@@ -352,7 +352,11 @@ func operatorRemoteBrokerTwoKernelRouters(t *testing.T, reconnect bool) {
 	}
 	sessionReady := make(chan *operatormesh.Session, 1)
 	openOperatorSession = func(ctx context.Context, options operatormesh.Options) (*operatormesh.Session, error) {
-		options.CarrierSources = []carriers.Source{}
+		options.CarrierSources = []carriers.Source{func(ctx context.Context, emit func([]carriers.Candidate)) error {
+			emit([]carriers.Candidate{{Device: devices[0], Transport: carriers.TCP, Address: "10.221.0.2:43024", Cost: 128}})
+			<-ctx.Done()
+			return ctx.Err()
+		}}
 		s, err := operatormesh.Open(ctx, options)
 		if err == nil {
 			sessionReady <- s
@@ -370,7 +374,7 @@ func operatorRemoteBrokerTwoKernelRouters(t *testing.T, reconnect bool) {
 		})
 		return nil
 	}
-	adjacent, err := PrepareOperator(ctx, certificate, "10.221.0.2:43024", devices[0].UUID().String())
+	adjacent, err := PrepareOperatorAutomatic(ctx, certificate)
 	if err != nil {
 		t.Fatal(err)
 	}

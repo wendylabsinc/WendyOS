@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/bleprovider"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh/carriers"
@@ -25,72 +24,8 @@ type managedCarrier struct {
 	cost uint16
 }
 
-func (s *Session) seedCandidate() carriers.Candidate {
-	transport := s.options.Transport
-	if transport == "" {
-		transport = carriers.TCP
-	}
-	psm := s.options.BLEPSM
-	cost := uint16(128)
-	if transport == carriers.BLE {
-		cost = bleprovider.LinkCost
-		if psm == 0 {
-			psm = bleprovider.DefaultPSM
-		}
-	}
-	return carriers.Candidate{Device: s.routerConfig.Router, Address: s.options.RouterAddress, Transport: transport, PSM: psm, Cost: cost}
-}
-
 func (s *Session) carrierConfig() carriers.Config {
-	sources := s.options.CarrierSources
-	if sources == nil && !s.options.Automatic {
-		// Explicit first-hop intent includes the physical carrier. A pinned
-		// TCP/BLE session must not silently start other LAN or radio attachments.
-		// The persistent seed still reconnects without any discovery source.
-		sources = []carriers.Source{}
-	}
-	if s.options.CarrierSources != nil && s.options.Discover != nil {
-		// Host fixtures can substitute this existing discovery callback without
-		// starting any radio. Production nil Sources uses the native providers.
-		sources = append(append([]carriers.Source{}, sources...), func(ctx context.Context, emit func([]carriers.Candidate)) error {
-			for ctx.Err() == nil {
-				options, err := s.options.Discover(ctx)
-				if err != nil {
-					return err
-				}
-				items := make([]carriers.Candidate, 0, len(options))
-				for _, o := range options {
-					peer, err := meshid.ParseDevice(s.Node.Credentials.Device.Tenant(), o.RouterUUID)
-					if err != nil {
-						continue
-					}
-					transport := o.Transport
-					if transport == "" {
-						transport = carriers.TCP
-					}
-					cost := uint16(128)
-					if transport == carriers.BLE {
-						cost = bleprovider.LinkCost
-					}
-					items = append(items, carriers.Candidate{Device: peer, Address: o.RouterAddress, Transport: transport, PSM: o.BLEPSM, Cost: cost})
-				}
-				emit(items)
-				timer := time.NewTimer(time.Second)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return ctx.Err()
-				case <-timer.C:
-				}
-			}
-			return ctx.Err()
-		})
-	}
-	var seeds []carriers.Candidate
-	if s.options.RouterAddress != "" {
-		seeds = []carriers.Candidate{s.seedCandidate()}
-	}
-	return carriers.Config{Credentials: s.Node.Credentials, Snapshot: s.Snapshot, Connect: s.connectCandidate, Seeds: seeds, Sources: sources, Limits: carriers.Limits{AuthenticatedTTL: 15 * time.Minute}}
+	return carriers.Config{Credentials: s.Node.Credentials, Snapshot: s.Snapshot, Connect: s.connectCandidate, Sources: s.options.CarrierSources, Limits: carriers.Limits{AuthenticatedTTL: 15 * time.Minute}}
 }
 
 func (s *Session) runCarriers(ctx context.Context) error {
@@ -98,91 +33,80 @@ func (s *Session) runCarriers(ctx context.Context) error {
 }
 
 func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) (result error) {
-	defer func() {
-		if result != nil && ctx.Err() == nil && !errors.Is(result, carriers.ErrUnsupportedPeer) && s.options.ReportCarrierFailure != nil {
-			s.options.ReportCarrierFailure(candidate.Transport, result)
-		}
-	}()
 	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
 		defer func() {
 			fmt.Fprintf(os.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
 		}()
 	}
-	var link *meshoperatorlink.RouterLink
-	seed := s.seedCandidate()
-	if candidate.Address == seed.Address && candidate.Transport == seed.Transport && candidate.PSM == seed.PSM {
-		s.initialOnce.Do(func() { link = s.initialRouter })
-	}
-	if link == nil {
-		var peer meshid.Device
-		config := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, NextProtos: []string{meshoperatorlink.RouterALPN}, Certificates: []tls.Certificate{s.Node.Credentials.Certificate}, InsecureSkipVerify: true, SessionTicketsDisabled: true,
-			VerifyConnection: func(state tls.ConnectionState) error {
-				if len(state.PeerCertificates) == 0 {
-					return errors.New("mesh candidate has no peer certificate")
-				}
-				actual, err := meshid.DeviceFromCert(state.PeerCertificates[0])
-				if err != nil {
-					return err
-				}
-				if actual.Tenant() != s.Node.Credentials.Device.Tenant() {
-					return errors.New("mesh candidate belongs to another tenant")
-				}
-				if candidate.Device.IsValid() && actual != candidate.Device {
-					return errors.New("mesh candidate identity differs from discovery")
-				}
-				id := actual.UUID()
-				if candidate.Transport == carriers.BLE && candidate.Hint != ([4]byte{}) && candidate.Hint != ([4]byte(id[:4])) {
-					return errors.New("BLE candidate identity differs from the live hint")
-				}
-				cfg := s.routerConfig
-				cfg.Router = actual
-				pinned, err := meshoperatorlink.ClientTLSConfig(cfg, s.Node.Credentials.Certificate)
-				if err != nil {
-					return err
-				}
-				if err = pinned.VerifyConnection(state); err != nil {
-					return err
-				}
-				pins, err := devicepin.Open(s.options.StateDirectory)
-				if err != nil {
-					return err
-				}
-				if err = pins.CheckAndUpdate(state.PeerCertificates[0], actual.Principal()); err != nil {
-					return err
-				}
-				peer = actual
-				return nil
-			}}
-		// Router binding independently verifies the TLS wire chain at both ends.
-		// Known-issuer ALPN can omit cached CAs from that chain even though the
-		// handshake's cache-aware verifier passed. Retain the full-chain role
-		// until binding also consumes that exact issuer snapshot. Ordinary mesh
-		// TLS continues to use known-issuer negotiation.
-		config.NextProtos = []string{meshoperatorlink.RouterALPN}
-		options := s.options
-		options.Transport = candidate.Transport
-		options.RouterAddress = candidate.Address
-		options.BLEPSM = candidate.PSM
-		secure, err := dialOperatorTLS(ctx, options, config)
-		if err != nil {
-			// BLE's existing advertisement has no platform/role bit. A first
-			// ordinary ALPN mismatch is remembered for this exact radio hint;
-			// do not repeatedly spend TLS flights on a Lite-only carrier.
-			if strings.Contains(err.Error(), "no application protocol") {
-				return fmt.Errorf("%w: %s", carriers.ErrUnsupportedPeer, candidate.Address)
+	defer func() {
+		if result != nil && ctx.Err() == nil && !errors.Is(result, carriers.ErrUnsupportedPeer) && s.options.ReportCarrierFailure != nil {
+			s.options.ReportCarrierFailure(candidate.Transport, result)
+		}
+	}()
+	var peer meshid.Device
+	config := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, NextProtos: []string{meshoperatorlink.RouterALPN}, Certificates: []tls.Certificate{s.Node.Credentials.Certificate}, InsecureSkipVerify: true, SessionTicketsDisabled: true,
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return errors.New("mesh candidate has no peer certificate")
 			}
-			return err
+			actual, err := meshid.DeviceFromCert(state.PeerCertificates[0])
+			if err != nil {
+				return err
+			}
+			if actual.Tenant() != s.Node.Credentials.Device.Tenant() {
+				return errors.New("mesh candidate belongs to another tenant")
+			}
+			if candidate.Device.IsValid() && actual != candidate.Device {
+				return errors.New("mesh candidate identity differs from discovery")
+			}
+			id := actual.UUID()
+			if candidate.Transport == carriers.BLE && candidate.Hint != ([4]byte{}) && candidate.Hint != ([4]byte(id[:4])) {
+				return errors.New("BLE candidate identity differs from the live hint")
+			}
+			cfg := s.routerConfig
+			cfg.Router = actual
+			pinned, err := meshoperatorlink.ClientTLSConfig(cfg, s.Node.Credentials.Certificate)
+			if err != nil {
+				return err
+			}
+			if err = pinned.VerifyConnection(state); err != nil {
+				return err
+			}
+			pins, err := devicepin.Open(s.options.StateDirectory)
+			if err != nil {
+				return err
+			}
+			if err = pins.CheckAndUpdate(state.PeerCertificates[0], actual.Principal()); err != nil {
+				return err
+			}
+			peer = actual
+			return nil
+		}}
+	// Router binding independently verifies the TLS wire chain at both ends.
+	// Known-issuer ALPN can omit cached CAs from that chain even though the
+	// handshake's cache-aware verifier passed. Retain the full-chain role
+	// until binding also consumes that exact issuer snapshot. Ordinary mesh
+	// TLS continues to use known-issuer negotiation.
+	config.NextProtos = []string{meshoperatorlink.RouterALPN}
+	secure, err := dialOperatorTLS(ctx, candidate, config)
+	if err != nil {
+		// BLE's existing advertisement has no platform/role bit. A first
+		// ordinary ALPN mismatch is remembered for this exact radio hint;
+		// do not repeatedly spend TLS flights on a Lite-only carrier.
+		if strings.Contains(err.Error(), "no application protocol") {
+			return fmt.Errorf("%w: %s", carriers.ErrUnsupportedPeer, candidate.Address)
 		}
-		cfg := s.routerConfig
-		cfg.Router = peer
-		cfg.IssuerCandidates = s.Node.Credentials.TLSIssuerCandidates
-		link, err = meshoperatorlink.RouterClient(ctx, secure, cfg)
-		if err != nil {
-			return err
-		}
+		return err
+	}
+	cfg := s.routerConfig
+	cfg.Router = peer
+	cfg.IssuerCandidates = s.Node.Credentials.TLSIssuerCandidates
+	link, err := meshoperatorlink.RouterClient(ctx, secure, cfg)
+	if err != nil {
+		return err
 	}
 	defer func() { _ = link.Close(); link.Wait() }()
-	peer := link.Peer()
+	peer = link.Peer()
 	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
 		fmt.Fprintf(os.Stderr, "wendy: mesh %s authenticated %s\n", candidate.Transport, peer.Principal())
 	}

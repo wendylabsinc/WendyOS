@@ -15,7 +15,6 @@ import (
 
 type operatorAttachmentState struct {
 	session *operatormesh.Session
-	recipe  OperatorSpec
 	result  <-chan error
 }
 
@@ -48,7 +47,7 @@ func configuredOperatorCertificate(spec Spec) (config.CertificateInfo, error) {
 	return config.CertificateInfo{}, errOperatorCredentialsChanged
 }
 
-func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*operatorAttachmentState, error) {
+func (a *operatorAttachment) open(ctx context.Context) (*operatorAttachmentState, error) {
 	if err := operatorRecipeCurrent(a.spec); err != nil {
 		return nil, err
 	}
@@ -58,30 +57,8 @@ func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*op
 	}
 	// Open reloads the profile trust/pin state and persists a new revision before
 	// dialing. Neither an older key snapshot nor an old proof is reused.
-	// A discovered fallback is a concrete first-hop hint, not a change to the
-	// retained context's discovery policy. It still dials this seed initially.
-	options := operatormesh.Options{Automatic: a.spec.Operator.Automatic, StateDirectory: a.directory, Certificate: certificate, RouterAddress: recipe.RouterAddress, RouterUUID: recipe.RouterUUID, Transport: recipe.Transport, BLEPSM: recipe.BLEPSM}
+	options := operatormesh.Options{StateDirectory: a.directory, Certificate: certificate}
 	options.ReportCarrierFailure = operatorCarrierReporter(ctx)
-	if a.spec.Operator.Automatic {
-		options.Discover = func(ctx context.Context) ([]operatormesh.Options, error) {
-			operator, _ := operatorPrincipal(certificate)
-			found, err := discoverOperatorLAN(ctx, operator)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]operatormesh.Options, 0, len(found))
-			for _, candidate := range found {
-				next := options
-				next.Discover = nil
-				next.RouterAddress = candidate.RouterAddress
-				next.RouterUUID = candidate.RouterUUID
-				next.Transport = candidate.Transport
-				next.BLEPSM = candidate.BLEPSM
-				out = append(out, next)
-			}
-			return out, nil
-		}
-	}
 	session, err := openOperatorSession(ctx, options)
 	if err != nil {
 		return nil, err
@@ -98,7 +75,7 @@ func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*op
 		session.Close()
 		return nil, err
 	}
-	return &operatorAttachmentState{session: session, recipe: recipe, result: result}, nil
+	return &operatorAttachmentState{session: session, result: result}, nil
 }
 
 func (a *operatorAttachment) snapshot() (*operatorAttachmentState, error) {
@@ -188,30 +165,12 @@ func (a *operatorAttachment) run(ctx context.Context) error {
 				return ctx.Err()
 			case <-timer.C:
 			}
-			// Explicit first-hop intent stays pinned to that recipe. Automatic
-			// recipes may rediscover a changed address or a replacement router.
-			candidates := []OperatorSpec{current.recipe}
-			if a.spec.Operator.Automatic {
-				operator, _ := operatorPrincipal(a.certificate)
-				found, browseErr := discoverOperatorLAN(ctx, operator)
-				if browseErr != nil && ctx.Err() != nil {
-					return ctx.Err()
-				}
-				for _, candidate := range found {
-					if candidate.RouterUUID != current.recipe.RouterUUID || candidate.RouterAddress != current.recipe.RouterAddress {
-						candidates = append(candidates, candidate)
-					}
-				}
+			next, openErr := a.open(ctx)
+			if openErr == nil {
+				a.replace(next)
 			}
-			for _, candidate := range candidates {
-				next, openErr := a.open(ctx, candidate)
-				if openErr == nil {
-					a.replace(next)
-					break
-				}
-				if ctx.Err() != nil || errors.Is(openErr, errOperatorCredentialsChanged) {
-					return openErr
-				}
+			if ctx.Err() != nil || errors.Is(openErr, errOperatorCredentialsChanged) {
+				return openErr
 			}
 			if _, err := a.snapshot(); err == nil {
 				break
