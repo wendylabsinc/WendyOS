@@ -125,7 +125,7 @@ The CLI verifies device server certificates on all mTLS connections (BLE, LAN gR
 
 2. **Organization matching** — The server certificate's Wendy org ID is extracted and compared against the CLI's expected org ID. If the device belongs to a different organization than the CLI session, the connection is rejected with an `OrgMismatchError`. For BLE connections, the CLI automatically retries with a matching certificate from another org if one is available.
 
-3. **Exact device identity (`ServerVerifyOpts.ExpectedIdentity`)** — When the caller has pinned a specific asset (see "Device identity pinning" below), the verifier additionally requires the peer's leaf certificate to carry an `asset` Wendy identity whose org and entity id match exactly. Unlike organization matching there is no grace mode here: a certificate with no Wendy identity at all is a mismatch, not a legacy device to tolerate, because the caller asked for a *specific* device and got something that cannot prove it is that device. This check runs inside `tls.Config.VerifyConnection`, not `VerifyPeerCertificate` — a resumed TLS 1.3 handshake skips `VerifyPeerCertificate` but not `VerifyConnection`, so pinning implemented in the wrong hook would silently stop firing on session resumption.
+3. **Exact device identity (`ServerVerifyOpts.ExpectedIdentity`)** — Required on every enrolled-device mTLS connection, including BLE and MCP Cloud connections. Before connecting, the caller must supply the expected identity from authenticated Cloud inventory, trusted enrollment, or a saved device binding. The certificate must name that exact device. Tenant SPIFFE principals are compared exactly; supported older `urn:wendy:org:<org>:asset:<asset>` and `sh/wendy/<org>/<asset>` identities still require the expected organization and asset to match. A missing expectation, a certificate without a device identity, and a different device in the same tenant are rejected. There is no implicit legacy grace mode. This check runs inside `tls.Config.VerifyConnection`, including on resumed TLS sessions.
 
 4. **SPKI pinning** — On first mTLS connection to a device — over BLE, LAN gRPC, or the cloud tunnel — its SPKI (Subject Public Key Info) fingerprint is pinned in `~/.wendy/known_devices.json`, keyed by the certificate's Wendy asset identity. A later connection presenting a different key while the *previously pinned* certificate is still within its validity window is hard-refused (a `PinMismatchError` aborts the handshake): a renewal replaces an expiring certificate, it does not race one that is still live, so an unexplained key change during that window is treated as a MITM signal, not a warning. Once the pinned certificate has expired, a new key is ordinary rotation — accepted silently, and the pin is updated to the new fingerprint.
 
@@ -133,13 +133,19 @@ The CLI verifies device server certificates on all mTLS connections (BLE, LAN gR
 
 When one device dials another by its device UUID, the agent runs `VerifyPeerDevice` after the chain check. The peer leaf must carry exactly one tenant SPIFFE device principal (`spiffe://wendy.sh/tenant/<tenant-uuid>/device/<device-uuid>`), its tenant must equal the calling device's own tenant, and its device UUID must equal the roster entry for the dialed name. There is no grace mode: a calling device with no tenant identity of its own refuses every device peer. The dialed address is a routing hint only and is not part of the check. `NewClientTLSConfigExpectingPeer` selects this strict rule whenever the peer identifier is a UUID.
 
+Mesh peer certificates must be non-CA leaves with explicit `clientAuth` usage. Missing EKU and `anyExtendedKeyUsage` alone are refused. LAN QUIC and native mesh TLS apply this peer profile in both TLS roles and recheck restored peer certificates on session resumption. The mesh peer profile does not additionally require `serverAuth`; issuer certificates may still omit EKU.
+
 A legacy asset-ID string selects the older asset pin: the certificate must identify the expected asset, and its scope must match the calling device's own scope when that scope is known. Only this legacy path permits an unknown calling scope; it still requires the exact asset identity and a valid certificate chain.
 
 Wendy Net verifies the exact enrolled device identity when connecting to a peer. Devices must belong to the same organization. Operators in that organization can also verify a target device when delivering builds.
 
 ## Device identity pinning (default device)
 
-On the first successful connection to a hostname, the CLI records that hostname's identity in `~/.wendy/config.json` under `devicePins`: the **organisation**, the **cloud host** that issued its certificate, and the **asset id** from the device certificate's identity SAN (the name of its tenant SPIFFE principal, or the legacy `urn:wendy:org:<org>:asset:<assetID>` URN on an old chain), and that **principal** when it has one. Every later connection to that hostname is checked against the pin — this is what feeds `ServerVerifyOpts.ExpectedIdentity` above, so a wrong device is rejected during the TLS handshake itself, not after.
+An enrolled device needs a trusted expected identity before its first mTLS connection. Cloud connections use the selected inventory row's PKI identity (or its legacy organization/asset identity). `wendy cloud discover` seeds named device bindings in `~/.wendy/config.json` under `devicePins`. A different LAN or BLE hostname needs its own saved binding from verified enrollment; discovery aliases do not establish that relationship. Trusted enrollment or an existing saved device pin can also supply it. The verifier never learns the expected identity from whichever server answers the dial.
+
+BLE uses the selected hostname to look up an existing binding. An advertisement can select an existing constraint but cannot create one. If no binding exists, the CLI refuses the enrolled-device connection: refresh the trusted Cloud inventory or complete explicit enrollment through a trusted setup connection. Successful CLI and desktop enrollment reconnect with the freshly minted expected identity before saving its binding under the selected hostname and enrollment name. A BLE-only device whose advertised name has no matching saved binding cannot use authenticated management until that binding is available. Explicit enrollment can connect to an unpinned plaintext setup endpoint only after it reports that it is unprovisioned. Existing saved identities cannot use that path. Local setup sockets remain separate trust boundaries; none bypasses the enrolled-device verifier for ordinary management.
+
+After an identity-checked connection, the CLI may record the verified identity under the device's other names and refresh its certificate-key pin. A saved binding records the organization, issuing Cloud, asset ID, and tenant SPIFFE principal when present. Every later connection enforces the same device identity during the TLS handshake.
 
 The pin is deliberately not a certificate fingerprint — a device legitimately rotates and re-enrolls certificates, and that must not look like an attack. What trips it is a change of *who* is answering:
 
@@ -149,7 +155,7 @@ The pin is deliberately not a certificate fingerprint — a device legitimately 
 | Different org or cloud host | Refused, no prompt |
 | Same org + cloud, **different asset id** | Refused, no prompt — the hostname now resolves to a different machine, or the device was wiped and re-enrolled as a new asset |
 | **No mTLS identity at all**, on a hostname that was pinned | Refused, no prompt — the device may have been unenrolled, reflashed, or reset, or another machine may have taken its name |
-| No mTLS identity, hostname never pinned | Connects normally (ordinary out-of-the-box device) |
+| No expected device identity, hostname never pinned | Enrolled-device mTLS is refused; establish a trusted inventory or enrollment binding first |
 
 The asset id is read only from a certificate that passed chain and org verification, so an impostor cannot assert its way past the pin. On the dial ladder, a wrong-device rejection aborts the whole ladder immediately — no further certificate or port is tried — and a hostname that carries any pin at all is never offered the unauthenticated plaintext rung, regardless of what its (attacker-controlled) mDNS TXT records claim about it.
 
@@ -161,7 +167,7 @@ wendy device unpin spiffe://wendy.sh/tenant/<uuid>/device/<id>
 wendy device unpin urn:wendy:org:<org>:asset:<id>
 ```
 
-This clears the local pin only — it never dials the device, so it works even when the device is offline, wiped, or gone. The next successful connection to that hostname records a fresh pin from scratch. Naming a device explicitly with `wendy device set-default <hostname>` has the same clearing effect, since typing the hostname is itself the user asserting "I mean that device."
+This clears the local pin only — it never dials the device, so it works even when the device is offline, wiped, or gone. Before the next enrolled-device connection, refresh the trusted Cloud inventory or establish a new enrollment binding. Clearing a pin does not authorize accepting whichever certificate answers next. Naming a device explicitly with `wendy device set-default <hostname>` also clears its saved pin; it still needs a trusted expected identity to reconnect over mTLS.
 
 Both forms are accepted because the two stores are keyed differently. The identity-change refusals above name a hostname, and the hostname form clears it (a pin records its device's principal on the first connect after the SPIFFE cutover, which is how the hostname form still reaches the SPKI entry). The **SPKI** refusal (point 4 above) can only name the certificate identity, because that is what `known_devices.json` is keyed by — the tenant SPIFFE principal for a Wendy-issued device, the legacy URN for an old chain and there is often no hostname to offer: `wendy device list` and the device picker dial the device's IP, and an agent that never advertises `orgid` in its mDNS records leaves nothing locally that maps a name to an asset. Copy the identity out of the refusal and pass it back — it clears the SPKI entry and any `devicePins` entry naming the same asset.
 
@@ -184,31 +190,27 @@ A pin's `source` field records how the CLI learned it:
 
 | Source | Written by | Trust basis |
 | --- | --- | --- |
-| `lan` | An ordinary connection to the device (the default) | Only a certificate presented on the local network |
+| `lan` | Recording or refreshing an already identity-checked local connection | Its trusted expected device identity plus a matching verified certificate |
 | `cloud` | The org's asset roster, fetched over an authenticated cloud session (e.g. `wendy cloud discover` seeds a pin for every named asset the roster returns) | The org's cloud vouching for the (name, org, asset) binding |
 
 Pins written before sources were tracked carry an empty `source` and are treated as `lan`.
 
-A `cloud` write is authoritative and overwrites whatever was pinned for that name, `lan`-sourced or not — that is how cloud-known devices get their trust-on-first-use window closed before the CLI ever meets them on the network (see below). The one exception is a tenant session's roster meeting a pin that already holds a different tenant principal, which it leaves alone (see [Cloud pin seeding](#cloud-pin-seeding)). The reverse never holds: a LAN sighting cannot upgrade or override a `cloud` pin, and specifically:
+A `cloud` write is authoritative and overwrites whatever was pinned for that name, `lan`-sourced or not — that is how cloud-known devices obtain their expected identity before the CLI meets them on the network (see below). The one exception is a tenant session's roster meeting a pin that already holds a different tenant principal, which it leaves alone (see [Cloud pin seeding](#cloud-pin-seeding)). The reverse never holds: a LAN sighting cannot upgrade or override a `cloud` pin, and specifically:
 
-- A `lan`-sourced pin that predates asset ids (no asset recorded) is backfilled with the observed asset id on the first connection whose org and cloud still match — org and cloud already vouch for the connection, so this is a one-time upgrade, not a challenge. A `cloud`-sourced pin with no asset id is **not** backfilled this way: the cloud already spoke for this name, and a LAN sighting is not evidence to the contrary, so it is treated as a plain match instead.
+- A historical pin without an asset or principal cannot supply an expected device identity. Refresh it from trusted Cloud inventory or enrollment before connecting. An ordinary LAN connection cannot discover the missing binding.
 - An asset-less `cloud` pin is never displaced by a `lan` pin in a way that would erase an existing exact-identity constraint on that name — cloud authority decides *which* binding to believe, and applying it is worthless if the result is a name constrained to no asset at all.
 
-Agents whose certificates carry no asset identity at all are never treated as swapped devices: an empty *observed* asset id can never produce a mismatch on its own, regardless of source.
+An enrolled agent whose certificate carries no device identity is rejected during TLS verification, regardless of the pin source.
 
-## Multi-key pin lookup
+## Device names and routing addresses
 
-One device can answer to more than one name, and different surfaces record its pin under different ones: an ordinary connection records under the mDNS hostname actually dialed, cloud seeding records under the asset's roster name, and a wendy net dial names the device by its wendy net name. Resolving "does this dial have a pin" therefore checks, in order:
+The expected identity comes from the saved binding for the selected name. A hostname, Cloud inventory name, and mesh name may refer to the same device, but an unauthenticated discovery record cannot establish that relationship or replace an existing binding. Cloud inventory authenticates its own names. Verified enrollment saves the selected hostname and the chosen enrollment name after the certificate is checked.
 
-1. The name the caller dialed (`--device` value, saved default, or the device picker's name).
-2. The wendy net name from the discovery-cache entry whose hostname matches (1), if the cache has one.
-3. That entry's display name.
-
-Consulting an alias can only ever *find* a pin, never discard one: an attacker-chosen alias can at most impose a stricter constraint that the real device still satisfies, never a way to bypass one. The trust decision itself always rests on the certificate, never on which name resolved the lookup.
+Picker selections, discovery probes, fleet operations and reconnects retain the selected name independently of the IP used to reach it. IP addresses found through discovery are routing hints; they do not become authentication keys merely because a connection used them. Explicit enrollment may connect to a device confirmed to be unprovisioned, including through the picker. Ordinary management still requires a saved expected identity.
 
 ## Cloud pin seeding
 
-A hostname the CLI has never connected to has no pin, so its first connection is trust-on-first-use — the one moment this scheme cannot, by construction, distinguish the real device from an impostor answering first. Seeding pins from the cloud closes that window for every device the org's cloud already knows about: whenever the CLI fetches the org's asset roster over an authenticated session, each named asset is recorded as a `cloud`-sourced pin (org, asset id) before the CLI has ever reached it on the network. An impostor answering an mDNS query for that name is then rejected on the very first LAN connection attempt, not just the second.
+A hostname without a saved device identity cannot make an enrolled-device mTLS connection. Seeding pins from Cloud supplies that identity for devices the authenticated organization already knows about: whenever the CLI reads a trusted roster, it records the named assets' expected identities before dialing them. The subsequent certificate must match that binding; the server cannot establish the binding by answering first.
 
 A tenant (UUID) session's roster records each asset's device principal, taken from its PKI device binding when it has one. It replaces pins that hold no principal, such as the numeric pins an earlier Cloud session left behind, but never a pin that holds a different principal. That pin names a device the CLI already verified, or a binding an earlier roster made, and a Cloud name that now belongs to another asset stays refused until `wendy device unpin`. Cloud connections fetch the roster too, so replacing the pin would let the retry of a refused connection reach the name's new holder. A name that two assets share is not seeded, because Cloud lookups refuse it as ambiguous. Two lookups do not seed at all: the offline re-query that explains why a name was not found, and unenrollment, which deletes the asset it finds.
 

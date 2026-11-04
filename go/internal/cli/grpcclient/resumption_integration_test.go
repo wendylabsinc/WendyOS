@@ -70,7 +70,7 @@ func TestConnectWithTLSResumesAcrossConnections(t *testing.T) {
 		PemCertificateChain: pki.caPEM,
 	}
 	call := func() {
-		conn, err := grpcclient.ConnectWithTLSAndPins(context.Background(), ln.Addr().String(), certInfo, nil)
+		conn, err := grpcclient.ConnectWithTLSExpecting(context.Background(), ln.Addr().String(), certInfo, nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
@@ -183,7 +183,7 @@ func integrationPKIWithIntermediate(t *testing.T, intermediate bool) integration
 			string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 	}
 
-	serverCertPEM, serverKeyPEM := leaf("resumption-e2e-server", x509.ExtKeyUsageServerAuth)
+	serverCertPEM, serverKeyPEM := leaf("sh/wendy/7/42", x509.ExtKeyUsageServerAuth)
 	clientCertPEM, clientKeyPEM := leaf("resumption-e2e-client", x509.ExtKeyUsageClientAuth)
 	return integrationPKI{
 		serverCertPEM: serverCertPEM,
@@ -213,7 +213,7 @@ func TestNormalAgentRPCKnownIssuers(t *testing.T) {
 	t.Cleanup(server.Stop)
 	identity := &config.CertificateInfo{PemCertificate: pki.clientCertPEM, PemPrivateKey: pki.clientKeyPEM, PemCertificateChain: pki.caPEM}
 	for range 2 {
-		conn, err := grpcclient.ConnectWithTLSAndPins(context.Background(), listener.Addr().String(), identity, nil)
+		conn, err := grpcclient.ConnectWithTLSExpecting(context.Background(), listener.Addr().String(), identity, nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"})
 		if err != nil {
 			t.Fatal(err)
 		}
