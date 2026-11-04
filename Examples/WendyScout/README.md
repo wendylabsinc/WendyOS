@@ -37,8 +37,8 @@ failure described below.
 Normal operation starts a fresh bounded session, retains its evidence, waits
 60 seconds, and repeats until the app stops. Public context/releases are cached
 for 30 minutes; each session pins its CLI artifacts and verifies their digests.
-For operator validation, `--env SCOUT_MAX_SESSIONS=1` stops further sessions after
-one result while keeping the worker alive. `--env SCOUT_BOOTSTRAP=1` performs
+For operator validation, the worker handles `--env SCOUT_MAX_SESSIONS=1`: it stops
+further sessions after one result while keeping the worker alive. `--env SCOUT_BOOTSTRAP=1` performs
 kernel/offline-CLI checks without loading the model.
 
 ## Live transcript
@@ -100,8 +100,10 @@ file creation and process-group escape are denied. Descendants are killed and
 reaped. A failed live preflight holds testing. Pi's built-ins, ambient extensions,
 context files, MCP discovery and cloud providers are disabled.
 
-One session has a 270-second deadline and fixed model/tool-call budgets. Logs,
-sessions and retained findings have size/count caps. Trusted root supervisors,
+The worker enforces a 270-second Pi-loop deadline. The controller allows a
+300-second supervisor session window; each probe batch is additionally bounded
+to 90 seconds and that remaining window. Fixed model/tool-call budgets and
+size/count caps bound logs, sessions and retained findings. Trusted root supervisors,
 Pi/model native libraries, Agent and kernel remain trusted. These controls do
 not claim protection from compromised trusted code or eliminate covert channels
 through authorized issue choices/content/timing. Untrusted issue/source text
