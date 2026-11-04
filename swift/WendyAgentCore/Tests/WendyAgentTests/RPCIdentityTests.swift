@@ -109,6 +109,140 @@ struct RPCIdentityTests {
         }
     }
 
+    @Test func legacyUserGraceIsNarrow() throws {
+        let ca = try TestPKI.makeCA()
+        let scope = OrgIdentity.Scope(tenantUUID: Self.tenant, orgID: 7)
+        let principal = "spiffe://wendy.sh/tenant/\(Self.tenant)/"
+        let cases: [(String, [String], Bool)] = [
+            ("wendy/user/human", [], true),
+            ("wendy/user/", [], false),
+            ("wendy/user/human/other", [], false),
+            ("wendy/user/human:other", [], false),
+            ("wendy/user/human ", [], false),
+            ("wendy/user/human\n", [], false),
+            ("unknown", [], false),
+            ("wendy/user/human", [principal + "device/peer"], false),
+            ("wendy/user/human", [principal + "service/asset-12"], false),
+            ("wendy/user/human", [principal + "signer/code"], false),
+            ("wendy/user/human", [principal + "admin/root"], false),
+            ("wendy/user/human", ["urn:wendy:org:0:user:human"], false),
+            ("wendy/user/human", [principal + "operator/human", principal + "device/peer"], false),
+        ]
+        for mode in [ClientCertAuthorizer.OrgEnforcementMode.off, .grace, .strict] {
+            for (cn, uris, legacyUser) in cases {
+                let cert = try TestPKI.makeIdentity(commonName: cn, ca: ca, uris: uris)
+                for method in [Self.management, "future.AdminService/NewMethod"] {
+                    do {
+                        try RPCIdentityInterceptor.check(
+                            leaf: cert.certificate,
+                            method: method,
+                            expectedScope: scope,
+                            orgMode: mode
+                        )
+                        #expect(mode == .grace && legacyUser)
+                    } catch let error as RPCError {
+                        #expect(mode != .grace || !legacyUser)
+                        try Self.expectIdentityDenied(error)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: ["default", "grace", "strict", "off"])
+    func legacyUsersOverProductionMTLS(mode: String) async throws {
+        let ca = try TestPKI.makeCA()
+        let source = try TestPKI.makeDeviceIdentity(org: 7, asset: 1, ca: ca)
+        let legacy = try TestPKI.makeIdentity(commonName: "wendy/user/human", ca: ca)
+        let device = try TestPKI.makeIdentity(
+            commonName: "wendy/user/human",
+            ca: ca,
+            uris: ["urn:wendy:org:7:asset:2"]
+        )
+        let unknown = try TestPKI.makeIdentity(commonName: "unknown", ca: ca)
+        let calls = RPCManagementCalls()
+        let server = try WendyAgent.makeMainServer(
+            services: [RPCLegacyManagement(calls: calls)],
+            certs: .init(
+                certPEM: source.certPEM,
+                chainPEM: ca.pem,
+                keyBacking: .softwarePEM(source.keyPEM),
+                seKey: nil
+            ),
+            host: "127.0.0.1",
+            port: 0,
+            environment: mode == "default" ? [:] : ["WENDY_MTLS_ORG_ENFORCEMENT": mode],
+            logger: Logger(label: "test.legacy-rpc")
+        )
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await server.serve() }
+            defer {
+                server.beginGracefulShutdown()
+                group.cancelAll()
+            }
+            let listeningAddress = try await server.listeningAddress
+            let address = try #require(listeningAddress)
+            let port = try #require(address.ipv4?.port)
+            for (identity, isLegacy, isDevice) in [
+                (legacy, true, false), (device, false, true), (unknown, false, false),
+            ] {
+                let transport = try HTTP2ClientTransport.Posix(
+                    target: .ipv4(address: "127.0.0.1", port: port),
+                    transportSecurity: .mTLS(
+                        certificateChain: [.bytes(Array(identity.certPEM.utf8), format: .pem)],
+                        privateKey: .bytes(Array(identity.keyPEM.utf8), format: .pem)
+                    ) {
+                        $0.trustRoots = .certificates([.bytes(Array(ca.pem.utf8), format: .pem)])
+                        $0.serverCertificateVerification = .noHostnameVerification
+                    }
+                )
+                let allowed = isLegacy && (mode == "default" || mode == "grace")
+                let before = await calls.count
+                try await withGRPCClient(transport: transport) { client in
+                    let agent = Wendy_Agent_Services_V1_WendyAgentService.Client(wrapping: client)
+                    var options = CallOptions.defaults
+                    options.timeout = .seconds(3)
+                    do {
+                        let version = try await agent.getAgentVersion(
+                            .init(),
+                            options: options
+                        )
+                        #expect(allowed)
+                        #expect(version.version == "legacy-user-test")
+                    } catch let error as RPCError {
+                        #expect(!allowed)
+                        if mode == "strict" && !isDevice {
+                            #expect(error.code == .unavailable)
+                        } else {
+                            try Self.expectIdentityDenied(error)
+                        }
+                    }
+                    do {
+                        let count = try await agent.runContainer(
+                            request: .init(producer: { _ in }),
+                            options: options
+                        ) { response in
+                            var count = 0
+                            for try await _ in response.messages { count += 1 }
+                            return count
+                        }
+                        #expect(allowed)
+                        #expect(count == 1)
+                    } catch let error as RPCError {
+                        #expect(!allowed)
+                        if mode == "strict" && !isDevice {
+                            #expect(error.code == .unavailable)
+                        } else {
+                            try Self.expectIdentityDenied(error)
+                        }
+                    }
+                }
+                let after = await calls.count
+                #expect(after == before + (allowed ? 2 : 0))
+            }
+        }
+    }
+
     static func expectIdentityDenied(_ error: RPCError) throws {
         #expect(error.code == .permissionDenied)
         let unpacked = try error.unpackGoogleRPCStatus()
@@ -122,7 +256,8 @@ struct RPCIdentityTests {
     @Test func requestMetadataCannotSupplyAnIdentity() async throws {
         let interceptor = RPCIdentityInterceptor(
             expectedScope: .init(tenantUUID: Self.tenant, orgID: 7),
-            logger: Logger(label: "test.rpc-metadata")
+            logger: Logger(label: "test.rpc-metadata"),
+            orgMode: .grace
         )
         let context = ServerContext(
             descriptor: .init(
@@ -313,5 +448,45 @@ private struct RPCSensorCamera: CameraCapturing {
             $0.yield(CameraFrame(annexB: Data([0, 0, 0, 1, 0x67]), isKeyframe: true))
             $0.finish()
         }
+    }
+}
+
+private actor RPCManagementCalls {
+    var count = 0
+    func record() { count += 1 }
+}
+
+// Fake management handlers prove unary and streaming calls pass the real
+// listener's policy without starting a container or touching hardware.
+private struct RPCLegacyManagement: RegistrableRPCService {
+    let calls: RPCManagementCalls
+    func registerMethods<Transport>(with router: inout RPCRouter<Transport>)
+    where Transport: ServerTransport {
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.GetAgentVersion.descriptor,
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_GetAgentVersionRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_GetAgentVersionResponse>(),
+            handler: { _, _ in
+                await calls.record()
+                return .init { writer in
+                    var response = Wendy_Agent_Services_V1_GetAgentVersionResponse()
+                    response.version = "legacy-user-test"
+                    try await writer.write(response)
+                    return [:]
+                }
+            }
+        )
+        router.registerHandler(
+            forMethod: Wendy_Agent_Services_V1_WendyAgentService.Method.RunContainer.descriptor,
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_RunContainerRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_RunContainerResponse>(),
+            handler: { _, _ in
+                await calls.record()
+                return .init { writer in
+                    try await writer.write(Wendy_Agent_Services_V1_RunContainerResponse())
+                    return [:]
+                }
+            }
+        )
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
 import GRPCProtobuf
@@ -11,6 +12,7 @@ import X509
 struct RPCIdentityInterceptor: ServerInterceptor {
     let expectedScope: OrgIdentity.Scope?
     let logger: Logger
+    let orgMode: ClientCertAuthorizer.OrgEnforcementMode
 
     static func deviceRPCAllowed(_ method: String) -> Bool {
         switch method {
@@ -43,8 +45,12 @@ struct RPCIdentityInterceptor: ServerInterceptor {
         return RPCError(code: status.code, message: message, metadata: status.rpcErrorMetadata)
     }
 
-    static func check(leaf: Certificate?, method: String, expectedScope: OrgIdentity.Scope?) throws
-    {
+    static func check(
+        leaf: Certificate?,
+        method: String,
+        expectedScope: OrgIdentity.Scope?,
+        orgMode: ClientCertAuthorizer.OrgEnforcementMode = .strict
+    ) throws {
         guard let leaf else {
             throw RPCError(
                 code: .unauthenticated,
@@ -58,6 +64,10 @@ struct RPCIdentityInterceptor: ServerInterceptor {
             throw denied("client certificate has no recognized RPC caller identity")
         }
         guard let identity = parsed else {
+            // The TLS verifier already checked the chain and tenant policy.
+            // Fall back only when no authoritative identity was present, never
+            // when parsing one failed or identified a device/signer.
+            if orgMode == .grace && legacyUser(leaf) { return }
             throw denied("client certificate has no recognized RPC caller identity")
         }
         switch identity.entityType {
@@ -80,6 +90,20 @@ struct RPCIdentityInterceptor: ServerInterceptor {
         }
     }
 
+    private static func legacyUser(_ leaf: Certificate) -> Bool {
+        var commonNames: [String] = []
+        for relativeName in leaf.subject {
+            for attribute in relativeName where attribute.type == .RDNAttributeType.commonName {
+                commonNames.append(attribute.value.description)
+            }
+        }
+        guard commonNames.count == 1, let cn = commonNames.first, cn.hasPrefix("wendy/user/")
+        else { return false }
+        let uid = cn.dropFirst("wendy/user/".count)
+        return !uid.isEmpty && !uid.contains("/") && !uid.contains(":")
+            && uid.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil
+    }
+
     @concurrent
     func intercept<Input: Sendable, Output: Sendable>(
         request: StreamingServerRequest<Input>,
@@ -96,7 +120,8 @@ struct RPCIdentityInterceptor: ServerInterceptor {
             try Self.check(
                 leaf: leaf,
                 method: context.descriptor.fullyQualifiedMethod,
-                expectedScope: expectedScope
+                expectedScope: expectedScope,
+                orgMode: orgMode
             )
         } catch {
             var metadata: Logger.Metadata = [

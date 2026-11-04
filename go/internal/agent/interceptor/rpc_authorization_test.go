@@ -5,9 +5,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"math/big"
 	"net"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -35,11 +37,11 @@ func TestRPCIdentityRefusalsAreLogged(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 	logger := zap.New(core)
 	called := false
-	_, unaryErr := UnaryRPCIdentityInterceptor(logger, scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
+	_, unaryErr := UnaryRPCIdentityInterceptor(logger, scope, OrgModeStrict)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
 		called = true
 		return nil, nil
 	})
-	streamErr := StreamRPCIdentityInterceptor(logger, scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method}, func(any, grpc.ServerStream) error {
+	streamErr := StreamRPCIdentityInterceptor(logger, scope, OrgModeStrict)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method}, func(any, grpc.ServerStream) error {
 		called = true
 		return nil
 	})
@@ -111,10 +113,15 @@ func (rpcNonTLSAuth) AuthType() string { return "not-tls" }
 // effect, while successful authentication must preserve the handler's response.
 func assertRPCDecision(t *testing.T, ctx context.Context, method string, scope certs.Scope, want codes.Code) {
 	t.Helper()
+	assertRPCDecisionInMode(t, ctx, method, scope, OrgModeStrict, want)
+}
+
+func assertRPCDecisionInMode(t *testing.T, ctx context.Context, method string, scope certs.Scope, mode OrgMode, want codes.Code) {
+	t.Helper()
 	t.Run("unary", func(t *testing.T) {
 		called := false
 		marker := new(int)
-		response, err := UnaryRPCIdentityInterceptor(nil, scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
+		response, err := UnaryRPCIdentityInterceptor(nil, scope, mode)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
 			called = true
 			return marker, nil
 		})
@@ -127,7 +134,7 @@ func assertRPCDecision(t *testing.T, ctx context.Context, method string, scope c
 	})
 	t.Run("stream", func(t *testing.T) {
 		called := false
-		err := StreamRPCIdentityInterceptor(nil, scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method, IsClientStream: true, IsServerStream: true}, func(any, grpc.ServerStream) error {
+		err := StreamRPCIdentityInterceptor(nil, scope, mode)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method, IsClientStream: true, IsServerStream: true}, func(any, grpc.ServerStream) error {
 			called = true
 			return nil
 		})
@@ -262,7 +269,7 @@ func TestRPCDeviceTenantCannotUseMigrationGrace(t *testing.T) {
 				if got := status.Code(CheckMTLS(ctx, zap.NewNop(), tt.scope, mode)); got != tt.gate[mode] {
 					t.Fatalf("scope gate=%v; want %v", got, tt.gate[mode])
 				}
-				assertRPCDecision(t, ctx, rpcTestDeviceMethods[0], tt.scope, tt.want)
+				assertRPCDecisionInMode(t, ctx, rpcTestDeviceMethods[0], tt.scope, mode, tt.want)
 			})
 		}
 	}
@@ -272,12 +279,57 @@ func TestRPCIdentityPreservesHandlerErrors(t *testing.T) {
 	ctx := rpcIdentityContext(rpcIdentityLeaf(t, "sh/wendy/7/12"))
 	scope := certs.Scope{OrgID: 7}
 	want := status.Error(codes.FailedPrecondition, "handler-specific authorization")
-	_, err := UnaryRPCIdentityInterceptor(nil, scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(context.Context, any) (any, error) { return nil, want })
+	_, err := UnaryRPCIdentityInterceptor(nil, scope, OrgModeStrict)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(context.Context, any) (any, error) { return nil, want })
 	if err != want {
 		t.Fatalf("unary handler error changed: %v", err)
 	}
-	err = StreamRPCIdentityInterceptor(nil, scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(any, grpc.ServerStream) error { return want })
+	err = StreamRPCIdentityInterceptor(nil, scope, OrgModeStrict)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(any, grpc.ServerStream) error { return want })
 	if err != want {
 		t.Fatalf("stream handler error changed: %v", err)
 	}
+}
+
+// The exception grants user access, including future management methods, only
+// for a well-formed legacy user CN in grace. SAN identities always win.
+func TestRPCLegacyUserGrace(t *testing.T) {
+	principal := "spiffe://wendy.sh/tenant/" + rpcTestTenant + "/"
+	scope := certs.Scope{TenantUUID: rpcTestTenant}
+	for _, mode := range []OrgMode{OrgModeOff, OrgModeGrace, OrgModeStrict} {
+		for _, tt := range []struct {
+			cn      string
+			uris    []string
+			allowed bool
+		}{
+			{cn: "wendy/user/human", allowed: true},
+			{cn: "wendy/user/"},
+			{cn: "wendy/user/human/other"},
+			{cn: "wendy/user/human:other"},
+			{cn: "wendy/user/human "},
+			{cn: "wendy/user/human\n"},
+			{cn: "some legacy name"},
+			{cn: "wendy/user/human", uris: []string{principal + "device/peer"}},
+			{cn: "wendy/user/human", uris: []string{principal + "service/asset-12"}},
+			{cn: "wendy/user/human", uris: []string{principal + "signer/code"}},
+			{cn: "wendy/user/human", uris: []string{principal + "admin/root"}},
+			{cn: "wendy/user/human", uris: []string{"urn:wendy:org:0:user:human"}},
+			{cn: "wendy/user/human", uris: []string{principal + "operator/human", principal + "device/peer"}},
+		} {
+			t.Run(mode.String()+"/"+tt.cn+strings.Join(tt.uris, ","), func(t *testing.T) {
+				ctx := rpcIdentityContext(rpcIdentityLeaf(t, tt.cn, tt.uris...))
+				want := codes.PermissionDenied
+				if mode == OrgModeGrace && tt.allowed {
+					want = codes.OK
+				}
+				for _, method := range []string{"/wendy.agent.services.v1.WendyShellService/HostShell", "/future.AdminService/NewMethod"} {
+					t.Run(method, func(t *testing.T) { assertRPCDecisionInMode(t, ctx, method, scope, mode, want) })
+				}
+			})
+		}
+	}
+	leaf := rpcIdentityLeaf(t, "wendy/user/human")
+	leaf.Subject.Names = []pkix.AttributeTypeAndValue{
+		{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "wendy/user/other"},
+		{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "wendy/user/human"},
+	}
+	assertRPCDecisionInMode(t, rpcIdentityContext(leaf), "/future.AdminService/NewMethod", scope, OrgModeGrace, codes.PermissionDenied)
 }

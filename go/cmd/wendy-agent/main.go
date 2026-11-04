@@ -949,9 +949,10 @@ func main() {
 
 		// WendyShellService opens an interactive *host* root shell. It is
 		// deliberately registered ONLY here, on the mTLS server, so it is
-		// reachable only on a provisioned device over an authenticated,
-		// org-checked operator connection: the mandatory RPC policy rejects
-		// device credentials before HostShell. It is intentionally NOT part of
+		// reachable only on a provisioned device over an authenticated connection
+		// admitted by the tenant and user policies (including legacy users in grace
+		// mode). The mandatory RPC policy rejects device credentials before
+		// HostShell. It is intentionally NOT part of
 		// registerAllServices: that would also expose it on the unauthenticated
 		// plaintext pre-provisioning server (handing anyone on the LAN a host
 		// root shell) and on the local admin socket.

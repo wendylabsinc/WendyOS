@@ -134,9 +134,8 @@ func registerRPCPolicyFuture(s *grpc.Server, calls *atomic.Int32) {
 	}, struct{}{})
 }
 
-func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
-	const tenant = "11111111-1111-4111-8111-111111111111"
-	const serverID = "22222222-2222-4222-8222-222222222222"
+func newRPCPolicyIssuer(t *testing.T) (string, func(int64, string, string) (string, string)) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +151,7 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
-	issue := func(serial int64, principal string) (string, string) {
+	issue := func(serial int64, cn, principal string) (string, string) {
 		t.Helper()
 		leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -162,7 +161,10 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, URIs: []*url.URL{uri}}
+		leaf := &x509.Certificate{Subject: pkix.Name{CommonName: cn}, SerialNumber: big.NewInt(serial), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, URIs: nil}
+		if principal != "" {
+			leaf.URIs = []*url.URL{uri}
+		}
 		der, err := x509.CreateCertificate(rand.Reader, leaf, root, &leafKey.PublicKey, key)
 		if err != nil {
 			t.Fatal(err)
@@ -173,6 +175,14 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 		}
 		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 	}
+	return rootPEM, issue
+}
+
+func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
+	const tenant = "11111111-1111-4111-8111-111111111111"
+	const serverID = "22222222-2222-4222-8222-222222222222"
+	rootPEM, issueWithCN := newRPCPolicyIssuer(t)
+	issue := func(serial int64, principal string) (string, string) { return issueWithCN(serial, "", principal) }
 	serverCert, serverKey := issue(2, "spiffe://wendy.sh/tenant/"+tenant+"/device/"+serverID)
 	var unaryExtras, streamExtras atomic.Int32
 	srv, err := mtls.NewServer(serverCert, rootPEM, serverKey, zap.NewNop(), time.Time{}, certs.Scope{TenantUUID: tenant}, interceptor.OrgModeStrict,
@@ -427,5 +437,97 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 	}
 	if backend.count("QueryChunks") != 1 || shell.calls.Load() != 1 {
 		t.Fatal("foreign tenant reached backend")
+	}
+}
+
+// Use an old-chain server identity: direct-PKI Go listeners already require a
+// tenant SAN at TLS verification and must not be weakened by this exception.
+func TestLegacyUserRPCPolicyOverProductionMTLS(t *testing.T) {
+	rootPEM, issue := newRPCPolicyIssuer(t)
+	serverCert, serverKey := issue(2, "sh/wendy/7/12", "")
+	for _, configured := range []string{"", "strict", "grace", "off"} {
+		t.Run("mode="+configured, func(t *testing.T) {
+			mode, _ := interceptor.ParseOrgMode(configured)
+			srv, err := mtls.NewServer(serverCert, rootPEM, serverKey, zap.NewNop(), time.Time{}, certs.Scope{OrgID: 7}, mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			registerRPCPolicyFuture(srv, &calls)
+			backend := &rpcPolicyBackend{calls: make(map[string]int)}
+			agentpb.RegisterWendyContainerServiceServer(srv, backend)
+			lis, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer srv.Stop()
+			defer lis.Close()
+			go func() { _ = srv.Serve(lis) }()
+			for i, caller := range []struct {
+				name, cn, uri  string
+				legacy, device bool
+			}{
+				{name: "legacy user", cn: "wendy/user/human", legacy: true},
+				{name: "empty user", cn: "wendy/user/"},
+				{name: "unknown", cn: "unknown"},
+				{name: "device with user CN", cn: "wendy/user/human", uri: "urn:wendy:org:7:asset:12", device: true},
+				{name: "foreign device with user CN", cn: "wendy/user/human", uri: "urn:wendy:org:8:asset:12"},
+				{name: "malformed claim with user CN", cn: "wendy/user/human", uri: "urn:wendy:org:0:user:human"},
+				{name: "operator", cn: "operator", uri: "urn:wendy:org:7:user:human"},
+			} {
+				t.Run(caller.name, func(t *testing.T) {
+					certPEM, keyPEM := issue(int64(i+3), caller.cn, caller.uri)
+					cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+					if err != nil {
+						t.Fatal(err)
+					}
+					roots := x509.NewCertPool()
+					roots.AppendCertsFromPEM([]byte(rootPEM))
+					cfg := &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: roots, MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}
+					// Identity certificates have no DNS SAN. Verify the server chain explicitly.
+					cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+						_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{Roots: roots})
+						return err
+					}
+					conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(credentials.NewTLS(cfg)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer conn.Close()
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					before := calls.Load()
+					allowed := caller.name == "operator" || caller.legacy && mode == interceptor.OrgModeGrace
+					check := func(err error) {
+						t.Helper()
+						if allowed && err != nil {
+							t.Fatalf("legacy/operator RPC refused: %v", err)
+						}
+						if !allowed && status.Code(err) != codes.PermissionDenied {
+							t.Fatalf("want PermissionDenied, got %v", err)
+						}
+					}
+					check(conn.Invoke(ctx, "/test.FutureAdmin/Do", &emptypb.Empty{}, &emptypb.Empty{}))
+					stream, err := conn.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/test.FutureAdmin/DoStream")
+					if err == nil {
+						_ = stream.CloseSend()
+						err = stream.RecvMsg(&emptypb.Empty{})
+					}
+					check(err)
+					want := before
+					if allowed {
+						want += 2
+					}
+					if got := calls.Load(); got != want {
+						t.Fatalf("management handler calls=%d; want %d", got, want)
+					}
+					if caller.device {
+						if _, err := agentpb.NewWendyContainerServiceClient(conn).QueryChunks(ctx, &agentpb.QueryChunksRequest{}); err != nil {
+							t.Fatalf("same-tenant device staging refused in %s: %v", mode, err)
+						}
+					}
+				})
+			}
+		})
 	}
 }

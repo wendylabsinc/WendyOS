@@ -132,10 +132,10 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		// so that no handler can be reached without a verified client certificate.
 		grpc.ChainUnaryInterceptor(
 			interceptor.UnaryMTLSInterceptor(logger, expected, orgMode),
-			interceptor.UnaryRPCIdentityInterceptor(logger, expected)),
+			interceptor.UnaryRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.ChainStreamInterceptor(
 			interceptor.StreamMTLSInterceptor(logger, expected, orgMode),
-			interceptor.StreamRPCIdentityInterceptor(logger, expected)),
+			interceptor.StreamRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{

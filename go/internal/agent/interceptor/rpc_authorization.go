@@ -2,6 +2,10 @@ package interceptor
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/asn1"
+	"strings"
+	"unicode"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
@@ -48,8 +52,9 @@ func deviceRPCAllowed(method string) bool {
 // metadata. Operator/user callers retain the existing handler-specific policy.
 // Device callers need both an exact allowlisted method and a provably matching
 // tenant, even when the authentication gate is configured for org migration.
-// Identity-less, malformed and non-user/non-device credentials fail closed.
-func CheckRPCIdentity(ctx context.Context, method string, expected certs.Scope) error {
+// Only grace mode preserves the verified legacy wendy/user/<uid> user form.
+// Other identity-less, malformed and non-user/non-device credentials fail closed.
+func CheckRPCIdentity(ctx context.Context, method string, expected certs.Scope, mode OrgMode) error {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return status.Error(codes.Unauthenticated, "mTLS caller identity required")
@@ -58,8 +63,17 @@ func CheckRPCIdentity(ctx context.Context, method string, expected certs.Scope) 
 	if !ok || !tlsInfo.State.HandshakeComplete || len(tlsInfo.State.PeerCertificates) == 0 {
 		return status.Error(codes.Unauthenticated, "verified mTLS caller identity required")
 	}
-	identity, found, err := certs.IdentityFromCert(tlsInfo.State.PeerCertificates[0])
-	if err != nil || !found {
+	leaf := tlsInfo.State.PeerCertificates[0]
+	identity, found, err := certs.IdentityFromCert(leaf)
+	if err != nil {
+		return rpcauth.Denied("client certificate has no recognized RPC caller identity")
+	}
+	if !found {
+		// Never fall back from an authoritative or malformed identity to the CN.
+		// CheckMTLS has already verified the chain and applied tenant policy.
+		if mode == OrgModeGrace && legacyRPCUser(leaf) {
+			return nil
+		}
 		return rpcauth.Denied("client certificate has no recognized RPC caller identity")
 	}
 	switch identity.EntityType {
@@ -76,6 +90,24 @@ func CheckRPCIdentity(ctx context.Context, method string, expected certs.Scope) 
 	default:
 		return rpcauth.Denied("client certificate role is not permitted for agent RPCs")
 	}
+}
+
+// legacyRPCUser recognizes only the old CLI user CN, not arbitrary certificates
+// without an identity. The signature and tenant gate must be checked first.
+func legacyRPCUser(leaf *x509.Certificate) bool {
+	commonNames := 0
+	for _, name := range leaf.Subject.Names {
+		if name.Type.Equal(asn1.ObjectIdentifier{2, 5, 4, 3}) {
+			commonNames++
+		}
+	}
+	if commonNames > 1 {
+		return false
+	}
+	uid, ok := strings.CutPrefix(leaf.Subject.CommonName, "wendy/user/")
+	return ok && uid != "" && !strings.ContainsAny(uid, "/:") && strings.IndexFunc(uid, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) == -1
 }
 
 func logRPCIdentityRefusal(ctx context.Context, logger *zap.Logger, method string, err error) {
@@ -97,9 +129,9 @@ func logRPCIdentityRefusal(ctx context.Context, logger *zap.Logger, method strin
 	logger.Warn("rejected gRPC caller by RPC identity policy", fields...)
 }
 
-func UnaryRPCIdentityInterceptor(logger *zap.Logger, expected certs.Scope) grpc.UnaryServerInterceptor {
+func UnaryRPCIdentityInterceptor(logger *zap.Logger, expected certs.Scope, mode OrgMode) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if err := CheckRPCIdentity(ctx, info.FullMethod, expected); err != nil {
+		if err := CheckRPCIdentity(ctx, info.FullMethod, expected, mode); err != nil {
 			logRPCIdentityRefusal(ctx, logger, info.FullMethod, err)
 			return nil, err
 		}
@@ -107,9 +139,9 @@ func UnaryRPCIdentityInterceptor(logger *zap.Logger, expected certs.Scope) grpc.
 	}
 }
 
-func StreamRPCIdentityInterceptor(logger *zap.Logger, expected certs.Scope) grpc.StreamServerInterceptor {
+func StreamRPCIdentityInterceptor(logger *zap.Logger, expected certs.Scope, mode OrgMode) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if err := CheckRPCIdentity(ss.Context(), info.FullMethod, expected); err != nil {
+		if err := CheckRPCIdentity(ss.Context(), info.FullMethod, expected, mode); err != nil {
 			logRPCIdentityRefusal(ss.Context(), logger, info.FullMethod, err)
 			return err
 		}

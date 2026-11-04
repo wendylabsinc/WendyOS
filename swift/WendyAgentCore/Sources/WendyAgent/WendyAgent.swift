@@ -580,7 +580,10 @@ public actor WendyAgent {
                 [
                     RPCIdentityInterceptor(
                         expectedScope: ClientCertAuthorizer.scope(fromLeafPEM: $0.certPEM),
-                        logger: logger
+                        logger: logger,
+                        orgMode: ClientCertAuthorizer.OrgEnforcementMode.parse(
+                            environment["WENDY_MTLS_ORG_ENFORCEMENT"]
+                        ).mode
                     )
                 ]
             } ?? []
