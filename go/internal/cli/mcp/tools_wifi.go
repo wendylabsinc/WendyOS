@@ -42,7 +42,7 @@ func (s *mcpServer) registerWiFiTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("wifi_status", statusOpts...), s.handleWiFiStatus)
 
 	disconnectOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Request WiFi disconnection. Reports acknowledged/requested separately from confirmed completion when the network path closes."),
+		mcpgo.WithDescription("Disconnect the device from WiFi. This may also lose the connection carrying the request. Report the device as disconnected only when completion_confirmed and success are both true. If completion is unconfirmed, use wifi_status after reconnecting through another working path; do not treat a received request as completed."),
 	}
 	disconnectOpts = append(disconnectOpts, destructive()...)
 	disconnectOpts = append(disconnectOpts, openWorld()...)

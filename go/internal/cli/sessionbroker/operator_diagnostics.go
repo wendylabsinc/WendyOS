@@ -40,11 +40,11 @@ func OperatorRecovery(err error) (bool, []string) {
 		case "timeout", "connection_closed":
 			return true, []string{"Check that nearby Wendy Net routers are reachable over LAN or Bluetooth and participating, then retry the connection."}
 		case "issuer_chain", "certificate":
-			return false, []string{"Verify the selected tenant, peer certificate chain and device clock; correct the verification failure before reconnecting."}
+			return false, []string{"Check the selected organization, the router certificate chain and the device clock; correct the reported verification error before reconnecting."}
 		case "device_pin":
-			return false, []string{"Verify the discovered peer identity against its saved pin before reconnecting."}
+			return false, []string{"Verify that this is the expected device and investigate why its certificate differs from the saved certificate pin before reconnecting."}
 		default:
-			return false, []string{"Check that nearby routers have LAN or Bluetooth enabled and participate in the same Wendy Net tenant, then retry automatic discovery."}
+			return false, []string{"Check that nearby routers have LAN or Bluetooth enabled and participate in the same Wendy Net organization, then retry automatic discovery."}
 		}
 	}
 	st, ok := status.FromError(err)
@@ -59,16 +59,16 @@ func OperatorRecovery(err error) (bool, []string) {
 		switch info.Reason {
 		case operatorNoPeers, operatorReconnecting:
 			return true, []string{
-				"Check that nearby routers are reachable over LAN or Bluetooth and participate in the same Wendy Net tenant.",
+				"Check that nearby routers are reachable over LAN or Bluetooth and participate in the same Wendy Net organization.",
 				"Retry while the local router discovers and reconnects automatically.",
 			}
 		case operatorTargetPending:
 			return true, []string{
-				"Wait for the target's authenticated route and agent announcement, then retry.",
-				"Check that the target is running and participating in the same Wendy Net tenant.",
+				"Wait for a verified route and management address for the device, then retry.",
+				"Check that the target is running and participating in the same Wendy Net organization.",
 			}
 		case operatorViewPartial:
-			return false, []string{"Use a direct device selector or obtain a complete mesh observation; a partial snapshot cannot establish the target's availability."}
+			return false, []string{"Retry discovery or use a direct LAN connection; the incomplete device list cannot establish whether this device is reachable."}
 		}
 	}
 	return false, nil

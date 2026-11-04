@@ -53,7 +53,7 @@ type OperatorServices struct {
 
 func (query OperatorServiceQuery) validate() error {
 	if len(query.Mesh) > 63 || len(query.Type) > 63 || strings.ContainsAny(query.Mesh+query.Type, "\x00\r\n") {
-		return status.Error(codes.InvalidArgument, "mesh service query exceeds its bounds")
+		return status.Error(codes.InvalidArgument, "the mesh service query exceeds the supported size limit; use a shorter query")
 	}
 	return nil
 }
@@ -181,7 +181,7 @@ func (r *operatorTargets) localServices(stream grpc.ServerStream, a *activity) (
 		return true, err
 	}
 	if len(wire) > operatorServicesBytes {
-		return true, status.Error(codes.ResourceExhausted, "mesh service observation exceeds reply budget")
+		return true, status.Error(codes.ResourceExhausted, "the mesh service list exceeds the supported size limit; narrow the query or connect to the device directly")
 	}
 	reply := rawMessage(wire)
 	return true, stream.SendMsg(&reply)
@@ -206,7 +206,7 @@ func ReadOperatorServices(ctx context.Context, query OperatorServiceQuery) (Oper
 	}
 	var result OperatorServices
 	if json.Unmarshal(reply, &result) != nil || result.Version != 1 || len(result.Services) > operatorServicesRows {
-		return result, errors.New("unsupported operator service observation")
+		return result, errors.New("the running Wendy Net router cannot return a compatible service list; use matching CLI versions and reconnect")
 	}
 	return result, nil
 }

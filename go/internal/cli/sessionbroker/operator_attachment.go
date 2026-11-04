@@ -82,7 +82,7 @@ func (a *operatorAttachment) snapshot() (*operatorAttachmentState, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.current == nil {
-		return nil, operatorUnavailable(operatorReconnecting, "operator mesh attachment is reconnecting")
+		return nil, operatorUnavailable(operatorReconnecting, "this computer is reconnecting to Wendy Net; retry shortly")
 	}
 	return a.current, nil
 }
@@ -102,7 +102,7 @@ func (a *operatorAttachment) adjacent() (*grpc.ClientConn, meshid.Device, error)
 	}
 	peer, live := current.session.AdjacentPeer()
 	if !live {
-		return nil, meshid.Device{}, operatorUnavailable(operatorNoPeers, "the local operator router has no authenticated peers; its adjacent carrier is reconnecting")
+		return nil, meshid.Device{}, operatorUnavailable(operatorNoPeers, "this computer has no authenticated connections to nearby Wendy Net routers; automatic discovery is reconnecting")
 	}
 	for _, manifest := range current.session.Snapshot().Devices {
 		owner, parseErr := manifest.Peer(peer.Tenant())

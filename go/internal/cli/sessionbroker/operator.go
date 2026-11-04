@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -68,11 +69,11 @@ func ParseMeshSelector(text string) (meshid.Device, bool, error) {
 func operatorPrincipal(cert config.CertificateInfo) (meshoperator.Operator, error) {
 	chain, err := certs.ParseCertsFromPEM([]byte(cert.PemCertificate))
 	if err != nil || len(chain) == 0 {
-		return meshoperator.Operator{}, errors.New("selected primary operator certificate is missing")
+		return meshoperator.Operator{}, errors.New("the selected sign-in profile has no usable Wendy Net certificate; run 'wendy auth login' for your organization")
 	}
 	id, known, err := certs.IdentityFromCert(chain[0])
 	if err != nil || !known {
-		return meshoperator.Operator{}, errors.New("selected certificate has no operator principal")
+		return meshoperator.Operator{}, errors.New("the selected certificate cannot identify your Wendy account for mesh access; check the sign-in profile")
 	}
 	return meshoperator.ParsePrincipal(id.Principal)
 }
@@ -89,21 +90,21 @@ func (s Spec) paths(dir string) (string, string) {
 func (s Spec) validateOperator() error {
 	recipe := s.Operator
 	if recipe.Version != 2 {
-		return errors.New("unsupported operator broker recipe version")
+		return fmt.Errorf("saved Wendy Net settings use unsupported format version %d; update the CLI or select a compatible profile", recipe.Version)
 	}
 	operator, err := meshoperator.ParsePrincipal(recipe.Principal)
 	if err != nil {
 		return err
 	}
 	if s.Key != operatorKey(recipe.Principal) || s.Expected != (certs.WendyIdentity{}) || s.Host != operator.Principal() || s.Addr != s.Host || s.CertFingerprint == "" {
-		return errors.New("operator context identity differs")
+		return errors.New("saved Wendy Net connection details do not match the selected account; check your sign-in profile and reconnect")
 	}
 	return nil
 }
 func operatorSpec(recipe OperatorSpec, cert config.CertificateInfo) (Spec, error) {
 	operator, err := operatorPrincipal(cert)
 	if err != nil || operator.Principal() != recipe.Principal {
-		return Spec{}, errors.New("operator recipe differs from the selected primary credential")
+		return Spec{}, errors.New("saved Wendy Net settings belong to a different sign-in identity; select the matching profile or reconnect")
 	}
 	s := Spec{Operator: &recipe, Key: operatorKey(recipe.Principal), Host: operator.Principal(), Addr: operator.Principal(), CertFingerprint: certificateFingerprint(cert)}
 	return s, s.validate()
@@ -123,7 +124,7 @@ func configuredOperator() (config.CertificateInfo, meshoperator.Operator, error)
 		return config.CertificateInfo{}, meshoperator.Operator{}, err
 	}
 	if len(auth.Certificates) == 0 {
-		return config.CertificateInfo{}, meshoperator.Operator{}, errors.New("current context has no primary operator credential")
+		return config.CertificateInfo{}, meshoperator.Operator{}, errors.New("the selected sign-in profile has no certificate for joining Wendy Net; run 'wendy auth login' for your organization")
 	}
 	certificate := auth.Certificates[0]
 	operator, err := operatorPrincipal(certificate)
@@ -136,7 +137,7 @@ func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateIn
 		return nil, err
 	}
 	if !configDirOwnershipSafe() {
-		return nil, errors.New("operator profile is not owned by the current user")
+		return nil, errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	directory, err := configDir()
 	if err != nil {
@@ -195,7 +196,7 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	if !locked {
-		return errors.New("operator context is still shutting down")
+		return errors.New("the previous Wendy Net connection is still closing; wait a few seconds, then run 'wendy device wendy-net connect' again")
 	}
 	defer func() { releaseLock(owner); owner.Close() }()
 	data, err := json.Marshal(recipe)
@@ -231,7 +232,7 @@ func lockOperatorFile(ctx context.Context, path string) (*os.File, error) {
 	}
 }
 
-var errOperatorDisconnected = errors.New("operator mesh is disconnected; run 'wendy device wendy-net connect' to rejoin")
+var errOperatorDisconnected = errors.New("this computer is disconnected from Wendy Net; run 'wendy device wendy-net connect' to rejoin")
 
 func operatorRecipeCurrent(spec Spec) error {
 	directory, err := configDir()
@@ -246,7 +247,7 @@ func operatorRecipeCurrent(spec Spec) error {
 		return errOperatorDisconnected
 	}
 	if !sameOperatorRecipe(current, *spec.Operator) {
-		return errors.New("configured operator context changed; resolve the mesh selector again")
+		return errors.New("your Wendy Net connection settings changed while this command was running; retry the command")
 	}
 	return nil
 }
@@ -272,7 +273,7 @@ func readOperatorRecipeRecord(path string) (OperatorSpec, bool, error) {
 		return recipe, false, err
 	}
 	if len(data) > operatorRecipeBytes {
-		return recipe, false, errors.New("oversized operator recipe")
+		return recipe, false, errors.New("saved Wendy Net settings exceed the supported size limit")
 	}
 	err = json.Unmarshal(data, &recipe)
 	migrated := err == nil && recipe.Version == 1
@@ -308,7 +309,7 @@ func ConnectOperator(ctx context.Context, selector string) (*grpcclient.AgentCon
 		return nil, err
 	}
 	if device.Tenant() != operator.Tenant() {
-		return nil, errors.New("mesh target differs from the selected operator tenant")
+		return nil, errors.New("the selected mesh device belongs to a different organization; switch to its sign-in profile")
 	}
 	directory, err := configDir()
 	if err != nil {
@@ -347,7 +348,7 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 		return nil, ErrEmbeddedSuspended
 	}
 	if !configDirOwnershipSafe() {
-		return nil, errors.New("operator profile is not owned by the current user")
+		return nil, errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	wait, cancel := context.WithTimeout(ctx, operatormesh.JoinSetupTimeout)
 	defer cancel()
@@ -443,8 +444,8 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 	}
 }
 
-var errOperatorCredentialsChanged = errors.New("selected operator credential changed")
-var errOperatorProtocolChanged = errors.New("operator broker IPC protocol changed")
+var errOperatorCredentialsChanged = errors.New("your Wendy sign-in credentials changed; retry the command")
+var errOperatorProtocolChanged = errors.New("the local Wendy Net background router uses an incompatible version and must be restarted")
 
 // DisconnectOperator withdraws the current operator's retained context and
 // records that only an explicit connect may start it again. The non-secret
@@ -459,7 +460,7 @@ func DisconnectOperator(ctx context.Context) error {
 		return err
 	}
 	if !configDirOwnershipSafe() {
-		return errors.New("operator profile is not owned by current user")
+		return errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	brokerDirectory, err := brokerDir()
 	if err != nil {
@@ -508,7 +509,7 @@ func disconnectOperatorSpec(ctx context.Context, spec Spec) error {
 		return err
 	}
 	if !configDirOwnershipSafe() {
-		return errors.New("operator profile is not owned by current user")
+		return errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	if err = ensurePrivateDir(dir); err != nil {
 		return err
@@ -567,7 +568,7 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 		return nil, readErr
 	}
 	if len(data) > operatorStateBytes {
-		return nil, errors.New("oversized operator broker state")
+		return nil, errors.New("the local Wendy Net background router returned connection details larger than the supported limit")
 	}
 	var state stateFile
 	if json.Unmarshal(data, &state) == nil && state.Spec.Operator != nil && state.Spec.Key == spec.Key && state.Spec.Operator.Principal == spec.Operator.Principal && state.IPCVersion != operatorIPCVersion {
@@ -578,7 +579,7 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 		return nil, errOperatorCredentialsChanged
 	}
 	if json.Unmarshal(data, &state) != nil || state.Spec.Operator == nil || !sameOperatorRecipe(*state.Spec.Operator, *spec.Operator) || state.Spec.Expected != spec.Expected || state.Spec.CertFingerprint != spec.CertFingerprint || state.Spec.Key != spec.Key {
-		return nil, errors.New("operator broker is owned by different selected credentials")
+		return nil, errors.New("the local Wendy Net background router is using a different sign-in identity; check the selected profile and reconnect")
 	}
 	if state.IPCVersion != operatorIPCVersion {
 		return nil, errOperatorProtocolChanged
@@ -600,7 +601,7 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 	cancel()
 	var observation operatorContextStatus
 	if err == nil && (json.Unmarshal(reply, &observation) != nil || observation.Version != operatorIPCVersion || observation.Principal != spec.Operator.Principal) {
-		err = errors.New("operator broker context status differs")
+		err = errors.New("the local Wendy Net background router returned connection details for a different account or version")
 	}
 	if err != nil {
 		client.Close()

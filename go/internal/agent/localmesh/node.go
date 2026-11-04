@@ -534,7 +534,7 @@ func (n *Node) handle(e nodeEvent) error {
 			if n.reclaimGlobalRedundancy(e.add.device) {
 				return ErrCarrierCapacityRetry
 			}
-			return errors.New("wendy net link capacity reached")
+			return errors.New("Wendy Net connection limit reached")
 		}
 		n.nextLink++
 		e.add.id = n.nextLink

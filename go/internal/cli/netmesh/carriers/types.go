@@ -18,7 +18,7 @@ import (
 )
 
 // ErrUnsupportedPeer is a normal negotiated capability mismatch, not an authentication fallback.
-var ErrUnsupportedPeer = errors.New("peer does not support primary operator-router carriers")
+var ErrUnsupportedPeer = errors.New("the router does not support the required Wendy Net connection protocol")
 
 const (
 	TCP  = "tcp"
