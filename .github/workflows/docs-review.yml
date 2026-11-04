@@ -92,6 +92,7 @@ jobs:
           import os
           import pathlib
           import re
+          import subprocess
           import sys
 
           sys.path.insert(0, str(pathlib.Path('.github/scripts').resolve()))
@@ -183,7 +184,10 @@ jobs:
                   candidate.relative_to(docs_root)
               except ValueError:
                   return ''
-              if not candidate.is_file():
+              # The model reads documents from the PR head, not this checkout.
+              blob = subprocess.run(['git', 'cat-file', '-t', f'{os.environ["EXPECTED_HEAD_SHA"]}:{docs_prefix}{path}'],
+                                    capture_output=True, text=True)
+              if blob.stdout.strip() != 'blob':
                   return ''
               return f'{docs_prefix}{path}'
 

@@ -528,6 +528,44 @@ class WorkflowTests(unittest.TestCase):
                                 exec(inline(workflow, 2), {})
                     self.assertEqual([call.args[0].method for call in request.call_args_list], ['GET'])
 
+    def docs_finding_on_real_git(self, base_files, head_files, cited):
+        """Render one docs finding from a real repository checked out at its base."""
+        finding = dict(severity='concern', title='Wrong statement', path=cited,
+                       overview='The page says the wrong thing.', details='Fix it.')
+        fake = Mock()
+        fake.BadRequestError = type('BadRequest', (Exception,), {})
+        client = fake.Anthropic.return_value
+        client.messages.count_tokens.return_value = SimpleNamespace(input_tokens=100)
+        client.messages.create.return_value = SimpleNamespace(stop_reason='end_turn', content=[
+            SimpleNamespace(text=json.dumps({'summary': '', 'findings': [finding]}))])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            base, head, raw = commit_pair(path, base_files, head_files)
+            (path / 'pr.paths').write_bytes(git(path, 'diff', '--name-only', '-z', base, head, '--'))
+            git(path, 'checkout', '-q', base)
+            (path / 'pr.diff').write_bytes(raw)
+            env = dict(GITHUB_ENV=str(path/'env'), REVIEW_FILE=str(path/'review.md'),
+                       EXPECTED_HEAD_SHA=head, PR_TITLE='Test', PR_BODY='', PR_NUMBER='42')
+            with working_directory(path), patch.dict(os.environ, env), patch.dict(sys.modules, {'anthropic': fake}), \
+                 redirect_stdout(io.StringIO()):
+                exec(inline('docs-review.yml', 0), {})
+            return (path/'review.md').read_text()
+
+    def test_docs_finding_path_is_checked_against_the_head_revision(self):
+        page = docs_review.DOCS_PREFIX + 'guide/page.md'
+        present, absent = f'`{page}`: The page says the wrong thing.', 'The page says the wrong thing.'
+        for label, base_files, head_files, cited, shown in (
+            ('added by the PR', {'src/a.go': b'x\n'}, {page: b'New page\n'}, page, present),
+            ('on base and head', {page: b'Page\n'}, {page: b'Page\nMore\n'}, 'guide/page.md', present),
+            ('deleted by the PR', {page: b'Page\n'}, {page: None, 'src/a.go': b'x\n'}, page, absent),
+            ('on neither', {'src/a.go': b'x\n'}, {'src/a.go': b'y\n'}, page, absent),
+        ):
+            with self.subTest(label):
+                body = self.docs_finding_on_real_git(base_files, head_files, cited)
+                self.assertIn(shown, body)
+                if shown is absent:
+                    self.assertNotIn(f'`{page}`', body)
+
     def post_integration_comment(self, previous, comment=None, excerpted=True):
         """Run the post step with a mocked GitHub API; return its writes and any failure."""
         marker = '<!-- ai-integration-test-review:v1 -->'
