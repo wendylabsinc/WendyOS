@@ -167,6 +167,7 @@ class ArchivedAPI(r.GitHub):
         self.fixture, self.mac_files, self.downloads = fixture, mac_files, []
         self.source = fixture.source
         self.extra_files = {}
+        self.ubuntu_files = {}
 
     def get(self, path):
         match = re.fullmatch(r"actions/runs/(\d+)/artifacts\?per_page=100", path)
@@ -184,7 +185,7 @@ class ArchivedAPI(r.GitHub):
         name = re.fullmatch(r"actions/artifacts/(.+)/zip", path)[1]
         number = int(re.search(r"gh(\d+)", name)[1])
         source_run = next(c for c in self.fixture.runs if c["id"] == number)
-        files = self.mac_files[number] if "local-macos" in name else evidence(number != 1)
+        files = self.mac_files[number] if "local-macos" in name else self.ubuntu_files.get(number, evidence(number != 1))
         return archive({**files, **self.extra_files, "attempt.json": json.dumps({
             "git": {"commit": source_run["head_sha"], "dirty": False},
             "github": {"repository": REPO, "runID": str(number), "runAttempt": "1"},
@@ -226,6 +227,17 @@ class MacOSFailureTests(unittest.TestCase):
         ):
             with self.subTest(name), self.assertRaises(r.Skip):
                 self.prepare(mac, files)
+
+    def test_macos_failure_without_one_ubuntu_failure_skips(self):
+        # A teardown or upload step can fail the Ubuntu job while every test passes.
+        for name, ubuntu in (("no failing case", evidence(False)),
+                             ("additional assertion", mac_evidence(self.SAME, self.SAME))):
+            fixture = API()
+            fixture.mac = {3: "failure"}
+            api = ArchivedAPI(fixture, {3: mac_evidence()})
+            api.ubuntu_files = {3: ubuntu}
+            with self.subTest(name), self.assertRaisesRegex(r.Skip, "separate macOS failure"):
+                r.prepare(api, 3)
 
     def test_macos_only_failure_at_the_green_boundary_is_not_green(self):
         fixture = API()
