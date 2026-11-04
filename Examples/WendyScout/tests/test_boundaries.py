@@ -160,6 +160,33 @@ class ProjectionTests(unittest.TestCase):
             self.assertEqual(common.context()["issues"][0]["body"], "")
 
 
+class FreshMarkerTests(unittest.TestCase):
+    def test_stored_or_attached_output_must_belong_to_current_fixture(self):
+        p = probes.Probes.__new__(probes.Probes)
+        p.local = types.SimpleNamespace(
+            generation="current", verify_development=lambda: None
+        )
+        p.scratch = "sh.wendy.scout.scratch.0000000000"
+        p.versions = {"stable": {"tag": "2026.10.29-210857", "binary": "fixture"}}
+        p.socket = "/run/wendy/agent/agent.sock"
+        p.deadline = None
+        for marker, expected in [("old", False), ("current", True)]:
+            with patch.object(
+                probes,
+                "command",
+                return_value={
+                    "exit": 130,
+                    "output": "SCOUT_SCRATCH_READY generation=" + marker,
+                },
+            ) as cmd:
+                value = p.run("scratch_start", "stable", None)
+                self.assertEqual(value["output"]["ready_marker"], expected)
+                self.assertEqual(
+                    cmd.call_args.kwargs["detach_marker"],
+                    b"SCOUT_SCRATCH_READY generation=current",
+                )
+
+
 class ReplayTests(unittest.TestCase):
     def instance(self, results, new_stable=False):
         p = probes.Probes.__new__(probes.Probes)

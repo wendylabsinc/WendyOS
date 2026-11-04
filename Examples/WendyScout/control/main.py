@@ -514,6 +514,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.reply(
                     {
                         "alive": not STOP.is_set()
+                        and not getattr(scout, "error", None)
                         and time.monotonic() - scout.worker_seen < 4
                     }
                 )

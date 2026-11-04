@@ -165,6 +165,14 @@ def experiment(probes, kind, version, run):
                 check("invalid_args_preserve_data", 1, local.fixture_starts())
             else:
                 logs = command("scratch_logs")
+                for _ in range(2):
+                    if (
+                        logs["exit"] != 0
+                        or logs["output"].get("ready_marker")
+                        or CANCEL.wait(1)
+                    ):
+                        break
+                    logs = command("scratch_logs")
                 check("logs_exit", 0, logs["exit"])
                 check(
                     "stored_ready_output",

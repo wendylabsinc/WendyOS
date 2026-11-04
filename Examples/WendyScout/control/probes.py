@@ -69,7 +69,9 @@ class Probes:
                     else 25
                 ),
                 detach_marker=(
-                    b"SCOUT_SCRATCH_READY" if kind == "scratch_start" else None
+                    ("SCOUT_SCRATCH_READY generation=" + self.local.generation).encode()
+                    if kind == "scratch_start"
+                    else None
                 ),
             )
         except TimeoutError:
@@ -81,6 +83,10 @@ class Probes:
             parsed = raw["output"]
             json_valid = False
         output = public_observation(kind, parsed, raw["exit"], self.scratch)
+        if kind in {"scratch_start", "scratch_logs"}:
+            output["ready_marker"] = (
+                "SCOUT_SCRATCH_READY generation=" + self.local.generation
+            ) in raw["output"]
         result = {
             "evidence_kind": "fresh_command",
             "kind": kind,

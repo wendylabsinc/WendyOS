@@ -653,7 +653,13 @@ def main():
             json.dump({"generation": request["generation"], "starts": count + 1}, f)
             f.flush()
             os.fsync(f.fileno())
-        print("SCOUT_SCRATCH_READY starts=" + str(count + 1), flush=True)
+        print(
+            "SCOUT_SCRATCH_READY generation="
+            + request["generation"]
+            + " starts="
+            + str(count + 1),
+            flush=True,
+        )
         while not STOP.is_set():
             try:
                 if not control("/scratch-lease", timeout=1).get("alive"):
