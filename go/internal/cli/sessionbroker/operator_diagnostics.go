@@ -38,13 +38,13 @@ func OperatorRecovery(err error) (bool, []string) {
 	if errors.As(err, &startup) {
 		switch startup.failure.Kind {
 		case "timeout", "connection_closed":
-			return true, []string{"Check that the selected first-hop board is reachable and participating, then retry the connection."}
+			return true, []string{"Check that nearby Wendy Net routers are reachable over LAN or Bluetooth and participating, then retry the connection."}
 		case "issuer_chain", "certificate":
 			return false, []string{"Verify the selected tenant, peer certificate chain and device clock; correct the verification failure before reconnecting."}
 		case "device_pin":
-			return false, []string{"Verify the first-hop device identity against its saved pin before reconnecting."}
+			return false, []string{"Verify the discovered peer identity against its saved pin before reconnecting."}
 		default:
-			return false, []string{"Check the selected first-hop address and transport, then reconnect using automatic discovery or explicit --address and --router."}
+			return false, []string{"Check that nearby routers have LAN or Bluetooth enabled and participate in the same Wendy Net tenant, then retry automatic discovery."}
 		}
 	}
 	st, ok := status.FromError(err)
@@ -59,8 +59,8 @@ func OperatorRecovery(err error) (bool, []string) {
 		switch info.Reason {
 		case operatorNoPeers, operatorReconnecting:
 			return true, []string{
-				"Check that the first-hop board is reachable and participating in Wendy Net, then retry while the local router reconnects.",
-				"To choose a new first hop, run 'wendy device wendy-net disconnect', then 'wendy device wendy-net connect' or connect with explicit --address and --router.",
+				"Check that nearby routers are reachable over LAN or Bluetooth and participate in the same Wendy Net tenant.",
+				"Retry while the local router discovers and reconnects automatically.",
 			}
 		case operatorTargetPending:
 			return true, []string{
