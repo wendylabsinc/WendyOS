@@ -81,6 +81,13 @@ numeric asset IDs for legacy Cloud, or device names in either environment.
 | `--device` | Target a specific device by name (case-insensitive exact match), by UUID, or — on legacy sessions only — by numeric asset ID. When omitted in a non-interactive context with multiple devices, the command exits with an error listing `id=name` pairs. |
 | `--broker-url` | Override the tunnel broker host and port. **Legacy sessions only**; defaults to `WENDY_BROKER_URL` when set, otherwise the cloud endpoint's broker address. On a cloud (OIDC) session Cloud selects the authorized relay and passing this flag errors. |
 
+The Agent also reads `WENDY_BROKER_URL` from its service environment when it
+starts with a legacy enrollment. Set it on the device to override the broker
+endpoint for presence registration and device-originated v1 tunnels when the
+broker is separate from the API server. Without an override, an enrolled Cloud
+endpoint on port `443` also serves the broker; other hosts use port `50052`.
+This setting does not change the Agent's API or telemetry endpoints.
+
 ## Related
 
 - [Cloud Connectivity](./connectivity.md)

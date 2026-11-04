@@ -81,6 +81,14 @@ V1 app networking retains numeric names such as
 Friendly names require the v1 server's organization roster. The routed Wendy Net
 UUID address space requires a direct PKI enrollment.
 
+V1 VIPs are deterministic addresses, not an allocated-device allowlist. An app
+can address another numeric asset in its enrolled organization directly through
+the corresponding VIP, without a previous DNS lookup. LAN connections verify the
+exact peer certificate, and the Cloud broker enforces the organization boundary.
+V1 MeshDial admits same-organization device certificates to loopback ports;
+v2's service catalog and published-port admission do not apply to this legacy
+path. These are retained v1 access rules to include in your migration review.
+
 ## Inventory what the deployment depends on
 
 Record the current device names and IDs, app manifests and image versions,
