@@ -298,7 +298,9 @@ class Scout:
                 and cache.exists()
                 and time.time() - cache.stat().st_mtime < 1800
             ):
-                self.ctx = json.loads(cache.read_text())
+                cached_context = json.loads(cache.read_text())
+                if cached_context.get("schema") == 1:
+                    self.ctx = cached_context
             if self.ctx is None or time.monotonic() - self.refreshed >= 1800:
                 try:
                     fresh = releases() if self.ctx is not None else self.versions
