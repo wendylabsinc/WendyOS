@@ -335,6 +335,29 @@ class Scout:
                 "model": PINS["model"],
                 "pi": PINS["pi"],
             }
+            # Bound repetition when public context and release pins are unchanged.
+            import hashlib
+
+            campaign = hashlib.sha256(
+                json.dumps(
+                    {
+                        "versions": {k: v["tag"] for k, v in self.versions.items()},
+                        "context": ctx,
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            progress_path = STATE / "progress.json"
+            progress = (
+                json.loads(progress_path.read_text()) if progress_path.exists() else {}
+            )
+            if progress.get("campaign") != campaign:
+                progress = {"campaign": campaign, "sessions": 0}
+            if progress["sessions"] >= 3:
+                return {"status": "waiting_context_change", "retry_after": 60}
+            progress["sessions"] += 1
+            save(progress_path, progress)
+            manifest["campaign"] = progress
             save(run / "manifest.json", manifest)
             save(run / "context.json", ctx)
             self.sessions[token] = {

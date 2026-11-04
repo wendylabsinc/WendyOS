@@ -52,7 +52,9 @@ Volumes survive redeploys:
 Public release metadata determines channels from `prerelease`, never tag age or
 name alone. Scout pins latest stable, previous stable and latest nightly per
 session. Release/context refresh happens between sessions on a bounded interval;
-transient fetch failures back off. Cached artifacts are reverified. A newer
+transient fetch failures back off. Cached artifacts are reverified. Unchanged
+release/context snapshots receive at most three sessions before Scout waits for
+new context, preserving that budget across restarts instead of repeating forever. A newer
 stable release is tested before publication so an already-fixed older-nightly
 failure does not become a new pre-stable regression issue.
 
@@ -146,6 +148,8 @@ wendy-scout/release-pins.json       exact verified CLI releases/digests
 wendy-scout/runs/<UTC>/            context, versions, projected and private raw probes
 wendy-scout/findings/               verified findings retained independently of run pruning
 wendy-scout/publisher.json          deduplication and issue-rate ledger
+wendy-scout/progress.json           durable bounded session budget per context
+wendy-scout-work/events.jsonl[.1]    worker startup/backoff/session diagnostics
 wendy-scout-work/preflight.json     live kernel/namespace/cleanup checks
 wendy-scout-work/bootstrap-complete.json   positive offline CLI checks
 wendy-scout-work/runs/              bounded Pi events, scripts and summaries

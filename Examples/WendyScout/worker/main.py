@@ -330,7 +330,14 @@ def model_session(begin, index):
             "run": run,
             "session": begin["session"],
             "script_calls": 0,
-            "inputs": {"challenge": challenge, "observations": []},
+            "inputs": {
+                "challenge": challenge,
+                "observations": [],
+                "cli_binaries": {
+                    label: "/opt/scout-offline/" + v["tag"] + "/wendy"
+                    for label, v in begin["versions"].items()
+                },
+            },
             "finished": False,
         }
     )
@@ -647,7 +654,7 @@ def main():
                     while not STOP.wait(1):
                         pass
                     break
-                STOP.wait(2)
+                STOP.wait(min(60, max(2, begin.get("retry_after", 2))))
                 continue
             install_offline(begin["versions"])
             result = model_session(begin, index)
