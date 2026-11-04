@@ -1149,13 +1149,14 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 }
 
 // LoadCameraDHCPAllowlist loads saved permissions, migrating legacy camera links
-// once if no configuration exists. The resulting file, even when empty, is
-// authoritative and is reread every link scan. Call before StartDiscovery.
+// with MAC-matched stored credentials once if no configuration exists. The file
+// is authoritative even when empty, and is reread every link scan. Call before
+// StartDiscovery.
 func (s *VideoService) LoadCameraDHCPAllowlist(path string) error {
 	if err := s.links.LoadDHCPAllowlist(path); err != nil {
 		return err
 	}
-	return s.links.MigrateLegacyDHCPAllowlist()
+	return s.links.MigrateLegacyDHCPAllowlist(s.credentials)
 }
 
 // discoveryInterval is how often the agent re-probes for network cameras. It is

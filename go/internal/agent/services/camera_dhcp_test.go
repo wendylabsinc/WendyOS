@@ -48,9 +48,22 @@ func TestCameraDHCPServiceMigratedRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s := &VideoService{links: ipcam.NewLinkManager(registry, zap.NewNop())}
+	credentials := ipcam.NewCredentialStore(filepath.Join(dir, "camera-credentials.json"))
+	for _, mac := range []string{"02:00:00:00:00:01", "02:00:00:00:00:02"} {
+		if err := credentials.Set(mac, ipcam.Credential{Username: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An ordinary client mistakenly served before must not enable another port.
+	if _, err := registry.Upsert(ipcam.Camera{MAC: "02:00:00:00:00:03", Link: "camera-test2", Address: "10.98.2.50", DHCPServed: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := &VideoService{links: ipcam.NewLinkManager(registry, zap.NewNop()), credentials: credentials}
 	if err := s.LoadCameraDHCPAllowlist(path); err != nil {
 		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "camera-test0\ncamera-test1\n" {
+		t.Fatalf("migration must enable only credential-matched ports: %q, %v", data, err)
 	}
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -83,7 +96,7 @@ func TestCameraDHCPServiceMigratedRoundTrip(t *testing.T) {
 	if err != nil || string(data) != "camera-test1\n" {
 		t.Fatalf("persisted configuration = %q, %v", data, err)
 	}
-	restarted := &VideoService{links: ipcam.NewLinkManager(registry, zap.NewNop())}
+	restarted := &VideoService{links: ipcam.NewLinkManager(registry, zap.NewNop()), credentials: credentials}
 	if err := restarted.LoadCameraDHCPAllowlist(path); err != nil {
 		t.Fatal(err)
 	}

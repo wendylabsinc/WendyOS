@@ -1,6 +1,9 @@
 package ipcam
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestLegacyDHCPInterfaces(t *testing.T) {
 	for _, tc := range []struct {
@@ -24,10 +27,34 @@ func TestLegacyDHCPInterfaces(t *testing.T) {
 		{"IPv6", Camera{Link: "eth0", Address: "fd00::50"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := legacyDHCPInterfaces([]Camera{tc.cam, tc.cam})
+			tc.cam.MAC = "02:00:00:00:00:01"
+			credentials := &CredentialStore{by: map[string]Credential{tc.cam.MAC: {Username: "admin"}}}
+			got := legacyDHCPInterfaces([]Camera{tc.cam, tc.cam}, credentials)
 			if got[tc.cam.Link] != tc.want || (!tc.want && len(got) != 0) || len(got) > 1 {
 				t.Fatalf("legacy interfaces = %v, want inclusion %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A saved lease, served flag, hostname or discovery metadata must never let
+// credentials for a different device authorize this port.
+func TestLegacyDHCPInterfacesRequiresMatchingCredentials(t *testing.T) {
+	cameras := []Camera{
+		{MAC: "02:00:00:00:00:01", Link: "eth0", Address: "10.98.0.50", Model: "OfficePrinter", DHCPServed: true},
+		{MAC: "02:00:00:00:00:02", Link: "eth1", Address: "10.98.1.149"},
+		{MAC: "02:00:00:00:00:03", Link: "eth2", Address: "10.98.2.50", ONVIFAddr: "http://camera/onvif", StreamMain: "/main"},
+		{Link: "eth3", Address: "10.98.3.50"},
+	}
+	credentials := &CredentialStore{by: map[string]Credential{
+		"02:00:00:00:00:02": {Username: "admin"},
+		"02:00:00:00:00:99": {Username: "other"},
+		"":                  {Username: "invalid"},
+	}}
+	if got := legacyDHCPInterfaces(cameras, credentials); !reflect.DeepEqual(got, map[string]bool{"eth1": true}) {
+		t.Fatalf("migrated interfaces = %v, want only MAC-matched eth1", got)
+	}
+	if got := legacyDHCPInterfaces(cameras, nil); len(got) != 0 {
+		t.Fatalf("migrated without credentials: %v", got)
 	}
 }
