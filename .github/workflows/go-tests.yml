@@ -159,8 +159,16 @@ jobs:
           python3 scripts/package-chatgpt-plugin.py --check
 
   containerd-regressions:
-    name: Containerd lifecycle regressions
+    name: Containerd lifecycle regressions (${{ matrix.runtime }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: '1.7'
+            package: containerd=1.7.12-0ubuntu4
+          - runtime: current
+            package: containerd
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -174,11 +182,13 @@ jobs:
           go test -c -o "$RUNNER_TEMP/containerd.test" ./go/internal/agent/containerd
           go test -c -o "$RUNNER_TEMP/rtps.test" ./go/internal/rtps
       - name: Extract test runtime without replacing the runner's daemon
+        env:
+          CONTAINERD_PACKAGE: ${{ matrix.package }}
         run: |
           sudo apt-get update
           mkdir -p "$RUNNER_TEMP/wendy-runtime"
           cd "$RUNNER_TEMP/wendy-runtime"
-          apt-get download containerd runc busybox-static
+          apt-get download "$CONTAINERD_PACKAGE" runc busybox-static
           for package in ./*.deb; do dpkg-deb --extract "$package" root; done
       - name: Test replacement, restoration and layer repair
         run: |

@@ -34,8 +34,8 @@ with the race detector on Linux. It now also:
   directory on an ephemeral GitHub-hosted Linux runner. It leaves the runner's
   installed daemon alone. The [runner script](../.github/scripts/test-containerd-regressions.sh)
   creates a private root, state directory and socket, requires every integration
-  test to pass, and cleans up its own tasks and daemon. This covers containerd 1.7
-  behavior as supplied by Ubuntu 24.04, including the layer-parent repair.
+  test to pass, and cleans up its own tasks and daemon. The matrix checks Ubuntu 24.04's original containerd 1.7.12 package and its current
+  update, covering both the old layer-parent behavior and the newer daemon.
 - Executes DDS namespace isolation with Linux namespace privileges and checks that
   all three selected tests actually passed.
 - Runs the Darwin BLE package with cgo and the race detector. The native fixture
