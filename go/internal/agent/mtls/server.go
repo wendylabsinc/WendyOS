@@ -30,11 +30,17 @@ import (
 // certs remain valid when the device clock has not yet been synchronised via NTP. Pass a
 // zero time.Time to disable the floor.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
+	keyData := []byte(keyPEM)
+	defer clear(keyData)
+	return newTLSConfig(certPEM, chainPEM, keyData, logger, notBeforeFloor)
+}
+
+func newTLSConfig(certPEM, chainPEM string, keyPEM []byte, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
 	if chainPEM == "" {
 		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
 
-	cert, err := certs.TLSKeyPair(certPEM, chainPEM, keyPEM)
+	cert, err := certs.TLSKeyPairWithKeyBytes(certPEM, chainPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading X509 key pair: %w", err)
 	}
@@ -159,7 +165,13 @@ var meshSessionCache = tls.NewLRUClientSessionCache(64)
 // Hostname verification is intentionally skipped — device certs carry wendy
 // URN SANs, not DNS names.
 func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*tls.Config, error) {
-	base, err := NewTLSConfig(certPEM, chainPEM, keyPEM, logger, time.Time{})
+	keyData := []byte(keyPEM)
+	defer clear(keyData)
+	return newClientTLSConfig(certPEM, chainPEM, keyData, logger)
+}
+
+func newClientTLSConfig(certPEM, chainPEM string, keyPEM []byte, logger *zap.Logger) (*tls.Config, error) {
+	base, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +267,16 @@ func NewClientTLSConfigExpectingDevice(certPEM, chainPEM, keyPEM string, logger 
 // have one, legacy scope+type+id otherwise) and live in this device's own
 // tenant when that tenant is knowable.
 func NewClientTLSConfigExpectingIdentity(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want certs.WendyIdentity) (*tls.Config, error) {
-	base, err := NewClientTLSConfig(certPEM, chainPEM, keyPEM, logger)
+	keyData := []byte(keyPEM)
+	defer clear(keyData)
+	return NewClientTLSConfigExpectingIdentityWithKeyBytes(certPEM, chainPEM, keyData, logger, want)
+}
+
+// NewClientTLSConfigExpectingIdentityWithKeyBytes preserves the same chain and
+// exact peer checks without copying the private-key PEM into an immutable string.
+// The caller may clear keyPEM after return; the config retains only the parsed key.
+func NewClientTLSConfigExpectingIdentityWithKeyBytes(certPEM, chainPEM string, keyPEM []byte, logger *zap.Logger, want certs.WendyIdentity) (*tls.Config, error) {
+	base, err := newClientTLSConfig(certPEM, chainPEM, keyPEM, logger)
 	if err != nil {
 		return nil, err
 	}

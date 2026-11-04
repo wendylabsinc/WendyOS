@@ -43,6 +43,14 @@ type Signer struct {
 
 // New validates that the certificate and private key are the same P-256 pair.
 func New(identityURI, certificatePEM, privateKeyPEM string) (*Signer, error) {
+	keyData := []byte(privateKeyPEM)
+	defer clear(keyData)
+	return NewWithKeyBytes(identityURI, certificatePEM, keyData)
+}
+
+// NewWithKeyBytes parses the key without retaining its PEM encoding. The caller
+// keeps ownership of privateKeyPEM and may clear it immediately after return.
+func NewWithKeyBytes(identityURI, certificatePEM string, privateKeyPEM []byte) (*Signer, error) {
 	certificate, err := parseCertificate(certificatePEM)
 	if err != nil {
 		return nil, err
@@ -162,11 +170,12 @@ func parseCertificate(value string) (*x509.Certificate, error) {
 	return certificate, nil
 }
 
-func parsePrivateKey(value string) (*ecdsa.PrivateKey, error) {
-	block, _ := pem.Decode([]byte(value))
+func parsePrivateKey(value []byte) (*ecdsa.PrivateKey, error) {
+	block, _ := pem.Decode(value)
 	if block == nil {
 		return nil, fmt.Errorf("decode legacy certificate proof private key")
 	}
+	defer clear(block.Bytes)
 	var key *ecdsa.PrivateKey
 	switch block.Type {
 	case "EC PRIVATE KEY":

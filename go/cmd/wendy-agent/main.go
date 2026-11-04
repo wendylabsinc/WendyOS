@@ -775,15 +775,13 @@ func main() {
 			// no remote way back (ccr1, org 90, 2026-11-03).
 			brokerURL := services.LegacyBrokerURL(cloudHost)
 			certPEM, chainPEM, keyData := provisioningSvc.ProvisioningCerts()
-			keyPEM := string(keyData)
-			for i := range keyData {
-				keyData[i] = 0
-			}
 			if chainPEM == "" {
+				clear(keyData)
 				logger.Warn("CA chain PEM unavailable; cannot start tunnel broker (re-provision if this persists)")
 				return
 			}
-			client := services.NewTunnelBrokerClient(logger, brokerURL, certPEM, keyPEM, chainPEM, mtlsPortNum)
+			client := services.NewTunnelBrokerClient(logger, brokerURL, certPEM, keyData, chainPEM, mtlsPortNum)
+			clear(keyData)
 			client.Run(ctx)
 		}()
 	}
@@ -843,10 +841,11 @@ func main() {
 					return nil, err
 				}
 				_, cert, chain, key, err := provisioningSvc.LegacyCloudCredentials()
+				defer clear(key)
 				if err != nil {
 					return nil, err
 				}
-				return mtls.NewClientTLSConfigExpectingIdentity(cert, chain, key, logger, certs.WendyIdentity{OrgID: org, EntityType: certs.EntityAsset, EntityID: strconv.Itoa(int(asset))})
+				return mtls.NewClientTLSConfigExpectingIdentityWithKeyBytes(cert, chain, key, logger, certs.WendyIdentity{OrgID: org, EntityType: certs.EntityAsset, EntityID: strconv.Itoa(int(asset))})
 			},
 			ContextLocks: buildContextLocks,
 			// Legacy fallback for a CLI that does not put each target's actual

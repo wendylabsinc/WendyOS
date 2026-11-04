@@ -46,7 +46,7 @@ func ecdsaCertKeyPEM(t *testing.T) (certPEM, keyPEM string) {
 // A valid ECDSA leaf/key is presented as the client certificate.
 func TestBrokerTLSConfig_PresentsValidClientCert(t *testing.T) {
 	certPEM, keyPEM := ecdsaCertKeyPEM(t)
-	cfg, err := brokerTLSConfig(zap.NewNop(), certPEM, keyPEM, "")
+	cfg, err := brokerTLSConfig(zap.NewNop(), certPEM, []byte(keyPEM), "")
 	if err != nil {
 		t.Fatalf("brokerTLSConfig returned error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestBrokerTLSConfig_PresentsValidClientCert(t *testing.T) {
 // (no error), rather than blocking the connection.
 func TestBrokerTLSConfig_MalformedKeyFallsBackToNoClientCert(t *testing.T) {
 	certPEM, _ := ecdsaCertKeyPEM(t)
-	cfg, err := brokerTLSConfig(zap.NewNop(), certPEM, "-----BEGIN EC PRIVATE KEY-----\nnot a key\n-----END EC PRIVATE KEY-----\n", "")
+	cfg, err := brokerTLSConfig(zap.NewNop(), certPEM, []byte("-----BEGIN EC PRIVATE KEY-----\nnot a key\n-----END EC PRIVATE KEY-----\n"), "")
 	if err != nil {
 		t.Fatalf("cert-load failure must be non-fatal, got error: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestBrokerTLSConfig_MalformedKeyFallsBackToNoClientCert(t *testing.T) {
 
 // With no cert/key material at all, no client cert is presented and no error.
 func TestBrokerTLSConfig_EmptyCertKeyPresentsNoClientCert(t *testing.T) {
-	cfg, err := brokerTLSConfig(zap.NewNop(), "", "", "")
+	cfg, err := brokerTLSConfig(zap.NewNop(), "", nil, "")
 	if err != nil {
 		t.Fatalf("empty cert/key must be non-fatal, got error: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestBrokerTLSConfig_EmptyCertKeyPresentsNoClientCert(t *testing.T) {
 
 func TestBrokerDialOptsAddsFreshCertificateProof(t *testing.T) {
 	certPEM, keyPEM := ecdsaCertKeyPEM(t)
-	_, requestMetadata, err := brokerIdentityDialOpts(zap.NewNop(), "urn:wendy:org:7:asset:42", certPEM, keyPEM, "")
+	_, requestMetadata, err := brokerIdentityDialOpts(zap.NewNop(), "urn:wendy:org:7:asset:42", certPEM, []byte(keyPEM), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestBrokerDialOptsAddsFreshCertificateProof(t *testing.T) {
 // A malformed CA chain is a hard error (the broker's server cert can't be
 // validated without it) — unlike the client-cert fallback.
 func TestBrokerTLSConfig_MalformedChainErrors(t *testing.T) {
-	if _, err := brokerTLSConfig(zap.NewNop(), "", "", "not-a-pem-chain"); err == nil {
+	if _, err := brokerTLSConfig(zap.NewNop(), "", nil, "not-a-pem-chain"); err == nil {
 		t.Fatal("expected error for a malformed CA chain, got nil")
 	}
 }
@@ -136,7 +136,7 @@ func TestBrokerTLSConfig_TrailingBytesChainAccepted(t *testing.T) {
 		t.Fatal("AppendCertsFromPEM accepted a trailing-bytes chain; this guard no longer tests anything")
 	}
 
-	cfg, err := brokerTLSConfig(zap.NewNop(), certPEM, keyPEM, string(chainPEM))
+	cfg, err := brokerTLSConfig(zap.NewNop(), certPEM, []byte(keyPEM), string(chainPEM))
 	if err != nil {
 		t.Fatalf("brokerTLSConfig rejected a pki-core chain: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestBrokerDialOpts_DowngradesAreAudited(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			core, logs := observer.New(zap.WarnLevel)
-			_, requestMetadata, err := brokerIdentityDialOpts(zap.New(core), "urn:wendy:org:7:asset:42", tc.certPEM, tc.keyPEM, "")
+			_, requestMetadata, err := brokerIdentityDialOpts(zap.New(core), "urn:wendy:org:7:asset:42", tc.certPEM, []byte(tc.keyPEM), "")
 			if err != nil {
 				t.Fatal(err)
 			}

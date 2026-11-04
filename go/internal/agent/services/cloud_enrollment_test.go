@@ -51,3 +51,20 @@ func TestLegacyEnrollmentDoesNotStartPKIRenewal(t *testing.T) {
 		t.Fatal("legacy enrollment exposed PKI worker credentials")
 	}
 }
+
+func TestLegacyCredentialsKeyCopyDoesNotAliasProvisioning(t *testing.T) {
+	service := &ProvisioningService{enrolled: true, cloudHost: "legacy:443", orgID: 64, assetID: 674, keyPEM: []byte("private key")}
+	_, _, _, first, err := service.LegacyCloudCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(first)
+	_, _, _, second, err := service.LegacyCloudCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(second)
+	if string(second) != "private key" {
+		t.Fatal("clearing a credential snapshot changed provisioning state")
+	}
+}

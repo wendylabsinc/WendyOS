@@ -121,7 +121,7 @@ func TestBrokerTLSConfigVerifiesEndpointIdentity(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			cfg, err := brokerTLSConfig(zap.NewNop(), "", "", pemCA)
+			cfg, err := brokerTLSConfig(zap.NewNop(), "", nil, pemCA)
 			if err != nil {
 				t.Fatal(err)
 			}

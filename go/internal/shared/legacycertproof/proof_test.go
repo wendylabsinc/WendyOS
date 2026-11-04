@@ -18,7 +18,9 @@ import (
 
 func TestMetadataSignsMethodBoundProof(t *testing.T) {
 	certificatePEM, privateKeyPEM, certificate, key := testIdentity(t)
-	signer, err := New("urn:wendy:org:7:user:user-a", certificatePEM, privateKeyPEM)
+	keyData := []byte(privateKeyPEM)
+	signer, err := NewWithKeyBytes("urn:wendy:org:7:user:user-a", certificatePEM, keyData)
+	clear(keyData)
 	if err != nil {
 		t.Fatal(err)
 	}

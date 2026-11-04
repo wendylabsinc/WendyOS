@@ -116,6 +116,7 @@ func (d *LegacyPeerDialer) DialRoutedTarget(ctx context.Context, target Delivery
 		return nil, "", fmt.Errorf("invalid or mixed legacy relay target")
 	}
 	enrollment, cert, chain, key, err := d.provisioning.LegacyCloudCredentials()
+	defer clear(key)
 	if err != nil || enrollment.Mode != CloudLegacy {
 		if err == nil {
 			err = fmt.Errorf("legacy enrollment no longer active")
@@ -191,6 +192,7 @@ func (d *LegacyPeerDialer) DialLegacyApp(ctx context.Context, org, asset int32, 
 		return nil, "", fmt.Errorf("invalid legacy application destination")
 	}
 	e, cert, chain, key, err := d.provisioning.LegacyCloudCredentials()
+	defer clear(key)
 	if err != nil || e.Mode != CloudLegacy || e.OrganizationID != target.LegacyOrgID {
 		return nil, "", fmt.Errorf("legacy enrollment changed")
 	}
@@ -224,8 +226,8 @@ func (d *LegacyPeerDialer) DialLegacyApp(ctx context.Context, org, asset int32, 
 	return conn, mode, err
 }
 
-func (d *LegacyPeerDialer) dialLegacyLAN(ctx context.Context, hostport, cert, chain, key string, org, asset int32, port uint16) (net.Conn, error) {
-	tlsConfig, err := mtls.NewClientTLSConfigExpectingIdentity(cert, chain, key, d.logger, certs.WendyIdentity{OrgID: org, EntityType: certs.EntityAsset, EntityID: strconv.Itoa(int(asset))})
+func (d *LegacyPeerDialer) dialLegacyLAN(ctx context.Context, hostport, cert, chain string, key []byte, org, asset int32, port uint16) (net.Conn, error) {
+	tlsConfig, err := mtls.NewClientTLSConfigExpectingIdentityWithKeyBytes(cert, chain, key, d.logger, certs.WendyIdentity{OrgID: org, EntityType: certs.EntityAsset, EntityID: strconv.Itoa(int(asset))})
 	if err != nil {
 		return nil, err
 	}

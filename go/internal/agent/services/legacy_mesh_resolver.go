@@ -98,6 +98,7 @@ func (r *LegacyMeshResolver) apply(e CloudEnrollment, resp *cloudpb.GetMeshRoste
 }
 func (r *LegacyMeshResolver) Sync(ctx context.Context) error {
 	e, cert, chain, key, err := r.peers.provisioning.LegacyCloudCredentials()
+	defer clear(key)
 	if err != nil {
 		return err
 	}

@@ -98,7 +98,9 @@ func runV1BrokerContract(t *testing.T, b *v1BrokerContract, dual bool) {
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 	leaf, private := legacyBrokerTestLeaf(t, dual)
-	client := NewTunnelBrokerClient(zap.NewNop(), listener.Addr().String(), leaf, private, roots, 0)
+	keyData := []byte(private)
+	client := NewTunnelBrokerClient(zap.NewNop(), listener.Addr().String(), leaf, keyData, roots, 0)
+	clear(keyData) // Presence and subsequent tunnels must use parsed keys, not this PEM.
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	done := make(chan struct{})

@@ -184,7 +184,7 @@ func (f *CloudFlusher) dial(ctx context.Context, host, certPEM, chainPEM string,
 			return nil, err
 		}
 		if enrollment.Mode == CloudLegacy {
-			opts, proof, err := NewTunnelBrokerClient(f.logger, host, certPEM, string(keyData), chainPEM, 0).buildDialOpts()
+			opts, proof, err := NewTunnelBrokerClient(f.logger, host, certPEM, keyData, chainPEM, 0).buildDialOpts()
 			if err != nil {
 				return nil, err
 			}

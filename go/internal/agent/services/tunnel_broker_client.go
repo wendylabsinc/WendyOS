@@ -46,12 +46,12 @@ var (
 )
 
 type TunnelBrokerClient struct {
-	logger   *zap.Logger
-	url      string
-	certPEM  string
-	keyPEM   string
-	chainPEM string
-	mtlsPort int
+	logger         *zap.Logger
+	url            string
+	dialOpts       []grpc.DialOption
+	proof          brokerRequestMetadata
+	credentialsErr error
+	mtlsPort       int
 
 	// sessions counts live tunnel sessions; they ride the presence connection.
 	sessions atomic.Int32
@@ -59,15 +59,17 @@ type TunnelBrokerClient struct {
 
 // NewTunnelBrokerClient serves legacy Cloud v1 enrollments. Direct PKI
 // enrollments use cloudrelay.Agent, including their independent v2 datagrams.
-func NewTunnelBrokerClient(logger *zap.Logger, url, certPEM, keyPEM, chainPEM string, mtlsPort int) *TunnelBrokerClient {
-	return &TunnelBrokerClient{
-		logger:   logger,
-		url:      url,
-		certPEM:  certPEM,
-		keyPEM:   keyPEM,
-		chainPEM: chainPEM,
-		mtlsPort: mtlsPort,
+// keyPEM is borrowed only during construction. The caller may clear it after
+// return; retries retain parsed TLS/proof keys rather than the PEM encoding.
+func NewTunnelBrokerClient(logger *zap.Logger, url, certPEM string, keyPEM []byte, chainPEM string, mtlsPort int) *TunnelBrokerClient {
+	c := &TunnelBrokerClient{logger: logger, url: url, mtlsPort: mtlsPort}
+	identityURI := brokerIdentityFromCert(logger, certPEM)
+	if identityURI == "" {
+		c.credentialsErr = errors.New("no provisioned device identity; broker presence requires an enrolled certificate to authenticate with")
+	} else {
+		c.dialOpts, c.proof, c.credentialsErr = brokerIdentityDialOpts(logger, identityURI, certPEM, keyPEM, chainPEM)
 	}
+	return c
 }
 
 // brokerIdentityFromCert uses the legacy URN even when a transitional leaf
@@ -234,11 +236,10 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 }
 
 func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, brokerRequestMetadata, error) {
-	identityURI := brokerIdentityFromCert(c.logger, c.certPEM)
-	if identityURI == "" {
-		return nil, nil, errors.New("no provisioned device identity; broker presence requires an enrolled certificate to authenticate with")
+	if c.proof == nil && c.credentialsErr == nil {
+		return nil, nil, errors.New("broker client has no enrolled credentials")
 	}
-	return brokerIdentityDialOpts(c.logger, identityURI, c.certPEM, c.keyPEM, c.chainPEM)
+	return c.dialOpts, c.proof, c.credentialsErr
 }
 
 // brokerTLSConfig validates the broker certificate chain against system and
@@ -249,7 +250,7 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, brokerRequestMe
 // TLS before the broker. Request authentication separately proves possession
 // of this key; retaining the TLS presentation supports direct broker endpoints.
 // Extracted so the cert-load fallback is unit-testable without a live dial.
-func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls.Config, error) {
+func brokerTLSConfig(logger *zap.Logger, certPEM string, keyPEM []byte, chainPEM string) (*tls.Config, error) {
 	caPool, err := x509.SystemCertPool()
 	if err != nil {
 		caPool = x509.NewCertPool()
@@ -269,8 +270,8 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 	// this connection via mTLS once it starts requesting client certs. Loading
 	// only the leaf (not the ML-DSA CA chain) keeps Go's TLS stack from tripping
 	// over ML-DSA parse failures.
-	if certPEM != "" && keyPEM != "" {
-		if clientCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
+	if certPEM != "" && len(keyPEM) != 0 {
+		if clientCert, err := tls.X509KeyPair([]byte(certPEM), keyPEM); err != nil {
 			logger.Warn("failed to load device client certificate for broker mTLS; presenting none",
 				zap.String("event", "broker_mtls_client_cert_load_failed"),
 				zap.String("auth_downgrade", "mtls_client_cert->none"),
@@ -289,7 +290,7 @@ type brokerRequestMetadata func(fullMethod string) (metadata.MD, error)
 // brokerIdentityDialOpts returns gRPC options and certificate-bound identity
 // metadata for a broker caller authenticating as a principal URI — the SPIFFE
 // device principal on a v2 leaf, the legacy URN on an old-chain certificate.
-func brokerIdentityDialOpts(logger *zap.Logger, identityURI, certPEM, keyPEM, chainPEM string) ([]grpc.DialOption, brokerRequestMetadata, error) {
+func brokerIdentityDialOpts(logger *zap.Logger, identityURI, certPEM string, keyPEM []byte, chainPEM string) ([]grpc.DialOption, brokerRequestMetadata, error) {
 	// Cloud Run cannot forward the TLS client certificate to the broker, so each
 	// RPC carries a fresh method-bound signature from the enrolled certificate
 	// key. Legacy XFCC headers remain during the additive rollout only. Direct
@@ -308,8 +309,8 @@ func brokerIdentityDialOpts(logger *zap.Logger, identityURI, certPEM, keyPEM, ch
 		"x-forwarded-client-cert", certHeader,
 	)
 	var proofSigner *legacycertproof.Signer
-	if certPEM != "" && keyPEM != "" {
-		proofSigner, err = legacycertproof.New(identityURI, certPEM, keyPEM)
+	if certPEM != "" && len(keyPEM) != 0 {
+		proofSigner, err = legacycertproof.NewWithKeyBytes(identityURI, certPEM, keyPEM)
 		if err != nil {
 			logger.Warn("failed to initialize certificate-bound broker authentication; legacy headers still apply",
 				zap.String("event", "broker_certificate_proof_unavailable"),

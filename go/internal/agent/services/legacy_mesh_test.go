@@ -84,7 +84,7 @@ func TestLegacyAppLANPinsNumericPeerAndNeedsNoReadyFrame(t *testing.T) {
 	defer server.Stop()
 	peers := NewLegacyPeerDialer(zap.NewNop(), &ProvisioningService{})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	conn, err := peers.dialLegacyLAN(ctx, listener.Addr().String(), self, chain, key, 64, 675, 28091)
+	conn, err := peers.dialLegacyLAN(ctx, listener.Addr().String(), self, chain, []byte(key), 64, 675, 28091)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestLegacyAppLANPinsNumericPeerAndNeedsNoReadyFrame(t *testing.T) {
 	}
 	wrongCtx, wrongCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer wrongCancel()
-	bad, err := peers.dialLegacyLAN(wrongCtx, listener.Addr().String(), self, chain, key, 64, 676, 28091)
+	bad, err := peers.dialLegacyLAN(wrongCtx, listener.Addr().String(), self, chain, []byte(key), 64, 676, 28091)
 	if err == nil {
 		bad.Close()
 		t.Fatal("accepted another numeric asset")

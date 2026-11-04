@@ -17,6 +17,14 @@ import (
 // leafPEM may itself be a chain bundle; issuers from both inputs are retained
 // in presentation order and duplicate certificates are sent only once.
 func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
+	keyData := []byte(keyPEM)
+	defer clear(keyData)
+	return TLSKeyPairWithKeyBytes(leafPEM, chainPEM, keyData)
+}
+
+// TLSKeyPairWithKeyBytes is TLSKeyPair without an immutable private-key PEM
+// copy. It does not retain keyPEM; the caller may clear it after return.
+func TLSKeyPairWithKeyBytes(leafPEM, chainPEM string, keyPEM []byte) (tls.Certificate, error) {
 	leaf, err := LeafCertificatePEM(leafPEM)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -45,7 +53,7 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 		}
 		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})...)
 	}
-	return tls.X509KeyPair(bundle, []byte(keyPEM))
+	return tls.X509KeyPair(bundle, keyPEM)
 }
 
 // VerifyPeerCertificateChain verifies signatures through peer-supplied issuers

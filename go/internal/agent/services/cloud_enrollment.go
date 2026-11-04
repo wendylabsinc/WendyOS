@@ -67,12 +67,13 @@ func (s *ProvisioningService) PKICloudCredentials() (host, certificate, chain, k
 }
 
 // LegacyCloudCredentials atomically captures the v1 binding and credentials.
-func (s *ProvisioningService) LegacyCloudCredentials() (CloudEnrollment, string, string, string, error) {
+// The caller owns the returned key copy and must clear it after use.
+func (s *ProvisioningService) LegacyCloudCredentials() (CloudEnrollment, string, string, []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, err := classifyCloudEnrollment(s.enrolled, s.cloudHost, s.orgID, s.assetID, s.principalURI)
 	if err != nil || e.Mode != CloudLegacy {
-		return e, "", "", "", err
+		return e, "", "", nil, err
 	}
-	return e, s.certPEM, s.chainPEM, string(s.keyPEM), nil
+	return e, s.certPEM, s.chainPEM, append([]byte(nil), s.keyPEM...), nil
 }
