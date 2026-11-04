@@ -9,10 +9,11 @@ The supported edit is one positive `stdout.contains("complete synopsis")` or
 `result.stdout.contains("complete synopsis")` assertion in
 `swift/WendyE2ETests/Tests/WendyE2ETests/Wendy*Tests.swift`, inside
 `prints command help`, correlated with that test's metadata and its single
-successful, unauthenticated `wendy … --help` recording. No other receiver qualifies,
-and the failure message must name the same receiver as the source. The test must use
-`scenario.run(authenticated: false)`, so help tests without it stay out of scope. Only brackets and spacing
-may differ, without joining or splitting words. Every word, argument name and flag stays identical. Other failures,
+successful, unauthenticated `wendy … --help` recording. No other receiver
+qualifies, and the failure message must name the same receiver as the source. The
+test must use `scenario.run(authenticated: false)`, so help tests without it stay
+out of scope. Only brackets and spacing may differ, without joining or splitting
+words. Every word, argument name and flag stays identical. Other failures,
 multiple failing assertions, changed test source across the green/red boundary,
 or ambiguous evidence produce a reason in the workflow summary and no writes.
 
@@ -96,6 +97,12 @@ If either notification fails, the job fails clearly and later runs do not
 retry. A branch created without a draft also needs human follow-up. Operators
 inspect the branch, draft, source PR and channel before manually completing
 missing steps; no guaranteed-delivery reconciliation is provided.
+
+To retry a repair run that failed before publishing, use **Re-run all jobs**.
+**Re-run failed jobs** cannot work: proposal and verification artifact names include
+the run attempt, and a retained job does not upload them again for the new attempt.
+A re-run only works while main still equals the source SHA, because prepare skips a
+stale run.
 
 ## Validation
 
