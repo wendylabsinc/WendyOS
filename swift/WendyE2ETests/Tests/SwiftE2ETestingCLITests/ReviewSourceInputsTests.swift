@@ -35,6 +35,7 @@ struct ReviewSourceInputsTests {
         #expect(manifest["head_commit"] as? String == head)
         let coverage = try #require(manifest["coverage"] as? [String: Any])
         #expect((coverage["excluded_generated_files"] as? [[String: Any]])?.count == 1)
+        #expect((coverage["non_utf8_files"] as? [String]) == [])
         let names = try String(contentsOf: context.sources.changedFilesURL, encoding: .utf8)
         #expect(!names.contains("go/proto/gen/service.pb.go"))
         #expect(names.contains("Proto/service.proto"))
@@ -108,10 +109,33 @@ struct ReviewSourceInputsTests {
         #expect(context.sources.status == "source_diff")
     }
 
+    @Test
+    func `a non-UTF-8 text file is replaced and recorded without failing the range`() throws {
+        let fixture = try SourceReviewFixture()
+        try fixture.write("SOURCE_CHANGE\n", to: "Proto/service.proto")
+        // Git has no NUL byte to see here, so it emits these raw bytes as a text diff.
+        try fixture.write(Data([0x63, 0x61, 0x66, 0xE9, 0x0A]), to: "Docs/latin1.txt")
+        try fixture.commit()
+        let context = try fixture.prepare(diff: true)
+        #expect(context.sources.status == "source_diff")
+        let patch = try String(contentsOf: context.sources.patchURL, encoding: .utf8)
+        #expect(patch.contains("+caf\u{FFFD}\n"))
+        #expect(patch.contains("SOURCE_CHANGE"))
+        let coverage = try #require(try fixture.manifest()["coverage"] as? [String: Any])
+        #expect((coverage["non_utf8_files"] as? [String]) == ["Docs/latin1.txt"])
+        let names = try String(contentsOf: context.sources.changedFilesURL, encoding: .utf8)
+        #expect(names.contains("Docs/latin1.txt"))
+    }
+
     @Test(arguments: ["review_sources.py", "review_diff.py"])
     func `missing canonical dependency fails without fallback`(missing: String) throws {
         let fixture = try SourceReviewFixture(missing: missing)
-        #expect(throws: ValidationError.self) { try fixture.prepare(diff: false) }
+        let error = try #require(throws: ReviewSourcePreparationError.self) {
+            try fixture.prepare(diff: false)
+        }
+        #expect(error.description.contains(".github/scripts/\(missing)"))
+        #expect(error.description.contains("--source-policy-ref"))
+        #expect(error.description.contains("fatal: path"))
         #expect(try fixture.manifest()["status"] as? String == "error")
         #expect(
             !FileManager.default.fileExists(
@@ -142,9 +166,44 @@ struct ReviewSourceInputsTests {
         adapter.git = malformed
         sys.exit(adapter.main())
         """.write(to: mock, atomically: true, encoding: .utf8)
-        #expect(throws: ValidationError.self) { try fixture.prepare(diff: true, adapter: mock) }
+        #expect(throws: ReviewSourcePreparationError.self) {
+            try fixture.prepare(diff: true, adapter: mock)
+        }
         #expect(try fixture.manifest()["status"] as? String == "error")
         #expect(!FileManager.default.fileExists(atPath: stale.path))
+    }
+
+    @Test
+    func `an unresolvable range reports Git's reason and what to check`() throws {
+        let fixture = try SourceReviewFixture()
+        let error = try #require(throws: ReviewSourcePreparationError.self) {
+            try fixture.prepare(range: "nosuchref...HEAD")
+        }
+        #expect(error.description.contains("nosuchref...HEAD"))
+        #expect(error.description.contains("enough history"))
+        #expect(error.description.contains("fatal: Needed a single revision"))
+        #expect(!error.description.contains("returned non-zero exit status"))
+    }
+
+    @Test
+    func `an unresolvable policy ref names its remedy`() throws {
+        let fixture = try SourceReviewFixture()
+        let error = try #require(throws: ReviewSourcePreparationError.self) {
+            try fixture.prepare(range: nil, policyRef: "origin/nosuchref")
+        }
+        #expect(error.description.contains("origin/nosuchref"))
+        #expect(error.description.contains("--source-policy-ref"))
+        #expect(error.description.contains("fatal: Needed a single revision"))
+    }
+
+    @Test
+    func `a preparation failure is not reported as a command-line mistake`() throws {
+        let fixture = try SourceReviewFixture(missing: "review_sources.py")
+        let error = try #require(throws: (any Error).self) { try fixture.prepare(diff: false) }
+        let message = SwiftE2ETestingCLI.fullMessage(for: error)
+        #expect(message.contains("--source-policy-ref"))
+        #expect(!message.contains("Usage:"))
+        #expect(!SwiftE2ETestingCLI.exitCode(for: error).isSuccess)
     }
 }
 
@@ -210,6 +269,15 @@ private final class SourceReviewFixture {
         ])
     }
 
+    func write(_ data: Data, to path: String) throws {
+        let url = repoURL.appendingPathComponent(path)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: url)
+    }
+
     func git(_ arguments: [String]) throws -> String {
         let p = Process()
         let output = Pipe()
@@ -227,11 +295,19 @@ private final class SourceReviewFixture {
     }
 
     func prepare(diff: Bool, adapter: URL = sourceReviewAdapter) throws -> ReviewContext {
-        try ReviewMode(diff: diff ? "\(base)...HEAD" : nil).prepareContext(
+        try prepare(range: diff ? "\(base)...HEAD" : nil, adapter: adapter)
+    }
+
+    func prepare(
+        range: String?,
+        policyRef: String? = nil,
+        adapter: URL = sourceReviewAdapter
+    ) throws -> ReviewContext {
+        try ReviewMode(diff: range).prepareContext(
             runURL: runURL,
             repoURL: repoURL,
             adapterURL: adapter,
-            policyRef: base
+            policyRef: policyRef ?? base
         )
     }
 

@@ -4,6 +4,7 @@ import argparse
 import importlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,24 +20,55 @@ TOOL_READ_LIMITATION = (
 )
 
 
+class GitError(RuntimeError):
+    """A failed Git command, carrying Git's own reason."""
+
+
 def git(repo, *arguments):
-    return subprocess.check_output(["git", "-C", str(repo), *arguments], stderr=subprocess.PIPE)
+    try:
+        return subprocess.check_output(["git", "-C", str(repo), *arguments], stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        # str(CalledProcessError) omits stderr, which holds the actual reason.
+        reason = error.stderr.decode("utf-8", errors="replace").strip() or f"exit status {error.returncode}"
+        raise GitError(f"git {' '.join(arguments)}: {reason}") from error
 
 
 def commit(repo, ref):
     return git(repo, "rev-parse", "--verify", "--end-of-options", ref + "^{commit}").decode().strip()
 
 
+def non_utf8_files(policy, raw):
+    """Name the files whose diff lost bytes to U+FFFD when decoded."""
+    files = []
+    for section in re.split(rb"^(?=diff --git )", raw, flags=re.M):
+        try:
+            section.decode("utf-8")
+        except UnicodeDecodeError:
+            parsed = policy.parse_diff(section.decode("utf-8", errors="replace"), allow_binary=True)
+            files += [file["head"] or file["base"] for file in parsed["files"]]
+    return files
+
+
 def prepare(repo, run, policy_ref, diff=None):
     for name in ARTIFACTS:
         (run / name).unlink(missing_ok=True)
-    policy_sha = commit(repo, policy_ref)
+    try:
+        policy_sha = commit(repo, policy_ref)
+    except GitError as error:
+        raise GitError(f"Could not resolve source policy ref {policy_ref}. "
+                       f"Pass a fetched commit with --source-policy-ref. {error}") from error
     head = commit(repo, "HEAD")
     # Neither the event-head module nor PYTHONPATH supplies review policy.
     # Both siblings come from this one immutable trusted automation/base commit.
     with tempfile.TemporaryDirectory(prefix="wendy-e2e-review-policy-") as directory:
         for name in ("review_sources.py", "review_diff.py"):
-            Path(directory, name).write_bytes(git(repo, "show", f"{policy_sha}:.github/scripts/{name}"))
+            try:
+                module = git(repo, "show", f"{policy_sha}:.github/scripts/{name}")
+            except GitError as error:
+                raise GitError(f"Source policy file .github/scripts/{name} is missing at {policy_sha} "
+                               f"(from {policy_ref}). Pass a commit that has both policy modules with "
+                               f"--source-policy-ref. {error}") from error
+            Path(directory, name).write_bytes(module)
         sys.path.insert(0, directory)
         try:
             policy = importlib.import_module("review_sources")
@@ -60,19 +92,26 @@ def prepare(repo, run, policy_ref, diff=None):
                 revisions = diff.split(separator) if separator else [diff, "HEAD"]
                 if len(revisions) != 2 or not all(revisions):
                     raise policy.ReviewError("Expected a complete BASE...HEAD or BASE..HEAD review range")
-                base, range_head = (commit(repo, value) for value in revisions)
-                # The tree index and patch must describe the same committed head.
-                if range_head != head:
-                    raise policy.ReviewError("The review range must end at the checked-out HEAD commit")
-                if separator == "...":
-                    base = git(repo, "merge-base", base, head).decode().strip()
+                try:
+                    base, range_head = (commit(repo, value) for value in revisions)
+                    # The tree index and patch must describe the same committed head.
+                    if range_head != head:
+                        raise policy.ReviewError("The review range must end at the checked-out HEAD commit")
+                    if separator == "...":
+                        base = git(repo, "merge-base", base, head).decode().strip()
+                except GitError as error:
+                    raise GitError(f"Could not resolve review range {diff}. Ensure the repository has "
+                                   f"enough history and the range is fetchable. {error}") from error
                 raw = git(repo, "-c", "core.quotePath=true", "diff", "--no-ext-diff",
                           "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/",
-                          "--dst-prefix=b/", "--find-renames", base, head, "--").decode("utf-8")
+                          "--dst-prefix=b/", "--find-renames", base, head, "--")
                 # Empty Git output means no committed changes; malformed nonempty
                 # input still goes through the complete canonical parser and fails.
                 if raw:
-                    source, coverage = policy.source_diff(raw, allow_binary=True)
+                    # Git emits legacy-encoded text as raw bytes. One such file must
+                    # not fail the range, so coverage records what was replaced.
+                    source, coverage = policy.source_diff(raw.decode("utf-8", errors="replace"), allow_binary=True)
+                    coverage["non_utf8_files"] = non_utf8_files(policy, raw)
                 status = "source_diff" if source else "generated_only" if raw else "no_changes"
                 files = policy.parse_diff(source, allow_binary=True)["files"] if source else []
                 index = [{"base": f["base"], "head": f["head"],
@@ -84,7 +123,7 @@ def prepare(repo, run, policy_ref, diff=None):
                         "policy_rule": policy.SOURCE_ONLY_RULE,
                         "tool_read_limitation": TOOL_READ_LIMITATION,
                         "source_snapshot": "Committed files only; uncommitted/untracked source is not prepared.",
-                        "evidence_scope": "Prepared input counts do not prove model review. Binary placeholders do not supply binary contents. Retain failed-run, test, qualitative AI-request and prior-finding evidence even when the diff is generated-only."}
+                        "evidence_scope": "Prepared input counts do not prove model review. Binary placeholders do not supply binary contents. Files in coverage.non_utf8_files show U+FFFD where their bytes were not valid UTF-8. Retain failed-run, test, qualitative AI-request and prior-finding evidence even when the diff is generated-only."}
             names = sorted({f[side] for f in index for side in ("base", "head") if f[side]})
             stats = [f"{f['base'] or f['head']}" +
                      (f" => {f['head']}" if f['base'] and f['head'] and f['base'] != f['head'] else "") +
@@ -110,7 +149,7 @@ def main():
     args = parser.parse_args()
     try:
         prepare(args.repo, args.run_dir, args.policy_ref, args.diff)
-    except (OSError, ValueError, RuntimeError, ImportError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, RuntimeError, ImportError) as error:
         # No raw patch is written to disk or included in an error response.
         message = "Source-only E2E input preparation failed: " + str(error)
         (args.run_dir / ARTIFACTS[1]).write_text(json.dumps({"status": "error", "error": message}) + "\n")
