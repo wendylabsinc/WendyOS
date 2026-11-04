@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -41,6 +42,7 @@ type ConnMetrics interface {
 // PeerDialer stream toward that device.
 type Proxy struct {
 	logger      *zap.Logger
+	legacy      LegacyAppDialer
 	dialer      PeerDialer
 	metrics     ConnMetrics
 	vips        *VIPTable                                  // resolves original destinations back to devices
@@ -64,6 +66,10 @@ func NewProxy(logger *zap.Logger, dialer PeerDialer, metrics ConnMetrics, vips *
 		dialTimeout: meshsession.TLSAppSessionSetupTimeout,
 	}
 }
+
+// SetLegacyDialer selects numeric addressing only while v1 enrollment is active.
+// Call before Start; every dial still reads the current enrollment scope.
+func (p *Proxy) SetLegacyDialer(d LegacyAppDialer) { p.legacy = d }
 
 func (p *Proxy) Start(addr string) error {
 	ln, err := net.Listen("tcp", addr)
@@ -105,19 +111,44 @@ func (p *Proxy) handleConn(conn net.Conn) {
 		p.logger.Warn("wendy net proxy: original destination unavailable", zap.Error(err))
 		return
 	}
-	if p.vips == nil {
-		p.logger.Warn("wendy net proxy: no VIP table configured", zap.String("dst", dst.String()))
-		return
-	}
-	device, err := p.vips.Device(dst.Addr())
-	if err != nil {
-		p.logger.Warn("wendy net proxy: destination is not a wendy net VIP", zap.String("dst", dst.String()), zap.Error(err))
-		return
-	}
-	peerID := device.UUID().String()
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), p.dialTimeout)
-	peer, mode, err := p.dialer.DialDevice(ctx, device, dst.Port())
+	var peer net.Conn
+	var mode, peerID string
+	var recordBytes func(string, int64)
+	org := int32(0)
+	if p.legacy != nil {
+		org = p.legacy.LegacyOrgID()
+	}
+	if org > 0 {
+		asset, parseErr := LegacyDeviceForVIP(dst.Addr())
+		if parseErr != nil {
+			cancel()
+			return
+		}
+		peerID = fmt.Sprintf("%d/%d", org, asset)
+		peer, mode, err = p.legacy.DialLegacyApp(ctx, org, asset, dst.Port())
+		if metrics, ok := p.metrics.(legacyConnMetrics); ok {
+			recordBytes = func(direction string, n int64) { metrics.RecordAssetBytes(asset, direction, n) }
+		}
+	} else {
+		if p.vips == nil {
+			cancel()
+			p.logger.Warn("wendy net proxy: no VIP table configured", zap.String("dst", dst.String()))
+			return
+		}
+		device, parseErr := p.vips.Device(dst.Addr())
+		if parseErr != nil {
+			cancel()
+			p.logger.Warn("wendy net proxy: destination is not a wendy net VIP", zap.String("dst", dst.String()), zap.Error(parseErr))
+			return
+		}
+		peerID = device.UUID().String()
+		peer, mode, err = p.dialer.DialDevice(ctx, device, dst.Port())
+		if p.metrics != nil {
+			recordBytes = func(direction string, n int64) { p.metrics.RecordBytes(device, direction, n) }
+		}
+	}
 	cancel()
 	if err != nil {
 		// The dialer already recorded the mesh.connections/dial.duration_ms
@@ -133,9 +164,9 @@ func (p *Proxy) handleConn(conn net.Conn) {
 	}
 	defer peer.Close()
 	tx, rx := relayBytes(conn, peer)
-	if p.metrics != nil {
-		p.metrics.RecordBytes(device, "tx", tx)
-		p.metrics.RecordBytes(device, "rx", rx)
+	if recordBytes != nil {
+		recordBytes("tx", tx)
+		recordBytes("rx", rx)
 	}
 	p.logger.Info("wendy net connection",
 		zap.String("mesh.peer", peerID),

@@ -49,8 +49,8 @@ func (c *Client) ReportApps(ctx context.Context) ([]services.AppReport, error) {
 			signal = uint32(code - 128)
 		}
 		digest, release := info.Labels[labelKeyImageDigest], info.Labels[labelKeyReleaseID]
-		if !c.validReleaseID(release) {
-			release = "" // do not mix numeric v1 IDs and v2 UUIDs
+		if !isCanonicalUUID(release) {
+			release = "" // cloud refuses the whole report for a non-UUID release id
 		}
 		r, seen := byApp[appID]
 		if !seen {

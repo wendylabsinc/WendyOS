@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"go.uber.org/zap"
@@ -70,32 +71,44 @@ func TestLegacyPeerUsesV1ClientTunnel(t *testing.T) {
 	dialer := NewLegacyPeerDialer(zap.NewNop(), provisioning)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	conn, mode, err := dialer.DialRoutedTarget(ctx, DeliveryTarget{LegacyOrgID: 64, LegacyAssetID: 675}, 50052)
-	if err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"admin", "app-fallback"} {
+		t.Run(path, func(t *testing.T) {
+			dial := func() (net.Conn, string, error) {
+				return dialer.DialRoutedTarget(ctx, DeliveryTarget{LegacyOrgID: 64, LegacyAssetID: 675}, 50052)
+			}
+			if path == "app-fallback" {
+				dialer.browse = func(context.Context) ([]models.LANDevice, error) { return nil, nil }
+				dial = func() (net.Conn, string, error) { return dialer.DialLegacyApp(ctx, 64, 675, 50052) }
+			}
+			conn, mode, err := dial()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if mode != "relay" {
+				t.Fatalf("mode=%s", mode)
+			}
+			if _, err := conn.Write([]byte("legacy peer")); err != nil {
+				t.Fatal(err)
+			}
+			data := make([]byte, len("legacy peer"))
+			if _, err := io.ReadFull(conn, data); err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != "legacy peer" {
+				t.Fatalf("echo=%q", data)
+			}
+			select {
+			case err := <-contract.result:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal("no v1 relay")
+			}
+		})
 	}
-	defer conn.Close()
-	if mode != "relay" {
-		t.Fatalf("mode=%s", mode)
-	}
-	if _, err := conn.Write([]byte("legacy peer")); err != nil {
-		t.Fatal(err)
-	}
-	data := make([]byte, len("legacy peer"))
-	if _, err := io.ReadFull(conn, data); err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "legacy peer" {
-		t.Fatalf("echo=%q", data)
-	}
-	select {
-	case err := <-contract.result:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-ctx.Done():
-		t.Fatal("no v1 relay")
-	}
+
 }
 func TestLegacyPeersRefuseCrossProtocolAndCrossOrganization(t *testing.T) {
 	provisioning := &ProvisioningService{enrolled: true, cloudHost: "legacy:443", orgID: 64, assetID: 674}

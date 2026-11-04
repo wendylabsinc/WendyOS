@@ -6,6 +6,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -15,10 +22,18 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// LegacyPeerDialer is v1's org-scoped administrative transport. It never
-// enters the UUID/Babel mesh. The caller still pins endpoint mTLS to the exact
-// numeric org and asset before sending image data over either raw transport.
+type legacyLANKey struct {
+	binding CloudEnrollment
+	asset   int32
+}
+
+// LegacyPeerDialer preserves v1's numeric app and administrative transports.
+// It never enters the UUID/Babel mesh. Administrative callers pin endpoint
+// mTLS themselves; app streams pin the discovered agent before MeshDial.
 type LegacyPeerDialer struct {
+	mu           sync.Mutex
+	cache        map[legacyLANKey]lanCacheEntry
+	metrics      *MeshMetrics
 	logger       *zap.Logger
 	provisioning *ProvisioningService
 	browse       func(context.Context) ([]models.LANDevice, error)
@@ -135,3 +150,131 @@ func (a *legacyClientTunnelAdapter) recv() ([]byte, bool, error) {
 	return m.GetPayload(), m.GetHalfClose(), nil
 }
 func (a *legacyClientTunnelAdapter) closeSend() error { return a.stream.CloseSend() }
+
+// SetMetrics must be called before serving connections.
+func (d *LegacyPeerDialer) SetMetrics(m *MeshMetrics) { d.metrics = m }
+
+// LegacyOrgID reads the saved protocol rather than inferring it from a SAN.
+func (d *LegacyPeerDialer) LegacyOrgID() int32 {
+	e, err := d.provisioning.CloudEnrollment()
+	if err != nil || e.Mode != CloudLegacy {
+		return 0
+	}
+	return e.OrganizationID
+}
+
+// DialLegacyApp restores numeric application dialing. LAN uses an authenticated
+// MeshDial stream to the discovered agent port, not raw TCP to the app port.
+func (d *LegacyPeerDialer) DialLegacyApp(ctx context.Context, org, asset int32, port uint16) (net.Conn, string, error) {
+	target, err := d.Resolve(org, asset)
+	if err != nil {
+		return nil, "", err
+	}
+	if asset > 65534 || port == 0 {
+		return nil, "", fmt.Errorf("invalid legacy application destination")
+	}
+	e, cert, chain, key, err := d.provisioning.LegacyCloudCredentials()
+	if err != nil || e.Mode != CloudLegacy || e.OrganizationID != target.LegacyOrgID {
+		return nil, "", fmt.Errorf("legacy enrollment changed")
+	}
+	record := func(mode string, start time.Time, err error) {
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+		d.metrics.RecordAssetDial(asset, mode, result, float64(time.Since(start))/float64(time.Millisecond))
+	}
+	if asset == e.AssetID {
+		start := time.Now()
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+		record("local-app", start, err)
+		return conn, "local-app", err
+	}
+
+	start := time.Now()
+	if hostport, ok := d.legacyAppLANAddr(ctx, e, asset); ok {
+		conn, err := d.dialLegacyLAN(ctx, hostport, cert, chain, key, e.OrganizationID, asset, port)
+		record("lan-direct", start, err)
+		if err == nil {
+			return conn, "lan-direct", nil
+		}
+	}
+	start = time.Now()
+	conn, mode, err := d.DialRoutedTarget(ctx, target, port)
+	record("relay", start, err)
+	return conn, mode, err
+}
+
+func (d *LegacyPeerDialer) dialLegacyLAN(ctx context.Context, hostport, cert, chain, key string, org, asset int32, port uint16) (net.Conn, error) {
+	tlsConfig, err := mtls.NewClientTLSConfigExpectingIdentity(cert, chain, key, d.logger, certs.WendyIdentity{OrgID: org, EntityType: certs.EntityAsset, EntityID: strconv.Itoa(int(asset))})
+	if err != nil {
+		return nil, err
+	}
+	cc, err := grpc.NewClient(meshDialTarget, grpc.WithContextDialer(meshDialContextDialer(hostport)), grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	if err != nil {
+		return nil, err
+	}
+	sctx, cancel, established := dialBoundContext(ctx)
+	stream, err := agentpbv2.NewWendyMeshServiceClient(cc).MeshDial(sctx)
+	if err == nil {
+		err = stream.Send(&agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: uint32(port)}}})
+	}
+	if err != nil {
+		cancel()
+		cc.Close()
+		return nil, err
+	}
+	// Older v1 agents have no ready frame: the first response may require an
+	// application request. Empty ready frames from newer agents are harmless.
+	established()
+	return streamNetConn(&legacyMeshDialAdapter{stream}, func() { cancel(); cc.Close() }), nil
+}
+
+type legacyMeshDialAdapter struct {
+	stream agentpbv2.WendyMeshService_MeshDialClient
+}
+
+func (a *legacyMeshDialAdapter) send(p []byte, half bool) error {
+	return a.stream.Send(&agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Data{Data: &agentpbv2.MeshDialData{Payload: p, HalfClose: half}}})
+}
+func (a *legacyMeshDialAdapter) recv() ([]byte, bool, error) {
+	m, err := a.stream.Recv()
+	if err != nil {
+		return nil, false, err
+	}
+	return m.Payload, m.HalfClose, nil
+}
+func (a *legacyMeshDialAdapter) closeSend() error { return a.stream.CloseSend() }
+
+func (d *LegacyPeerDialer) legacyAppLANAddr(ctx context.Context, e CloudEnrollment, asset int32) (string, bool) {
+	key := legacyLANKey{e, asset}
+	d.mu.Lock()
+	cached, ok := d.cache[key]
+	d.mu.Unlock()
+	if ok && time.Now().Before(cached.expires) {
+		return cached.hostport, cached.hostport != ""
+	}
+	bounded, cancel := context.WithTimeout(ctx, lanBudget)
+	defer cancel()
+	devices, err := d.browse(bounded)
+	hostport := ""
+	if err == nil {
+		for _, device := range devices {
+			if device.OrgID != e.OrganizationID || device.AssetID != asset || !device.IsMTLS || device.IPAddress == "" || device.Port <= 0 || strings.EqualFold(device.IPAddress, "localhost") {
+				continue
+			}
+			if ip := net.ParseIP(device.IPAddress); ip != nil && ip.IsLoopback() {
+				continue
+			}
+			hostport = net.JoinHostPort(device.IPAddress, strconv.Itoa(device.Port))
+			break
+		}
+	}
+	d.mu.Lock()
+	if d.cache == nil {
+		d.cache = make(map[legacyLANKey]lanCacheEntry)
+	}
+	d.cache[key] = lanCacheEntry{hostport: hostport, expires: time.Now().Add(lanCacheTTL)}
+	d.mu.Unlock()
+	return hostport, hostport != ""
+}

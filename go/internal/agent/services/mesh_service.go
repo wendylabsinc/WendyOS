@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -50,7 +51,7 @@ type MeshService struct {
 	}
 }
 
-// SetIngressAuthorizer restricts the legacy LAN MeshDial path to ports owned
+// SetIngressAuthorizer restricts the PKI LAN MeshDial path to ports owned
 // by live mesh-mode apps. A missing authorizer denies every port.
 func (s *MeshService) SetIngressAuthorizer(authorizer interface {
 	DialAuthorized(uint16, func(string) (net.Conn, error)) (net.Conn, error)
@@ -95,13 +96,17 @@ func (s *MeshService) MeshDial(stream agentpbv2.WendyMeshService_MeshDialServer)
 	if open.Port == 0 || open.Port > 65535 {
 		return status.Errorf(codes.InvalidArgument, "invalid port %d", open.Port)
 	}
-	if s.ingress == nil {
+	if s.legacyOrgID == 0 && s.ingress == nil {
 		return status.Error(codes.PermissionDenied, "wendy net ingress port is not published by a running app")
 	}
-	// Dial only the verified endpoint of the admitted running container.
-	conn, err := s.ingress.DialAuthorized(uint16(open.Port), func(address string) (net.Conn, error) {
-		return s.dialLocal(address, 10*time.Second)
-	})
+	// PKI calls dial only a verified endpoint of an admitted running container.
+	var conn net.Conn
+	if s.legacyOrgID > 0 {
+		// The original v1 MeshDial contract is an org-scoped loopback tunnel.
+		conn, err = s.dialLocal(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(open.Port))), 10*time.Second)
+	} else {
+		conn, err = s.ingress.DialAuthorized(uint16(open.Port), func(address string) (net.Conn, error) { return s.dialLocal(address, 10*time.Second) })
+	}
 	if err != nil {
 		if errors.Is(err, meshingress.ErrPortDenied) {
 			return status.Error(codes.PermissionDenied, "wendy net ingress port is not published by a running app")
@@ -141,8 +146,8 @@ func (s *MeshService) applicationPrincipalFromContext(ctx context.Context) (stri
 			return "", status.Error(codes.PermissionDenied, "legacy app dial requires a certificate")
 		}
 		identity, found, err := certs.IdentityFromCert(info.State.PeerCertificates[0])
-		if err != nil || !found || identity.OrgID != s.legacyOrgID || identity.LegacyURN() == "" || (identity.EntityType != certs.EntityAsset && identity.EntityType != certs.EntityUser) {
-			return "", status.Error(codes.PermissionDenied, "legacy app dial requires a same-organization device or user")
+		if err != nil || !found || identity.OrgID != s.legacyOrgID || identity.LegacyURN() == "" || identity.EntityType != certs.EntityAsset {
+			return "", status.Error(codes.PermissionDenied, "legacy app dial requires a same-organization device")
 		}
 		return identity.LegacyURN(), nil
 	}

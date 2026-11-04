@@ -339,9 +339,6 @@ func main() {
 	audioSvc := services.NewAudioService(logger)
 
 	provisioningSvc := services.NewProvisioningService(logger, configPath, timesyncMgr)
-	if ctrdClient != nil {
-		ctrdClient.SetCloudEnrollment(provisioningSvc.CloudEnrollment)
-	}
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster, telemetryBuf)
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
@@ -1194,12 +1191,14 @@ func main() {
 		startConfiguredLocalMesh(certPEM, chainPEM, keyPEM)
 	}
 	meshMetrics := services.NewMeshMetrics(telemetryBuf, logger)
+	legacyPeers.SetMetrics(meshMetrics)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		meshMetrics.Collect(ctx)
 	}()
-	meshDialer = services.NewMeshDialer(logger, certPEM, keyPEM, chainPEM, meshMetrics)
+	_, meshCert, meshChain, meshKey := provisioningSvc.PKICloudCredentials()
+	meshDialer = services.NewMeshDialer(logger, meshCert, meshKey, meshChain, meshMetrics)
 	meshDialer.SetLegacyPeerDialer(legacyPeers)
 	meshDialer.SetSelfDialer(func(dialCtx context.Context, port uint16) (net.Conn, error) {
 		bounded, cancel := context.WithTimeout(dialCtx, 5*time.Second)
@@ -1269,6 +1268,7 @@ func main() {
 	// no admitted route exists; a boot-time file check would disable it forever.
 	appDialer := services.NewMeshAppDialer(meshDialer)
 	meshProxy := mesh.NewProxy(logger, appDialer, meshMetrics, meshVIPs)
+	meshProxy.SetLegacyDialer(legacyPeers)
 	// The proxy listens on bridge addresses because container REDIRECT traffic
 	// cannot reach a loopback-only listener. It accepts only mesh VIP targets;
 	// the application dialer still enforces device-principal admission.
@@ -1276,6 +1276,9 @@ func main() {
 		logger.Warn("wendy net proxy failed to start; wendy net egress disabled", zap.Error(err))
 	}
 	udpProxy, udpErr := mesh.NewUDPProxy(mesh.UDPDialFunc(func(dialCtx context.Context, request mesh.UDPDialRequest) (mesh.UDPFlow, error) {
+		if enrollment, err := provisioningSvc.CloudEnrollment(); err != nil || enrollment.Mode != services.CloudPKI {
+			return nil, meshsession.ErrNoRoute
+		}
 		peer, port := request.Peer, request.Port
 		options := meshsession.UDPOptions{Manager: appUDPMessages, Endpoint: request.Endpoint, Done: request.Done, Source: &request.Source}
 		if meshDialer.IsSelf(peer) {
@@ -1327,6 +1330,9 @@ func main() {
 		return col.LANDevices, nil
 	}
 	meshResolver := services.NewMeshResolver(logger, meshRoster, meshBrowse)
+	legacyResolver := services.NewLegacyMeshResolver(legacyPeers)
+	wg.Add(1)
+	go func() { defer wg.Done(); legacyResolver.RunSync(ctx, 5*time.Minute) }()
 	// The tenant mesh names resolve under follows the roster's provisioned
 	// identity; unset until provisioning completes.
 	var meshTenant meshid.Tenant
@@ -1335,6 +1341,7 @@ func main() {
 	}
 	if meshDNS != nil {
 		meshDNS.SetResolver(meshResolver)
+		meshDNS.SetLegacyResolver(legacyResolver)
 		if meshVIPs != nil && meshTenant != (meshid.Tenant{}) {
 			meshDNS.SetMeshIdentity(meshTenant, meshVIPs)
 		}
@@ -1349,11 +1356,7 @@ func main() {
 	// roster it starts unconditionally and stays silent until enrolled.
 	var reportedState *services.ReportedState
 	var postbox *services.Postbox
-	var legacyReportedState *services.LegacyReportedState
 	if ctrdErr == nil {
-		legacyReportedState = services.NewLegacyReportedState(logger, provisioningSvc, ctrdClient, containerSvc, ctrdClient)
-		wg.Add(1)
-		go func() { defer wg.Done(); legacyReportedState.Run(ctx) }()
 		reportedState = services.NewReportedState(logger, ctrdClient, telemetryBuf, cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
 		// The operator-signed postbox (AAA contract section 5.3): woken by the
 		// reported-state nudge, it applies only what it verifies itself.
@@ -1486,6 +1489,7 @@ func main() {
 	// Set up the provisioning callback to start the mTLS server, shut down
 	// the plaintext server, and switch the registry to HTTPS.
 	provisioningSvc.OnProvisioned = func(certPEM, chainPEM string, keyData []byte) {
+		legacyResolver.UpdateIdentity()
 		// Bind to the callback's authenticated leaf before exposing a new tenant.
 		unitreeScope, _ := certs.ScopeFromCertPEM(certPEM)
 		if err := unitreeSvc.Rebind(unitreePairingOwner(unitreeScope, true)); err != nil {
@@ -1514,7 +1518,8 @@ func main() {
 		// server and tunnel broker above, it consumes cert material, and BLE
 		// first-boot enrollment happens while the agent is running, so the
 		// boot-time snapshot is empty on virtually every new device.
-		meshDialer.UpdateIdentity(certPEM, keyPEM, chainPEM)
+		_, meshCert, meshChain, meshKey := provisioningSvc.PKICloudCredentials()
+		meshDialer.UpdateIdentity(meshCert, meshKey, meshChain)
 		// Same story for the friendly-name roster/resolver: the boot-time
 		// snapshot has no certificate and so no device principal, meaning the
 		// roster cannot authenticate a sync and the resolver rejects every LAN
@@ -1522,9 +1527,6 @@ func main() {
 		// identity here.
 		pkiHost, pkiCert, pkiChain, pkiKey := provisioningSvc.PKICloudCredentials()
 		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
-		if legacyReportedState != nil {
-			legacyReportedState.UpdateIdentity()
-		}
 		if reportedState != nil {
 			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
 			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
@@ -1568,9 +1570,6 @@ func main() {
 	// Revoke Unitree sessions and keys before Unprovision reports success.
 	// A failed clear is retried when the agent restarts unenrolled.
 	provisioningSvc.BeforeUnprovisioned = func() error {
-		if legacyReportedState != nil {
-			legacyReportedState.UpdateIdentity()
-		}
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()
@@ -1579,6 +1578,7 @@ func main() {
 		localMeshMu.Unlock()
 		meshDialer.UpdateIdentity("", "", "")
 		meshRoster.UpdateIdentity("", "", "", "")
+		legacyResolver.UpdateIdentity()
 		if reportedState != nil {
 			reportedState.UpdateIdentity("", "", "", "")
 			postbox.UpdateIdentity("", "", "", "")

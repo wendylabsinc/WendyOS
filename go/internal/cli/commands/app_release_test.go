@@ -198,11 +198,8 @@ func TestDeployReleasePrepareRefusesBeforeBuild(t *testing.T) {
 		t.Fatalf("unenrolled device: %v", err)
 	}
 	numeric := func() (*config.Config, error) { return registrationConfig(), nil }
-	if err := r.prepare(ctx, registrationProvisioned(registrationDevice()), numeric); err != nil {
-		t.Fatalf("legacy device preparation: %v", err)
-	}
-	if r.auth == nil || r.tenant == "" || r.id != "" {
-		t.Fatalf("legacy preparation did not preserve numeric enrollment")
+	if err := r.prepare(ctx, registrationProvisioned(registrationDevice()), numeric); err == nil || !strings.Contains(err.Error(), "Cloud v2") {
+		t.Fatalf("device enrolled with numeric ids: %v", err)
 	}
 	session := tenantOperatorSession(t, "cloud.example:443")
 	tenant := func() (*config.Config, error) { return &config.Config{Auth: []config.AuthConfig{session}}, nil }

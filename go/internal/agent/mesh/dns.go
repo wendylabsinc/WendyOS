@@ -65,6 +65,7 @@ type DNSServer struct {
 	listeners map[string]*gatewayListener
 	resolver  Resolver      // friendly-name resolver; nil until SetResolver
 	identity  *meshIdentity // tenant + VIP table; nil until SetMeshIdentity
+	legacy    LegacyResolver
 }
 
 type gatewayListener struct {
@@ -208,6 +209,23 @@ func (s *DNSServer) handle(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	q := r.Question[0]
 	lower := strings.ToLower(q.Name)
+	if m := legacyMeshNameRE.FindStringSubmatch(lower); m != nil {
+		s.mu.Lock()
+		legacy := s.legacy
+		s.mu.Unlock()
+		if legacy == nil || legacy.LegacyOrgID() <= 0 {
+			s.reply(w, r, dns.RcodeNameError)
+			return
+		}
+		asset, err := legacyAssetID(m[1])
+		if err != nil {
+			s.reply(w, r, dns.RcodeNameError)
+			return
+		}
+		vip, _ := LegacyVIPForDevice(asset)
+		s.answerVIP(w, r, q, vip)
+		return
+	}
 	if m := meshNameRE.FindStringSubmatch(lower); m != nil {
 		s.answerDevice(w, r, q, m[1])
 		return
@@ -224,9 +242,9 @@ func (s *DNSServer) handle(w dns.ResponseWriter, r *dns.Msg) {
 // host's own table.
 func (s *DNSServer) answerDevice(w dns.ResponseWriter, r *dns.Msg, q dns.Question, uuidText string) {
 	s.mu.Lock()
-	id := s.identity
+	id, legacy := s.identity, s.legacy
 	s.mu.Unlock()
-	if id == nil {
+	if id == nil || (legacy != nil && legacy.LegacyOrgID() > 0) {
 		s.reply(w, r, dns.RcodeNameError)
 		return
 	}
@@ -240,7 +258,7 @@ func (s *DNSServer) answerDevice(w dns.ResponseWriter, r *dns.Msg, q dns.Questio
 
 func (s *DNSServer) answerFriendly(w dns.ResponseWriter, r *dns.Msg, q dns.Question, name, orgSlug string) {
 	s.mu.Lock()
-	resolver, id := s.resolver, s.identity
+	resolver, id, legacy := s.resolver, s.identity, s.legacy
 	s.mu.Unlock()
 	// Re-normalize both labels so slightly-off-but-regex-valid forms (e.g. a
 	// doubled hyphen) compare symmetrically against the resolver's
@@ -248,6 +266,21 @@ func (s *DNSServer) answerFriendly(w dns.ResponseWriter, r *dns.Msg, q dns.Quest
 	// unaffected.
 	name = Normalize(name)
 	orgSlug = Normalize(orgSlug)
+	if legacy != nil && legacy.LegacyOrgID() > 0 {
+		asset, ok := legacy.ResolveLegacy(name, orgSlug)
+		if !ok {
+			s.reply(w, r, dns.RcodeNameError)
+			return
+		}
+		vip, err := LegacyVIPForDevice(asset)
+		if err != nil {
+			s.reply(w, r, dns.RcodeNameError)
+			return
+		}
+		s.answerVIP(w, r, q, vip)
+		return
+	}
+
 	if resolver == nil || id == nil || resolver.OrgSlug() == "" || orgSlug != resolver.OrgSlug() {
 		s.reply(w, r, dns.RcodeNameError)
 		return

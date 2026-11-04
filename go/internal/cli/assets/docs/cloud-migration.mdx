@@ -60,31 +60,22 @@ retarget that device. Select the new target explicitly when validating v2.
 ## How the Agent selects its Cloud protocol
 
 The saved device enrollment selects the protocol. A numeric v1 organization and
-asset binding starts the v1 broker, reporting stream, certificate refresh, and
-OTLP uploads. When `WENDY_TELEMETRY_URL` is unset, v1 telemetry goes to the
-enrolled Cloud host; PKI telemetry needs an explicit collector. A direct PKI
-enrollment starts the v2 relay and signed postbox.
-Changing the active CLI context does not change that choice. A transitional v1
-certificate carrying an additional SPIFFE SAN remains a v1 enrollment.
+asset binding starts the v1 broker and OTLP uploads. When `WENDY_TELEMETRY_URL`
+is unset, v1 telemetry goes to the enrolled Cloud host; PKI telemetry needs an
+explicit collector. A direct PKI enrollment starts the v2 relay and signed
+postbox. Changing the active CLI context does not change that choice. A
+transitional v1 certificate carrying an additional SPIFFE SAN remains a v1
+enrollment.
 
-Legacy release IDs remain positive integers; v2 release IDs remain UUIDs. Remote
-build delivery supports both forms and checks the destination against the
-certificate of the device the CLI reached. Updated clients require the build
-host's legacy-delivery capability before submitting a numeric destination.
-The routed Wendy Net UUID address space requires a direct PKI enrollment.
+Remote build delivery supports numeric v1 assets and v2 device principals, and
+checks the destination against its device certificate. Updated clients require
+the build host's legacy-delivery capability before submitting a numeric target.
 
-Legacy server versions must also support the requested operation. In particular,
-UDP and ping require the broker to preserve the datagram protocol field. Cloud
-container controls require a delegated certificate identifying the acting user
-in the device's organization. Desired-release downloads require device-authorized
-pull credentials; an authorization failure leaves the existing app intact.
-Do not use a deployment filter until your v1 server actually enforces it.
-
-Legacy certificate renewal rotates the device key and retains its numeric
-identity using ECDSA P-256; PKI renewal uses ML-DSA-65. A CLI holding an old
-certificate-key pin can refuse the new key.
-Verify the renewal before using `wendy device unpin <identity>` to record the
-replacement on the next connection.
+V1 app networking retains numeric names such as
+`device-674.mesh.wendy.internal` and the `cloud.wendy.dev` alias, deterministic
+`10.99.0.0/16` VIPs, authenticated LAN MeshDial, and the v1 relay fallback.
+Friendly names require the v1 server's organization roster. The routed Wendy Net
+UUID address space requires a direct PKI enrollment.
 
 ## Inventory what the deployment depends on
 

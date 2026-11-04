@@ -23,10 +23,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
-// Pre-expiry PKI device certificate renewal against pki-core's renew frontend
+// Pre-expiry device certificate renewal against pki-core's renew frontend
 // (registry plan T10).
 //
-// Every PKI renewal uses a fresh ML-DSA-65 key, whatever key the device holds
+// Every renewal uses a fresh ML-DSA-65 key, whatever key the device holds
 // today: that is how existing tier A/B devices leave P-256 (sem 2026-10-20
 // 21:29). The agent never chooses an algorithm by tier. pki-core's per-tier
 // policy is the only validator, so a refusal is reported as an error and never
@@ -94,21 +94,17 @@ func (s *ProvisioningService) RunRenewal(ctx context.Context, onRenewed func()) 
 	ticker := time.NewTicker(renewCheckInterval)
 	defer ticker.Stop()
 	for {
-		algorithm := "ML-DSA-65"
-		if enrollment, err := s.CloudEnrollment(); err == nil && enrollment.Mode == CloudLegacy {
-			algorithm = "ECDSA P-256"
-		}
 		renewed, err := s.RenewIfDue(ctx, time.Now())
 		switch {
 		case err != nil:
 			s.logger.Error("Device certificate renewal failed; retrying at the next check",
 				zap.String("event", "device_cert_renewal_failed"),
-				zap.String("requested_key_algorithm", algorithm),
+				zap.String("requested_key_algorithm", "ML-DSA-65"),
 				zap.Error(err))
 		case renewed:
 			s.logger.Info("Device certificate renewed",
 				zap.String("event", "device_cert_renewed"),
-				zap.String("key_algorithm", algorithm))
+				zap.String("key_algorithm", "ML-DSA-65"))
 			onRenewed()
 			return
 		}
@@ -120,23 +116,15 @@ func (s *ProvisioningService) RunRenewal(ctx context.Context, onRenewed func()) 
 	}
 }
 
-// RenewIfDue renews a due device certificate using its saved enrollment
-// protocol: v1 RefreshCertificate with P-256, or PKI renewal with ML-DSA-65.
-// Concurrent checks serialize so the crash-recovery key has one owner.
+// RenewIfDue renews a pki-core device certificate that is due at now with a
+// fresh ML-DSA-65 key. It returns false without error when there is nothing to
+// renew: not enrolled, a legacy (non pki-core) enrollment, or not yet due.
 func (s *ProvisioningService) RenewIfDue(ctx context.Context, now time.Time) (bool, error) {
-	s.renewalMu.Lock()
-	defer s.renewalMu.Unlock()
 	s.mu.Lock()
 	enrolled, principal, directory := s.enrolled && s.resetRecoveryErr == nil, s.principalURI, s.acmeDirectoryURL
 	certPEM, chainPEM, keyPEM := s.certPEM, s.chainPEM, string(s.keyPEM)
 	s.mu.Unlock()
-	if !enrolled {
-		return false, nil
-	}
-	if principal == "" {
-		return s.renewLegacyIfDue(ctx, now)
-	}
-	if directory == "" {
+	if !enrolled || principal == "" || directory == "" {
 		return false, nil
 	}
 	leaf, err := storedDeviceLeaf(certPEM)

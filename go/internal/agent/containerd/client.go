@@ -116,7 +116,6 @@ func dbusProxyManagerOrNil(m *dbusproxy.Manager) dbusProxyManager {
 }
 
 type Client struct {
-	cloudEnrollment         func() (services.CloudEnrollment, error)
 	client                  *containerd.Client
 	logger                  *zap.Logger
 	namespace               string
@@ -1198,9 +1197,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			return fmt.Errorf("invalid service name: %w", err)
 		}
 	}
-	// Release labels follow the saved enrollment protocol.
-	if req.ReleaseId != nil && !c.validReleaseID(req.GetReleaseId()) {
-		return fmt.Errorf("invalid release id for the device enrollment")
+	// Cloud stores the release id as a UUID; a label it would refuse to read
+	// back must not be written.
+	if req.ReleaseId != nil && !isCanonicalUUID(req.GetReleaseId()) {
+		return fmt.Errorf("invalid release id: want a canonical lowercase UUID")
 	}
 
 	// Both values are now validated; promote to short names for readability.

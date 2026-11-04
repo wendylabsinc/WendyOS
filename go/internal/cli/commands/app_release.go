@@ -3,9 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
-	"math"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +16,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	legacycloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -61,15 +58,11 @@ func newAppReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(auth.Certificates) == 0 || (auth.Certificates[0].TenantUUID() == "" && (auth.Certificates[0].OrganizationID <= 0 || auth.Certificates[0].UserID == "" || auth.Certificates[0].AssetID != 0)) {
+			if len(auth.Certificates) == 0 || auth.Certificates[0].TenantUUID() == "" {
 				return fmt.Errorf("wendy app release needs an operator session; run 'wendy auth login'")
 			}
 			return withCloud(cmd.Context(), auth, func(ctx context.Context, conn grpc.ClientConnInterface) error {
-				tenant := auth.Certificates[0].TenantUUID()
-				if tenant == "" {
-					tenant = strconv.Itoa(auth.Certificates[0].OrganizationID)
-				}
-				id, err := createAppRelease(ctx, conn, auth, tenant, appCfg.AppID, tag)
+				id, err := createAppRelease(ctx, conn, auth, auth.Certificates[0].TenantUUID(), appCfg.AppID, tag)
 				if err != nil {
 					return err
 				}
@@ -95,20 +88,6 @@ func validateReleaseTag(tag string) error {
 }
 
 func createAppRelease(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, appID, tag string) (string, error) {
-	if legacyReleaseAuth(auth) {
-		org, err := strconv.ParseInt(tenant, 10, 32)
-		if err != nil || org <= 0 || org != int64(auth.Certificates[0].OrganizationID) {
-			return "", fmt.Errorf("legacy release organization does not match operator session")
-		}
-		release, err := legacycloudpb.NewDeploymentServiceClient(conn).CreateAppRelease(ctx, &legacycloudpb.CreateAppReleaseRequest{AppId: appID, OrganizationId: int32(org), Name: tag, ReleaseType: legacycloudpb.ReleaseType_CONTAINER})
-		if err != nil {
-			return "", err
-		}
-		if release.GetId() <= 0 {
-			return "", fmt.Errorf("Cloud returned no legacy release ID")
-		}
-		return strconv.FormatInt(int64(release.GetId()), 10), nil
-	}
 	release := new(cloudpb.AppRelease)
 	err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.DeploymentService_CreateAppRelease_FullMethodName,
 		&cloudpb.CreateAppReleaseRequest{AppId: appID, OrganizationId: tenant, Name: tag, ReleaseType: cloudpb.ReleaseType_CONTAINER}, release)
@@ -121,21 +100,9 @@ func createAppRelease(ctx context.Context, conn grpc.ClientConnInterface, auth *
 	return release.GetId(), nil
 }
 
-func legacyReleaseAuth(auth *config.AuthConfig) bool {
-	return auth != nil && len(auth.Certificates) == 1 && auth.Certificates[0].TenantUUID() == "" && auth.Certificates[0].OrganizationID > 0 && auth.Certificates[0].OrganizationID <= math.MaxInt32 && auth.Certificates[0].UserID != "" && auth.Certificates[0].AssetID == 0
-}
-
 // setAppReleaseDigest records the digest. UpdateAppRelease replaces the name
 // too, so the tag is sent again.
 func setAppReleaseDigest(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, id, tag, digest string) error {
-	if legacyReleaseAuth(auth) {
-		release, err := strconv.ParseInt(id, 10, 32)
-		if err != nil || release <= 0 {
-			return fmt.Errorf("invalid legacy release ID")
-		}
-		_, err = legacycloudpb.NewDeploymentServiceClient(conn).UpdateAppRelease(ctx, &legacycloudpb.UpdateAppReleaseRequest{Id: int32(release), Name: tag, ImageDigest: digest})
-		return err
-	}
 	return cloudrequest.Invoke(ctx, conn, auth, cloudpb.DeploymentService_UpdateAppRelease_FullMethodName,
 		&cloudpb.UpdateAppReleaseRequest{Id: id, Name: tag, ImageDigest: digest}, new(cloudpb.AppRelease))
 }
@@ -184,13 +151,9 @@ func (r *deployRelease) prepare(ctx context.Context, provisioning deploymentProv
 	defer cancel()
 	err := registerDeviceApps(ctx, provisioning, []string{r.appID}, loadConfig,
 		func(_ context.Context, auth *config.AuthConfig, device *agentpb.ProvisionedResponse, _ []string) error {
-			if device.GetPrincipalUri() == "" && device.GetOrganizationId() > 0 && legacyReleaseAuth(auth) {
-				r.auth, r.tenant = auth, strconv.FormatInt(int64(device.GetOrganizationId()), 10)
-				return nil
-			}
 			identity, err := certs.ParsePrincipal(device.GetPrincipalUri())
 			if err != nil || identity.TenantUUID == "" {
-				return fmt.Errorf("--record-release needs a valid Cloud device enrollment")
+				return fmt.Errorf("--record-release needs a device enrolled with Wendy Cloud v2")
 			}
 			r.auth, r.tenant = auth, identity.TenantUUID
 			return nil

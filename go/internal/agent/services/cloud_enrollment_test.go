@@ -1,6 +1,10 @@
 package services
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 func TestCloudEnrollmentUsesPersistedProtocol(t *testing.T) {
 	principal := "spiffe://wendy.sh/tenant/22f35004-d638-4b5c-869f-b815974d6eae/device/2122b8ea-8571-4c7b-9835-64f669d01462"
@@ -31,5 +35,19 @@ func TestLegacyEnrollmentDoesNotFeedPKIWorkers(t *testing.T) {
 	s := &ProvisioningService{enrolled: true, cloudHost: "legacy.example:443", orgID: 64, assetID: 674, certPEM: "legacy-or-dual-SAN-leaf", keyPEM: []byte("key")}
 	if host, leaf, chain, key := s.PKICloudCredentials(); host != "" || leaf != "" || chain != "" || key != "" {
 		t.Fatal("legacy identity was published to a PKI-only worker")
+	}
+}
+
+// Restoring v1 transport must not invent automatic lifecycle operations which
+// the pre-Wendy-Net v1 agent never ran, even for a transitional dual-SAN leaf.
+func TestLegacyEnrollmentDoesNotStartPKIRenewal(t *testing.T) {
+	leaf, key := legacyBrokerTestLeaf(t, true)
+	service := &ProvisioningService{enrolled: true, cloudHost: "legacy:443", orgID: 64, assetID: 674, certPEM: leaf, keyPEM: []byte(key)}
+	renewed, err := service.RenewIfDue(context.Background(), time.Now().AddDate(10, 0, 0))
+	if err != nil || renewed {
+		t.Fatalf("legacy renewal=%v %v", renewed, err)
+	}
+	if host, cert, chain, key := service.PKICloudCredentials(); host != "" || cert != "" || chain != "" || key != "" {
+		t.Fatal("legacy enrollment exposed PKI worker credentials")
 	}
 }

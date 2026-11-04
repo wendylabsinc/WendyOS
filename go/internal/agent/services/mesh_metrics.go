@@ -135,6 +135,16 @@ func (m *MeshMetrics) RecordBytes(device meshid.Device, dir string, n int64) {
 	m.bytes[meshBytesKey{peer: device.UUID().String(), dir: dir}] += n
 }
 
+// RecordAssetBytes preserves numeric peer labels for v1 app connections.
+func (m *MeshMetrics) RecordAssetBytes(asset int32, dir string, n int64) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bytes[meshBytesKey{peer: strconv.Itoa(int(asset)), dir: dir}] += n
+}
+
 // Collect flushes accumulated mesh metrics as one OTel export every 15s until
 // ctx is cancelled. Run it as a goroutine from main.
 func (m *MeshMetrics) Collect(ctx context.Context) {
