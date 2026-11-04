@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"net"
 	"strings"
 	"sync"
@@ -212,11 +213,11 @@ func TestCloudRegistrationV2BeforeRosterSyncUsesSignedOperatorRequest(t *testing
 	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{{CloudGRPC: srv.device.CloudHost, Certificates: []config.CertificateInfo{cert}}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := registerCloudApps(ctx, conn, []string{"app", "campaign:people", "watch:front-door", "app", "existing"}, false); err != nil {
+	if err := registerCloudApps(ctx, conn, []string{"app", "sh.wendy.campaign.people", "sh.wendy.watch.front-door", "app", "existing"}, false); err != nil {
 		t.Fatal(err)
 	}
 	srv.mu.Lock()
-	if srv.mutations != 3 || legacy.calls != 0 || srv.apps["campaign:people"].Name != "people" || srv.apps["watch:front-door"].Name != "front-door" || srv.apps["existing"].Name != "operator metadata" || !srv.apps["existing"].CanSendNotifications {
+	if srv.mutations != 3 || legacy.calls != 0 || srv.apps["sh.wendy.campaign.people"].Name != "people" || srv.apps["sh.wendy.watch.front-door"].Name != "front-door" || srv.apps["existing"].Name != "operator metadata" || !srv.apps["existing"].CanSendNotifications {
 		t.Fatal("wrong mutation count, fallback, campaign or watch name, or existing app metadata/grant changed")
 	}
 	srv.appErr = status.Error(codes.PermissionDenied, "viewer")
@@ -261,5 +262,17 @@ func TestDeploymentProvisioningFallsBackOnlyForUnimplementedV2(t *testing.T) {
 				t.Fatalf("unexpected fallback or failure: calls=%d err=%v", legacy.calls, err)
 			}
 		})
+	}
+}
+
+func TestManagedAppNameDropsTheKindPrefix(t *testing.T) {
+	for id, want := range map[string]string{
+		data.CampaignAppID("people"):  "people",
+		data.WatchAppID("front-door"): "front-door",
+		"sh.wendy.app":                "sh.wendy.app",
+	} {
+		if got := managedAppName(id); got != want {
+			t.Errorf("managedAppName(%q) = %q, want %q", id, got, want)
+		}
 	}
 }

@@ -55,6 +55,11 @@ func TestListAlsaNodes(t *testing.T) {
 	if mic.IsSink {
 		t.Error("USB capture device marked as a sink")
 	}
+	// The stable name carries the card's id rather than its index, so the
+	// microphone keeps it when another card probes first after a reboot.
+	if mic.StableName != "alsa:C920:0" {
+		t.Errorf("mic stable name = %q, want alsa:C920:0", mic.StableName)
+	}
 
 	// Sorted by ID so a listing is stable.
 	for i := 1; i < len(nodes); i++ {

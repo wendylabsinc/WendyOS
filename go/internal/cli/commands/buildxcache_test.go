@@ -182,6 +182,132 @@ func TestBuildxArgsRequestPlainProgress(t *testing.T) {
 	}
 }
 
+// An account with no ~/.docker yet (root on a device, say) must not get links
+// to directories that do not exist: buildx's first write through one fails
+// with "mkdir …/docker-config/buildx: file exists". Links an earlier run left
+// dangling are repaired, and when the docker config cannot be created at all
+// the link is dropped so buildx can make a real directory instead.
+func TestEnsureCleanDockerConfigNeverLeavesDanglingLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses the host docker config unchanged")
+	}
+	subdirs := []string{"buildx", "cli-plugins", "contexts"}
+	for _, tc := range []struct {
+		name                 string
+		uncreatable, earlier bool
+	}{
+		{"fresh account", false, false},
+		{"dangling links from an earlier run", false, true},
+		{"docker config cannot be created", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			dockerConfig := filepath.Join(home, ".docker")
+			if tc.uncreatable {
+				blocker := filepath.Join(home, "not-a-directory")
+				if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				dockerConfig = filepath.Join(blocker, ".docker")
+			}
+			t.Setenv("DOCKER_CONFIG", dockerConfig)
+			if tc.earlier {
+				dir := filepath.Join(home, ".cache", "wendy", "docker-config")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				for _, subdir := range subdirs {
+					if err := os.Symlink(filepath.Join(dockerConfig, subdir), filepath.Join(dir, subdir)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			dir, err := ensureCleanDockerConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, subdir := range subdirs {
+				path := filepath.Join(dir, subdir)
+				if tc.uncreatable {
+					if _, err := os.Lstat(path); !os.IsNotExist(err) {
+						t.Fatalf("%s: kept a link to a directory that cannot exist (lstat err %v)", subdir, err)
+					}
+				} else if info, err := os.Stat(path); err != nil || !info.IsDir() {
+					t.Fatalf("%s does not resolve to a directory: %v", subdir, err)
+				}
+			}
+			// buildx's first write on a new account.
+			if err := os.MkdirAll(filepath.Join(dir, "buildx", "instances"), 0o755); err != nil {
+				t.Fatalf("buildx cannot create its state: %v", err)
+			}
+			if !tc.uncreatable {
+				// Builder state stays shared with the account's own docker config.
+				if _, err := os.Stat(filepath.Join(dockerConfig, "buildx", "instances")); err != nil {
+					t.Fatalf("builder state not shared with %s: %v", dockerConfig, err)
+				}
+			}
+		})
+	}
+}
+
+// Parallel service builds call ensureCleanDockerConfig at once, after the
+// build lock is released, and each build's buildx writes through the links
+// straight away. A build must never remove a link another build just made:
+// buildx would then create a real buildx directory in the gap, which every
+// later run accepts, and the build's builder registrations would no longer
+// be the account's own.
+func TestEnsureCleanDockerConfigConcurrentBuildsKeepTheLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses the host docker config unchanged")
+	}
+	for iteration := range 50 {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("DOCKER_CONFIG", filepath.Join(home, ".docker"))
+
+		var builds sync.WaitGroup
+		errs := make([]error, 8)
+		for i := range errs {
+			builds.Add(1)
+			go func() {
+				defer builds.Done()
+				dir, err := ensureCleanDockerConfig()
+				if err == nil {
+					err = os.MkdirAll(filepath.Join(dir, "buildx", "instances"), 0o755)
+				}
+				errs[i] = err
+			}()
+		}
+		builds.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("iteration %d, build %d: %v", iteration, i, err)
+			}
+		}
+		dir := filepath.Join(home, ".cache", "wendy", "docker-config")
+		for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+			info, err := os.Lstat(filepath.Join(dir, subdir))
+			if err != nil {
+				t.Fatalf("iteration %d: %s: %v", iteration, subdir, err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("iteration %d: %s is a %v, not a link", iteration, subdir, info.Mode())
+			}
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Name(), ".link-") {
+				t.Fatalf("iteration %d: leftover temporary link %q", iteration, e.Name())
+			}
+		}
+	}
+}
+
 func TestAppleContainerBuildRequestsPlainProgress(t *testing.T) {
 	// Apple Container builds must also request --progress=plain so their output
 	// renders through the shared build progress UI (default --progress auto emits

@@ -2,6 +2,8 @@ package browserauth
 
 import (
 	"context"
+	"io"
+	"net"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -65,5 +67,20 @@ func TestTopologyFailuresDoNotLookLikeEmptyHealthyNetworks(t *testing.T) {
 		if got.Status != test.state || len(got.Topology) != 0 || len(got.Error) == 0 || got.ObservedAt.IsZero() {
 			t.Fatalf("incorrect failure observation: %+v", got)
 		}
+	}
+}
+
+func TestClosedTopologyMonitoringStreamIsUnavailable(t *testing.T) {
+	for _, err := range []error{io.EOF, net.ErrClosed} {
+		if got := TopologyFailure(err); got.Status != "unavailable" {
+			t.Fatal(got)
+		}
+	}
+}
+
+func TestBrowserLocalCLIReporterIsExplicitlyUnavailable(t *testing.T) {
+	result := LocalCLIUnavailable()
+	if result.Status != "unavailable" || result.Platform != "wendy-cli" || result.Topology != nil {
+		t.Fatal(result)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	invite "github.com/wendylabsinc/wendy/go/proto/gen/cloudinvitepb"
 	"io"
 	"os"
 	"strings"
@@ -21,7 +22,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
-	"github.com/wendylabsinc/wendy/go/proto/gen/pkicorepb"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -86,43 +86,17 @@ type Signer struct {
 const CollidingFieldMetadataKey = "wendy-colliding-field"
 
 func Invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message) error {
-	return invoke(ctx, conn, auth, method, req, reply, "", nil)
+	return invoke(ctx, conn, auth, method, req, reply, nil)
 }
 
 // InvokeWithTrailer is Invoke, additionally collecting the call's trailing
 // metadata into *trailer. Callers that branch on a refusal -- enrollment's
 // mesh-address collision retry -- need the trailer; everyone else uses Invoke.
 func InvokeWithTrailer(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, trailer *metadata.MD) error {
-	return invoke(ctx, conn, auth, method, req, reply, "", trailer)
+	return invoke(ctx, conn, auth, method, req, reply, trailer)
 }
 
-// RevokePrincipalCertificates revokes the selected tenant's live device
-// certificates through Cloud's PKI relay. Both request signatures use the
-// same operator leaf. Each retry carries fresh PKI replay authority.
-func RevokePrincipalCertificates(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, deviceID string) (int, error) {
-	if deviceID == "" || len(deviceID) > 64 || strings.Trim(deviceID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != "" {
-		return 0, fmt.Errorf("device ID must contain 1–64 letters, digits, dots, underscores or hyphens")
-	}
-	if auth == nil || len(auth.Certificates) == 0 {
-		return 0, fmt.Errorf("device revocation requires an operator certificate")
-	}
-	tenant, err := operatorTenant(auth.Certificates[0].PrincipalURI)
-	if err != nil {
-		return 0, err
-	}
-	reply := new(pkicorepb.RevokeByPrincipalResponse)
-	err = invoke(ctx, conn, auth, cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName,
-		&cloudpbv2.RevokePrincipalCertificatesRequest{OrganizationId: tenant}, reply, deviceID, nil)
-	if err != nil {
-		return 0, err
-	}
-	if reply.GetRevokedCount() < 0 {
-		return 0, fmt.Errorf("Cloud returned an invalid revoked-certificate count")
-	}
-	return int(reply.GetRevokedCount()), nil
-}
-
-func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, revokeDeviceID string, trailer *metadata.MD) error {
+func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, trailer *metadata.MD) error {
 	s, err := newSigner(auth)
 	if err != nil {
 		return err
@@ -140,13 +114,7 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 		if err != nil {
 			return err
 		}
-		if revokeDeviceID != "" {
-			management, err := s.principalRevocationManagementRequest(revokeDeviceID)
-			if err != nil {
-				return err
-			}
-			signed.PkiManagementRequest = management
-		}
+		markContextChannel(ctx, signed)
 		var opts []grpc.CallOption
 		if trailer != nil {
 			opts = append(opts, grpc.Trailer(trailer))
@@ -241,6 +209,7 @@ func (s *Signer) register(ctx context.Context, conn grpc.ClientConnInterface, co
 	if err != nil {
 		return false, err
 	}
+	markContextChannel(ctx, signed)
 	var resp cloudpbv2.RegisterOperatorLeafResponse
 	if err := conn.Invoke(ctx, method, signed, &resp); err != nil {
 		if status.Code(err) == codes.Unimplemented {
@@ -415,7 +384,7 @@ func (s *Signer) unenrollManagementRequest(deviceID string) ([]byte, error) {
 }
 
 // Principal revocation also supports Lite identities that are not UUIDs.
-// RevokePrincipalCertificates validates those IDs before issuing an RPC.
+// unenrollManagementRequest validates those IDs before signing.
 func (s *Signer) principalRevocationManagementRequest(deviceID string) ([]byte, error) {
 	tenant, err := uuid.Parse(s.tenantUUID)
 	if err != nil || tenant.String() != s.tenantUUID {
@@ -441,6 +410,48 @@ func (s *Signer) principalRevocationManagementRequest(deviceID string) ([]byte, 
 // target.resource (cloud RequestSigning.md). The type assertion is what keeps
 // payload_type equal to the method's request message.
 var signedResources = map[string]func(tenant string, req proto.Message) (string, bool){
+	cloudpbv2.OrganizationService_AddMembersByEmails_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.AddMembersByEmailsRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(len(in.GetMembers()) > 0) {
+			return "", false
+		}
+		return "org/" + tenant + "/members-by-emails", true
+	},
+	cloudpbv2.OrganizationService_UpdateMemberRole_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateMemberRoleRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetUserId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/member/" + in.GetUserId(), true
+	},
+	cloudpbv2.OrganizationService_RemoveMember_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RemoveMemberRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetUserId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/member/" + in.GetUserId(), true
+	},
+	cloudpbv2.DeviceAccessService_CreateAccessEntry_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateAccessEntryRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetPrincipalId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/device-access", true
+	},
+	cloudpbv2.DeviceAccessService_DeleteAccessEntry_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeleteAccessEntryRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetEntryId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/device-access/" + in.GetEntryId(), true
+	},
+	invite.OrganizationInviteService_CreateOrganizationInvite_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*invite.CreateOrganizationInviteRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(true) {
+			return "", false
+		}
+		return "org/" + tenant + "/invite", true
+	},
 	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RegisterOperatorLeafRequest)
 		return "org/" + in.GetOrganizationId() + "/operator-leaf", ok
@@ -448,6 +459,13 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 	cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.EnrollDeviceRequest)
 		return "org/" + tenant + "/device/" + in.GetDeviceId(), ok
+	},
+	cloudpbv2.AppService_UpdateApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAppRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant || in.GetId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetId(), true
 	},
 	cloudpbv2.AppService_UpsertApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.UpsertAppRequest)
@@ -507,10 +525,6 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
 		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
-	},
-	cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
-		in, ok := req.(*cloudpbv2.RevokePrincipalCertificatesRequest)
-		return "org/" + tenant + "/pki", ok && in.GetOrganizationId() == tenant
 	},
 	cloudpbv2.PKIAdminService_RevokeEnrollmentToken_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RevokeEnrollmentTokenRequest)
@@ -645,4 +659,20 @@ func canonicalJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(strings.TrimSuffix(b.String(), "\n")), nil
+}
+
+// WithLocalMCP marks requests made by an embedded MCP call without changing
+// the process-wide channel used by unrelated native UI operations.
+func WithLocalMCP(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localMCPContextKey{}, true)
+}
+
+type localMCPContextKey struct{}
+
+func markContextChannel(ctx context.Context, signed *cloudpbv2.SignedRequest) {
+	if local, _ := ctx.Value(localMCPContextKey{}).(bool); local {
+		signed.Channel = cloudpbv2.RequestChannel_REQUEST_CHANNEL_MCP_LOCAL
+		signed.McpClientId = ""
+		signed.RelaySessionId = ""
+	}
 }

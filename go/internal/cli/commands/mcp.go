@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -91,13 +93,15 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 	srv := wendymcp.New(cfg, connectMCPDevice)
+	srv.SetTransientConnectError(isTransientDeviceConnectError)
+	srv.SetLoginRenewer(renewConnectionLogin)
 	srv.SetCLIUpdateChecker(checkCLIUpdateIfDue)
 	if err := srv.SetToolGroups(toolGroups); err != nil {
 		return nil, err
 	}
 	srv.SetInstallationBackend(installationJobBackend())
 	srv.SetSimulatorBackend(simulatorBackend())
-	srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject})
+	srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject, WaitReadyUnsupported: waitReadyUnsupportedForMCP})
 	srv.SetLANDiscoverer(func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 		return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 	})
@@ -127,6 +131,21 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 	return srv, nil
 }
 
+// isTransientDeviceConnectError reports a device connection that failed
+// because nothing answered, as while the device reboots: a later attempt can
+// succeed without anyone acting. A device that answered and refused this
+// computer's login or the device's identity cannot, and neither can a missing
+// login. ErrorClass checks those verdicts first, so they win.
+func isTransientDeviceConnectError(err error) bool {
+	switch ErrorClass(err) {
+	case "device_unreachable", "device_offline":
+		return true
+	case "":
+		return errors.Is(err, context.DeadlineExceeded) || isConnectionRefusedError(err) || isReachabilityTimeoutError(err)
+	}
+	return false
+}
+
 // enterLocalMCPChannel refuses a local MCP server when the session's realm
 // turned Allow MCP off, then marks this process's signed Cloud calls, and
 // those of the CLI children its tools start, as MCP_LOCAL. Only a resolvable
@@ -146,6 +165,9 @@ func enterLocalMCPChannel() error {
 }
 
 func mcpStartupAddress(address string) string {
+	if _, matched, _ := sessionbroker.ParseMeshSelector(address); matched {
+		return address
+	}
 	if _, matched, _ := parseCloudDeviceSelector(address); matched {
 		return address
 	}

@@ -49,7 +49,10 @@ type thorDevice struct {
 // the device, then run download → stage-1 RCM boot → stage-2 partition flash as a
 // BuildKit-style step list. Stage-2 is the shared Go engine (flashengine) on all
 // platforms.
-func installThor(ctx context.Context, version string, nightly, force bool, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int) error {
+func installThor(ctx context.Context, version string, nightly, force bool, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int, agent *localInstallAgent) error {
+	if err := agent.checkArchitecture("arm64"); err != nil {
+		return err
+	}
 	// Thor's USB recovery access is an in-process libusb handle, so the whole
 	// process must be root on macOS/Linux — caching the sudo timestamp is not
 	// enough. Elevate up front, before the briefing, so a missing-permission
@@ -173,7 +176,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 			if err != nil {
 				return false, err
 			}
-			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail)
+			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agent)
 		}},
 		{id: stepStage1, label: "Stage 1  RCM boot", run: func(out io.Writer, _ func(string)) (bool, error) {
 			return false, thorStageOne(fp, dev, out)
@@ -255,18 +258,13 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 // wendy.conf, provisioning.json, clock_floor — so first boot applies them via the
 // identical on-device path. Runs before stage-2, so a failure aborts with nothing
 // written to the Thor.
-func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string)) error {
-	// Freshen the agent like a disk install, but best-effort: resolveAgentArtifact
-	// is the only network step here, so an offline re-flash of a cached flashpack
-	// still provisions wifi/enrollment, falling back to the agent baked into the
-	// image.
-	detail("downloading agent")
-	agentBinary, agentVer, _, err := resolveAgentArtifact("linux", "arm64", false)
-	if err != nil {
-		fmt.Fprintf(out, "warning: could not download wendy-agent (%v); using the agent baked into the image\n", err)
-	} else {
-		detail("agent " + agentVer)
+func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
+	// A local agent is required provisioning. Release downloads remain
+	// best-effort so an offline flash can still provision WiFi and enrollment.
+	if err := agent.checkArchitecture("arm64"); err != nil {
+		return err
 	}
+	agentBinary, _ := resolveSeedAgent(out, detail, agent)
 
 	d, err := diskfs.Open(img)
 	if err != nil {

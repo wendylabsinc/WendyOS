@@ -14,6 +14,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -72,11 +73,29 @@ func (s *darwinScanner) Snapshot(_ context.Context) ([]BLEDeviceInfo, error) {
 	cDevices := unsafe.Slice(snapshot.devices, count)
 	devices := make([]BLEDeviceInfo, 0, count)
 	for _, cd := range cDevices {
+		canonical := make(map[string][]byte)
+		if cd.service_data_count > 0 && cd.service_data_count <= 8 && cd.service_data != nil {
+			for _, part := range unsafe.Slice(cd.service_data, int(cd.service_data_count)) {
+				if part.size > 512 || (part.size > 0 && part.bytes == nil) {
+					continue
+				}
+				key := CanonicalUUID(C.GoString(part.uuid))
+				if key == "" {
+					continue
+				}
+				canonical[key] = C.GoBytes(unsafe.Pointer(part.bytes), C.int(part.size))
+			}
+		}
 		devices = append(devices, BLEDeviceInfo{
-			Address:      C.GoString(cd.address),
-			Name:         C.GoString(cd.name),
-			ServiceUUIDs: splitList(C.GoString(cd.service_uuids)),
-			RSSI:         int(cd.rssi),
+			Address:               C.GoString(cd.address),
+			ServiceData:           canonical,
+			ServiceDataSeen:       observationTime(float64(cd.service_data_seen)),
+			AdvertisementName:     C.GoString(cd.advertisement_name),
+			AdvertisementNameSeen: observationTime(float64(cd.advertisement_name_seen)),
+			LastSeen:              observationTime(float64(cd.last_seen)),
+			Name:                  C.GoString(cd.name),
+			ServiceUUIDs:          splitList(C.GoString(cd.service_uuids)),
+			RSSI:                  int(cd.rssi),
 		})
 	}
 	return devices, nil
@@ -112,4 +131,11 @@ func splitList(s string) []string {
 		return nil
 	}
 	return out
+}
+
+func observationTime(seconds float64) time.Time {
+	if seconds <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(int64(seconds * 1000))
 }

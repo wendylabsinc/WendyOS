@@ -29,14 +29,14 @@ const (
 
 // usbSetupUdevRule tags the Wendy USB gadget so ModemManager leaves its CDC-ACM
 // serial console (/dev/ttyACM*) and CDC-NCM network port alone.
-const usbSetupUdevRule = `# Installed by 'wendy discover' USB-C auto-setup.
+const usbSetupUdevRule = `# Installed by 'wendy discover' USB auto-setup.
 # Stop ModemManager from probing the Wendy USB gadget's serial console
 # (/dev/ttyACM*) and network port (VID:PID 1d6b:0104).
 ACTION=="add|change", SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ENV{ID_MM_DEVICE_IGNORE}="1"
 ACTION=="add|change", SUBSYSTEM=="net", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ENV{ID_MM_DEVICE_IGNORE}="1"
 `
 
-// runUSBSetup configures this Linux host so a USB-C-tethered Wendy device is
+// runUSBSetup configures this Linux host so a USB-tethered Wendy device is
 // reachable. It brings up a link-local NetworkManager profile (IPv4 169.254/16
 // and IPv6 fe80::/64, matching a stock device's link-local usb0) and installs a
 // udev rule so ModemManager stops grabbing the gadget's serial console. The
@@ -61,7 +61,7 @@ func runUSBSetup(ctx context.Context, iface string, w io.Writer) error {
 	}
 	conn := usbSetupConnName(mac)
 
-	fmt.Fprintln(w, "Wendy USB-C host setup")
+	fmt.Fprintln(w, "Wendy USB host setup")
 	fmt.Fprintf(w, "  interface: %s (MAC %s)\n", iface, mac)
 	fmt.Fprintln(w, "  ip mode:   link-local (IPv4 169.254/16, IPv6 fe80::/64; no DHCP)")
 	fmt.Fprintf(w, "  udev rule: %s (ModemManager-ignore for %s:%s)\n", usbSetupUdevPath, usbGadgetVID, usbGadgetPID)
@@ -136,7 +136,7 @@ func resolveUSBSetupInterface(override string) (string, error) {
 	switch len(found) {
 	case 0:
 		return "", fmt.Errorf("no USB gadget interface found.\n" +
-			"  Connect the device with a data (not charge-only) USB-C cable, wait a few seconds, then retry.")
+			"  Connect the device with a data (not charge-only) USB cable, wait a few seconds, then retry.")
 	case 1:
 		return found[0], nil
 	default:

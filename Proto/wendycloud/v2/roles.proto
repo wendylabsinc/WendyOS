@@ -1,0 +1,177 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
+
+// Role definitions as data (WDY-3348). A role is a named set of catalog
+// permissions. Built-in roles are system-owned and read-only; a tenant clones
+// one or creates its own. Every write keeps role ⊆ organization ceiling ⊆
+// platform cap, and the caller may only place permissions it holds itself.
+//
+// Each RPC comment names its gate: the catalog permission the caller must hold
+// in organization_id. Errors use the gRPC status code named in the comment.
+
+// PermissionService exposes the permission catalog and an organization's
+// ceiling.
+service PermissionService {
+  // The platform permission catalog. Gate: authenticated caller, no org gate;
+  // the catalog carries no tenant data.
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsResponse);
+  // The permissions the organization holds (its ceiling), already clipped to
+  // the platform cap. Gate: `permission:read`.
+  rpc GetOrganizationCeiling(GetOrganizationCeilingRequest) returns (GetOrganizationCeilingResponse);
+}
+
+// RoleService defines roles. Assigning a role to a member stays on
+// OrganizationService (AddMember, UpdateMemberRole: role_id).
+service RoleService {
+  // Built-in and tenant roles visible in the organization. Unpaginated: the set
+  // is the built-ins plus the tenant's own roles. Gate: `role:list`.
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+  // Gate: `role:list`. NOT_FOUND if the role is neither built-in nor owned by
+  // the organization.
+  rpc GetRole(GetRoleRequest) returns (Role);
+  // Gate: `role:create`. PERMISSION_DENIED if any permission is outside the
+  // ceiling or not held by the caller; INVALID_ARGUMENT for an unknown
+  // permission; ALREADY_EXISTS if the name is taken in the organization.
+  // Signed; payload_type "wendycloud.v2.CreateRoleRequest".
+  rpc CreateRole(SignedRequest) returns (Role) {
+    option (wendy.signed_request) = true;
+  }
+  // Copies the source role's description and permissions into a new tenant
+  // role. The source may be built-in or tenant-owned. Gate: `role:create`.
+  // Same errors as CreateRole; the whole clone is refused, never clipped.
+  // Signed; payload_type "wendycloud.v2.CloneRoleRequest".
+  rpc CloneRole(SignedRequest) returns (Role) {
+    option (wendy.signed_request) = true;
+  }
+  // Full replace of name, description and permissions; last write wins.
+  // Gate: `role:update`. PERMISSION_DENIED for a built-in role and under the
+  // CreateRole rules; ALREADY_EXISTS on a name clash.
+  // Signed; payload_type "wendycloud.v2.UpdateRoleRequest".
+  rpc UpdateRole(SignedRequest) returns (Role) {
+    option (wendy.signed_request) = true;
+  }
+  // Gate: `role:delete`. PERMISSION_DENIED for a built-in role.
+  // FAILED_PRECONDITION while any member or group mapping is assigned the
+  // role; the caller reassigns them first. There is no force flag.
+  // Signed; payload_type "wendycloud.v2.DeleteRoleRequest".
+  rpc DeleteRole(SignedRequest) returns (DeleteRoleResponse) {
+    option (wendy.signed_request) = true;
+  }
+  // What one member effectively holds in the organization, after deny-wins and
+  // the ceiling. Gate: `permission:read`, except a member may always read
+  // their own.
+  rpc ListEffectivePermissions(ListEffectivePermissionsRequest) returns (ListEffectivePermissionsResponse);
+}
+
+message Permission {
+  // Catalog ID, "category:name", e.g. "app:update".
+  string name = 1;
+  // Catalog partition that enforces it, e.g. "cloud", "pki".
+  string service = 2;
+  string label = 3;
+  string description = 4;
+  // Reserved for platform roles; never in a tenant ceiling or tenant role.
+  bool platform_only = 5;
+}
+
+message Role {
+  string id = 1;
+  string name = 2;
+  optional string description = 3;
+  // System-owned and read-only; shared by every organization.
+  bool is_builtin = 4;
+  // Catalog permission names (Permission.name).
+  repeated string permissions = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+enum PermissionSource {
+  PERMISSION_SOURCE_UNSPECIFIED = 0;
+  // The member's assigned role.
+  PERMISSION_SOURCE_ROLE = 1;
+  // A role reached through a realm-group mapping.
+  PERMISSION_SOURCE_GROUP = 2;
+  // A per-user override in the organization.
+  PERMISSION_SOURCE_OVERRIDE = 3;
+}
+
+message EffectivePermission {
+  string permission = 1;
+  PermissionSource source = 2;
+  // ROLE: role ID. GROUP: realm-qualified group name. OVERRIDE: empty.
+  string source_ref = 3;
+}
+
+message ListPermissionsRequest {}
+
+message ListPermissionsResponse {
+  repeated Permission permissions = 1;
+}
+
+message GetOrganizationCeilingRequest {
+  string organization_id = 1;
+}
+
+message GetOrganizationCeilingResponse {
+  repeated string permissions = 1;
+}
+
+message ListRolesRequest {
+  string organization_id = 1;
+}
+
+message ListRolesResponse {
+  repeated Role roles = 1;
+}
+
+message GetRoleRequest {
+  string organization_id = 1;
+  string role_id = 2;
+}
+
+message CreateRoleRequest {
+  string organization_id = 1;
+  string name = 2;
+  optional string description = 3;
+  repeated string permissions = 4;
+}
+
+message CloneRoleRequest {
+  string organization_id = 1;
+  string source_role_id = 2;
+  string name = 3;
+}
+
+message UpdateRoleRequest {
+  string organization_id = 1;
+  string role_id = 2;
+  string name = 3;
+  // Unset clears it.
+  optional string description = 4;
+  // Replaces the whole set; empty leaves the role with no permissions.
+  repeated string permissions = 5;
+}
+
+message DeleteRoleRequest {
+  string organization_id = 1;
+  string role_id = 2;
+}
+
+message DeleteRoleResponse {}
+
+message ListEffectivePermissionsRequest {
+  string organization_id = 1;
+  string user_id = 2;
+}
+
+message ListEffectivePermissionsResponse {
+  // One entry per (permission, source); a permission held through two sources
+  // appears twice. Denied or ceiling-clipped permissions are absent.
+  repeated EffectivePermission permissions = 1;
+}

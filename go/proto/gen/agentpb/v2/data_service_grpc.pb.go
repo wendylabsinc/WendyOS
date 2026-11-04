@@ -34,6 +34,9 @@ const (
 	DataService_Campaigns_FullMethodName                  = "/wendy.agent.services.v2.DataService/Campaigns"
 	DataService_CampaignInspect_FullMethodName            = "/wendy.agent.services.v2.DataService/CampaignInspect"
 	DataService_CampaignTrigger_FullMethodName            = "/wendy.agent.services.v2.DataService/CampaignTrigger"
+	DataService_CampaignArm_FullMethodName                = "/wendy.agent.services.v2.DataService/CampaignArm"
+	DataService_CampaignDisarm_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignDisarm"
+	DataService_CampaignRemove_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignRemove"
 	DataService_DocumentApply_FullMethodName              = "/wendy.agent.services.v2.DataService/DocumentApply"
 	DataService_DocumentRemove_FullMethodName             = "/wendy.agent.services.v2.DataService/DocumentRemove"
 	DataService_DocumentRenew_FullMethodName              = "/wendy.agent.services.v2.DataService/DocumentRenew"
@@ -54,11 +57,11 @@ const (
 // app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
 // any method below callable by an application.
 //
-// The four Campaign methods in particular are command-line-facing: they are
-// what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
-// campaign inspect` and `wendy data campaign trigger` call over that mutually
-// authenticated channel. They are operator commands for managing capture
-// campaigns on a device, not an application programming interface for apps.
+// The Campaign methods in particular are command-line-facing: they are what
+// `wendy data campaign deploy`, `list`, `inspect`, `trigger`, `arm`, `disarm`
+// and `remove` call over that mutually authenticated channel. They are
+// operator commands for managing capture campaigns on a device, not an
+// application programming interface for apps.
 type DataServiceClient interface {
 	// Bounded, durable event inbox. An empty cursor starts at the current tail;
 	// replay=true reads retained history. Expired cursors report a gap explicitly.
@@ -79,6 +82,31 @@ type DataServiceClient interface {
 	Campaigns(ctx context.Context, in *DataCampaignsRequest, opts ...grpc.CallOption) (*DataCampaignsResponse, error)
 	CampaignInspect(ctx context.Context, in *DataCampaignInspectRequest, opts ...grpc.CallOption) (*DataCampaign, error)
 	CampaignTrigger(ctx context.Context, in *DataCampaignTriggerRequest, opts ...grpc.CallOption) (*DataEpisode, error)
+	// CampaignArm and CampaignDisarm switch a deployed campaign on and off
+	// without touching its plan or revision. A disarmed campaign stays listed,
+	// fires no trigger (CampaignTrigger refuses it with FAILED_PRECONDITION),
+	// runs no inference and holds no camera pre-roll. The state is stored with
+	// the plan, so it survives agent restarts and reboots, and redeploying a
+	// disarmed campaign keeps it disarmed. Both are idempotent. NOT_FOUND if
+	// the campaign is not deployed.
+	CampaignArm(ctx context.Context, in *DataCampaignArmRequest, opts ...grpc.CallOption) (*DataCampaignArmResponse, error)
+	// CampaignDisarm stores the disarmed state, releases the camera pre-roll,
+	// and then waits for the campaign's inference to stop. Storing the state
+	// first waits for the campaign's key lock, which an episode that is ending
+	// holds until it is sealed, its capture.drain included. The inference wait
+	// after that is at most 10 s. A worker still stopping then is reported in
+	// warnings and the call succeeds, because the campaign is already disarmed.
+	// A recording in progress is not cut short: it finishes its after_trigger
+	// window and is sealed normally.
+	CampaignDisarm(ctx context.Context, in *DataCampaignDisarmRequest, opts ...grpc.CallOption) (*DataCampaignDisarmResponse, error)
+	// CampaignRemove deletes a campaign's stored plan, so it is no longer
+	// listed, triggered or restored at boot. Every episode it recorded is kept.
+	// FAILED_PRECONDITION while the campaign is recording, unless force is set,
+	// which stops and seals that recording first, its capture.drain included.
+	// It waits for the key lock and then for the campaign's inference as
+	// CampaignDisarm does, and reports a worker still stopping after 10 s the
+	// same way: in warnings, with the plan already deleted.
+	CampaignRemove(ctx context.Context, in *DataCampaignRemoveRequest, opts ...grpc.CallOption) (*DataCampaignRemoveResponse, error)
 	// Data documents (specs/2026-10-12-data-documents-design.md §9.2).
 	// DocumentApply validates and stores a document of any kind and hands it to
 	// its runner. A collection takes the CampaignDeploy path.
@@ -262,6 +290,36 @@ func (c *dataServiceClient) CampaignTrigger(ctx context.Context, in *DataCampaig
 	return out, nil
 }
 
+func (c *dataServiceClient) CampaignArm(ctx context.Context, in *DataCampaignArmRequest, opts ...grpc.CallOption) (*DataCampaignArmResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataCampaignArmResponse)
+	err := c.cc.Invoke(ctx, DataService_CampaignArm_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) CampaignDisarm(ctx context.Context, in *DataCampaignDisarmRequest, opts ...grpc.CallOption) (*DataCampaignDisarmResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataCampaignDisarmResponse)
+	err := c.cc.Invoke(ctx, DataService_CampaignDisarm_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) CampaignRemove(ctx context.Context, in *DataCampaignRemoveRequest, opts ...grpc.CallOption) (*DataCampaignRemoveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataCampaignRemoveResponse)
+	err := c.cc.Invoke(ctx, DataService_CampaignRemove_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *dataServiceClient) DocumentApply(ctx context.Context, in *DataDocumentApplyRequest, opts ...grpc.CallOption) (*DataDocumentApplyResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DataDocumentApplyResponse)
@@ -316,11 +374,11 @@ func (c *dataServiceClient) Documents(ctx context.Context, in *DataDocumentsRequ
 // app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
 // any method below callable by an application.
 //
-// The four Campaign methods in particular are command-line-facing: they are
-// what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
-// campaign inspect` and `wendy data campaign trigger` call over that mutually
-// authenticated channel. They are operator commands for managing capture
-// campaigns on a device, not an application programming interface for apps.
+// The Campaign methods in particular are command-line-facing: they are what
+// `wendy data campaign deploy`, `list`, `inspect`, `trigger`, `arm`, `disarm`
+// and `remove` call over that mutually authenticated channel. They are
+// operator commands for managing capture campaigns on a device, not an
+// application programming interface for apps.
 type DataServiceServer interface {
 	// Bounded, durable event inbox. An empty cursor starts at the current tail;
 	// replay=true reads retained history. Expired cursors report a gap explicitly.
@@ -341,6 +399,31 @@ type DataServiceServer interface {
 	Campaigns(context.Context, *DataCampaignsRequest) (*DataCampaignsResponse, error)
 	CampaignInspect(context.Context, *DataCampaignInspectRequest) (*DataCampaign, error)
 	CampaignTrigger(context.Context, *DataCampaignTriggerRequest) (*DataEpisode, error)
+	// CampaignArm and CampaignDisarm switch a deployed campaign on and off
+	// without touching its plan or revision. A disarmed campaign stays listed,
+	// fires no trigger (CampaignTrigger refuses it with FAILED_PRECONDITION),
+	// runs no inference and holds no camera pre-roll. The state is stored with
+	// the plan, so it survives agent restarts and reboots, and redeploying a
+	// disarmed campaign keeps it disarmed. Both are idempotent. NOT_FOUND if
+	// the campaign is not deployed.
+	CampaignArm(context.Context, *DataCampaignArmRequest) (*DataCampaignArmResponse, error)
+	// CampaignDisarm stores the disarmed state, releases the camera pre-roll,
+	// and then waits for the campaign's inference to stop. Storing the state
+	// first waits for the campaign's key lock, which an episode that is ending
+	// holds until it is sealed, its capture.drain included. The inference wait
+	// after that is at most 10 s. A worker still stopping then is reported in
+	// warnings and the call succeeds, because the campaign is already disarmed.
+	// A recording in progress is not cut short: it finishes its after_trigger
+	// window and is sealed normally.
+	CampaignDisarm(context.Context, *DataCampaignDisarmRequest) (*DataCampaignDisarmResponse, error)
+	// CampaignRemove deletes a campaign's stored plan, so it is no longer
+	// listed, triggered or restored at boot. Every episode it recorded is kept.
+	// FAILED_PRECONDITION while the campaign is recording, unless force is set,
+	// which stops and seals that recording first, its capture.drain included.
+	// It waits for the key lock and then for the campaign's inference as
+	// CampaignDisarm does, and reports a worker still stopping after 10 s the
+	// same way: in warnings, with the plan already deleted.
+	CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error)
 	// Data documents (specs/2026-10-12-data-documents-design.md §9.2).
 	// DocumentApply validates and stores a document of any kind and hands it to
 	// its runner. A collection takes the CampaignDeploy path.
@@ -407,6 +490,15 @@ func (UnimplementedDataServiceServer) CampaignInspect(context.Context, *DataCamp
 }
 func (UnimplementedDataServiceServer) CampaignTrigger(context.Context, *DataCampaignTriggerRequest) (*DataEpisode, error) {
 	return nil, status.Error(codes.Unimplemented, "method CampaignTrigger not implemented")
+}
+func (UnimplementedDataServiceServer) CampaignArm(context.Context, *DataCampaignArmRequest) (*DataCampaignArmResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CampaignArm not implemented")
+}
+func (UnimplementedDataServiceServer) CampaignDisarm(context.Context, *DataCampaignDisarmRequest) (*DataCampaignDisarmResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CampaignDisarm not implemented")
+}
+func (UnimplementedDataServiceServer) CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CampaignRemove not implemented")
 }
 func (UnimplementedDataServiceServer) DocumentApply(context.Context, *DataDocumentApplyRequest) (*DataDocumentApplyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DocumentApply not implemented")
@@ -679,6 +771,60 @@ func _DataService_CampaignTrigger_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataService_CampaignArm_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataCampaignArmRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).CampaignArm(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_CampaignArm_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).CampaignArm(ctx, req.(*DataCampaignArmRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_CampaignDisarm_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataCampaignDisarmRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).CampaignDisarm(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_CampaignDisarm_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).CampaignDisarm(ctx, req.(*DataCampaignDisarmRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_CampaignRemove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataCampaignRemoveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).CampaignRemove(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_CampaignRemove_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).CampaignRemove(ctx, req.(*DataCampaignRemoveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DataService_DocumentApply_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DataDocumentApplyRequest)
 	if err := dec(in); err != nil {
@@ -805,6 +951,18 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CampaignTrigger",
 			Handler:    _DataService_CampaignTrigger_Handler,
+		},
+		{
+			MethodName: "CampaignArm",
+			Handler:    _DataService_CampaignArm_Handler,
+		},
+		{
+			MethodName: "CampaignDisarm",
+			Handler:    _DataService_CampaignDisarm_Handler,
+		},
+		{
+			MethodName: "CampaignRemove",
+			Handler:    _DataService_CampaignRemove_Handler,
 		},
 		{
 			MethodName: "DocumentApply",
