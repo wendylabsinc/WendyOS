@@ -138,40 +138,16 @@ The target must currently advertise port 80 as a TCP service. The command binds
 authorization. UDP forwarding is not supported. Devices with small connection
 budgets can reject additional streams; close unused connections and retry.
 
-## Select an explicit first neighbour
+## Join automatically
 
-Automatic discovery is normally enough. To connect to a known WendyOS router,
-supply its enrolled device UUID and TLS carrier address together:
+Run `wendy device wendy-net connect` to enable the local operator router. It
+finds and authenticates nearby routers over LAN and Bluetooth and can maintain
+multiple connections. Router addresses and Bluetooth connection parameters come
+from discovery; users do not select a particular neighbour or carrier.
 
-```sh
-wendy device wendy-net connect --transport tcp \
-  --address ROUTER_IP:TLS_CARRIER_PORT --router ROUTER_DEVICE_UUID
-```
-
-For Bluetooth, first list native radio hints without starting a router:
-
-```sh
-wendy device wendy-net discover --transport ble --timeout 5s
-wendy --json device wendy-net discover --transport ble
-wendy device wendy-net connect --transport ble \
-  --address NATIVE_BLE_ADDRESS --psm LISTED_PSM --router ENROLLED_DEVICE_UUID
-```
-
-Use the listed CoreBluetooth peripheral UUID on macOS, or LE address on Linux.
-macOS does not expose the hardware Bluetooth MAC address. The radio identifier is
-different from the enrolled device UUID required by `--router`.
-
-Discovery returns unverified advertisement hints and a dynamic PSM. Its short
-device hint is not a full device UUID or an identity proof; candidates may include
-peers without the WendyOS operator-router role. The selected identity and tenant
-are authenticated during attachment. This command does not connect, create an
-operator recipe or enable a background router. It is separate from the retired
-generic Bluetooth agent-discovery path.
-
-An explicit first hop stays on the selected physical carrier and reconnects that
-peer without starting additional LAN/BLE discovery. Slow Bluetooth setup or
-several mesh hops can make cold connections take longer than ordinary LAN
-connections.
+Use `wendy discover` to find reachable destination devices. Selecting a device
+controls where a command runs, while the mesh chooses the path to it. Run
+`wendy device wendy-net disconnect` to disable the local operator router.
 
 ## Configure a Lite device
 
