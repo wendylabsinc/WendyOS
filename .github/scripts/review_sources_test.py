@@ -479,6 +479,94 @@ class WorkflowTests(unittest.TestCase):
                                 exec(inline(workflow, 2), {})
                     self.assertEqual([call.args[0].method for call in request.call_args_list], ['GET'])
 
+    def post_integration_comment(self, previous, comment=None, excerpted=True):
+        """Run the post step with a mocked GitHub API; return its writes and any failure."""
+        marker = '<!-- ai-integration-test-review:v1 -->'
+        writes = []
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def urlopen(request, timeout=None):
+            if request.method == 'GET':
+                return Response(json.dumps([{'id': 1, 'user': {'login': 'github-actions[bot]', 'type': 'Bot'},
+                                             'body': previous}]).encode())
+            writes.append((request.method, json.loads(request.data)['body'] if request.data else None))
+            return Response(b'{"id": 1}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            comment_file = Path(directory) / 'comment.md'
+            if comment:
+                comment_file.write_text(f'{comment}\n\n{marker}\n')
+            env = dict(INTEGRATION_SOURCE_EXCERPTED='true' if excerpted else 'false', SOURCE_ONLY_REVIEW='false',
+                       COMMENT_FILE=str(comment_file), GH_TOKEN='offline', REPO=REPO, PR_NUMBER='42')
+            failure = None
+            with patch.dict(os.environ, env), patch('urllib.request.urlopen', urlopen), redirect_stdout(io.StringIO()):
+                try:
+                    exec(inline('integration-test-review.yml', 2), {})
+                except SystemExit:
+                    pass
+                except RuntimeError as error:
+                    failure = str(error)
+        return writes, failure
+
+    def test_partial_review_publishes_new_findings_without_clearing_a_blocker(self):
+        marker = '<!-- ai-integration-test-review:v1 -->'
+        prior = f'# AI Integration Test Review\n\n#### 🛑 Error Prior blocker\n\nBlocker details\n\n{marker}\n'
+        first = '# AI Integration Test Review\n\n#### ⚠️ Concern First concern'
+        writes, failure = self.post_integration_comment(prior, first)
+        self.assertEqual([method for method, _ in writes], ['PATCH'])
+        published = writes[0][1]
+        self.assertIn('#### 🛑 Error Prior blocker', published)
+        self.assertIn('Blocker details', published)
+        self.assertIn('#### ⚠️ Concern First concern', published)
+        self.assertEqual(published.count(marker), 1)
+        self.assertTrue(published.endswith(marker))
+        for phrase in ('blockers remain open', 'delete the bot comment', '30,000'):
+            self.assertIn(phrase, failure)
+        # Each later partial run replaces the last partial findings instead of stacking them.
+        second = '# AI Integration Test Review\n\n#### 💡 Info Second info'
+        writes, failure = self.post_integration_comment(published, second)
+        self.assertIn('delete the bot comment', failure)
+        republished = writes[0][1]
+        self.assertIn('Prior blocker', republished)
+        self.assertIn('Second info', republished)
+        self.assertNotIn('First concern', republished)
+        self.assertEqual(republished.count('Latest partial review'), 1)
+        # Findings that no longer apply leave with their partial run; the blocker stays.
+        writes, failure = self.post_integration_comment(republished)
+        self.assertIn('delete the bot comment', failure)
+        self.assertIn('Prior blocker', writes[0][1])
+        self.assertNotIn('Second info', writes[0][1])
+        self.assertNotIn('Latest partial review', writes[0][1])
+        # A full review of a smaller diff may still clear everything.
+        writes, failure = self.post_integration_comment(republished, excerpted=False)
+        self.assertEqual(writes, [('DELETE', None)])
+        self.assertIsNone(failure)
+
+    def test_partial_review_keeps_a_new_blocker_and_the_comment_size_limit(self):
+        marker = '<!-- ai-integration-test-review:v1 -->'
+        prior = f'#### 🛑 Error Prior blocker\n\n{"p" * 40000}\n\n{marker}\n'
+        writes, failure = self.post_integration_comment(prior, f'#### 🛑 Error New blocker\n\n{"n" * 40000}')
+        self.assertIn('blockers remain open', failure)
+        published = writes[0][1]
+        self.assertIn('#### 🛑 Error Prior blocker', published)
+        self.assertIn('#### 🛑 Error New blocker', published)
+        self.assertLessEqual(len(published), 65000)
+        self.assertIn('*(truncated)*', published)
+        self.assertTrue(published.endswith(marker))
+
+    def test_partial_blocker_failure_step_names_the_exit_paths(self):
+        text = (ROOT / '.github/workflows/integration-test-review.yml').read_text()
+        step = text.split('- name: Fail on open integration test blockers', 1)[1]
+        self.assertIn('INTEGRATION_SOURCE_EXCERPTED', step)
+        self.assertIn('delete the bot comment', step)
+        self.assertIn('30,000', step)
+
 
 class OutputIsolationTests(unittest.TestCase):
     def test_suite_publishes_nothing_to_the_job_running_it(self):

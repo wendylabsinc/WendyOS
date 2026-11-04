@@ -16,7 +16,7 @@ GitHub-managed Copilot uses `.github/copilot-instructions.md` as prompt guidance
 
 ### Integration Test Review (`.github/workflows/integration-test-review.yml`)
 
-The diff is read from immutable base/head Git commits after checking PR metadata. Existing test context is read as data from the event head. The model retains its existing 30,000-character diff excerpt budget. Larger source diffs are explicitly reported as partial input; omitted source remains unreviewed, and an excerpt cannot clear earlier blockers. Generated output is filtered before the diff, file lists or context are sent to the model.
+The diff is read from immutable base/head Git commits after checking PR metadata. Existing test context is read as data from the event head. The model retains its existing 30,000-character diff excerpt budget. Larger source diffs are explicitly reported as partial input; omitted source remains unreviewed, and an excerpt cannot clear earlier blockers. A partial run publishes its new findings beneath an earlier blocker, and the check stays red until the source diff shrinks under the 30,000-character limit so a full review runs, or a maintainer deletes the bot comment after triage. Generated output is filtered before the diff, file lists or context are sent to the model.
 
 ### Docs Review Workflow (`.github/workflows/docs-review.yml`)
 

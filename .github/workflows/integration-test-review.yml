@@ -513,6 +513,7 @@ jobs:
           pr_number_text = os.environ['PR_NUMBER']
           comment_path = pathlib.Path(os.environ['COMMENT_FILE'])
           marker = '<!-- ai-integration-test-review:v1 -->'
+          partial_marker = '<!-- ai-integration-test-review:latest-partial -->'
 
           if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo_full_name):
               raise RuntimeError(f'Invalid REPO value: {repo_full_name}')
@@ -605,8 +606,27 @@ jobs:
               raise SystemExit(0)
 
           if os.environ.get('INTEGRATION_SOURCE_EXCERPTED') == 'true':
-              if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
-                  raise RuntimeError('Partial source review; prior integration test blockers remain open')
+              blocked = [comment for comment in existing if '#### 🛑 Error' in (comment.get('body') or '')]
+              if blocked:
+                  # A partial review cannot clear a blocker. The blocker's text stays,
+                  # and only the latest partial findings published beneath it change.
+                  prior = blocked[0]['body']
+                  update = comment_path.read_text(encoding='utf-8').replace(marker, '').strip() if comment_path.exists() else ''
+                  update = update.removeprefix('# AI Integration Test Review').strip()
+                  if update or partial_marker in prior:
+                      body = prior.split(partial_marker, 1)[0].replace(marker, '').rstrip()
+                      if update:
+                          body += f'\n\n{partial_marker}\n\n## Latest partial review\n\n{update}'
+                      body_limit = 65000 - len(f'\n\n{marker}')
+                      if len(body) > body_limit:
+                          truncation_notice = '\n\n*(truncated)*'
+                          body = body[:body_limit - len(truncation_notice)].rstrip() + truncation_notice
+                      request('PATCH', f'/repos/{owner}/{repo}/issues/comments/{blocked[0]["id"]}', {'body': f'{body}\n\n{marker}'})
+                  raise RuntimeError(
+                      'Partial source review; prior integration test blockers remain open. A partial review '
+                      'cannot clear them. Shrink the source diff under the 30,000-character excerpt limit so '
+                      'a full review runs, or have a maintainer delete the bot comment after triage.'
+                  )
               if not comment_path.exists():
                   print('No findings in supplied excerpt; omitted source is unreviewed and prior comments preserved')
                   raise SystemExit(0)
@@ -649,4 +669,7 @@ jobs:
         if: env.HAS_INTEGRATION_TEST_BLOCKER == 'true'
         run: |
           echo "Integration test review found a container-observable capability changed by this PR with no covering test. Add the test or push a follow-up commit before merging."
+          if [[ "${INTEGRATION_SOURCE_EXCERPTED:-}" == "true" ]]; then
+            echo "This review was partial, and a later partial review cannot clear this blocker. After adding the test, shrink the source diff under the 30,000-character excerpt limit so a full review runs, or have a maintainer delete the bot comment after triage."
+          fi
           exit 1
