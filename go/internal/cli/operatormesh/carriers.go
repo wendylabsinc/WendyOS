@@ -47,21 +47,21 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	config := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, NextProtos: []string{meshoperatorlink.RouterALPN}, Certificates: []tls.Certificate{s.Node.Credentials.Certificate}, InsecureSkipVerify: true, SessionTicketsDisabled: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
-				return errors.New("mesh candidate has no peer certificate")
+				return errors.New("the discovered router did not provide a TLS certificate")
 			}
 			actual, err := meshid.DeviceFromCert(state.PeerCertificates[0])
 			if err != nil {
 				return err
 			}
 			if actual.Tenant() != s.Node.Credentials.Device.Tenant() {
-				return errors.New("mesh candidate belongs to another tenant")
+				return errors.New("the discovered router belongs to a different organization")
 			}
 			if candidate.Device.IsValid() && actual != candidate.Device {
-				return errors.New("mesh candidate identity differs from discovery")
+				return errors.New("the router certificate does not match its advertised device identity")
 			}
 			id := actual.UUID()
 			if candidate.Transport == carriers.BLE && candidate.Hint != ([4]byte{}) && candidate.Hint != ([4]byte(id[:4])) {
-				return errors.New("BLE candidate identity differs from the live hint")
+				return errors.New("the Bluetooth router certificate does not match its advertised device identity")
 			}
 			cfg := s.routerConfig
 			cfg.Router = actual

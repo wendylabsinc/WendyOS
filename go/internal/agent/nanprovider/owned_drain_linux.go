@@ -47,7 +47,7 @@ func (l *radioLink) beginDrain(now time.Time, emit func(radioPeer)) {
 // matched lifecycle event is processed.
 func (l *radioLink) drainTick(now time.Time, control radioCommander, local string, logger *zap.Logger) error {
 	if now.Sub(l.since) >= 35*time.Second {
-		return fmt.Errorf("NAN NDP for %s did not disconnect while draining", l.peer.NMI)
+		return fmt.Errorf("Wi-Fi Aware data connection to %s did not close during shutdown", l.peer.NMI)
 	}
 	if now.Sub(l.stopAttempt) < 5*time.Second {
 		return nil

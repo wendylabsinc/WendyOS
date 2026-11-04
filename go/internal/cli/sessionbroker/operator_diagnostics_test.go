@@ -43,7 +43,7 @@ func TestOperatorRecoveryMissingRouteExplainsPeerState(t *testing.T) {
 			} else if status.Code(err) != codes.Unavailable || !retryable || len(steps) != 2 {
 				t.Fatalf("readiness error lost recovery detail: %v, retry=%v steps=%v", err, retryable, steps)
 			}
-			if got := strings.Contains(err.Error(), "no authenticated peers"); got != tc.wantPeer {
+			if got := strings.Contains(err.Error(), "no authenticated connections"); got != tc.wantPeer {
 				t.Fatalf("peer absence claim = %v, want %v: %v", got, tc.wantPeer, err)
 			}
 		})

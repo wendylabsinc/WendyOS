@@ -183,7 +183,7 @@ func TestOperatorExitColdStartupRetainsSpecificRecovery(t *testing.T) {
 	}{
 		{"timeout", "timeout", "timed out", "reachable", context.DeadlineExceeded, true},
 		{"issuer", "issuer_chain", "issuer chain", "certificate chain", &certs.IssuerPathError{Err: errors.New("private issuer payload")}, false},
-		{"pin", "device_pin", "saved device identity", "saved pin", operatorFailurePinRejection{}, false},
+		{"pin", "device_pin", "saved device identity", "saved certificate pin", operatorFailurePinRejection{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, spec := operatorDiagnosticsFixture(t)

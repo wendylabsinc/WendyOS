@@ -9,7 +9,7 @@ import (
 // ErrCarrierCapacityRetry is a local scheduling deferral, not a failed peer.
 // Callers retry through their existing poll/backoff after owned cleanup frees
 // capacity. It adds no wire field and never permits a 65th Node attachment.
-var ErrCarrierCapacityRetry = errors.New("wendy net link capacity reclamation pending")
+var ErrCarrierCapacityRetry = errors.New("Wendy Net is closing a backup connection to free a slot; retry shortly")
 
 // reclaimGlobalRedundancy runs only on the Node actor, after its liveness tick
 // and snapshot refresh. Unlike provider budgets, this is the existing shared

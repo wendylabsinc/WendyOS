@@ -301,7 +301,7 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 			// owned handle first; an unchanged normal link needs no procedure.
 			tx, rx, err := readMeshLinkPHY(ctx, io, handle)
 			if err != nil {
-				return err
+				return fmt.Errorf("checking Bluetooth radio mode on %s (handle %d): %w", adapter, handle, err)
 			}
 			if tx == 1 && rx == 1 {
 				return nil
@@ -318,7 +318,7 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 		}
 		p := []byte{byte(handle), byte(handle >> 8), 0, phy, phy, byte(options), byte(options >> 8)}
 		if _, err := hciCommand(ctx, io, 0x2032, p); err != nil {
-			return err
+			return fmt.Errorf("setting Bluetooth radio mode to %s on %s (handle %d): %w", mode, adapter, handle, err)
 		}
 		// An accepted Set PHY is asynchronous. Require observed TX/RX PHY, rather
 		// than claiming success merely from Command Status. HCI does not report S2/S8.
@@ -329,7 +329,7 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 		for {
 			tx, rx, err := readMeshLinkPHY(ctx, io, handle)
 			if err != nil {
-				return err
+				return fmt.Errorf("checking Bluetooth radio mode on %s (handle %d): %w", adapter, handle, err)
 			}
 			if tx == want && rx == want {
 				return nil
@@ -338,7 +338,7 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return fmt.Errorf("selected PHY not observed: %w", ctx.Err())
+				return fmt.Errorf("Bluetooth connection did not reach the requested %s radio mode on %s (handle %d): %w", mode, adapter, handle, ctx.Err())
 			case <-timer.C:
 			}
 		}

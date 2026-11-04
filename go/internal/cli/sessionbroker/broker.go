@@ -59,7 +59,7 @@ const (
 	maxParentLease = 30 * time.Minute
 )
 
-var ErrUnavailable = errors.New("session broker unavailable")
+var ErrUnavailable = errors.New("the local Wendy connection service is unavailable")
 
 type Spec struct {
 	Operator        *OperatorSpec       `json:"operator,omitempty"`

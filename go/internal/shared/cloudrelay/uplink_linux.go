@@ -24,7 +24,7 @@ const interfaceFallbackSupported = true
 func availableUplinks(ctx context.Context) ([]uplink, error) {
 	routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
 	if err != nil {
-		return nil, fmt.Errorf("listing Cloud uplinks: %w", err)
+		return nil, fmt.Errorf("finding network connections for Cloud access: %w", err)
 	}
 	var names []string
 	for _, route := range routes {
@@ -88,7 +88,7 @@ func uplinkResolver(name string, servers []string) *net.Resolver {
 	var next atomic.Uint64
 	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
 		if len(servers) == 0 {
-			return nil, fmt.Errorf("no DNS servers for uplink %s", name)
+			return nil, fmt.Errorf("cannot resolve Cloud addresses: no DNS servers are configured for network interface %s", name)
 		}
 		server := servers[(next.Add(1)-1)%uint64(len(servers))]
 		d := net.Dialer{}
