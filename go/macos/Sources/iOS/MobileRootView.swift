@@ -331,7 +331,7 @@ private struct MobileAccountsView: View {
         NavigationStack {
             List {
                 Section {
-                    NavigationLink { CloudManagementView().navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
+                    NavigationLink { CloudManagementView(signIn: { signIn(false) }).navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
                     NavigationLink { MobileVPNView(model: model, vpn: model.vpn) } label: { Label("Connection settings", systemImage: "network") }
                 }
                 if accounts.isEmpty && model.account?.signedIn != true {

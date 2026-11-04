@@ -18,6 +18,11 @@ struct CloudManagementView: View {
     @State private var invitationLink = ""
     @State private var details: String?
     @State private var initialLoadComplete = false
+    /// Replaces the default sign-in action. A presenter that shows this view
+    /// inside a sheet passes it to close that sheet first, because the sign-in
+    /// browser is itself a sheet and cannot present over another one.
+    private let signIn: (() -> Void)?
+    init(signIn: (() -> Void)? = nil) { self.signIn = signIn }
     private enum CloudForm: String, Identifiable {
         case teammate = "Add teammate"
         case invitation = "Create invitation"
@@ -155,7 +160,7 @@ struct CloudManagementView: View {
                     Text("Sign in to manage your organization.")
                 } actions: {
                     Button(app.signingIn ? "Signing in…" : "Sign in") {
-                        actions.submit { await app.signIn() }
+                        if let signIn { signIn() } else { actions.submit { await app.signIn() } }
                     }.disabled(app.signingIn)
                     if let url = app.loginURL { Link("Continue in browser", destination: url) }
                 }
@@ -234,7 +239,7 @@ struct CloudManagementView: View {
                         description: { Text("Sign in to manage your organization.") }
                         actions: {
                             Button(app.signingIn ? "Signing in…" : "Sign in") {
-                                actions.submit { await app.signIn() }
+                                if let signIn { signIn() } else { actions.submit { await app.signIn() } }
                             }.disabled(app.signingIn)
                             if app.signingIn {
                                 ProgressView()
