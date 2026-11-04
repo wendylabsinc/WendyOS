@@ -250,19 +250,23 @@ func singleObjectPath(body []any) (dbus.ObjectPath, bool) {
 // ServiceBrowser, ResolveService blocks the D-Bus call until it has an answer
 // or times out on Avahi's side).
 //
-// The first attempt pins aprotocol=avahiProtoInet (IPv4-only): most WendyOS
-// devices answer on IPv4, and asking for it directly avoids Avahi racing an
-// AAAA lookup that would otherwise sometimes win and hand back a
-// less-preferred IPv6 address (preferIPv4Addr encodes the same preference for
-// the darwin/dns-sd path). A device with no IPv4 address at all fails that
-// call, so it is retried once with aprotocol=avahiProtoUnspec, which accepts
-// whatever address family Avahi actually has.
+// IPv4 advertisements prefer an IPv4 address, with an unspecified-family
+// fallback. IPv6 advertisements may come from IPv6-only app bridges: resolve
+// either family immediately rather than occupying the worker until an IPv4
+// lookup times out. The returned address still carries its interface zone.
 func resolveAvahiItem(ctx context.Context, conn avahiConn, item avahiItemNew) (MDNSService, bool) {
 	resolveCtx, cancel := context.WithTimeout(ctx, avahiResolveTimeout)
 	defer cancel()
 
+	aprotocol := avahiProtoUnspec
+	if item.proto == avahiProtoInet {
+		aprotocol = avahiProtoInet
+	}
 	reply, err := conn.Call(resolveCtx, avahiServerPath, avahiResolveServiceMethod,
-		item.iface, item.proto, item.name, item.stype, item.domain, avahiProtoInet, uint32(0))
+		item.iface, item.proto, item.name, item.stype, item.domain, aprotocol, uint32(0))
+	if err != nil && aprotocol == avahiProtoUnspec {
+		return MDNSService{}, false
+	}
 	if err != nil {
 		reply, err = conn.Call(resolveCtx, avahiServerPath, avahiResolveServiceMethod,
 			item.iface, item.proto, item.name, item.stype, item.domain, avahiProtoUnspec, uint32(0))

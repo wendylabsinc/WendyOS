@@ -67,6 +67,10 @@ postbox. Changing the active CLI context does not change that choice. A
 transitional v1 certificate carrying an additional SPIFFE SAN remains a v1
 enrollment.
 
+For local or on-premises v1 services, set `WENDY_BROKER_URL` to override the
+broker endpoint for both presence and outgoing tunnels. The API and telemetry
+continue to use their configured endpoints.
+
 Remote build delivery supports numeric v1 assets and v2 device principals, and
 checks the destination against its device certificate. Updated clients require
 the build host's legacy-delivery capability before submitting a numeric target.

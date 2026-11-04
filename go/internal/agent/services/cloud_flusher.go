@@ -32,9 +32,10 @@ func normalizeCloudHost(host string) string {
 
 const (
 	cloudFlusherMaxBackoff = 60 * time.Second
-	// cloudFlusherFramesPerPass bounds how many buffered OTLP frames a single
-	// flush pass merges into one bounded Export RPC before looping.
-	cloudFlusherFramesPerPass = 50
+	// Preserve the collector drain budget independently of individual RPC sizes.
+	// Large frames are split across bounded batches, each checkpointed on success.
+	cloudFlusherFramesPerPass = 500
+	cloudFlusherReadFrames    = 50
 	cloudFlusherMaxBatchBytes = 2 << 20
 )
 
@@ -241,48 +242,73 @@ func (f *CloudFlusher) runOnce(ctx context.Context, logs collogspb.LogsServiceCl
 	})
 }
 
-// flushSignal reads one batch of buffered frames for sig, exports each via the
-// provided callback, and advances the signal's cursor only if all exports
-// succeed. On any export error the cursor is left untouched so the batch is
-// retried (already-exported frames may be re-sent).
+// flushSignal drains a bounded number of frames in size-limited RPC batches.
+// Only a successfully exported batch advances the cursor; a failed batch is
+// retried without replaying earlier successful batches.
 func (f *CloudFlusher) flushSignal(sig SignalType, export func(proto.Message) error) error {
 	if f.buffer == nil {
 		return nil
 	}
+
 	cursor := f.buffer.LoadCursor(sig)
-	// Merge OTLP frames into one bounded export. Replaying a backlog one RPC
-	// per frame exhausts the v1 per-device rate limit before a batch can finish,
-	// so its cursor never advances and the same prefix is replayed forever.
-	count := cloudFlusherFramesPerPass
-	var msgs []proto.Message
-	var next flushCursor
-	for {
-		var err error
-		msgs, next, err = f.buffer.ReadFromCursor(sig, cursor, count)
-		if err != nil {
-			return fmt.Errorf("cloud flusher: read %s from cursor: %w", sig, err)
+	for remaining := cloudFlusherFramesPerPass; remaining > 0; {
+		var batch proto.Message
+		batchFrames, batchBytes := 0, 0
+		nextCursor := cursor
+	fillBatch:
+		for batchFrames < remaining {
+			count := min(remaining-batchFrames, cloudFlusherReadFrames)
+			var msgs []proto.Message
+			var next flushCursor
+			size := 0
+			for {
+				var err error
+				msgs, next, err = f.buffer.ReadFromCursor(sig, nextCursor, count)
+				if err != nil {
+					return fmt.Errorf("cloud flusher: read %s from cursor: %w", sig, err)
+				}
+				if len(msgs) == 0 {
+					break fillBatch
+				}
+				size = 0
+				for _, msg := range msgs {
+					size += proto.Size(msg)
+				}
+				if batchBytes+size <= cloudFlusherMaxBatchBytes {
+					break
+				}
+				if count == 1 {
+					if batchFrames == 0 {
+						return fmt.Errorf("cloud flusher: %s frame exceeds export limit", sig)
+					}
+					break fillBatch
+				}
+				count = max(1, count/2)
+			}
+			for _, msg := range msgs {
+				if batch == nil {
+					batch = proto.Clone(msg)
+				} else {
+					proto.Merge(batch, msg)
+				}
+			}
+			batchFrames += len(msgs)
+			batchBytes += size
+			nextCursor = next
 		}
-		if len(msgs) == 0 {
+		if batchFrames == 0 {
 			return nil
 		}
-		size := 0
-		for _, msg := range msgs {
-			size += proto.Size(msg)
+		if err := export(batch); err != nil {
+			return fmt.Errorf("cloud flusher: export %s: %w", sig, err)
 		}
-		if size <= cloudFlusherMaxBatchBytes || count == 1 {
-			break
+		// Checkpoint each successful RPC. A later refusal must not replay the
+		// successful prefix while catching up against a rate-limited server.
+		if err := f.buffer.SaveCursor(sig, nextCursor); err != nil {
+			return fmt.Errorf("cloud flusher: save %s cursor: %w", sig, err)
 		}
-		count = max(1, count/2)
-	}
-	batch := proto.Clone(msgs[0])
-	for _, msg := range msgs[1:] {
-		proto.Merge(batch, msg)
-	}
-	if err := export(batch); err != nil {
-		return fmt.Errorf("cloud flusher: export %s: %w", sig, err)
-	}
-	if err := f.buffer.SaveCursor(sig, next); err != nil {
-		return fmt.Errorf("cloud flusher: save %s cursor: %w", sig, err)
+		cursor = nextCursor
+		remaining -= batchFrames
 	}
 	return nil
 }

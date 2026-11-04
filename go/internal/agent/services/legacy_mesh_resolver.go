@@ -53,9 +53,7 @@ func (r *LegacyMeshResolver) ResolveLegacy(name, slug string) (int32, bool) {
 	cached, ok := r.names[name]
 	ambiguous := r.ambiguous[name]
 	r.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), lanBudget)
-	defer cancel()
-	devices, err := r.peers.browse(ctx)
+	devices, err := r.peers.browse(context.Background())
 	if err == nil {
 		var found int32
 		for _, d := range devices {

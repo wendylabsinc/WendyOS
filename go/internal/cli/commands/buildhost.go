@@ -1012,7 +1012,7 @@ func verifiedLegacyBuildDelivery(conn *grpcclient.AgentConnection, remote *peer.
 	if !verified || identity.LegacyURN() != certs.AssetURN(reported.GetOrganizationId(), reported.GetAssetId()) {
 		return errors.New("legacy delivery target disagrees with its authenticated device")
 	}
-	if conn.CertInfo != nil && (conn.CertInfo.TenantUUID() != "" || conn.CertInfo.OrganizationID != int(reported.GetOrganizationId())) {
+	if conn.CertInfo != nil && !legacyOperatorForOrg(*conn.CertInfo, reported.GetOrganizationId()) {
 		return errors.New("legacy delivery target is outside the operator's organization")
 	}
 	return nil

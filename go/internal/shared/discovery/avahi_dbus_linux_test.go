@@ -942,3 +942,22 @@ func TestAvahiStreamBackendLive(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveAvahiIPv6AdvertisementDoesNotWaitForIPv4(t *testing.T) {
+	withFakeInterfaceLookup(t, func(int) (*net.Interface, error) { return nil, errors.New("n/a") })
+	for _, address := range []string{"fe80::42", "192.0.2.5"} {
+		t.Run(address, func(t *testing.T) {
+			fake := newFakeAvahiConn("/browser")
+			fake.resolveFn = func(args []any) ([]any, error) {
+				if args[5].(int32) != avahiProtoUnspec {
+					t.Fatal("IPv6 announcement attempted IPv4-only resolution")
+				}
+				return resolveReplyBody(1, "peer", "peer.local.", address, 50052, nil), nil
+			}
+			svc, ok := resolveAvahiItem(context.Background(), fake, avahiItemNew{iface: 1, proto: 1, name: "peer", stype: "_wendyos._udp", domain: "local"})
+			if !ok || svc.IPAddress != address || fake.resolveCallCount() != 1 {
+				t.Fatalf("resolve=%+v %v", svc, ok)
+			}
+		})
+	}
+}

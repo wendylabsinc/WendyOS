@@ -100,3 +100,61 @@ func TestCloudFlusherBatchesStayBoundedAndDrain(t *testing.T) {
 		t.Fatalf("drain frames=%d calls=%d", frames, calls)
 	}
 }
+
+func TestCloudFlusherDrainsPreviousFrameBudgetInBoundedRPCs(t *testing.T) {
+	buffer, _ := makeTestBuffer(t, 10<<20, 1<<20)
+	for range 501 {
+		buffer.PublishLogs(makeLogReq("small frame"))
+	}
+	flusher := NewCloudFlusher(zap.NewNop(), buffer, 0, 0)
+	frames, calls := 0, 0
+	export := func(msg proto.Message) error {
+		n := len(msg.(*collogspb.ExportLogsServiceRequest).ResourceLogs)
+		if n > cloudFlusherFramesPerPass || proto.Size(msg) > cloudFlusherMaxBatchBytes {
+			t.Fatal("unbounded RPC")
+		}
+		frames += n
+		calls++
+		return nil
+	}
+	if err := flusher.flushSignal(SignalLogs, export); err != nil {
+		t.Fatal(err)
+	}
+	if frames != 500 || calls != 1 {
+		t.Fatalf("first pass frames=%d calls=%d", frames, calls)
+	}
+	if err := flusher.flushSignal(SignalLogs, export); err != nil {
+		t.Fatal(err)
+	}
+	if frames != 501 {
+		t.Fatalf("remaining frame lost: %d", frames)
+	}
+}
+func TestCloudFlusherFailureRetainsCompletedBatchProgress(t *testing.T) {
+	buffer, _ := makeTestBuffer(t, 10<<20, 1<<20)
+	for range 3 {
+		buffer.PublishLogs(makeLogReq(strings.Repeat("x", 700<<10)))
+	}
+	flusher := NewCloudFlusher(zap.NewNop(), buffer, 0, 0)
+	frames, calls := 0, 0
+	err := flusher.flushSignal(SignalLogs, func(msg proto.Message) error {
+		calls++
+		if calls == 2 {
+			return fmt.Errorf("rate limited")
+		}
+		frames += len(msg.(*collogspb.ExportLogsServiceRequest).ResourceLogs)
+		return nil
+	})
+	if err == nil || frames == 0 {
+		t.Fatal("did not checkpoint successful prefix before refusal")
+	}
+	if err := flusher.flushSignal(SignalLogs, func(msg proto.Message) error {
+		frames += len(msg.(*collogspb.ExportLogsServiceRequest).ResourceLogs)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if frames != 3 {
+		t.Fatalf("successful prefix was replayed: %d frames", frames)
+	}
+}

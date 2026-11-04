@@ -22,6 +22,10 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+// Match the normal discovery window on a cold Avahi cache. Confirmed peers
+// settle sooner; results are cached so registry connections do not re-browse.
+const legacyLANScanTimeout = 5 * time.Second
+
 type legacyLANKey struct {
 	binding CloudEnrollment
 	asset   int32
@@ -37,15 +41,26 @@ type LegacyPeerDialer struct {
 	logger       *zap.Logger
 	provisioning *ProvisioningService
 	browse       func(context.Context) ([]models.LANDevice, error)
+	dialTCP      func(context.Context, string) (net.Conn, error)
 }
 
 func NewLegacyPeerDialer(logger *zap.Logger, provisioning *ProvisioningService) *LegacyPeerDialer {
-	return &LegacyPeerDialer{logger: logger, provisioning: provisioning, browse: func(ctx context.Context) ([]models.LANDevice, error) {
-		found, err := discovery.Discover(ctx, discovery.DiscoveryOptions{Types: []models.InterfaceType{models.InterfaceLAN}, Timeout: lanBudget})
+	return &LegacyPeerDialer{logger: logger, provisioning: provisioning, dialTCP: func(ctx context.Context, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", address)
+	}, browse: func(ctx context.Context) ([]models.LANDevice, error) {
+		// Let CollectLAN's scan timer conclude normally so confirmed answers
+		// survive a full scan window. The caller's context bounds cancellation.
+		enrollment, err := provisioning.CloudEnrollment()
 		if err != nil {
 			return nil, err
 		}
-		return found.LANDevices, nil
+		if enrollment.Mode != CloudLegacy {
+			return nil, fmt.Errorf("legacy discovery requires a v1 enrollment")
+		}
+		// Foreign and self sightings must not settle the scan before a usable
+		// peer resolves. This matters on hosts advertising many app bridges.
+		filter := legacyPeerFilter{org: enrollment.OrganizationID, self: enrollment.AssetID}
+		return discovery.CollectLAN(ctx, discovery.StreamOptions{Exclude: filter}, legacyLANScanTimeout)
 	}}
 }
 func (d *LegacyPeerDialer) Resolve(org, asset int32) (DeliveryTarget, error) {
@@ -53,6 +68,10 @@ func (d *LegacyPeerDialer) Resolve(org, asset int32) (DeliveryTarget, error) {
 	if err != nil {
 		return DeliveryTarget{}, err
 	}
+	return legacyDeliveryTarget(e, org, asset)
+}
+
+func legacyDeliveryTarget(e CloudEnrollment, org, asset int32) (DeliveryTarget, error) {
 	if org == 0 && e.Mode == CloudLegacy {
 		org = e.OrganizationID
 	}
@@ -62,42 +81,37 @@ func (d *LegacyPeerDialer) Resolve(org, asset int32) (DeliveryTarget, error) {
 	return DeliveryTarget{LegacyOrgID: org, LegacyAssetID: asset}, nil
 }
 func (d *LegacyPeerDialer) DialTarget(ctx context.Context, target DeliveryTarget, port uint16) (net.Conn, string, error) {
-	checked, err := d.Resolve(target.LegacyOrgID, target.LegacyAssetID)
+	enrollment, err := d.provisioning.CloudEnrollment()
+	if err != nil {
+		return nil, "", err
+	}
+	checked, err := legacyDeliveryTarget(enrollment, target.LegacyOrgID, target.LegacyAssetID)
 	if err != nil || target.Device.IsValid() || target.AssetUUID != "" || port == 0 {
 		if err == nil {
 			err = fmt.Errorf("invalid or mixed legacy transport target")
 		}
 		return nil, "", err
 	}
-	enrollment, _ := d.provisioning.CloudEnrollment()
 	if target.LegacyAssetID == enrollment.AssetID {
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+		conn, err := d.dialTCP(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
 		return conn, "local-service", err
 	}
-	bounded, cancel := context.WithTimeout(ctx, lanBudget)
-	devices, browseErr := d.browse(bounded)
-	if browseErr == nil {
-		for _, device := range devices {
-			if device.AssetID != checked.LegacyAssetID || device.OrgID != checked.LegacyOrgID || !device.IsMTLS || device.IPAddress == "" || strings.EqualFold(device.IPAddress, "localhost") {
-				continue
-			}
-			if ip := net.ParseIP(device.IPAddress); ip != nil && ip.IsLoopback() {
-				continue
-			}
-			conn, err := (&net.Dialer{}).DialContext(bounded, "tcp", net.JoinHostPort(device.IPAddress, strconv.Itoa(int(port))))
-			if err == nil {
-				cancel()
-				return conn, "lan-direct", nil
-			}
+
+	if hostport, ok := d.legacyAppLANAddr(ctx, enrollment, checked.LegacyAssetID); ok {
+		host, _, err := net.SplitHostPort(hostport)
+		if err != nil {
+			return nil, "", err
+		}
+		bounded, cancel := legacyLANContext(ctx)
+		conn, err := d.dialTCP(bounded, net.JoinHostPort(host, strconv.Itoa(int(port))))
+		cancel()
+		if err == nil {
+			return conn, "lan-direct", nil
 		}
 	}
-	cancel()
 	return d.DialRoutedTarget(ctx, target, port)
 }
 func (d *LegacyPeerDialer) DialRoutedTarget(ctx context.Context, target DeliveryTarget, port uint16) (net.Conn, string, error) {
-	if _, err := d.Resolve(target.LegacyOrgID, target.LegacyAssetID); err != nil {
-		return nil, "", err
-	}
 	if target.Device.IsValid() || target.AssetUUID != "" || port == 0 {
 		return nil, "", fmt.Errorf("invalid or mixed legacy relay target")
 	}
@@ -108,10 +122,13 @@ func (d *LegacyPeerDialer) DialRoutedTarget(ctx context.Context, target Delivery
 		}
 		return nil, "", err
 	}
+	if _, err := legacyDeliveryTarget(enrollment, target.LegacyOrgID, target.LegacyAssetID); err != nil {
+		return nil, "", err
+	}
 	if brokerIdentityFromCert(d.logger, cert) != certs.AssetURN(enrollment.OrganizationID, enrollment.AssetID) {
 		return nil, "", fmt.Errorf("legacy certificate does not match enrollment")
 	}
-	conn, proof, err := dialLegacyCloud(NewTunnelBrokerClient(d.logger, enrollment.Host, cert, key, chain, 0))
+	conn, proof, err := dialLegacyCloud(NewTunnelBrokerClient(d.logger, LegacyBrokerURL(enrollment.Host), cert, key, chain, 0))
 	if err != nil {
 		return nil, "", err
 	}
@@ -186,14 +203,16 @@ func (d *LegacyPeerDialer) DialLegacyApp(ctx context.Context, org, asset int32, 
 	}
 	if asset == e.AssetID {
 		start := time.Now()
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+		conn, err := d.dialTCP(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
 		record("local-app", start, err)
 		return conn, "local-app", err
 	}
 
 	start := time.Now()
 	if hostport, ok := d.legacyAppLANAddr(ctx, e, asset); ok {
-		conn, err := d.dialLegacyLAN(ctx, hostport, cert, chain, key, e.OrganizationID, asset, port)
+		bounded, cancel := legacyLANContext(ctx)
+		conn, err := d.dialLegacyLAN(bounded, hostport, cert, chain, key, e.OrganizationID, asset, port)
+		cancel()
 		record("lan-direct", start, err)
 		if err == nil {
 			return conn, "lan-direct", nil
@@ -254,21 +273,20 @@ func (d *LegacyPeerDialer) legacyAppLANAddr(ctx context.Context, e CloudEnrollme
 	if ok && time.Now().Before(cached.expires) {
 		return cached.hostport, cached.hostport != ""
 	}
-	bounded, cancel := context.WithTimeout(ctx, lanBudget)
-	defer cancel()
-	devices, err := d.browse(bounded)
+	devices, err := d.browse(ctx)
+	if err != nil {
+		return "", false
+	}
 	hostport := ""
-	if err == nil {
-		for _, device := range devices {
-			if device.OrgID != e.OrganizationID || device.AssetID != asset || !device.IsMTLS || device.IPAddress == "" || device.Port <= 0 || strings.EqualFold(device.IPAddress, "localhost") {
-				continue
-			}
-			if ip := net.ParseIP(device.IPAddress); ip != nil && ip.IsLoopback() {
-				continue
-			}
-			hostport = net.JoinHostPort(device.IPAddress, strconv.Itoa(device.Port))
-			break
+	for _, device := range devices {
+		if device.OrgID != e.OrganizationID || device.AssetID != asset || !device.IsMTLS || device.IPAddress == "" || device.Port <= 0 || strings.EqualFold(device.IPAddress, "localhost") {
+			continue
 		}
+		if ip := net.ParseIP(device.IPAddress); ip != nil && ip.IsLoopback() {
+			continue
+		}
+		hostport = net.JoinHostPort(device.IPAddress, strconv.Itoa(device.Port))
+		break
 	}
 	d.mu.Lock()
 	if d.cache == nil {
@@ -278,3 +296,22 @@ func (d *LegacyPeerDialer) legacyAppLANAddr(ctx context.Context, e CloudEnrollme
 	d.mu.Unlock()
 	return hostport, hostport != ""
 }
+
+// Reserve time for Cloud fallback even when a discovered LAN endpoint stalls.
+// Discovery has its own scan timer; this budget covers only connection setup.
+func legacyLANContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	budget := 3 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)/2)
+	}
+	return context.WithTimeout(ctx, budget)
+}
+
+// A batch scan must settle on a usable peer, not the dialing host or another
+// enrollment's advertisements. TLS still authenticates every dial afterward.
+type legacyPeerFilter struct{ org, self int32 }
+
+func (f legacyPeerFilter) Exclude(device models.LANDevice) bool {
+	return device.OrgID != f.org || device.AssetID <= 0 || device.AssetID == f.self || !device.IsMTLS
+}
+func (legacyPeerFilter) Changed() <-chan struct{} { return nil }

@@ -66,6 +66,7 @@ func TestLegacyPeerUsesV1ClientTunnel(t *testing.T) {
 	cloudpb.RegisterTunnelBrokerServiceServer(server, contract)
 	go func() { _ = server.Serve(listener) }()
 	defer server.Stop()
+	t.Setenv("WENDY_BROKER_URL", listener.Addr().String())
 	leaf, private := legacyBrokerTestLeaf(t, true)
 	provisioning := &ProvisioningService{enrolled: true, cloudHost: listener.Addr().String(), orgID: 64, assetID: 674, certPEM: leaf, keyPEM: []byte(private), chainPEM: chain}
 	dialer := NewLegacyPeerDialer(zap.NewNop(), provisioning)

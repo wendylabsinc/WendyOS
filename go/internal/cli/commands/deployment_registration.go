@@ -104,8 +104,13 @@ func deploymentAuth(cfg *config.Config, device *agentpb.ProvisionedResponse) (*c
 					continue
 				}
 				cert.PrincipalURI = principal
-			} else if cert.TenantUUID() != "" || cert.OrganizationID != int(device.GetOrganizationId()) || cert.UserID == "" || cert.AssetID != 0 {
-				continue
+			} else {
+				if !legacyOperatorForOrg(cert, device.GetOrganizationId()) {
+					continue
+				}
+				// This selected copy authenticates the v1 RPC named by the enrollment.
+				// Keep the saved session and the certificate's transitional SAN intact.
+				cert.PrincipalURI = ""
 			}
 			entry.Certificates = []config.CertificateInfo{cert}
 			return &entry, nil
