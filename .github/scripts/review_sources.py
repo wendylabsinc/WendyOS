@@ -1,7 +1,9 @@
 """Fixed generator-output policy and complete Git patch parsing for AI reviews.
 
-Only paths produced by the repository's actual protocol generators are excluded.
-PR attributes, headers, vendor roots and lockfiles never define review policy.
+Exclusion is a path and suffix policy over the locations the repository's protocol
+generators write to. It does not confirm a file came from a generator, and most
+excluded outputs have no regeneration check. PR attributes, headers, vendor roots
+and lockfiles never define review policy.
 """
 from __future__ import annotations
 
@@ -34,10 +36,14 @@ def is_generated_path(path: str) -> bool:
                   ("WendyAgentGRPC", "WendyCloudGRPC", "OpenTelemetryGRPC"))
     if path.startswith(roots) and path.endswith((".pb.swift", ".grpc.swift")):
         return True
-    # Examples/WendyNotify/regenerate-grpc.sh uses PathToUnderscores.
+    # The example regenerate-grpc.sh scripts use PathToUnderscores.
     return path in {
         "Examples/WendyNotify/Sources/WendyNotify/Generated/wendy_system_v1_notifications.pb.swift",
         "Examples/WendyNotify/Sources/WendyNotify/Generated/wendy_system_v1_notifications.grpc.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_system_v1_notifications.pb.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_system_v1_notifications.grpc.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_agent_services_v1_wendy_agent_v1_video_service.pb.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_agent_services_v1_wendy_agent_v1_video_service.grpc.swift",
     }
 
 
@@ -168,7 +174,9 @@ def parse_diff(diff: str, *, allow_binary: bool = False) -> dict[str, Any]:
                 raise ReviewError("The PR diff has an incomplete or malformed hunk")
         elif line.startswith(("--- ", "+++ ")):
             side = "base" if line.startswith("--- ") else "head"
-            path = git_path(line[4:])
+            # Git appends one TAB to a path containing a space, outside any
+            # quotes. A real tab in a name is always C-quoted.
+            path = git_path(line[4:].removesuffix("\t"))
             prefix = "a/" if side == "base" else "b/"
             if path == "/dev/null":
                 current[side] = None

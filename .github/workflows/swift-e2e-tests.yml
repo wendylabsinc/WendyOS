@@ -46,7 +46,7 @@ on:
         required: false
 
 concurrency:
-  # Keep every main run, including pending runs. Hosted jobs serialize below.
+  # Keep every main run, including pending runs. Main's Ubuntu job queues below.
   group: swift-e2e-tests-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
@@ -131,7 +131,9 @@ jobs:
     if: ${{ inputs.target_group == '' || inputs.target_group == 'all' || inputs.target_group == 'local' }}
     runs-on: ubuntu-24.04
     concurrency:
-      group: device-local-ubuntu-hosted
+      # A hosted runner is a fresh VM with no shared device, so PR runs need no
+      # queue. Main keeps one so its runs finish one at a time.
+      group: device-local-ubuntu-hosted-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
       cancel-in-progress: false
       queue: max
     timeout-minutes: 120

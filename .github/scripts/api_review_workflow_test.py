@@ -3,13 +3,20 @@
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "api-review.yml"
+DOCS_WORKFLOW = WORKFLOW.with_name("docs-review.yml")
 OLD_BASE = "b" * 40
 PR_HEAD = "c" * 40
 CURRENT_MAIN = "a" * 40
+# A run keeps the sparse list of its own YAML while reading current main's
+# scripts, so YAML that predates this workflow's test does not check it out.
+needs_docs_workflow = unittest.skipUnless(DOCS_WORKFLOW.is_file(), "docs-review.yml is outside this sparse checkout")
 
 
 def resolver_script(text):
@@ -49,10 +56,10 @@ const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 
 
 class TrustedSourceTests(unittest.TestCase):
-    def run_resolver(self, response, fail_lookup=False):
+    def run_resolver(self, response, fail_lookup=False, workflow=WORKFLOW):
         execution = subprocess.run(
             ["node", "-e", HARNESS], check=True, capture_output=True, text=True, timeout=10,
-            input=json.dumps({"script": resolver_script(WORKFLOW.read_text()), "response": response,
+            input=json.dumps({"script": resolver_script(workflow.read_text()), "response": response,
                               "oldBase": OLD_BASE, "prHead": PR_HEAD, "failLookup": fail_lookup}))
         result = json.loads(execution.stdout)
         self.assertEqual(result["calls"], [{"owner": "wendylabsinc", "repo": "WendyOS", "ref": "heads/main"}])
@@ -89,6 +96,39 @@ class TrustedSourceTests(unittest.TestCase):
         self.assertIn('merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA"', automatic_job)
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", automatic_job)
         self.assertIn("persist-credentials: false", automatic_job)
+        # Otherwise the docs workflow test below would skip on every run.
+        self.assertIn(".github/workflows/docs-review.yml", automatic_job)
+
+    @needs_docs_workflow
+    def test_sparse_checkout_without_docs_workflow_still_passes(self):
+        # The copy also skips this test, so it cannot recurse.
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / ".github" / "scripts" / Path(__file__).name
+            workflow = Path(directory) / ".github" / "workflows" / WORKFLOW.name
+            script.parent.mkdir(parents=True)
+            workflow.parent.mkdir(parents=True)
+            shutil.copy(__file__, script)
+            shutil.copy(WORKFLOW, workflow)
+            execution = subprocess.run(
+                [sys.executable, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(execution.returncode, 0, execution.stderr)
+        self.assertIn("skipped=", execution.stderr)
+
+    @needs_docs_workflow
+    def test_docs_review_runs_current_main_when_pr_base_predates_its_scripts(self):
+        result = self.run_resolver({"object": {"type": "commit", "sha": CURRENT_MAIN}}, workflow=DOCS_WORKFLOW)
+        self.assertFalse(result["failed"])
+        self.assertEqual(result["outputs"], {"sha": CURRENT_MAIN})
+        self.assertTrue(self.run_resolver({"object": {"type": "tag", "sha": CURRENT_MAIN}}, workflow=DOCS_WORKFLOW)["failed"])
+        self.assertTrue(self.run_resolver({}, fail_lookup=True, workflow=DOCS_WORKFLOW)["failed"])
+        text = DOCS_WORKFLOW.read_text()
+        self.assertIn("ref: ${{ steps.trusted-automation.outputs.sha }}", text)
+        self.assertNotIn("ref: ${{ github.event.pull_request.base.sha }}", text)
+        self.assertLess(text.index("id: trusted-automation"), text.index("actions/checkout@"))
+        self.assertIn("persist-credentials: false", text)
+        # The reviewed change stays the PR's own diff against its retained base.
+        self.assertIn("EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}", text)
+        self.assertIn('merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA"', text)
 
 
 if __name__ == "__main__":
