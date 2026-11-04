@@ -432,6 +432,10 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		buildArgs["WENDY_DEBUG"] = "true"
 	}
 	applyDeviceBuildArgHints(buildArgs, versionResp)
+	buildArgs, err = mergeBuildArgFlags(buildArgs, opts.buildArgs)
+	if err != nil {
+		return err
+	}
 
 	// Ensure the Apple Container system is up once, before the parallel builds,
 	// so an explicit --builder apple-container prompts/starts a single time
