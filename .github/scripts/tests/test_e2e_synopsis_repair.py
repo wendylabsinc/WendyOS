@@ -1,4 +1,5 @@
 """Offline fixtures: never use real credentials, APIs, models, or notifications."""
+import contextlib
 import copy
 import importlib.util
 import io
@@ -537,6 +538,26 @@ class RepairTests(unittest.TestCase):
         self.assertNotIn("<@", payload["text"])
         self.assertIn("not pinged", payload["text"])
         self.assertIn("mapping is missing", dict(api.writes)["pulls"]["body"])
+
+    def test_malformed_author_mapping_still_publishes_with_the_notice(self):
+        for authors in ("[]", "null", '"x"', "{not json", ""):
+            api = API()
+            proposal = r.prepare(api, 3)
+            with self.subTest(authors=authors), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "proposal.json").write_text(json.dumps(proposal))
+                (root / "proof.json").write_text(json.dumps(r.verification(proposal, 99, 1)))
+                env = {"E2E_SLACK_AUTHORS": authors, "GITHUB_REPOSITORY": REPO, "GH_TOKEN": "fixture-not-a-token",
+                       "SOURCE_SHA": CURRENT, "SOURCE_RUN_ID": "3", "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1",
+                       "SLACK_READY": "true", "SLACK_CHANNEL": "#feed-e2e", "GITHUB_OUTPUT": "", "GITHUB_STEP_SUMMARY": ""}
+                argv = ["repair", "publish", "--proposal", str(root / "proposal.json"), "--proof", str(root / "proof.json")]
+                with (contextlib.chdir(directory), patch.object(sys, "argv", argv), patch.dict(os.environ, env),
+                      patch.object(r, "GitHub", lambda *args, api=api: api)):
+                    r.main()
+                self.assertEqual([path for path, _ in api.writes],
+                                 ["git/blobs", "git/trees", "git/commits", "git/refs", "pulls", "issues/12/comments"])
+                self.assertIn("mapping is missing", dict(api.writes)["pulls"]["body"])
+                self.assertIn("not pinged", json.loads((root / "slack-payload.json").read_text())["text"])
 
     def test_missing_slack_does_not_claim_delivery(self):
         api = API()

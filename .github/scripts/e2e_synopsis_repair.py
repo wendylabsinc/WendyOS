@@ -398,6 +398,15 @@ def publish(api, proposal, proof, run_id, attempt, mapping, slack_ready):
             "Verified literal-only draft. Human inspection required.", "unfurl_links": False, "unfurl_media": False}
 
 
+def author_mapping(raw):
+    # A bad variable must not cost a verified repair; publish reports the missing mapping.
+    try:
+        mapping = json.loads(raw)
+    except ValueError:
+        return {}
+    return mapping if isinstance(mapping, dict) else {}
+
+
 def output(key, value):
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
@@ -437,8 +446,7 @@ def main():
                 Path(args.proof).write_text(json.dumps(verification(proposal, int(os.environ["GITHUB_RUN_ID"]),
                                                                   int(os.environ["GITHUB_RUN_ATTEMPT"]))))
             else:
-                mapping = json.loads(os.environ.get("E2E_SLACK_AUTHORS", "{}"))
-                require(isinstance(mapping, dict), "Invalid author mapping")
+                mapping = author_mapping(os.environ.get("E2E_SLACK_AUTHORS", "{}"))
                 channel = os.environ.get("SLACK_CHANNEL", "")
                 slack_ready = os.environ.get("SLACK_READY") == "true" and valid_channel(channel)
                 require(proposal["sha"] == os.environ["SOURCE_SHA"] and
