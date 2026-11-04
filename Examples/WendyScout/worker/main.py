@@ -369,7 +369,11 @@ def model_session(begin, index):
                         "reasoning": False,
                         "input": ["text"],
                         "contextWindow": 16384,
-                        "maxTokens": 1536,
+                        "maxTokens": (
+                            4096
+                            if pins["model"]["id"] == "qwen3.8-flash-next"
+                            else 1536
+                        ),
                         "compat": {
                             "maxTokensField": "max_tokens",
                             "supportsDeveloperRole": False,

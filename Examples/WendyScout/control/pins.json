@@ -2,12 +2,23 @@
   "appId": "sh.wendy.scout",
   "image": "docker.io/ollama/ollama:0.40.14@sha256:a2be4eed855ab2df84585f25e608fa68088988d2470c14dc736166b4770946c5",
   "model": {
-    "id": "qwen3-coder-30b-a3b",
-    "repo": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
-    "revision": "b17cb02dd882d5b6ab62fc777ad2995f19668350",
-    "file": "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-    "sha256": "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad",
-    "bytes": 18556689568
+    "id": "qwen3.8-flash-next",
+    "repo": "ggml-org/Qwen3.8-Flash-Next-GGUF",
+    "revision": "91fb00353e766eb43944ed223665ea4fb87dad47",
+    "file": "Qwen3.8-Flash-Next-IQ4_NL-00001-of-00002.gguf",
+    "bytes": 102048919008,
+    "files": [
+      {
+        "file": "Qwen3.8-Flash-Next-IQ4_NL-00001-of-00002.gguf",
+        "bytes": 10945504,
+        "sha256": "d63aed7c235572b3ce9ae2fa710d6c846a883db9b54a70f52d140a943e684274"
+      },
+      {
+        "file": "Qwen3.8-Flash-Next-IQ4_NL-00002-of-00002.gguf",
+        "bytes": 102037973504,
+        "sha256": "0299b147e42517ff8fa3a4fa66d370c77ce01c44ed8cbc3451b7a42caad5fc10"
+      }
+    ]
   },
   "pi": {
     "version": "0.73.1",

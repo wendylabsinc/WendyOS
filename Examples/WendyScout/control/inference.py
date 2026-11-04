@@ -112,7 +112,11 @@ def validate(body, model):
         raise ValueError("Unsupported stream options")
     result = dict(body)
     result["parallel_tool_calls"] = False
-    result["max_tokens"] = min(max(int(body.get("max_tokens", 1536)), 1), 1536)
+    cap = 4096 if model == "qwen3.8-flash-next" else 1536
+    result["max_tokens"] = min(max(int(body.get("max_tokens", cap)), 1), cap)
+    if model == "qwen3.8-flash-next":
+        # Fixed non-thinking sampling recommended by the model publisher.
+        result.update(temperature=0.7, top_p=0.8, presence_penalty=1.5)
     # A text containing a URL is inert tokenizer input. URL-bearing content
     # objects, JSON schemas, image/audio payloads and server overrides are denied.
     if len(json.dumps(result).encode()) > 1024 * 1024:

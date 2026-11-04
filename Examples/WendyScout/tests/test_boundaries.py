@@ -48,6 +48,26 @@ class InferenceTests(unittest.TestCase):
         }
         self.assertEqual(inference.validate(b, "local")["max_tokens"], 1536)
 
+    def test_flash_sampling_is_trusted_and_output_bounded(self):
+        body = {
+            "model": "qwen3.8-flash-next",
+            "messages": [{"role": "user", "content": "test"}],
+            "temperature": 9,
+            "top_p": 0.1,
+            "max_tokens": 99999,
+        }
+        result = inference.validate(body, body["model"])
+        self.assertEqual(result["max_tokens"], 4096)
+        self.assertEqual(
+            (result["temperature"], result["top_p"], result["presence_penalty"]),
+            (0.7, 0.8, 1.5),
+        )
+        with self.assertRaises(ValueError):
+            inference.validate(
+                {**body, "chat_template_kwargs": {"enable_thinking": True}},
+                body["model"],
+            )
+
     def test_fetch_and_override_features_rejected(self):
         base = {"model": "local", "messages": [{"role": "user", "content": "hello"}]}
         for key, value in [

@@ -98,6 +98,19 @@ class Scout:
 
     def start_model(self):
         m = PINS["model"]
+        flash = m["id"] == "qwen3.8-flash-next"
+        if flash:
+            available_kib = int(
+                next(
+                    l.split()[1]
+                    for l in pathlib.Path("/proc/meminfo").read_text().splitlines()
+                    if l.startswith("MemAvailable:")
+                )
+            )
+            if available_kib * 1024 < m["bytes"] + 12 * 1024**3:
+                raise RuntimeError(
+                    "Flash requires weight bytes plus 12 GiB available headroom"
+                )
         models = STATE / "models"
         models.mkdir(exist_ok=True)
         # llama-server loads the remaining official shards beside the first.
@@ -182,6 +195,22 @@ class Scout:
             "--jinja",
             "--no-webui",
         ]
+        if flash:
+            # Trusted fixed profile, never a model-supplied backend override.
+            argv += [
+                "--chat-template-kwargs",
+                '{"enable_thinking":false}',
+                "--reasoning-budget",
+                "0",
+                "--top-k",
+                "20",
+                "--min-p",
+                "0",
+                "--lazy-mode",
+                "off",
+                "-ot",
+                "per_layer_token_embd=CPU",
+            ]
         p = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
@@ -196,7 +225,7 @@ class Scout:
                 append_log(logpath, block)
 
         threading.Thread(target=pump, daemon=True).start()
-        for _ in range(120):
+        for _ in range(600 if flash else 120):
             if STOP.is_set() or p.poll() is not None:
                 raise RuntimeError("Model stopped during initialization")
             try:
