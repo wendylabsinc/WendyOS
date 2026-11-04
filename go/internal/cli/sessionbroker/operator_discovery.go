@@ -29,7 +29,7 @@ func prepareOperatorAutomatic(ctx context.Context, certificate config.Certificat
 	// startup after selecting a peer. Concurrent cold callers can see different
 	// multicast answers; the first recipe wins and the others reuse that owner.
 	if !configDirOwnershipSafe() {
-		return nil, errors.New("operator profile is not owned by the current user")
+		return nil, errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	directory, err := configDir()
 	if err != nil {
