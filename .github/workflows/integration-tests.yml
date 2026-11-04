@@ -85,17 +85,18 @@ jobs:
           INPUT_TESTS: ${{ inputs.tests }}
         run: |
           set -euo pipefail
-          [[ "$INPUT_JOBS" =~ ^(all|discover|integration)$ ]]
-          [[ "$INPUT_PLATFORM" =~ ^(all|macos|linux)$ ]]
+          # Bash 3.2 on macOS does not reliably apply errexit to [[ ... ]].
+          [[ "$INPUT_JOBS" =~ ^(all|discover|integration)$ ]] || exit 1
+          [[ "$INPUT_PLATFORM" =~ ^(all|macos|linux)$ ]] || exit 1
           repository_lower="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           if [[ "$repository_lower" != wendylabsinc/wendyos && ! "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
             echo 'External callers must pin source_ref to a WendyOS commit' >&2
             exit 1
           fi
           if [[ -n "$OS_VERSION$OS_SHA$OS_REPO$OS_RUN" ]]; then
-            [[ "$OS_VERSION" =~ ^[A-Za-z0-9._-]+$ && "$OS_SHA" =~ ^[0-9a-f]{40}$ ]]
-            [[ "$OS_REPO" == "$GITHUB_REPOSITORY" && "$OS_RUN" == "$GITHUB_RUN_ID" ]]
-            [[ -z "$INPUT_HOST$INPUT_TESTS" && "$INPUT_JOBS" != discover ]]
+            [[ "$OS_VERSION" =~ ^[A-Za-z0-9._-]+$ && "$OS_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            [[ "$OS_REPO" == "$GITHUB_REPOSITORY" && "$OS_RUN" == "$GITHUB_RUN_ID" ]] || exit 1
+            [[ -z "$INPUT_HOST$INPUT_TESTS" && "$INPUT_JOBS" != discover ]] || exit 1
           fi
       - uses: ./.github/actions/integration-candidate
         id: candidate
@@ -378,9 +379,9 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
-          [[ "$DISCOVER_RESULT" == success ]]
-          if [[ "$PLATFORM" != linux ]]; then [[ "$MACOS_RESULT" == success ]]; fi
-          if [[ "$PLATFORM" != macos ]]; then [[ "$LINUX_RESULT" == success ]]; fi
+          [[ "$DISCOVER_RESULT" == success ]] || exit 1
+          if [[ "$PLATFORM" != linux ]]; then [[ "$MACOS_RESULT" == success ]] || exit 1; fi
+          if [[ "$PLATFORM" != macos ]]; then [[ "$LINUX_RESULT" == success ]] || exit 1; fi
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: wendylabsinc/wendyos

@@ -142,6 +142,33 @@ class WorkflowTests(unittest.TestCase):
         cls.hardware_text = (ROOT / ".github/workflows/integration-tests.yml").read_text()
         cls.hardware = yaml.safe_load(cls.hardware_text)
 
+    def test_discovery_input_validation_rejects_invalid_candidates(self):
+        check = next(step for step in self.hardware["jobs"]["discover"]["steps"]
+                     if step.get("name") == "Validate qualification inputs")
+        base = dict(os.environ, INPUT_JOBS="integration", INPUT_PLATFORM="all",
+                    SOURCE_REF="a" * 40, OS_VERSION="nightly-20261104", OS_SHA="b" * 40,
+                    OS_REPO="wendylabsinc/WendyOS-Builder", OS_RUN="123",
+                    INPUT_HOST="", INPUT_TESTS="",
+                    GITHUB_REPOSITORY="wendylabsinc/WendyOS-Builder", GITHUB_RUN_ID="123")
+        # Execute the workflow's actual shell code, including on macOS Bash 3.2,
+        # where a failed [[ ... ]] does not reliably trigger errexit.
+        for overrides in ({}, {"OS_VERSION": "", "OS_SHA": "", "OS_REPO": "", "OS_RUN": ""}):
+            with self.subTest(valid=overrides):
+                result = subprocess.run(["bash", "-c", check["run"]], env=dict(base, **overrides),
+                                        capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+        for overrides in ({"INPUT_JOBS": "invalid"}, {"INPUT_PLATFORM": "invalid"},
+                          {"SOURCE_REF": "main"}, {"OS_VERSION": "invalid/version"},
+                          {"OS_VERSION": ""}, {"OS_SHA": "invalid"}, {"OS_SHA": ""},
+                          {"OS_REPO": "unrelated/repository"}, {"OS_REPO": ""},
+                          {"OS_RUN": "456"}, {"OS_RUN": ""},
+                          {"INPUT_HOST": "pi.local"}, {"INPUT_TESTS": "selected-fixture"},
+                          {"INPUT_JOBS": "discover"}):
+            with self.subTest(invalid=overrides):
+                result = subprocess.run(["bash", "-c", check["run"]], env=dict(base, **overrides),
+                                        capture_output=True, timeout=5)
+                self.assertNotEqual(result.returncode, 0, f"accepted invalid inputs: {overrides}")
+
     def test_release_artifacts_exist_before_integration_downloads(self):
         jobs = self.release["jobs"]
         self.assertTrue({"determine-version", "build", "build-cli-linux", "build-go-macos"}
