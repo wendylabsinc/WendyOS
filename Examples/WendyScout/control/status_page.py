@@ -1,7 +1,11 @@
 """One fixed read-only page over a bounded projection of the live transcript."""
 
-import datetime, html, http.server, json, pathlib, re, time
+import base64, hashlib, datetime, html, http.server, json, pathlib, re, time
 from common import scrub
+
+
+STYLE = "body{max-width:64rem;margin:1rem auto;padding:0 1rem;font-family:system-ui,sans-serif}pre{white-space:pre-wrap;overflow-wrap:anywhere}"
+STYLE_HASH = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode()
 
 
 def text_event(e):
@@ -160,7 +164,7 @@ def render(work, state, now=None):
         or "<p>No visible transcript events yet.</p>"
     )
     return (
-        '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Wendy Scout PoC</title></head><body>'
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="5"><title>Wendy Scout PoC</title><style>"+STYLE+"</style></head><body>'
         "<h1>Wendy Scout PoC</h1><p>State: <strong>"
         + esc(label)
         + "</strong> — elapsed "
@@ -197,7 +201,9 @@ def start(work, state, port=8087):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+                "default-src 'none'; style-src 'sha256-"
+                + STYLE_HASH
+                + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             )
             self.end_headers()
             self.wfile.write(body)
