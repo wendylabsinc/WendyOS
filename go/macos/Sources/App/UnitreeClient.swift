@@ -34,7 +34,7 @@ final class UnitreeClient: Sendable {
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await perform(unlessCancelled: false) {
-                let values = [serial, name, address, region, email, password].map { strdup($0)! }
+                let values = [serial, name, address, region, email, password].map { (value: String) in strdup(value)! }
                 defer { values.forEach { free($0) } }
                 if session != 0 {
                     try GoClient.finish(WDUnitreePair(attempt, session, values[0], values[1], values[2], values[3], values[4], values[5]))

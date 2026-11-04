@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+// A Qualcomm SoC in Emergency Download mode. USB detection still needs the
+// IDs on platforms that cannot flash.
+const (
+	VendorQualcomm = 0x05c6
+	ProductEDL     = 0x9008
+)
+
 // Platforms without a USB transport cannot flash EDL devices.
 var errUnsupported = errors.New("flashing a device in EDL mode is not supported on this platform")
 
