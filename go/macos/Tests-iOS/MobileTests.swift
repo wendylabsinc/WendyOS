@@ -1,4 +1,7 @@
 import XCTest
+import ARKit
+import RoomPlan
+import AVFoundation
 
 @testable import WendyMobile
 
@@ -548,4 +551,185 @@ extension MobileTests {
         XCTAssertFalse(chat.streaming)
         XCTAssertTrue(chat.messages.last?.interrupted == true)
     }
+}
+@MainActor
+final class SiteRoomCaptureTests: XCTestCase {
+    func testFinishThenDismissalStopsTheSessionOnlyOnce() {
+        let controller = SiteRoomCaptureController()
+        let session = RoomCaptureSessionSpy()
+        XCTAssertTrue(controller.start(session))
+        XCTAssertFalse(controller.start(session))
+        controller.finish()
+        controller.cancel() // Cancel or onDisappear.
+        controller.cancel() // UIViewRepresentable dismantling.
+        XCTAssertFalse(controller.start(session))
+        XCTAssertEqual(session.starts, 1)
+        XCTAssertEqual(session.stops, 1)
+    }
+
+    func testMemoryWarningThenDismissalStopsTheSessionOnlyOnce() {
+        let controller = SiteRoomCaptureController()
+        let session = RoomCaptureSessionSpy()
+        controller.start(session)
+        controller.memoryWarning()
+        controller.cancel()
+        controller.cancel()
+        XCTAssertEqual(session.starts, 1)
+        XCTAssertEqual(session.stops, 1)
+        XCTAssertFalse(controller.shouldProcess(error: nil))
+    }
+
+    func testDismissalBeforeViewCreationNeverStartsTheSession() {
+        let controller = SiteRoomCaptureController()
+        let session = RoomCaptureSessionSpy()
+        controller.cancel()
+        XCTAssertFalse(controller.start(session))
+        XCTAssertEqual(session.starts, 0)
+        XCTAssertEqual(session.stops, 0)
+    }
+
+    func testMemoryWarningStopsCaptureWithoutStartingReconstruction() async {
+        let controller = SiteRoomCaptureController()
+        controller.memoryWarning()
+        XCTAssertFalse(controller.scanning)
+        XCTAssertFalse(controller.finishing)
+        XCTAssertFalse(controller.shouldProcess(error: nil))
+        // Dismissal and a queued Finish action must not replace the useful error.
+        controller.cancel()
+        controller.finish()
+        XCTAssertFalse(controller.finishing)
+        do {
+            _ = try await controller.result.value()
+            XCTFail("Expected a memory-pressure error")
+        } catch {
+            XCTAssertTrue(error is SiteRoomCaptureError)
+            XCTAssertTrue(error.localizedDescription.contains("not saved"))
+        }
+    }
+
+    func testFinishStillAllowsRoomProcessing() {
+        let controller = SiteRoomCaptureController()
+        controller.finish()
+        controller.finish()
+        XCTAssertFalse(controller.scanning)
+        XCTAssertTrue(controller.finishing)
+        XCTAssertTrue(controller.shouldProcess(error: nil))
+        // A warning after Finish cannot undo reconstruction already underway.
+        controller.memoryWarning()
+        XCTAssertTrue(controller.finishing)
+        XCTAssertTrue(controller.shouldProcess(error: nil))
+        controller.cancel()
+    }
+
+    func testCancelRejectsQueuedRoomProcessing() async {
+        let controller = SiteRoomCaptureController()
+        controller.cancel()
+        controller.finish()
+        XCTAssertFalse(controller.scanning)
+        XCTAssertFalse(controller.finishing)
+        XCTAssertFalse(controller.shouldProcess(error: nil))
+        do {
+            _ = try await controller.result.value()
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testRoomProcessingErrorReachesCaller() async {
+        let controller = SiteRoomCaptureController()
+        XCTAssertFalse(controller.shouldProcess(error: NSError(domain: "RoomCaptureTest", code: 7)))
+        do {
+            _ = try await controller.result.value()
+            XCTFail("Expected the RoomPlan error")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, "RoomCaptureTest")
+            XCTAssertEqual((error as NSError).code, 7)
+        }
+        controller.cancel()
+    }
+}
+
+// Opt-in physical-device probe. Simulator tests cannot exercise CoreMotion,
+// LiDAR, or the RoomPlan camera startup from the reported crash.
+@MainActor
+final class PhysicalRoomCaptureTests: XCTestCase {
+    private static func collectReferences(_ references: SiteReferenceCapture, vision: DeviceViewfinderController) async {
+        await references.run(session: vision.session)
+    }
+
+    func testStartupStress() async throws {
+        let mode = ProcessInfo.processInfo.environment["WENDY_ROOM_CAPTURE_REPRO"] ?? ""
+        guard ["legacy", "roomplan"].contains(mode) else {
+            throw XCTSkip("Set WENDY_ROOM_CAPTURE_REPRO to legacy or roomplan on a LiDAR device")
+        }
+        guard RoomCaptureSession.isSupported else { throw XCTSkip("Requires a physical LiDAR device") }
+        let allowed = await AVCaptureDevice.requestAccess(for: .video)
+        XCTAssertTrue(allowed)
+        guard allowed else { return }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previousWindow?.makeKeyAndVisible() }
+
+        for cycle in 1...10 {
+            let vision = DeviceViewfinderController()
+            let references = SiteReferenceCapture()
+            let delegate = RoomCaptureProbeDelegate()
+            let view = RoomCaptureView(frame: host.view.bounds, arSession: vision.session)
+            view.delegate = delegate
+            host.view.addSubview(view)
+            defer {
+                references.stop()
+                view.captureSession.stop()
+                view.removeFromSuperview()
+            }
+            print("ROOM_REPRO start mode=\(mode) cycle=\(cycle)")
+            view.captureSession.run(configuration: .init())
+            print("ROOM_REPRO initial semantics=\(vision.session.configuration?.frameSemantics.rawValue ?? 0)")
+            if mode == "legacy", let configuration = vision.session.configuration?.copy() as? ARWorldTrackingConfiguration {
+                configuration.frameSemantics.insert(.sceneDepth)
+                vision.session.run(configuration)
+            }
+            var cameraFrames = 0
+            var depthFrames = 0
+            await withTaskGroup(of: Void.self) { group in
+                if mode == "legacy" { group.addTask { await vision.run(manageSession: false) } }
+                group.addTask { await Self.collectReferences(references, vision: vision) }
+                for _ in 0..<30 {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    if let frame = vision.session.currentFrame {
+                        cameraFrames += 1
+                        if frame.sceneDepth != nil { depthFrames += 1 }
+                    }
+                }
+                references.stop()
+                group.cancelAll()
+            }
+            print("ROOM_REPRO completed mode=\(mode) cycle=\(cycle) cameraSamples=\(cameraFrames) depthSamples=\(depthFrames) landmarks=\(references.landmarkCount)")
+            XCTAssertGreaterThan(cameraFrames, 0, "Camera never started in cycle \(cycle)")
+            XCTAssertGreaterThan(depthFrames, 0, "RoomPlan did not supply scene depth in cycle \(cycle)")
+        }
+    }
+}
+
+@objc(WendyRoomCaptureProbeDelegate)
+private final class RoomCaptureProbeDelegate: NSObject, RoomCaptureViewDelegate {
+    override init() { super.init() }
+    required init?(coder: NSCoder) { nil }
+    func encode(with coder: NSCoder) {}
+    func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
+        if let error { print("ROOM_REPRO RoomPlan error: \(error)") }
+        return false
+    }
+}
+
+private final class RoomCaptureSessionSpy: SiteRoomCaptureSession {
+    var starts = 0
+    var stops = 0
+    func run(configuration: RoomCaptureSession.Configuration) { starts += 1 }
+    func stop() { stops += 1 }
 }

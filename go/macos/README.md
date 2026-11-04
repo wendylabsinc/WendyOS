@@ -859,8 +859,8 @@ later. A publisher must renew its evidence; clients hide expired poses. Visual
 localization records also require an inlier count and reprojection RMS.
 
 This API stores pose evidence; it does not derive it from a device appearance
-match. The viewfinder and RoomPlan scanning share the local appearance recognizer
-described below. Those matches do not establish enrolled identity or a calibrated
+match. The device viewfinder uses the local appearance recognizer described below.
+Those matches do not establish enrolled identity or a calibrated
 camera pose. Automatic alignment needs the separately captured visual reference
 map described under [Importing and viewing sites](#importing-and-viewing-sites);
 a geometry-only RoomPlan export is insufficient. Older gateways and cameras
@@ -902,9 +902,28 @@ provide lens calibration or automatic identity verification. Remove references
 through the stack icon. At most 12 references and 32 MiB are stored atomically in
 Application Support/WendyDeviceRecognition/references.json. No cloud sync occurs.
 
-Room scanning uses the same recognizer with RoomPlan's ARSession and shows a
-recognized appearance during capture. It does not place cameras or infer their
-viewing angles from an appearance-only reference. The native C++ layer supports
+Room scanning runs RoomPlan and visual-reference capture without the device
+appearance recognizer, reducing concurrent image-processing memory. Reference
+capture copies the image and depth data before background processing so it does
+not retain AR camera buffers across suspension. An iOS memory warning during
+scanning stops capture without starting reconstruction and reports that the scan
+was not saved. Retry over a smaller area and tap Finish sooner. Memory warnings
+are not guaranteed before iOS terminates an app; large-room capture still needs
+physical-device testing. SwiftUI retains the capture controller with StateObject,
+and Finish, Cancel, and view teardown share one session stop. RoomPlan owns the
+underlying AR session pause.
+
+`PhysicalRoomCaptureTests` provides an opt-in device startup stress test. Set
+`WENDY_ROOM_CAPTURE_REPRO=legacy` in the test target's `.xctestrun`
+`EnvironmentVariables` to exercise the original concurrent device recognition and
+AR reconfiguration, or `roomplan` to let RoomPlan manage startup. Run only this
+class on an unlocked LiDAR iPhone. Each mode opens ten three-second captures and
+reports camera/depth samples and reference counts. It does not save scans or
+modify the device-recognition library. A stationary-phone pass does not reproduce
+a walk through a large room; camera movement and the reported room remain manual
+qualification steps.
+
+The native C++ layer supports
 metric planar references and checked PnP poses, tested with a synthetic calibrated
 fixture, but bundled photographs and user captures have no measured physical
 plane and deliberately cannot produce a pose. That code is not evidence of
