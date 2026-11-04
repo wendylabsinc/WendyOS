@@ -30,7 +30,7 @@ const (
 
 // OperatorTargetInfo describes the authenticated adjacent router's current
 // observation. Destination TLS still authenticates the exact selected device.
-const operatorIPCVersion = 6
+const operatorIPCVersion = 7
 
 // Both principal fields can contain a complete valid operator URI.
 const operatorContextBytes = 2*operatorJSONPrincipalBytes + 256

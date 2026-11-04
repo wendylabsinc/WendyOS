@@ -96,9 +96,9 @@ wendy device wendy-net disconnect
 
 Disconnecting ends the current mesh connections and forwarding while preserving
 the installation's routing identity. Mesh commands and discovery then remain
-disconnected until an explicit `wendy device wendy-net connect`. With no address,
-that command selects automatic discovery rather than a saved pinned first hop;
-disconnect a live pinned attachment before changing its mode.
+disconnected until an explicit `wendy device wendy-net connect`. That command
+resumes automatic discovery, including when upgrading from saved settings that
+previously selected a particular router.
 
 A requested Nearby or mesh discovery can also start a temporary router using the
 selected profile's cached operator certificate. Unless explicitly enabled with
@@ -142,43 +142,16 @@ The target must currently advertise port 80 as a TCP service. The command binds
 authorization. UDP forwarding is not supported. Devices with small connection
 budgets can reject additional streams; close unused connections and retry.
 
-## Select an explicit first neighbour
+## Join automatically
 
-Automatic discovery is normally enough. To connect to a known WendyOS router,
-supply its enrolled device UUID and TLS carrier address together:
+Run `wendy device wendy-net connect` to enable the local operator router. It
+finds and authenticates nearby routers over LAN and Bluetooth and can maintain
+multiple connections. Router addresses and Bluetooth connection parameters come
+from discovery; users do not select a particular neighbour or carrier.
 
-```sh
-wendy device wendy-net connect --transport tcp \
-  --address ROUTER_IP:TLS_CARRIER_PORT --router ROUTER_DEVICE_UUID
-```
-
-For Bluetooth, first list native radio hints without starting a router:
-
-```sh
-wendy device wendy-net discover --transport ble --timeout 5s
-wendy --json device wendy-net discover --transport ble
-wendy device wendy-net connect --transport ble \
-  --address NATIVE_BLE_ADDRESS --psm LISTED_PSM --router ENROLLED_DEVICE_UUID
-```
-
-The discovery timeout defaults to 5 seconds. `--timeout` must be greater than
-zero and cannot exceed 30 seconds.
-
-Use the listed CoreBluetooth peripheral UUID on macOS, or LE address on Linux.
-macOS does not expose the hardware Bluetooth MAC address. The radio identifier is
-different from the enrolled device UUID required by `--router`.
-
-Discovery returns unverified advertisement hints and a dynamic PSM. Its short
-device hint is not a full device UUID or an identity proof; candidates may include
-peers without the WendyOS operator-router role. The selected identity and tenant
-are authenticated during attachment. This command does not connect, create an
-operator recipe or enable a background router. It is separate from the retired
-generic Bluetooth agent-discovery path.
-
-An explicit first hop stays on the selected physical carrier and reconnects that
-peer without starting additional LAN/BLE discovery. Slow Bluetooth setup or
-several mesh hops can make cold connections take longer than ordinary LAN
-connections.
+Use `wendy discover` to find reachable destination devices. Selecting a device
+controls where a command runs, while the mesh chooses the path to it. Run
+`wendy device wendy-net disconnect` to disable the local operator router.
 
 ## Configure a Lite device
 
