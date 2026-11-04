@@ -534,6 +534,20 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		}
 		c.Close()
 	}
+	if algorithm == "P256-legacy-passive" {
+		data, err := os.ReadFile(operatorRecipePath(directory, principal))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved map[string]any
+		if err := json.Unmarshal(data, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved["version"] != float64(2) || saved["routerAddress"] != nil || saved["routerUuid"] != nil {
+			t.Fatalf("legacy targeting remained on disk: %s", data)
+		}
+	}
+
 	// The original launching process and even its fixture parent pipe stay
 	// alive; only open user IPC connections may hold this operator context.
 	warm, err := ConnectOperator(ctx, MeshSelector(router))
