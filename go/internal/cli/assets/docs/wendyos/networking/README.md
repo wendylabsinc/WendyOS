@@ -87,7 +87,7 @@ publication. Device discovery, management authentication, and app discovery are
 separate; finding a device does not publish every container port.
 
 Wi-Fi configuration currently uses NetworkManager through `nmcli`. Wendy Net
-participation and transport settings use `wendy net configure`; they do not
+participation and transport settings use `wendy device wendy-net configure`; they do not
 replace `wendy device wifi connect` for joining an ordinary Wi-Fi network.
 See [Wi-Fi setup](/docs/device/connecting-to-wifi) and the
 [Wendy Net settings reference](/docs/guides/wendy-net#settings-reference).

@@ -68,7 +68,7 @@ func TestReadyBLEIsActiveWhileLANHasNoEligibleInterface(t *testing.T) {
 	h.report(epoch, "BLE", localmesh.CarrierStatus{Ready: true})
 	state := h.status(sharing)
 	if state.State != "mesh-active" || state.AuthenticatedPeers != 2 || state.GatewayPrincipal != sharing.GatewayPrincipal ||
-		!strings.Contains(state.Detail, "BLE: ready") || !strings.Contains(state.Detail, "LAN: initializing (waiting for an eligible LAN interface)") {
+		!strings.Contains(state.Detail, "Bluetooth: ready") || !strings.Contains(state.Detail, "LAN: initializing (waiting for an eligible LAN interface)") {
 		t.Fatalf("working BLE was hidden by a missing LAN interface: %+v", state)
 	}
 	// A real error is still degraded, even though the BLE data path works.

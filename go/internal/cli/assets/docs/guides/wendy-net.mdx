@@ -12,7 +12,7 @@ support, use the [Lite configuration instructions](#configure-wendy-net-on-wendy
 ## 1. Prepare your devices
 
 Use current WendyOS images with Wendy Net support and enroll each device in the
-same Wendy Cloud organization. Sign in with `wendy cloud login`. Keep a working
+same Wendy Cloud organization. Sign in with `wendy auth login`. Keep a working
 management connection while changing network settings.
 
 ## 2. Enable the connections you want
@@ -20,7 +20,7 @@ management connection while changing network settings.
 For devices on the same Ethernet or ordinary Wi-Fi network, run this for each one:
 
 ```sh
-wendy net configure --device <device> \
+wendy device wendy-net configure --device <device> \
   --participate=true --ethernet=true --infrastructure-wifi=true
 ```
 
@@ -52,8 +52,8 @@ require participation, so disable them in the same command if they were enabled.
 ## 3. Check the result
 
 ```sh
-wendy net status --device <device>
-wendy net topology --device <device>
+wendy device wendy-net status --device <device>
+wendy device wendy-net topology --device <device>
 ```
 
 `status` shows saved settings and current runtime state. `topology` shows the
@@ -109,7 +109,7 @@ Choose a device with its own working Internet connection as the gateway. Allow
 it to offer that connection to other enrolled devices:
 
 ```sh
-wendy net configure --device <gateway> \
+wendy device wendy-net configure --device <gateway> \
   --participate=true --share-uplink=true
 ```
 
@@ -117,9 +117,9 @@ On a device that should use the gateway when its own Internet connection is
 unavailable:
 
 ```sh
-wendy net configure --device <travelling-device> \
+wendy device wendy-net configure --device <travelling-device> \
   --participate=true --roam=true
-wendy net status --device <travelling-device>
+wendy device wendy-net status --device <travelling-device>
 ```
 
 Both devices still need enabled Wendy Net connection types and a working route
@@ -150,6 +150,20 @@ To stop offering access, set `--share-uplink=false` on the gateway. To stop
 borrowing, set `--roam=false` on the travelling device. Changes are saved across
 agent restarts. Existing Internet sessions may be interrupted when a gateway or
 uplink changes.
+
+### Keep Cloud access working over the mesh
+
+A WendyOS device can use the shared Internet path for Cloud management too.
+Bluetooth paths can take longer to establish and renew than Ethernet or WiFi.
+Keep the gateway reachable while the agent connects or retries. A working local
+mesh route alone does not confirm Cloud access: run `wendy cloud discover` and
+try a device command through Cloud.
+
+If the device is reachable locally but not through Cloud, check its gateway and
+Internet-sharing state first. See [Cloud connectivity](/docs/cloud/connectivity)
+for network changes, DNS failures and recovery. Sharing and roaming remain
+separate settings; this does not enable Internet access for Lite profiles that
+do not support it.
 
 ### Give an app outbound Internet access
 
@@ -185,7 +199,7 @@ only to applications that manage the hardware themselves.
 
 ## Settings reference
 
-Use `wendy net configure` with just the options you want to change.
+Use `wendy device wendy-net configure` with just the options you want to change.
 Every boolean accepts `true` or `false`; omitted options retain their saved values.
 
 | Option | Purpose |

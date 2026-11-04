@@ -84,7 +84,7 @@ func (d *uplinkDialer) connect(ctx context.Context, attempt func(context.Context
 				}
 				conn, err := try(ctx, path, fallbackBudget)
 				if err != nil {
-					err = fmt.Errorf("uplink %s: %w", path.name, err)
+					err = fmt.Errorf("Cloud connection through %s failed: %w", path.name, err)
 				}
 				select {
 				case results <- result{conn, err}:

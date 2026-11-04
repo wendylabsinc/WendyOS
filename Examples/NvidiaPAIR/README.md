@@ -16,15 +16,23 @@ It does not combine GPU memory or split a model across nodes.
   support, enrolled in the same organization.
 - NVIDIA GPU access for the supplied manifest. The tested hardware is Jetson
   Orin Nano with JetPack 7.2. Other GPU/driver combinations need validation.
-- A CLI with `wendy device wendy-net` and agents with the app mDNS bridge. An
-  older agent accepting `mode: "mesh"` is not sufficient evidence of discovery
-  support.
+- A CLI with `wendy device wendy-net` and agents with the app mDNS bridge. Use matching, current CLI and agent versions; merely accepting `mode: "mesh"`
+  does not establish that app service discovery is available.
 - Internet access on the build machine to fetch PAIR, the Ollama image, and the
   roughly 398 MB model. The running app needs no engine or model downloads.
 
 ## Deploy two nodes
 
-From this directory, replace `DEVICE_A` and `DEVICE_B` with your device selectors:
+Find both devices first. For devices on the same LAN, this works even before
+Wendy Net is enabled:
+
+```sh
+wendy discover --type lan --timeout 5s
+```
+
+Use the selectors returned by discovery for `DEVICE_A` and `DEVICE_B`. For devices
+reachable only through the mesh, first [join Wendy Net from your computer](../../go/internal/cli/assets/docs/development/local-mesh-radio.md)
+and use the selectors returned by mesh discovery. Then run from this directory:
 
 ```sh
 wendy json validate
