@@ -166,7 +166,7 @@ enum TestPKI {
         }
     }
 
-    static func makeIdentity(commonName: String, ca: CA) throws -> Identity {
+    static func makeIdentity(commonName: String, ca: CA, uris: [String] = []) throws -> Identity {
         let key = P256.Signing.PrivateKey()
         let subject = try DistinguishedName { CommonName(commonName) }
         let cert = try Certificate(
@@ -182,6 +182,9 @@ enum TestPKI {
                 Critical(BasicConstraints.notCertificateAuthority)
                 Critical(KeyUsage(digitalSignature: true))
                 try ExtendedKeyUsage([.clientAuth, .serverAuth])
+                if !uris.isEmpty {
+                    SubjectAlternativeNames(uris.map { .uniformResourceIdentifier($0) })
+                }
             },
             issuerPrivateKey: ca.privateKey
         )
