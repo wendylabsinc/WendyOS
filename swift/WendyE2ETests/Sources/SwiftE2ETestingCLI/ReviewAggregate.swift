@@ -103,12 +103,12 @@ private func renderE2EReviewAggregate(
         "",
     ]
 
-    // CI passes its review step's outcome. A local report has none, so the
-    // absence of issues keeps its usual meaning there.
+    // CI and E2EAnalyze pass on the review's outcome. A report rendered on its own
+    // has none, so the absence of issues keeps its usual meaning there.
     let incomplete = reviewOutcome != nil && reviewOutcome != "success"
     if incomplete {
         lines.append(
-            "⚠️ AI review did not complete, so this is not a clean result. Any issues listed are partial; check the workflow log for the reason."
+            "⚠️ AI review did not complete, so this is not a clean result. Any issues listed are partial; check the review step's output for the reason."
         )
         lines.append("")
     }
