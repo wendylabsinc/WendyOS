@@ -77,7 +77,11 @@ verified by immutable revision/size/SHA-256. The existing official ARM64 CUDA 13
 image contains upstream llama.cpp `39febd2adb947b70da35e95f9351b3bf58ad170a`.
 There is no remote model fallback, vision/MTP loading or host tool installation.
 The text model endpoint binds host loopback 18081. Startup requires available RAM
-for weight bytes plus 12 GiB, with a separate bounded 600-second load window.
+for weight bytes plus 12 GiB, with a separate bounded 900-second load window.
+Startup uses 512/128 logical/physical batches. A later load exceeded the original
+600-second window during native GPU allocations despite available RAM; startup
+failure holds testing and terminates the loader. This is a runtime limitation,
+not a CLI regression.
 
 Actual unchanged-prompt trial: 49/49 GPU layers, 69,200.9 MiB GPU plus 28,110.1 MiB
 host weights, 170.34s GPU health, about 21 decoded tokens/s. Three turns performed
@@ -87,6 +91,11 @@ context limit, not proof of model weakness. Invalid report arguments and one sta
 chronology claim remained model mistakes; no regression was accepted. The functional
 path replaces that help-heavy prompt and results with compact trusted workflows.
 The cached 30B rollback pins remain in both service directories at `29ede24d5`.
+
+Direct Thor replay passed all three functional workflows twice on stable and
+nightly with checked cleanup (about 0.55–0.85 seconds per experiment). Stopping
+Scout stopped the fixture; restart removed its recorded leftover. These trusted
+operator checks do not by themselves establish autonomous model reliability.
 
 The worker has a 270-second Pi-loop deadline; control has a 300-second supervisor
 window and each probe batch is additionally bounded to 90 seconds and the remaining

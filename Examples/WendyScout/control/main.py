@@ -215,6 +215,10 @@ class Scout:
                 "0",
                 "--lazy-mode",
                 "off",
+                "-b",
+                "512",
+                "-ub",
+                "128",
                 "-ot",
                 "per_layer_token_embd=CPU",
             ]
@@ -232,7 +236,8 @@ class Scout:
                 append_log(logpath, block)
 
         threading.Thread(target=pump, daemon=True).start()
-        for _ in range(600 if flash else 120):
+        deadline = started + (900 if flash else 120)
+        while time.monotonic() < deadline:
             if STOP.is_set() or p.poll() is not None:
                 raise RuntimeError("Model stopped during initialization")
             try:
@@ -661,6 +666,14 @@ def main():
     except Exception as e:
         scout.error = str(e)
         event("held", reason=str(e))
+        # A held supervisor still serves diagnostics, never an unbounded loader.
+        for p in CHILDREN:
+            if p.poll() is None:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                p.wait(timeout=5)
         while not STOP.wait(1):
             pass
     finally:
