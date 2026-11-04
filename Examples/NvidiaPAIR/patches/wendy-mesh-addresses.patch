@@ -1,0 +1,177 @@
+diff --git a/services/nvpair-cluster-manager/httpserver.go b/services/nvpair-cluster-manager/httpserver.go
+index f010e58..cc3552c 100644
+--- a/services/nvpair-cluster-manager/httpserver.go
++++ b/services/nvpair-cluster-manager/httpserver.go
+@@ -499,7 +499,7 @@ func (m *Manager) prepareJoinerInitialComplete(inviteID string, sess *pairingSes
+ 	}
+ 	sess.peerPairing = pi
+ 	sess.peerCert = cert
+-	sess.addr = pi.Addr
++	sess.addr = m.wendyPeerAddr(pi.NodeUUID, pi.Addr)
+ 	sess.invitedEmitted = true
+ 
+ 	now := time.Now().UnixMilli()
+@@ -778,7 +778,7 @@ func (m *Manager) pinPeer(pi *PairingInfo, cert *x509.Certificate, endorsements
+ 
+ // recordMember upserts a ClusterNode for a peer described by its PairingInfo.
+ func (m *Manager) recordMember(pi *PairingInfo, state MembershipState, joinedAt *int64) {
+-	host, port := splitAddr(pi.Addr, m.port)
++	host, port := splitAddr(m.wendyPeerAddr(pi.NodeUUID, pi.Addr), m.port)
+ 	m.upsertMember(&ClusterNode{
+ 		ID:             pi.NodeID,
+ 		NodeUUID:       pi.NodeUUID,
+diff --git a/services/nvpair-cluster-manager/mdns_browser.go b/services/nvpair-cluster-manager/mdns_browser.go
+index 2950d71..6e447d7 100644
+--- a/services/nvpair-cluster-manager/mdns_browser.go
++++ b/services/nvpair-cluster-manager/mdns_browser.go
+@@ -16,6 +16,7 @@ package main
+ // former accumulate-only browse.
+ 
+ import (
++	"net"
+ 	"sync"
+ 
+ 	"nvpair-shared/discovery"
+@@ -122,3 +123,21 @@ func (b *Browser) seed(uuid, host string, port int) {
+ 		TXT:       []string{"uuid=" + uuid},
+ 	}
+ }
++
++// wendyPeerAddr translates only the dialing endpoint, never the authenticated
++// PairingInfo or certificate. VIPs are observer-local, so use this node's
++// discovery for the peer UUID instead of a private IP or another node's VIP.
++func (m *Manager) wendyPeerAddr(uuid, fallback string) string {
++	if m.browser != nil {
++		hosts, port, ok := m.browser.Resolve(uuid)
++		if ok {
++			for _, host := range hosts {
++				ip := net.ParseIP(host).To4()
++				if ip != nil && ip[0] == 10 && ip[1] == 99 {
++					return joinHostPort(host, port, m.port)
++				}
++			}
++		}
++	}
++	return fallback
++}
+diff --git a/services/nvpair-cluster-manager/membership.go b/services/nvpair-cluster-manager/membership.go
+index d207ab7..2a5d753 100644
+--- a/services/nvpair-cluster-manager/membership.go
++++ b/services/nvpair-cluster-manager/membership.go
+@@ -221,6 +221,10 @@ func (m *Manager) setMemberAddr(uuid, host string, port int) bool {
+ // host. So the observation is remembered, and refreshMemberAddr will not overwrite
+ // it with a claim.
+ func (m *Manager) noteObservedPeerHost(uuid, host string) bool {
++	// Mesh ingress terminates on the host; its source IP is not the peer.
++	if addr := m.wendyPeerAddr(uuid, ""); addr != "" {
++		host, _ = splitAddr(addr, m.port)
++	}
+ 	if uuid == "" || host == "" {
+ 		return false
+ 	}
+diff --git a/services/nvpair-cluster-manager/peer_addr_test.go b/services/nvpair-cluster-manager/peer_addr_test.go
+index 4565e47..c697e66 100644
+--- a/services/nvpair-cluster-manager/peer_addr_test.go
++++ b/services/nvpair-cluster-manager/peer_addr_test.go
+@@ -416,3 +416,38 @@ func TestCanceledInviteIsNotRepublishedByALaterAddress(t *testing.T) {
+ 		t.Error("the pairing session outlived the canceled invite; a Completion could still be served")
+ 	}
+ }
++
++func TestWendyPairingUsesObserverLocalEndpoint(t *testing.T) {
++	m := newTestManagerPort(t, 14321)
++	peer := "33333333-3333-3333-3333-333333333333"
++	m.browser = newBrowser()
++	m.browser.setRelay([]noderec.DirectoryNode{{
++		HostUUID: peer, Name: "wendy", IP: "10.99.0.2",
++		Services: map[noderec.ServiceKey]noderec.ServiceStatus{noderec.ServiceCluster: {Port: 14321}},
++	}})
++	pi := &PairingInfo{NodeUUID: peer, NodeID: "wendy", Addr: "10.81.76.50:14321"}
++	if got := m.wendyPeerAddr(peer, pi.Addr); got != "10.99.0.2:14321" {
++		t.Fatalf("pairing callback = %q", got)
++	}
++	m.recordMember(pi, stateMember, nil)
++	if pi.Addr != "10.81.76.50:14321" {
++		t.Fatal("authenticated PairingInfo was modified")
++	}
++	member, ok := m.memberByNodeID(peer)
++	if !ok || member.IPAddress != "10.99.0.2" {
++		t.Fatalf("member = %+v", member)
++	}
++	m.noteObservedPeerHost(peer, "10.81.76.49")
++	if got := m.observedPeerHost(peer); got != "10.99.0.2" {
++		t.Fatalf("ingress proxy mistaken for peer: %q", got)
++	}
++	// A stored address from another observer must not override local discovery.
++	member.IPAddress = "10.99.0.42"
++	got := m.resolvePeerAddrs(*member)
++	if len(got) != 1 || got[0] != "10.99.0.2:14321" {
++		t.Fatalf("peer endpoints = %v", got)
++	}
++	if got := m.wendyPeerAddr("unknown", pi.Addr); got != pi.Addr {
++		t.Fatalf("ordinary fallback changed: %q", got)
++	}
++}
+diff --git a/services/nvpair-cluster-manager/roster_http.go b/services/nvpair-cluster-manager/roster_http.go
+index 9728ebc..4307832 100644
+--- a/services/nvpair-cluster-manager/roster_http.go
++++ b/services/nvpair-cluster-manager/roster_http.go
+@@ -552,6 +552,9 @@ func (m *Manager) refreshMemberAddrsFromMDNS() {
+ // another of its addresses. Sitting on the recorded one is how a reconcile came
+ // to time out against a peer whose working address was already in hand.
+ func (m *Manager) resolvePeerAddrs(n ClusterNode) []string {
++	if addr := m.wendyPeerAddr(n.NodeUUID, ""); addr != "" {
++		return []string{addr}
++	}
+ 	addrs := make([]string, 0, 4)
+ 	seen := make(map[string]bool, 4)
+ 	add := func(addr string) {
+diff --git a/services/shared/netpick/netpick.go b/services/shared/netpick/netpick.go
+index 641a289..1c5591c 100644
+--- a/services/shared/netpick/netpick.go
++++ b/services/shared/netpick/netpick.go
+@@ -200,6 +200,18 @@ func Candidates(txt []string, addrs []string) []string {
+ 		seen[a] = true
+ 		out = append(out, a)
+ 	}
++	// Wendy Net projects DNS A records into its service range while retaining
++	// application TXT data. A peer's TXT may contain an overlapping private
++	// container address, so use only resolved mesh addresses for these records.
++	for _, a := range addrs {
++		ip := net.ParseIP(a).To4()
++		if ip != nil && ip[0] == 10 && ip[1] == 99 {
++			add(a)
++		}
++	}
++	if len(out) > 0 {
++		return out
++	}
+ 	add(IPFromTXT(txt))
+ 	for _, a := range IPsFromTXT(txt) {
+ 		add(a)
+diff --git a/services/shared/netpick/netpick_test.go b/services/shared/netpick/netpick_test.go
+index 2338038..63cac34 100644
+--- a/services/shared/netpick/netpick_test.go
++++ b/services/shared/netpick/netpick_test.go
+@@ -520,3 +520,21 @@ func TestRouteSourceIP_Smoke(t *testing.T) {
+ 		t.Fatalf("routeSourceIP = %q, want empty or a non-loopback IPv4", got)
+ 	}
+ }
++
++// Wendy containers on different hosts may have the same private IPv4 address.
++func TestCandidatesWendyMeshProjection(t *testing.T) {
++	txt := []string{"ip=10.88.0.2", "ips=10.88.0.2,192.168.1.7"}
++	for _, vip := range []string{"10.99.0.2", "10.99.0.3"} {
++		got := Candidates(txt, []string{vip, "10.88.0.2"})
++		if len(got) != 1 || got[0] != vip {
++			t.Fatalf("projected peer %s: got %v", vip, got)
++		}
++	}
++}
++
++func TestCandidatesWendyMeshPreservesLAN(t *testing.T) {
++	got := Candidates([]string{"ip=192.168.1.7"}, []string{"192.168.1.8"})
++	if len(got) != 2 || got[0] != "192.168.1.7" || got[1] != "192.168.1.8" {
++		t.Fatalf("ordinary LAN behavior changed: %v", got)
++	}
++}

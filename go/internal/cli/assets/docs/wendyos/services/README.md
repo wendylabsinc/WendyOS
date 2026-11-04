@@ -154,6 +154,9 @@ Point `WENDY_DATA_DIR` at a dedicated folder, never at a mount point such as
 WENDY_DATA_DIR=/data/wendy-data/episodes wendy-agent
 ```
 
+An existing `/data/wendy-agent/data/episodes` store from an earlier native-app
+build remains in use, together with its campaign plans and inference cache.
+
 Episodes an earlier agent recorded in `/var/lib/wendy-agent/data/episodes` stay
 there when the default moves to the data partition. They are no longer listed
 or uploaded, and the agent logs at each startup how many there are and how many
@@ -163,6 +166,7 @@ to list them again and upload the rest, or delete them.
 The agent creates the directory on startup. Unprivileged developer agents that
 cannot create the default fall back to their platform user configuration
 directory.
+An explicit `WENDY_DATA_DIR` is used unchanged and is not migrated automatically.
 
 ## Agent shutdown
 

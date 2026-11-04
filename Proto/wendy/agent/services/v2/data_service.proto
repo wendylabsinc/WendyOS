@@ -13,11 +13,11 @@ option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agent
 // app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
 // any method below callable by an application.
 //
-// The four Campaign methods in particular are command-line-facing: they are
-// what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
-// campaign inspect` and `wendy data campaign trigger` call over that mutually
-// authenticated channel. They are operator commands for managing capture
-// campaigns on a device, not an application programming interface for apps.
+// The Campaign methods in particular are command-line-facing: they are what
+// `wendy data campaign deploy`, `list`, `inspect`, `trigger`, `arm`, `disarm`
+// and `remove` call over that mutually authenticated channel. They are
+// operator commands for managing capture campaigns on a device, not an
+// application programming interface for apps.
 service DataService {
   // Bounded, durable event inbox. An empty cursor starts at the current tail;
   // replay=true reads retained history. Expired cursors report a gap explicitly.
@@ -38,6 +38,31 @@ service DataService {
   rpc Campaigns(DataCampaignsRequest) returns (DataCampaignsResponse);
   rpc CampaignInspect(DataCampaignInspectRequest) returns (DataCampaign);
   rpc CampaignTrigger(DataCampaignTriggerRequest) returns (DataEpisode);
+  // CampaignArm and CampaignDisarm switch a deployed campaign on and off
+  // without touching its plan or revision. A disarmed campaign stays listed,
+  // fires no trigger (CampaignTrigger refuses it with FAILED_PRECONDITION),
+  // runs no inference and holds no camera pre-roll. The state is stored with
+  // the plan, so it survives agent restarts and reboots, and redeploying a
+  // disarmed campaign keeps it disarmed. Both are idempotent. NOT_FOUND if
+  // the campaign is not deployed.
+  rpc CampaignArm(DataCampaignArmRequest) returns (DataCampaignArmResponse);
+  // CampaignDisarm stores the disarmed state, releases the camera pre-roll,
+  // and then waits for the campaign's inference to stop. Storing the state
+  // first waits for the campaign's key lock, which an episode that is ending
+  // holds until it is sealed, its capture.drain included. The inference wait
+  // after that is at most 10 s. A worker still stopping then is reported in
+  // warnings and the call succeeds, because the campaign is already disarmed.
+  // A recording in progress is not cut short: it finishes its after_trigger
+  // window and is sealed normally.
+  rpc CampaignDisarm(DataCampaignDisarmRequest) returns (DataCampaignDisarmResponse);
+  // CampaignRemove deletes a campaign's stored plan, so it is no longer
+  // listed, triggered or restored at boot. Every episode it recorded is kept.
+  // FAILED_PRECONDITION while the campaign is recording, unless force is set,
+  // which stops and seals that recording first, its capture.drain included.
+  // It waits for the key lock and then for the campaign's inference as
+  // CampaignDisarm does, and reports a worker still stopping after 10 s the
+  // same way: in warnings, with the plan already deleted.
+  rpc CampaignRemove(DataCampaignRemoveRequest) returns (DataCampaignRemoveResponse);
   // Data documents (specs/2026-10-12-data-documents-design.md §9.2).
   // DocumentApply validates and stores a document of any kind and hands it to
   // its runner. A collection takes the CampaignDeploy path.
@@ -81,6 +106,15 @@ message DataSource {
   string clock_domain = 3;
   bool healthy = 4;
   string detail = 5;
+  // A short name for people, such as "HD Pro Webcam C920", without the driver
+  // strings detail carries (ALSA and PipeWire node names, transport enums). It
+  // is a label, not an identifier: select a source by id. Empty from agents
+  // that predate it, where detail is the only description.
+  string name = 6;
+  // Why the source is not healthy, in a few words a person can act on, such as
+  // "no login stored", "camera offline" or "silent audio-hub channel". Set only
+  // when healthy is false. Empty from agents that predate it.
+  string unusable_reason = 7;
 }
 message DataSourcesRequest {}
 message DataSourcesResponse { repeated DataSource sources = 1; }
@@ -204,6 +238,47 @@ message DataCampaign {
   repeated string warnings = 7;
 }
 message DataCampaignsResponse { repeated DataCampaign campaigns = 1; }
+
+message DataCampaignArmRequest { string name = 1; }
+message DataCampaignArmResponse {
+  // The campaign as stored after the call; state is "armed".
+  DataCampaign campaign = 1;
+  // False when the campaign was already armed.
+  bool changed = 2;
+}
+message DataCampaignDisarmRequest { string name = 1; }
+message DataCampaignDisarmResponse {
+  // The campaign as stored after the call; state is "disarmed".
+  DataCampaign campaign = 1;
+  // False when the campaign was already disarmed.
+  bool changed = 2;
+  // The campaign's recording in progress, if it had one. Disarming does not
+  // cut it short.
+  DataEpisode recording = 3;
+  // Notes for the operator about this call, such as the recording above, an
+  // inference still stopping when the call returned, or a fleet that may
+  // deploy the plan again. Not stored with the plan.
+  repeated string warnings = 4;
+}
+message DataCampaignRemoveRequest {
+  string name = 1;
+  // Stop and seal the campaign's recording in progress, then remove it.
+  // Without it, a campaign that is recording is refused.
+  bool force = 2;
+}
+message DataCampaignRemoveResponse {
+  string name = 1;
+  // The revision of the plan that was removed.
+  string revision = 2;
+  // The fleet the plan named, if any.
+  string fleet = 3;
+  // The recording force stopped and sealed before the removal, if any.
+  DataEpisode sealed = 4;
+  // Notes for the operator about this call, such as an inference still
+  // stopping when the call returned, or a fleet that may deploy the plan
+  // again.
+  repeated string warnings = 5;
+}
 
 message DataDocumentApplyRequest { bytes document_yaml = 1; }
 message DataDocumentApplyResponse { DataDocument document = 1; }

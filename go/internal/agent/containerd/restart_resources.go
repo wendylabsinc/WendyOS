@@ -52,7 +52,7 @@ func (c *Client) ensureDBusProxyForStart(ctx context.Context, containerName stri
 		// the Bluetooth proxy: both share destination /var/run/dbus (one
 		// bus per container, enforced at create). Claiming it here wedges
 		// every avahi container at start (B2 device proof 2026-09-29).
-		if filepath.Clean(mount.Source) == avahibridge.ProxySocketDir(containerName) {
+		if avahibridge.IsProxySocketDir(containerName, mount.Source) {
 			return false, nil
 		}
 		expected := dbusproxy.SocketDir(containerName)
@@ -87,12 +87,15 @@ func (c *Client) ensureAvahiProxy(ctx context.Context, containerName string, mou
 		if mount.Destination != "/var/run/dbus" {
 			continue
 		}
-		expected := avahibridge.ProxySocketDir(containerName)
-		if filepath.Clean(mount.Source) != expected {
+		if !avahibridge.IsProxySocketDir(containerName, mount.Source) {
 			continue
 		}
+		expected := filepath.Clean(mount.Source)
 		if c.avahiManager == nil {
 			return false, fmt.Errorf("avahi bridge unavailable for %q", containerName)
+		}
+		if err := c.avahiManager.RestoreProxySocketDir(containerName, expected); err != nil {
+			return false, err
 		}
 		var dir string
 		var err error

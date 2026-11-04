@@ -32,8 +32,8 @@ and most recent rounds in `roughtime_observations` and counts the rounds in
 
 | Command | Description |
 |---|---|
-| `wendy data sources` | List camera, audio, ROS 2, application, and telemetry sources. |
-| `wendy data record` | Start one detached Episode. With no source flags, every healthy discovered source is selected. |
+| `wendy data sources` | List camera, microphone, ROS 2, application, and telemetry sources, and mark the ones `record` records by default. |
+| `wendy data record` | Start one detached Episode. With no source flags, every source `sources` marks with `*` is selected. |
 | `wendy data stop` | Stop and seal the active Episode. |
 | `wendy data status` | Show the Episodes still in progress: state, start time, duration, trigger, sources and size so far. |
 | `wendy data episodes` | List finalized Episodes, with any still in progress at the top. |
@@ -75,47 +75,104 @@ the samples the Episode just produced into that Episode. Campaigns set it with
 second default whenever it includes the applications source, which it does
 unless `--source` or `--exclude-source` leaves it out.
 
-`sources` prints an aligned table whose `DETAIL` column carries the device's own
-description of each source, truncated to keep the table readable. A single kind
-can dominate a board: an NVIDIA Jetson exposes 20 internal audio-DMA routing
-channels alongside its real microphone, so when more than six sources share a
-kind the first six are listed and the remainder are counted in a note. Nothing
-is hidden from `--json`.
+`sources` prints one section per kind (cameras, microphones, ROS 2, then
+everything else), each row a friendly name, a status and the source ID to pass
+to `--source`. A `*` marks the sources `wendy data record` records when it is
+given no `--source`: every source whose status is not a reason it is unusable.
+The ID is the last column, so a long ROS 2 topic or microphone ID makes one
+line longer rather than the whole table wider. The clock domain and the
+device's raw description are in `--json`.
 
 ```text
-SOURCE            KIND         CLOCK                       STATUS   DETAIL
-applications      application  CLOCK_BOOTTIME              healthy
-audio:16777217    audio        ALSA_CAPTURE/AGENT_RECEIPT  healthy  C920 [HD Pro Webcam C920], device 0: USB Audi...
-audio:16777729    audio        ALSA_CAPTURE/AGENT_RECEIPT  healthy  APE [NVIDIA Jetson Orin Nano APE], device 0: ...
-audio:16777730    audio        ALSA_CAPTURE/AGENT_RECEIPT  healthy  APE [NVIDIA Jetson Orin Nano APE], device 1: ...
-audio:16777731    audio        ALSA_CAPTURE/AGENT_RECEIPT  healthy  APE [NVIDIA Jetson Orin Nano APE], device 2: ...
-audio:16777732    audio        ALSA_CAPTURE/AGENT_RECEIPT  healthy  APE [NVIDIA Jetson Orin Nano APE], device 3: ...
-audio:16777733    audio        ALSA_CAPTURE/AGENT_RECEIPT  healthy  APE [NVIDIA Jetson Orin Nano APE], device 4: ...
-telemetry         telemetry    CLOCK_BOOTTIME              healthy
-v4l2:/dev/video0  camera       V4L2_BUFFER_TIMESTAMP       healthy  HD Pro Webcam C920: HD Pro Webc VIDEO_TRANSPO...
+  CAMERAS                          STATUS     ID
+* HD Pro Webcam C920               connected  v4l2:/dev/video0
 
-... 15 more audio sources not listed (--kind audio to list all, --json for everything)
+  MICROPHONES                      STATUS     ID
+* Built-in Audio                   detected   audio:alsa_input.platform-sound.analog-stereo
+* C920 PRO HD Webcam               detected   audio:alsa_input.usb-046d_HD_Pro_Webcam_C920_C2DD0F9F-02.analog-stereo
+
+  ROS 2                            STATUS     ID
+* Domain 0 (Fast DDS), all topics  reachable  ros2:rmw_fastrtps_cpp:domain-0
+
+  OTHER                            STATUS     ID
+* Application records              built in   applications
+* Device telemetry                 built in   telemetry
+
+* recorded by `wendy data record` when no --source is given
+2 ROS 2 housekeeping topics hidden (/parameter_events, /rosout); they are still recorded with their domain. --all lists them.
+
+Record some: wendy data record --source <ID> [--source <ID> ...]
+More:        wendy data sources --json
 ```
+
+The status says what the agent actually checked, which differs by kind:
+
+| Status | Source | What was checked |
+|---|---|---|
+| `connected` | Local camera (USB, CSI, or a ROS 2 image topic's loopback) | The camera answered a capture query when it was listed. Nothing tests that it delivers a picture. |
+| `online` | Network camera | It answered the agent's last check. Only network cameras with a stored login are sources; pair one with `wendy device pair` or `wendy device camera login <id>`, and see unpaired ones with `wendy device camera list --all`. The login itself is not tried. |
+| `detected` | Microphone | PipeWire, or ALSA where no PipeWire session runs, lists it as a capture device. Nothing tests that it hears anything. |
+| `reachable` | ROS 2 domain | `ros2 topic list` answered on the domain. Recording the domain records all of its topics. |
+| `listed` | ROS 2 topic | `ros2 topic list` lists the topic. |
+| `built in` | Application records, telemetry | Nothing; they need no hardware. |
+
+A source that is not usable shows why instead, for example `camera offline`
+for a network camera, `silent audio-hub channel` for an NVIDIA Jetson
+audio-DMA endpoint that records digital silence, or `topic listing failed` for
+a ROS 2 domain. It has no `*`: `record` leaves it out
+unless `--source` names it. In `--json`, `healthy` is the same verdict and
+`unusable_reason` carries the reason. An agent that predates these fields is
+shown by its raw description, with `healthy` or `unhealthy` as its status.
+
+Every ROS 2 node publishes `/parameter_events` and `/rosout` for the
+middleware's own bookkeeping. The table hides those two topics; they are still
+recorded with their domain. `--all` lists them, and lists every source of a
+kind that has more than six. An NVIDIA Jetson without PipeWire exposes 20
+internal audio-DMA channels beside its real microphone, so without `--all` the
+first six sources of a kind are listed and the rest are counted in a note.
+`--json` always carries every source.
 
 Narrow the table with `--kind`, which is repeatable or comma-separated and
 matches case-insensitively. A kind named there is never summarised, because
 asking for a kind is asking to see all of it. Without `--kind`, `--json` stays
 the full unfiltered response the device sent, so existing scripts keep working;
-with `--kind` it carries the filtered set.
+with `--kind` it carries the filtered set. New fields are only ever added to it.
 
 ```sh
 wendy data sources --kind camera
 wendy data sources --kind camera,telemetry
-wendy data sources --kind audio            # every audio source, nothing summarised
+wendy data sources --kind audio            # every microphone, nothing summarised
+wendy data sources --all                   # housekeeping topics too
 ```
+
+### Microphone IDs
+
+A microphone's ID is stable across reboots and replugs. On a device running
+PipeWire it is `audio:` followed by the PipeWire node name, which WirePlumber
+derives from the USB vendor, product and serial number, or the board's device
+path, and the active profile. Without PipeWire it is `audio:alsa:<card>:<device>`,
+using the kernel's card ID, for example `audio:alsa:C920:0`. A paired
+sensor-link microphone is `audio:sensor-link:<pairing>:<sensor>`. Characters a
+shell or YAML would act on become underscores.
+
+Earlier agents listed microphones as `audio:<number>`. That number is
+session-local: PipeWire reuses object numbers as devices come and go, and the
+ALSA fallback encoded a card index the kernel assigns in probe order, so the
+same microphone could get a different number after a reboot or a replug. The
+old form is deprecated but still accepted, for now, by `record --source`,
+`--exclude-source`, `--calibration` and campaign `audio:` selectors: it
+resolves to the microphone that number names at that moment, `record` prints a
+warning, `campaign deploy` returns one naming the stable ID, and the agent log
+records each use. New Episodes record the stable ID. A number that no longer
+names a microphone is refused with a pointer to `wendy data sources --kind audio`.
 
 ### The `--json` dialect
 
 Every `data` subcommand whose payload is a protocol buffer message prints it as
 canonical protobuf JSON on one compact line, with protocol buffer field names
 exactly as the `.proto` declares them, and unpopulated fields omitted. That
-covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`
-and `campaign trigger`.
+covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`,
+`campaign trigger`, `campaign arm`, `campaign disarm` and `campaign remove`.
 
 Some payloads are already a JSON document the device produced, and those bytes
 are written through untouched so they stay checkable against the device:
@@ -190,9 +247,85 @@ note.
 | `wendy data campaign list` | List deployed campaigns and revisions. |
 | `wendy data campaign inspect <name>` | Print the canonical deployed plan and state. |
 | `wendy data campaign trigger <name>` | Trigger a campaign manually; `--reason` is stored in the Episode. |
+| `wendy data campaign disarm <name>` | Switch a campaign off without removing it. |
+| `wendy data campaign arm <name>` | Switch a disarmed campaign back on. |
+| `wendy data campaign remove <name>` | Stop a campaign and delete its plan, keeping its Episodes. `--force` stops and seals a recording in progress first. Alias `rm`. |
 
 Event and model-uncertainty triggers are armed immediately after deployment.
 A complete plan is in `Examples/WendyDataCampaign` in the WendyOS repository.
+
+### Switching a campaign off, and removing it
+
+`wendy data campaign disarm <name>` switches a campaign off on the connected
+device. Its triggers stop firing, its agent inference stops, and its camera
+pre-roll is released, so the camera is no longer held for it. The plan, its
+revision and every Episode it recorded are kept, and `campaign list` and
+`campaign inspect` show it as `disarmed`; a campaign with `inference` or event
+notifications reports `inference_status.state: disarmed`. A manual
+`campaign trigger` of a disarmed campaign is refused.
+
+The command returns once the inference has stopped. Two waits come before
+that. If an Episode of the campaign is ending when you run it, the command
+first waits for that Episode to be sealed, which includes its `capture.drain`.
+It then waits up to 10 seconds for the inference to stop. If the inference is
+still stopping after that, the command succeeds anyway, because the campaign is
+already disarmed, and prints a warning. `campaign inspect` reports
+`inference_status.state: stopping` until the inference has stopped and
+released the camera.
+
+The disarmed state is stored with the plan, so it survives agent restarts and
+reboots. Redeploying a disarmed campaign stores the new plan but keeps the
+campaign disarmed, and the deploy output says so: switching a campaign off is
+an operator's decision on that device, and an edited plan, a teammate's
+deployment or a fleet sending the plan again must not quietly switch recording
+back on. `wendy data campaign arm <name>` reverses it: triggers fire again,
+inference restarts and camera pre-roll is re-armed. Both commands are
+idempotent.
+
+Disarming does not cut short a recording in progress. It finishes its
+`after_trigger` window and is sealed normally; the command names it.
+
+```console
+$ wendy data campaign disarm c920-yolo-live
+Campaign c920-yolo-live: disarmed (revision 1a2b3c4d5e6f)
+Its triggers and inference are stopped and its camera pre-roll is released. The plan and its episodes are kept.
+Arm it again with: wendy data campaign arm c920-yolo-live
+
+$ wendy data campaign list
+CAMPAIGN	STATE	REVISION	FLEET
+c920-yolo-live	disarmed	1a2b3c4d5e6f
+```
+
+`wendy data campaign remove <name>` stops the campaign the same way, then
+deletes its stored plan, so it is no longer listed, triggered or restored at
+boot. Every Episode it recorded is kept: they stay inspectable and
+downloadable, and Episodes still waiting to upload follow the removed plan's
+`upload.when` and `upload.max_rate`, which the device keeps for that purpose.
+The Cloud app registration is also left in place for those uploads. A
+campaign that is recording is refused, naming the Episode; `--force` stops and
+seals that recording first, including its `capture.drain`, then removes the
+campaign. Remove waits for the inference as disarm does. If the inference is
+still stopping after 10 seconds, the removal has already happened, so the
+command succeeds and prints a warning. Deploying the same name again starts a
+new, armed campaign.
+
+```console
+$ wendy data campaign remove c920-yolo-live
+Error: campaign c920-yolo-live is recording episode 20261027T101500Z-6c1f; wait for it to be sealed, or remove the campaign with --force to stop and seal that recording first
+$ wendy data campaign remove c920-yolo-live --force
+Stopped and sealed its recording first: episode 20261027T101500Z-6c1f (complete).
+Removed campaign c920-yolo-live (revision 1a2b3c4d5e6f).
+Its episodes are kept; list them with: wendy data episodes
+```
+
+A campaign whose plan names a `fleet` is still switched off or removed on the
+connected device only. Disarming is the durable choice for one device in a
+fleet, because a disarmed campaign stays disarmed when the plan is deployed
+again; a removed one comes back armed. Both commands print a warning for a
+fleet campaign.
+
+An agent that predates these commands is reported as needing
+`wendy device update`.
 
 ### Deployment and Cloud registration
 
@@ -243,11 +376,11 @@ reach only collections that trigger on its event. A watch stores nothing.
 |---|---|
 | `wendy data apply [file.yaml]` | Validate and apply any data document. Without a path, offers the documents in the current directory. |
 | `wendy data documents [<kind>[/<name>]]` | List documents with state, owner and lease expiry, or inspect one. |
-| `wendy data remove <kind>/<name>` | Remove an inference or watch and what it owns. Collections cannot be removed yet. |
+| `wendy data remove <kind>/<name>` | Remove an inference or watch and what it owns. Remove a collection with `wendy data campaign remove`. |
 
 A watch's state is `waiting` (its inference is missing or starting),
 `active` or `error`. Applying a watch with `cloud` registers the Cloud app
-`watch:<name>`. Applying inference or watch documents needs an agent with data
+`sh.wendy.watch.<name>`. Applying inference or watch documents needs an agent with data
 document support; `wendy device update` brings one. Complete examples are in
 `Examples/WendyDataWatch`.
 
@@ -262,7 +395,7 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 |---|---|---|
 | `version` | yes | Campaign schema version the author wrote the file against. This release supports version `1`; higher versions are a deploy-time error. |
 | `name` | yes | Unique device-local name using letters, numbers, `.`, `-`, or `_`; maximum 128 characters. |
-| `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device. |
+| `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device, and so do `campaign disarm` and `campaign remove`. |
 | `sources` | yes | One or more source entries. |
 | `capture` | yes | Buffer, post-trigger duration, and triggers. |
 | `upload` | yes | Upload condition, optional logical destination, and optional rate cap. |
@@ -278,7 +411,7 @@ Each `sources` item selects exactly one source:
 | Source | Description |
 |---|---|
 | `camera: <selector>` | A stable source ID, `/dev/videoN` path, or unambiguous name fragment. `front` and `default` select the only healthy camera when exactly one exists. `camera: "*"` selects every healthy camera, including cameras discovered after deployment. Quote the wildcard in YAML. |
-| `audio: <selector>` | A stable audio source ID or unambiguous name fragment from `wendy data sources --kind audio`. The selector must resolve to a healthy capture source at deployment. |
+| `audio: <selector>` | A microphone ID or unambiguous name fragment from `wendy data sources --kind audio`, for example `audio:alsa_input.usb-046d_HD_Pro_Webcam_C920_C2DD0F9F-02.analog-stereo` or `C920`. The selector must resolve to a usable capture source at deployment. The old `audio:<number>` form still resolves, with a deployment warning naming the stable ID to use instead; see [Microphone IDs](#microphone-ids). |
 | `ros2: <topic>` | A ROS 2 topic name such as `/lidar/points`. Selects that topic on every healthy ROS 2 graph publishing it. A full per-topic source ID such as `ros2:rmw_cyclonedds_cpp:domain-42:/lidar/points` selects that one source. A domain-level source ID such as `ros2:rmw_cyclonedds_cpp:domain-42` selects all topics in that domain. Missing topics warn at deployment; a triggered episode records available sources and reports missing sources in its manifest. Requested topics remain in the manifest. |
 | `telemetry: true` | Records uptime, system load, and total/free RAM once per second on Linux. Other sensor measurements need ROS 2 or application streams. |
 
@@ -419,6 +552,7 @@ disabled.
 | `backend` | no | `transformers` by default, or `yolo_onnx` for a compatible YOLO ONNX detection export. |
 | `model` | yes | `owner/repository` or `https://huggingface.co/owner/repository`; the repository containing the checkpoint or ONNX export. |
 | `model_file` | for `yolo_onnx` | Relative `.onnx` file path inside the pinned repository. Not accepted with `transformers`. |
+| `accelerator` | no | `auto` by default, `cpu`, or `tensorrt`. Chooses the hardware that runs the model; see below. `tensorrt` requires `backend: yolo_onnx`. |
 | `revision` | yes | Lowercase, 40-character Hugging Face commit SHA. Branch names are rejected. |
 | `labels` | yes | 1–32 unique, nonempty model labels, each at most 128 bytes. |
 | `threshold` | yes | Detection confidence in `(0, 1]`. |
@@ -435,10 +569,117 @@ Inference requires a camera source and a trigger matching its event in
 errors. Temporary camera loss retains presence/cooldown state so reconnecting
 does not produce a duplicate detection.
 
+Each scored frame produces a `prediction` record, which an Episode that
+records applications keeps in its `events.jsonl`. A frame that raises the
+inference event also writes an `event` record with the same attributes, which
+the device event journal keeps too.
+
+```json
+{"version":1,"type":"prediction","model":"webnn/yolo11n","attributes":{
+  "campaign":"c920-yolo-live","source_id":"v4l2:/dev/video0","model_version":"<revision>",
+  "width":1280,"height":720,
+  "detections":[{"label":"person","score":0.9225323796272278,
+    "box":[0,184.68881225585938,845.9542236328125,693.4185791015625],
+    "box_norm":[0,0.25651222,0.6609017,0.96308136]}],
+  "input_reference_status":"encoded_stream_decode_does_not_preserve_sample_ids",
+  "runtime_results_dropped":0}, ...}
+```
+
+| Attribute | Description |
+|---|---|
+| `width`, `height` | Size in pixels of the picture the model scored: the decoded camera frame. |
+| `detections[].box` | `[x1, y1, x2, y2]`: the top-left and bottom-right corners, in pixels of that picture. A box may reach past the picture's edges. |
+| `detections[].box_norm` | The same corners clamped to the picture and divided by `width` and `height`, so every value is in `[0, 1]`. `(0, 0)` is the top-left corner of the top-left pixel and `(1, 1)` the bottom-right corner of the bottom-right pixel; x grows to the right and y down. Omitted for a box with no area inside the picture. |
+
+To draw a box on the picture at any other size (a thumbnail, a phone, a
+half-scale stream), multiply `box_norm` by the displayed width and height.
+Records written by agents before `box_norm` existed have no `width`, `height`
+or `box_norm`; `box` there is in pixels of the camera's own resolution, which
+the record does not state. Readers that do not know the new fields ignore them.
+
+#### Accelerators
+
+With `accelerator: auto`, a `yolo_onnx` model runs on an NVIDIA Jetson's GPU
+through TensorRT when the device reports an NVIDIA GPU with CUDA and has the
+TensorRT libraries; every other device, and the `transformers` backend, runs
+on the CPU. `cpu` never uses an accelerator. `tensorrt` requires TensorRT and
+never scores on the CPU: if TensorRT is unavailable the campaign reports
+`error` with the reason and retries.
+
+- **First use.** The agent downloads NVIDIA's Python bindings for the device's
+  TensorRT version once (about 0.85 MB, pinned by SHA-256) and caches them in
+  its inference directory. The TensorRT and CUDA libraries come from the
+  WendyOS image.
+- **The engine.** The device builds a TensorRT engine for the model in the
+  background, at FP16; for `yolo11n` on a Jetson Orin Nano this took 11 to 14
+  minutes and about 2.2 GB of memory. Under `auto` the model keeps detecting
+  on the CPU meanwhile. The engine is cached and reused across restarts and
+  reboots, with no network, until the model, TensorRT version or GPU changes.
+- **When a build starts.** Under `auto`, the first build waits a random delay
+  of up to 20 minutes (`engine.state: scheduled`, with `not_before`), so that
+  devices updated together do not all build at once. Every build then waits
+  until 3 GiB of memory is available (`waiting_for_memory`), and until at
+  least 2 CPUs are idle (`waiting_for_cpu`), checking again every 2 minutes.
+  The campaign's own CPU inference counts as idle, since the engine replaces
+  it. The wait for memory has no limit, and the campaign reports itself
+  degraded while it lasts. The wait for the CPU lasts at most 30 minutes
+  (until `engine.build_by`) and is not degraded: after it, the build starts
+  anyway at the lowest priority (nice 19 and the idle I/O class,
+  `engine.low_priority: true`), so a device kept busy by continuous camera
+  capture still gets its engine. Either wait shows `waiting_since` and
+  `elapsed_seconds`. A `tensorrt` campaign scores nothing until its engine is
+  ready, so it skips the delay.
+- **Memory before the engine.** The model process loads TensorRT and CUDA
+  only when an engine is about to load. Until then, through the delay and the
+  waits, it uses about as much memory as one with no TensorRT; a short-lived
+  child process reads what the engine cache needs from TensorRT and the GPU.
+- **The switch.** Before replacing the CPU, the engine must find the same
+  detections as the CPU on the same camera frames: same labels, IoU of at
+  least 0.8, and scores within 0.05.
+- **Fallback.** If the bindings cannot be fetched, the build fails, the engine
+  disagrees with the CPU, or the accelerated path needs more than 1.5 GiB of
+  memory (TensorRT's libraries, the CUDA context and the engine together), an
+  `auto` campaign stays on the CPU. It is never silent: on a device with a
+  usable GPU, `inference_status.accelerator.degraded` is `true` with a
+  `reason`, and the agent logs a warning. A failed build is not retried for
+  24 hours unless the model changes.
+- **A worker that keeps crashing.** If the model process exits three times
+  within 10 minutes while it has TensorRT, without being asked to and without
+  reporting an error of its own, the model gets no TensorRT for an hour: an
+  `auto` campaign detects on the CPU, degraded, and a `tensorrt` campaign
+  reports `error`. Either way the reason carries the end of the last
+  process's stderr. Whenever the model process exits, `inference_status.error`
+  and the agent log say why, with the end of its stderr.
+
+`inference_status.accelerator` reports what actually runs: `active` (`cpu` or
+`tensorrt`), `degraded` and `reason`, `runtime` and `precision`,
+`gpu_memory_mib` (what the accelerated path took, measured as described
+under Fallback), and `engine` with its `state` (`checking`, `scheduled` with
+`not_before`, `waiting_for_memory` with `waiting_since`, `waiting_for_cpu`
+with `waiting_since` and `build_by`, `queued`, `building` with `started_at`,
+`verifying`, `ready` or `failed` with an `error`) and any `warnings` TensorRT
+printed while loading it. A build or a wait also reports `elapsed_seconds`,
+and a build that stopped waiting for idle CPUs reports `low_priority: true`.
+`inference_status.stats` reports `fps`, inference latency (`infer_ms_p50`,
+`infer_ms_p95`) and `frames_scored`, the frames the model process has scored
+since it started. Each `prediction` record carries `accelerator`, `precision`,
+`infer_ms` and `model_sha256`, because FP16 TensorRT scores differ slightly
+from FP32 CPU scores.
+
+The agent keeps what TensorRT needs in its inference directory: `accel/` holds
+the bindings, `engines/` the built engines (about 9 MB each for `yolo11n`),
+and `cuda-cache/` CUDA's cache of GPU code it compiled, which spares the next
+start compiling it again (about 172 MB with TensorRT on an Orin Nano, and
+never more than 512 MiB).
+
 See [the all-camera people example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataPeople)
 for a complete campaign. Campaign revision hashing now uses revision schema 2,
 which includes inference and notification settings. Existing plans receive new
-revision hashes when redeployed; the YAML `version` remains `1`.
+revision hashes when redeployed; the YAML `version` remains `1`. An absent
+`accelerator` is left out of the hash, so campaigns deployed before the field
+existed keep their revisions and are not re-armed by an agent update. Writing
+`accelerator: auto` explicitly is a new revision, as an explicit
+`backend: transformers` is, although it behaves the same as leaving it out.
 
 ### Notifications
 

@@ -164,10 +164,10 @@ func isDocumentKind(kind string) bool {
 func documentCloudApps(document datadoc.Document) []string {
 	switch body := document.Body.(type) {
 	case data.Campaign:
-		return []string{"campaign:" + body.Name}
+		return []string{data.CampaignAppID(body.Name)}
 	case data.Watch:
 		if body.NotifiesCloud() {
-			return []string{"watch:" + body.Name}
+			return []string{data.WatchAppID(body.Name)}
 		}
 	}
 	return nil

@@ -16,7 +16,7 @@ const InferenceDocumentVersion = 1
 
 // inferenceRevisionSchema versions the field list digestInput covers. Adding a
 // field there is a schema change: bump it with the field.
-const inferenceRevisionSchema = 1
+const inferenceRevisionSchema = 2
 
 // InferenceDocument runs one detector on cameras and emits one event per
 // arrival (spec §7). Its model fields are a campaign's inline inference block,
@@ -64,7 +64,9 @@ func (d InferenceDocument) revision() string {
 		"name":            d.Name,
 		"owner":           d.Owner,
 		"cameras":         cameras,
+		"task":            d.Task,
 		"backend":         d.Backend,
+		"accelerator":     d.Accelerator,
 		"model_file":      d.ModelFile,
 		"model":           d.Model,
 		"model_revision":  d.Revision,

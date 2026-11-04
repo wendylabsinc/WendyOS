@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -19,6 +20,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/credentials"
@@ -30,6 +32,7 @@ type versionService struct {
 	agentpb.UnimplementedWendyAgentServiceServer
 	mu      sync.Mutex
 	resumed []bool
+	states  []tls.ConnectionState
 }
 
 func (s *versionService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
@@ -37,6 +40,7 @@ func (s *versionService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgen
 	info := p.AuthInfo.(credentials.TLSInfo)
 	s.mu.Lock()
 	s.resumed = append(s.resumed, info.State.DidResume)
+	s.states = append(s.states, info.State)
 	s.mu.Unlock()
 	return &agentpb.GetAgentVersionResponse{Version: "test"}, nil
 }
@@ -110,6 +114,9 @@ type integrationPKI struct {
 }
 
 func newIntegrationPKI(t *testing.T) integrationPKI {
+	return integrationPKIWithIntermediate(t, false)
+}
+func integrationPKIWithIntermediate(t *testing.T, intermediate bool) integrationPKI {
 	t.Helper()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -133,6 +140,24 @@ func newIntegrationPKI(t *testing.T) integrationPKI {
 		t.Fatalf("parse CA: %v", err)
 	}
 
+	chainPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+	if intermediate {
+		issuerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		issuer := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "RPC shared issuer"}, NotBefore: caTmpl.NotBefore, NotAfter: caTmpl.NotAfter, KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true}
+		issuerDER, err := x509.CreateCertificate(rand.Reader, issuer, caCert, &issuerKey.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		caCert, err = x509.ParseCertificate(issuerDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		caKey = issuerKey
+		chainPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerDER})) + chainPEM
+	}
 	leaf := func(cn string, eku x509.ExtKeyUsage) (certPEM, keyPEM string) {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -163,8 +188,55 @@ func newIntegrationPKI(t *testing.T) integrationPKI {
 	return integrationPKI{
 		serverCertPEM: serverCertPEM,
 		serverKeyPEM:  serverKeyPEM,
-		caPEM:         string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
+		caPEM:         chainPEM,
 		clientCertPEM: clientCertPEM,
 		clientKeyPEM:  clientKeyPEM,
+	}
+}
+
+// Exercise actual gRPC HTTP/2 RPC dispatch with binary ALPN names and a shared
+// intermediate. Repeat dials exercise the per-handshake credential snapshots.
+func TestNormalAgentRPCKnownIssuers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pki := integrationPKIWithIntermediate(t, true)
+	server, err := mtls.NewServer(pki.serverCertPEM, pki.caPEM, pki.serverKeyPEM, zap.NewNop(), time.Time{}, certs.Scope{}, interceptor.OrgModeOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &versionService{}
+	agentpb.RegisterWendyAgentServiceServer(server, service)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	identity := &config.CertificateInfo{PemCertificate: pki.clientCertPEM, PemPrivateKey: pki.clientKeyPEM, PemCertificateChain: pki.caPEM}
+	for range 2 {
+		conn, err := grpcclient.ConnectWithTLSAndPins(context.Background(), listener.Addr().String(), identity, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err = conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+		cancel()
+		conn.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if len(service.states) != 2 {
+		t.Fatalf("RPCs=%d", len(service.states))
+	}
+	for _, state := range service.states {
+		app, hashes := meshalpn.Decode(state.NegotiatedProtocol)
+		if app != "h2" || len(hashes) != 2 {
+			t.Fatalf("application=%q CA hashes=%d", app, len(hashes))
+		}
+		if !state.DidResume && len(state.PeerCertificates) != 1 {
+			t.Fatalf("received %d certificates", len(state.PeerCertificates))
+		}
 	}
 }

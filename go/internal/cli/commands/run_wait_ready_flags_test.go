@@ -186,6 +186,43 @@ func TestRunCommandRejectsWaitReadyEarly(t *testing.T) {
 	}
 }
 
+// The MCP run tool waits by default only where this reports nil, so it must
+// refuse what runCommand refuses: a deploy the CLI accepts without
+// --wait-ready must not fail because MCP asked for the wait.
+func TestWaitReadyUnsupportedForMCP(t *testing.T) {
+	buildHost := ""
+	loadBuildHostDefault = func() (string, error) { return buildHost, nil }
+	t.Cleanup(func() { loadBuildHostDefault = configBuildHostDefault })
+	dockerfile := "FROM scratch\n"
+	for _, tc := range []struct {
+		name, buildType, host, want string
+		files                       map[string]string
+	}{
+		{name: "dockerfile", files: map[string]string{"Dockerfile": dockerfile, "wendy.json": `{"appId":"a"}`}},
+		{name: "python without wendy.json", files: map[string]string{"requirements.txt": "flask\n"}},
+		{name: "compose", files: map[string]string{"docker-compose.yml": "services:\n  web:\n    image: nginx\n"}, want: "Compose projects"},
+		{name: "multi-service", files: map[string]string{"Dockerfile": dockerfile, "wendy.json": `{"appId":"a","services":{"api":{"context":"api"}}}`}, want: "multi-service"},
+		{name: "native command", files: map[string]string{"wendy.json": `{"appId":"a","run":{"command":"./serve"}}`}, want: "native commands"},
+		{name: "host swift", files: map[string]string{"Package.swift": "// swift\n"}, want: "Swift packages"},
+		{name: "swift build type", buildType: "swift", files: map[string]string{"Package.swift": "// swift\n", "Dockerfile": dockerfile}, want: "Swift packages"},
+		{name: "default build host", host: "spark", files: map[string]string{"Dockerfile": dockerfile}, want: "--build-host"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buildHost = tc.host
+			err := waitReadyUnsupportedForMCP(writeProject(t, tc.files), tc.buildType)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // `--detach --wait-ready --json` promises exactly one JSON object on stdout,
 // so the run's non-interactive build progress (stdout by default) must move.
 func TestWaitReadyJSONStdoutGuard(t *testing.T) {

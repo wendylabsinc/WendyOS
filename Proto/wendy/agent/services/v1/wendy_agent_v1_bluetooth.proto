@@ -24,6 +24,10 @@ message BluetoothCommand {
         WifiSetPriorityCommand wifi_set_priority = 15;
         WifiReorderCommand wifi_reorder = 16;
         WifiForgetCommand wifi_forget = 17;
+        SetupStatusCommand setup_status = 18;
+        SetupEnrollCommand setup_enroll = 19;
+        SetupHello setup_hello = 20;
+        SetupSealed setup_sealed = 21;
     }
 }
 
@@ -105,6 +109,10 @@ message BluetoothResponse {
         WifiSetPriorityResponse wifi_set_priority = 16;
         WifiReorderResponse wifi_reorder = 17;
         WifiForgetResponse wifi_forget = 18;
+        SetupStatusResponse setup_status = 19;
+        SetupEnrollResponse setup_enroll = 20;
+        SetupHello setup_hello = 21;
+        SetupSealed setup_sealed = 22;
     }
 }
 
@@ -242,3 +250,35 @@ message BluetoothDeviceInfo {
     string device_type = 7;
     optional string icon = 8;
 }
+
+// Unenrolled-device setup only, on service 7565e9eb-4c20-4b67-9272-d708b397b632,
+// LE CoC PSM 130. Never dispatch these through the authenticated management service.
+message SetupStatusCommand { bool request_nonce = 1; }
+message SetupStatusResponse {
+    bool enrolled = 1;
+    bool acme_supported = 2;
+    string principal_uri = 3;
+    string device_class = 4;
+    string nonce = 5;
+    string hardware_id = 6;
+    bool lite_supported = 7;
+    uint32 max_config_size = 8;
+}
+message SetupEnrollCommand {
+    string cloud_host = 1;
+    string directory_url = 2;
+    string device_id = 3;
+    string eab_key_id = 4;
+    string eab_hmac_key = 5;
+    bytes lite_config = 6;
+}
+message SetupEnrollResponse { string principal_uri = 1; bool pending = 2; }
+// Ephemeral X25519 handshake. HKDF-SHA256 salt is client_public || server_public,
+// info "wendy-ble-setup-v1", 64 bytes: client write key then server write key.
+// This protects against passive listeners, not active impersonation. Setup has
+// the same physical-proximity trust as headless BLE Just Works pairing.
+message SetupHello { bytes public_key = 1; }
+// AES-256-GCM combined nonce || ciphertext || tag. Nonce is 4 zero bytes plus
+// a big-endian uint64 request counter starting at 1; response echoes its counter.
+// Only sealed messages are accepted after the hello, with strictly ordered counters.
+message SetupSealed { bytes data = 1; }

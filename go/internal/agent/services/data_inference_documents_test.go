@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -124,6 +125,42 @@ func TestInferenceDocumentRunsAndTriggersItsCollection(t *testing.T) {
 	}
 	if got := service.collectionsTriggeredBy("front-door"); len(got) != 1 || !got["clips"] {
 		t.Fatalf("audience = %v", got)
+	}
+}
+
+// A document's prediction carries what a campaign's does: the picture's size,
+// the normalised box beside the pixel box, and which engine scored the frame.
+func TestInferenceDocumentRecordsPictureAndEngine(t *testing.T) {
+	service, factory, sender := newDocumentTestService(t)
+	startDocumentTestService(t, service, factory, sender)
+	saveDocument(t, service, testInferenceDocumentYAML)
+	session := receiveInference(t, factory.sessions)
+	result := personResult(receiveInference(t, session.inputs))
+	result.Width, result.Height, result.Engine = 640, 480, "tensorrt"
+	session.results <- result
+	var attributes []byte
+	eventually(t, "the arrival event", func() bool {
+		events, _, _, err := service.manager.DeviceEvents(inferenceAppPrefix+"front-door", "front-door", "", true)
+		if err != nil || len(events) != 1 {
+			return false
+		}
+		attributes, err = json.Marshal(events[0].Attributes)
+		return err == nil
+	})
+	var got struct {
+		Inference   string `json:"inference"`
+		Width       int    `json:"width"`
+		Height      int    `json:"height"`
+		Accelerator string `json:"accelerator"`
+		Detections  []struct {
+			BoxNorm *[4]float64 `json:"box_norm"`
+		} `json:"detections"`
+	}
+	if err := json.Unmarshal(attributes, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Inference != "front-door" || got.Width != 640 || got.Height != 480 || got.Accelerator != "tensorrt" || len(got.Detections) != 1 || got.Detections[0].BoxNorm == nil {
+		t.Fatalf("prediction attributes: %s", attributes)
 	}
 }
 
