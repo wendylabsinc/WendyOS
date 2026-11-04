@@ -44,6 +44,7 @@ class GitHub:
         require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo), "Invalid repository")
         self.repo, self.token = repo, token
         self.writer_token = writer_token
+        self.artifacts = {}
 
     def request(self, path, data=None, binary=False):
         req = urllib.request.Request(
@@ -72,22 +73,29 @@ class GitHub:
         require(obj.get("type") == "file" and obj.get("encoding") == "base64", "Not a regular source file")
         return base64.b64decode(obj["content"], validate=False).decode("utf-8")
 
-    def artifact(self, run):
-        name = f"swift-e2e-tests.gh{run['id']}.local-ubuntu-24.{run['run_attempt']:04d}"
+    def artifact(self, run, target="local-ubuntu-24"):
+        name = f"swift-e2e-tests.gh{run['id']}.{target}.{run['run_attempt']:04d}"
+        # The history walk revisits runs, so read each artifact once per process.
+        if name not in self.artifacts:
+            self.artifacts[name] = self.read_artifact(run, name)
+        return self.artifacts[name]
+
+    def read_artifact(self, run, name):
         listing = self.get(f"actions/runs/{run['id']}/artifacts?per_page=100")
         require(listing["total_count"] <= 100, "Too many source artifacts")
         matches = [a for a in listing["artifacts"] if a["name"] == name and not a["expired"]]
-        require(len(matches) == 1 and matches[0]["size_in_bytes"] <= MAX_BYTES, "Missing/ambiguous Ubuntu artifact")
+        require(len(matches) == 1 and matches[0]["size_in_bytes"] <= MAX_BYTES, f"Missing/ambiguous artifact {name}")
         raw = self.request(f"actions/artifacts/{matches[0]['id']}/zip", binary=True)
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             entries = archive.infolist()
             names = [e.filename for e in entries]
             require(len(names) == len(set(names)) and len(names) <= 10000, "Ambiguous artifact entries")
-            require(sum(e.file_size for e in entries) <= MAX_BYTES, "Artifact exceeds size limit")
             # Do not extract anything. Only bounded UTF-8 evidence files are read.
-            files = {n: archive.read(n).decode("utf-8") for n in names
-                     if n in ("attempt.json", "test-results.xml") or
-                     re.fullmatch(r"observations/[a-z0-9-]+/prints-command-help/(test.json|recording.md)", n)}
+            # The bound skips other entries because macOS logs alone exceed it.
+            evidence = [e for e in entries if e.filename in ("attempt.json", "test-results.xml") or
+                        re.fullmatch(r"observations/[a-z0-9-]+/prints-command-help/(test.json|recording.md)", e.filename)]
+            require(sum(e.file_size for e in evidence) <= MAX_BYTES, "Artifact exceeds size limit")
+            files = {e.filename: archive.read(e.filename).decode("utf-8") for e in evidence}
         manifest = json.loads(files.get("attempt.json", "{}"))
         require(manifest.get("git", {}).get("commit") == run["head_sha"] and
                 manifest.get("git", {}).get("dirty") is False and
@@ -104,6 +112,10 @@ def cases(files):
     return list(ET.fromstring(xml).iter("testcase"))
 
 
+def failures(files):
+    return [(c, f) for c in cases(files) for f in c.findall("failure") + c.findall("error")]
+
+
 def identity(case):
     return {"suite": case.get("classname"), "test": case.get("name")}
 
@@ -115,9 +127,9 @@ def verify_results(change, xml):
 
 
 def candidate(files, source):
-    failures = [(c, f) for c in cases(files) for f in c.findall("failure") + c.findall("error")]
-    require(len(failures) == 1, "Expected exactly one failing assertion")
-    case, failure = failures[0]
+    failed = failures(files)
+    require(len(failed) == 1, "Expected exactly one failing assertion")
+    case, failure = failed[0]
     require(case.get("name") == "`prints command help`()", "Not a help test")
     match = re.fullmatch(r'Expectation failed: stdout\.contains\("([^"\n]+)"\) \(error\)',
                          failure.get("message") or failure.text or "")
@@ -176,6 +188,16 @@ def replace_literal(text, change):
     return text.replace('"' + change["old"] + '"', '"' + change["new"] + '"', 1)
 
 
+def same_single_failure(api, run):
+    # CLI help is cross-platform, so one synopsis change fails both jobs. macOS
+    # expands the expectation in its message, so only the test identity can match.
+    ubuntu = failures(api.artifact(run))
+    if len(ubuntu) != 1:
+        return False
+    mac = failures(api.artifact(run, "local-macos"))
+    return len(mac) == 1 and identity(mac[0][0]) == identity(ubuntu[0][0])
+
+
 def outcome(api, run):
     require(run.get("event") == "push" and run.get("head_branch") == "main" and
             run.get("head_repository", {}).get("full_name") == api.repo and
@@ -187,10 +209,13 @@ def outcome(api, run):
     require(jobs["total_count"] <= 100, "Too many jobs")
     ubuntu = [j for j in jobs["jobs"] if j["name"] == "Local: Ubuntu 24"]
     mac = [j for j in jobs["jobs"] if j["name"] == "Local: macOS 26"]
-    require(len(ubuntu) == len(mac) == 1 and mac[0]["conclusion"] in ("success", "skipped"),
+    require(len(ubuntu) == len(mac) == 1 and mac[0]["conclusion"] in ("success", "skipped", "failure"),
             "Ambiguous jobs or a separate macOS failure")
     status = ubuntu[0]["conclusion"]
     require(status in ("success", "failure"), "Ubuntu result is incomplete")
+    # A macOS failure next to a green Ubuntu job is never the green boundary of a chain.
+    require(mac[0]["conclusion"] != "failure" or (status == "failure" and same_single_failure(api, run)),
+            "Ambiguous jobs or a separate macOS failure")
     return status
 
 

@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,27 @@ def evidence(failed=True):
                 "\n### stderr\n\n```text\n\n```\n"}
 
 
+def mac_evidence(*failing):
+    # Message shape from macOS artifact swift-e2e-tests.gh41095365784.local-macos.0001.
+    # The same failure Ubuntu reports as stdout.contains("...") expands stdout here.
+    message = f'Expectation failed: (stdout → "Usage:\n  {NEW}\n").contains("{OLD}") (error)'
+    root = ET.Element("testsuite")
+    ET.SubElement(root, "testcase", classname=SUITE, name="`rejects bad ports`()")
+    for suite, test in failing or ((SUITE, TEST),):
+        cases = [c for c in root.iter("testcase") if (c.get("classname"), c.get("name")) == (suite, test)]
+        case = cases[0] if cases else ET.SubElement(root, "testcase", classname=suite, name=test)
+        ET.SubElement(case, "failure", message=message)
+    return {"test-results.xml": ET.tostring(root, encoding="unicode")}
+
+
+def archive(data):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as z:
+        for name, text in data.items():
+            z.writestr(name, text)
+    return stream.getvalue()
+
+
 def run(number, sha):
     return {"id": number, "head_sha": sha, "event": "push", "head_branch": "main",
             "head_repository": {"full_name": REPO}, "path": ".github/workflows/swift-e2e-tests.yml",
@@ -78,6 +100,7 @@ class API:
         self.fail_write = None
         self.verification_status = "success"
         self.calls = []
+        self.mac = {}
 
     def source(self, sha, path):
         assert path == PATH
@@ -99,7 +122,7 @@ class API:
             if path == f"actions/runs/{source_run['id']}/attempts/1/jobs?per_page=100":
                 return {"total_count": 2, "jobs": [
                     {"name": "Local: Ubuntu 24", "conclusion": source_run["conclusion"]},
-                    {"name": "Local: macOS 26", "conclusion": "skipped"}]}
+                    {"name": "Local: macOS 26", "conclusion": self.mac.get(source_run["id"], "skipped")}]}
         if path == "git/ref/heads/main":
             return {"object": {"sha": self.main}}
         if path.startswith("actions/workflows/"):
@@ -133,6 +156,100 @@ class API:
             self.prs.append({"number": 100, "title": body["title"], "body": body["body"]})
             return self.prs[-1]
         return {"sha": "f" * 40}
+
+
+class ArchivedAPI(r.GitHub):
+    """The real artifact() over zipped fixtures. mac_files maps run ID to its macOS evidence."""
+
+    def __init__(self, fixture, mac_files):
+        super().__init__(REPO, "fixture-not-a-token")
+        self.fixture, self.mac_files, self.downloads = fixture, mac_files, []
+        self.source = fixture.source
+        self.extra_files = {}
+
+    def get(self, path):
+        match = re.fullmatch(r"actions/runs/(\d+)/artifacts\?per_page=100", path)
+        if not match:
+            return self.fixture.get(path)
+        number = int(match[1])
+        names = [f"swift-e2e-tests.gh{number}.local-ubuntu-24.0001"]
+        if number in self.mac_files:
+            names.append(f"swift-e2e-tests.gh{number}.local-macos.0001")
+        return {"total_count": len(names), "artifacts": [
+            {"id": name, "name": name, "expired": False, "size_in_bytes": 123} for name in names]}
+
+    def request(self, path, binary=False):
+        self.downloads.append(path)
+        name = re.fullmatch(r"actions/artifacts/(.+)/zip", path)[1]
+        number = int(re.search(r"gh(\d+)", name)[1])
+        source_run = next(c for c in self.fixture.runs if c["id"] == number)
+        files = self.mac_files[number] if "local-macos" in name else evidence(number != 1)
+        return archive({**files, **self.extra_files, "attempt.json": json.dumps({
+            "git": {"commit": source_run["head_sha"], "dirty": False},
+            "github": {"repository": REPO, "runID": str(number), "runAttempt": "1"},
+            "test": {"filters": ["WendyE2ETests"]}})})
+
+
+class MacOSFailureTests(unittest.TestCase):
+    OTHER_TEST = (SUITE, "`rejects bad ports`()")
+    OTHER_SUITE = ("WendyE2ETests.`'wendy cloud status'`", TEST)
+    SAME = (SUITE, TEST)
+
+    def prepare(self, mac, mac_files):
+        fixture = API()
+        fixture.mac = mac
+        api = ArchivedAPI(fixture, mac_files)
+        return api, r.prepare(api, 3)
+
+    def test_same_single_failure_on_both_platforms_keeps_the_repair(self):
+        api, proposal = self.prepare({3: "failure", 2: "failure", 1: "success"},
+                                     {3: mac_evidence(), 2: mac_evidence()})
+        self.assertEqual(proposal, r.prepare(API(), 3))
+        # The source run is walked again, but both artifacts of a red run are read once.
+        self.assertEqual(len(api.downloads), 5)
+        self.assertEqual(len(set(api.downloads)), 5)
+
+    def test_macos_only_or_different_failure_skips_across_the_chain(self):
+        for name, mac, files in (
+            ("missing artifact", {3: "failure"}, {}),
+            ("artifact missing further down the chain", {3: "failure", 2: "failure"}, {3: mac_evidence()}),
+            ("different test", {3: "failure"}, {3: mac_evidence(self.OTHER_TEST)}),
+            ("different suite", {3: "failure"}, {3: mac_evidence(self.OTHER_SUITE)}),
+            ("additional test", {3: "failure"}, {3: mac_evidence(self.SAME, self.OTHER_TEST)}),
+            ("additional assertion", {3: "failure"}, {3: mac_evidence(self.SAME, self.SAME)}),
+            ("no failing case", {3: "failure"}, {3: evidence(False)}),
+            ("no results", {3: "failure"}, {3: {}}),
+            ("different test further down the chain", {3: "failure", 2: "failure"},
+             {3: mac_evidence(), 2: mac_evidence(self.OTHER_TEST)}),
+            ("cancelled job", {3: "cancelled"}, {3: mac_evidence()}),
+        ):
+            with self.subTest(name), self.assertRaises(r.Skip):
+                self.prepare(mac, files)
+
+    def test_macos_only_failure_at_the_green_boundary_is_not_green(self):
+        fixture = API()
+        fixture.mac = {1: "failure"}
+        api = ArchivedAPI(fixture, {1: mac_evidence()})
+        with self.assertRaisesRegex(r.Skip, "separate macOS failure"):
+            r.prepare(api, 3)
+        self.assertFalse([path for path in api.downloads if ".gh1." in path])
+
+    def test_macos_only_failure_of_the_source_run_skips(self):
+        fixture = API()
+        fixture.mac = {3: "failure"}
+        fixture.runs[0]["conclusion"] = "success"
+        with self.assertRaises(r.Skip):
+            r.prepare(ArchivedAPI(fixture, {3: mac_evidence()}), 3)
+
+    def test_only_read_evidence_counts_toward_the_size_limit(self):
+        # Real macOS artifacts hold 44-48 MB of logs and only about 485 KB of evidence.
+        api = ArchivedAPI(API(), {3: mac_evidence()})
+        api.extra_files = {"logs/agent.log": "x" * (r.MAX_BYTES + 1)}
+        self.assertNotIn("logs/agent.log", api.artifact(run(3, CURRENT), "local-macos"))
+        api.artifacts.clear()
+        api.extra_files = {"test-results.xml": " " * (r.MAX_BYTES + 1)}
+        with self.assertRaisesRegex(r.Skip, "exceeds size limit"):
+            api.artifact(run(3, CURRENT), "local-macos")
 
 
 class RepairTests(unittest.TestCase):
@@ -431,19 +548,13 @@ class RepairTests(unittest.TestCase):
         api.get = lambda path: {"total_count": 1, "artifacts": [{"id": 1, "expired": False,
             "name": "swift-e2e-tests.gh3.local-ubuntu-24.0001", "size_in_bytes": 123}]}
 
-        def archive(data):
-            stream = io.BytesIO()
-            with zipfile.ZipFile(stream, "w") as z:
-                for name, text in data.items():
-                    z.writestr(name, text)
-            return stream.getvalue()
-
         api.request = lambda path, binary: archive({**evidence(), "attempt.json": json.dumps(manifest)})
         self.assertEqual(r.candidate(api.artifact(run(3, CURRENT)), lambda p: SOURCE)["new"], NEW)
         for key, value in (("runID", "4"), ("runAttempt", "2"), ("repository", "fork/other")):
             bad = copy.deepcopy(manifest)
             bad["github"][key] = value
             api.request = lambda path, binary, bad=bad: archive({**evidence(), "attempt.json": json.dumps(bad)})
+            api.artifacts.clear()
             with self.subTest(key=key), self.assertRaises(r.Skip):
                 api.artifact(run(3, CURRENT))
 

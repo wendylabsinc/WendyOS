@@ -20,7 +20,11 @@ commits. Every commit from the source run back to a preceding green must have
 exactly one complete first-attempt E2E run. All red artifacts must show the same
 single failed assertion; the green artifact must show that exact test passed.
 Pending, cancelled, missing, rerun, expired or ambiguous evidence is skipped.
-Ubuntu must fail and macOS must pass or be explicitly skipped. The first failing
+Ubuntu must fail. macOS must pass, be explicitly skipped, or fail the same test:
+its artifact for the same attempt must show exactly one failing assertion, with
+the suite and test identity of Ubuntu's. Messages are not compared, because macOS
+expands them. A macOS-only failure, a missing macOS artifact, or a different or
+additional macOS failure is skipped, at every commit of the walk. The first failing
 commit must identify one merged, same-repository, non-bot PR targeting main.
 This intentionally cannot attribute the old cancelled-run interval.
 
