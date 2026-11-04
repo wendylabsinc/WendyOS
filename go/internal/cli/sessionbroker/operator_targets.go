@@ -107,7 +107,7 @@ func newOperatorTargets(session *operatormesh.Session, adjacent *grpc.ClientConn
 				return nil, err
 			}
 			if current != address {
-				return nil, fmt.Errorf("mesh agent endpoint changed; resolve the selector again")
+				return nil, fmt.Errorf("the device advertised a different management address; retry the command")
 			}
 			return r.packetDial(ctx, "tcp", address)
 		}))
@@ -119,7 +119,7 @@ func (r *operatorTargets) adjacentPeer() (*grpc.ClientConn, meshid.Device, error
 	if r.currentAdjacent != nil {
 		return r.currentAdjacent()
 	}
-	return nil, meshid.Device{}, errors.New("operator mesh has no authenticated adjacent peer")
+	return nil, meshid.Device{}, errors.New("this computer has no authenticated connection to a nearby Wendy Net router; wait for automatic discovery and retry")
 }
 
 func (r *operatorTargets) lookupTopology(ctx context.Context, target meshid.Device) (*pb.LocalMeshTopology, error) {
@@ -205,7 +205,7 @@ func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func()
 	}
 	operator, err := operatorPrincipal(r.certificate)
 	if err != nil || target.Tenant() != operator.Tenant() {
-		return nil, nil, status.Error(codes.InvalidArgument, "mesh target differs from the selected operator tenant")
+		return nil, nil, status.Error(codes.InvalidArgument, "the selected mesh device belongs to a different organization; switch to its sign-in profile")
 	}
 	adjacentConn, adjacent, err := r.adjacentPeer()
 	if err != nil && r.localSnapshot == nil {
@@ -222,7 +222,7 @@ func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func()
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
-		return nil, nil, status.Error(codes.Unavailable, "operator attachment is closing")
+		return nil, nil, status.Error(codes.Unavailable, "the local Wendy Net connection is closing; retry after reconnecting")
 	}
 	entry := r.entries[key]
 	if entry == nil {

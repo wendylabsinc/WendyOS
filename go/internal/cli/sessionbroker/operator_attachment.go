@@ -83,7 +83,7 @@ func (a *operatorAttachment) snapshot() (*operatorAttachmentState, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.current == nil {
-		return nil, status.Error(codes.Unavailable, "operator mesh attachment is reconnecting")
+		return nil, status.Error(codes.Unavailable, "this computer is reconnecting to Wendy Net; retry shortly")
 	}
 	return a.current, nil
 }
@@ -103,7 +103,7 @@ func (a *operatorAttachment) adjacent() (*grpc.ClientConn, meshid.Device, error)
 	}
 	peer, live := current.session.AdjacentPeer()
 	if !live {
-		return nil, meshid.Device{}, status.Error(codes.Unavailable, "adjacent carrier is reconnecting")
+		return nil, meshid.Device{}, status.Error(codes.Unavailable, "the connection to a nearby router is reconnecting; retry shortly")
 	}
 	for _, manifest := range current.session.Snapshot().Devices {
 		owner, parseErr := manifest.Peer(peer.Tenant())
