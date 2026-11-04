@@ -14,6 +14,15 @@ on:
         required: true
         type: string
 
+      compatibility_only_trial:
+        description: "Approved historical two-case experiment only; no publisher"
+        type: boolean
+        default: false
+      frozen_trial_sha256:
+        description: "Pre-call frozen compatibility-only input manifest digest"
+        type: string
+        default: ""
+
 concurrency:
   # Title/body edits have no model work and must not cancel an active review.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ (github.event.action != 'edited' || github.event.changes.base != null) && (github.event.pull_request.number || inputs.pr_number) || github.run_id }}
@@ -302,10 +311,11 @@ jobs:
           python3 .github/scripts/review_sources_test.py
           python3 .github/scripts/api_review_workflow_test.py
           python3 .github/scripts/api_review_compatibility_test.py
+          python3 .github/scripts/compatibility_trial_test.py
 
   validate-candidate:
     name: Validate candidate API review without publication
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.compatibility_only_trial
     needs: validate-candidate-tests
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
@@ -396,5 +406,61 @@ jobs:
         with:
           name: api-review-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/api-review-result.json
+          if-no-files-found: error
+          retention-days: 14
+
+  compatibility-only-trial:
+    name: Historical compatibility-only two-case trial
+    if: github.event_name == 'workflow_dispatch' && inputs.compatibility_only_trial && github.run_attempt == 1
+    needs: validate-candidate-tests
+    runs-on: runs-on,runner=2cpu-linux-x64
+    permissions:
+      contents: read
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      FROZEN_TRIAL_SHA256: ${{ inputs.frozen_trial_sha256 }}
+    steps:
+      # Explicit manual experiment, immutable dispatched code; never automatic.
+      - name: Check out dispatched trial harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned SDK
+        run: pip install --quiet anthropic==0.97.0
+      - name: Prepare and verify frozen historical evidence without provider credentials
+        run: |
+          set -euo pipefail
+          test "$PR_NUMBER" = 2657
+          test "$EXPECTED_HEAD_SHA" = dd9bc3d3684040341fc44b6ed1dd63bafa0c5544
+          python3 .github/scripts/compatibility_trial.py prepare \
+            --repository . --directory "$RUNNER_TEMP/compatibility-only-trial"
+          python3 - "$RUNNER_TEMP/compatibility-only-trial" <<'PYVERIFY'
+          import os, sys
+          sys.path.insert(0, '.github/scripts')
+          from pathlib import Path
+          from compatibility_trial import verify
+          verify(Path(sys.argv[1]), os.environ['FROZEN_TRIAL_SHA256'])
+          PYVERIFY
+      - name: Make exactly two evidence calls without repair or reconciliation
+        env:
+          # No GitHub token or write permissions, and no publisher in this job.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 .github/scripts/compatibility_trial.py run \
+            --directory "$RUNNER_TEMP/compatibility-only-trial" \
+            --expected-digest "$FROZEN_TRIAL_SHA256"
+      - name: Preserve frozen inputs and actual trial outputs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compatibility-only-trial-${{ github.run_id }}
+          path: ${{ runner.temp }}/compatibility-only-trial/
           if-no-files-found: error
           retention-days: 14
