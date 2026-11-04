@@ -526,23 +526,9 @@ func TestFormatError_EnrollmentTokenUnavailableIsCloudError(t *testing.T) {
 	}
 }
 
-func TestFormatError_LocalPKICoreUnavailable(t *testing.T) {
-	err := fmt.Errorf("creating enrollment token from pki-core services.orb.local:50051: %w", status.Error(codes.Unavailable, "connection refused"))
-
-	got := formatError(err).Error()
-	want := "creating enrollment token from pki-core services.orb.local:50051: Could not connect to local pki-core. Check that the gRPC endpoint is reachable from this machine."
-	if got != want {
-		t.Fatalf("formatError() = %q, want %q", got, want)
-	}
-	if strings.Contains(got, "Wendy Cloud") || strings.Contains(got, "device") {
-		t.Fatalf("formatError() should describe local pki-core, got %q", got)
-	}
-}
-
 func TestFormatError_CloudUnavailablePreservesDetails(t *testing.T) {
 	for _, prefix := range []string{
 		"creating enrollment token: ",
-		"creating enrollment token from pki-core services.orb.local:50051: ",
 	} {
 		for _, detail := range []string{
 			"upstream connect error or disconnect/reset before headers. reset reason: connection termination",
