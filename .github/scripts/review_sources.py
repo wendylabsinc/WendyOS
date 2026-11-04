@@ -1,7 +1,9 @@
 """Fixed generator-output policy and complete Git patch parsing for AI reviews.
 
-Only paths produced by the repository's actual protocol generators are excluded.
-PR attributes, headers, vendor roots and lockfiles never define review policy.
+Exclusion is a path and suffix policy over the locations the repository's protocol
+generators write to. It does not confirm a file came from a generator, and most
+excluded outputs have no regeneration check. PR attributes, headers, vendor roots
+and lockfiles never define review policy.
 """
 from __future__ import annotations
 
