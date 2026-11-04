@@ -14,11 +14,28 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+      - name: Resolve current trusted main automation
+        id: trusted-automation
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          script: |
+            // SECURITY: PR base.sha can retain an old target snapshot that lacks
+            // this job's scripts. Select only this repository's current main,
+            // never PR-controlled source.
+            const {data} = await github.rest.git.getRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: "heads/main"
+            });
+            const sha = data.object?.sha;
+            if (data.object?.type !== "commit" || typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) {
+              throw new Error("Could not resolve an immutable trusted main commit");
+            }
+            core.info(`Trusted docs automation commit: ${sha}`);
+            core.setOutput("sha", sha);
+
+      - name: Check out pinned trusted main review automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trusted-automation.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -75,6 +92,7 @@ jobs:
           import os
           import pathlib
           import re
+          import subprocess
           import sys
 
           sys.path.insert(0, str(pathlib.Path('.github/scripts').resolve()))
@@ -166,7 +184,10 @@ jobs:
                   candidate.relative_to(docs_root)
               except ValueError:
                   return ''
-              if not candidate.is_file():
+              # The model reads documents from the PR head, not this checkout.
+              blob = subprocess.run(['git', 'cat-file', '-t', f'{os.environ["EXPECTED_HEAD_SHA"]}:{docs_prefix}{path}'],
+                                    capture_output=True, text=True)
+              if blob.stdout.strip() != 'blob':
                   return ''
               return f'{docs_prefix}{path}'
 
@@ -444,7 +465,11 @@ jobs:
 
           if os.environ.get('SOURCE_ONLY_REVIEW') == 'true':
               if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
-                  raise RuntimeError('Generated-only review skipped; prior documentation blockers remain open')
+                  raise RuntimeError(
+                      'Generated-only review skipped; prior documentation blockers remain open. A later push '
+                      'with a non-generated change gets a normal review, or a maintainer can delete the bot '
+                      'comment after triage.'
+                  )
               print('Generated-only review skipped; prior comments preserved')
               raise SystemExit(0)
 
