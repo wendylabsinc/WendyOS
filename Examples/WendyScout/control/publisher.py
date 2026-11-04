@@ -1,7 +1,7 @@
 """Issues-only publisher. Receives trusted replay records, never free-form model posts."""
 
-import datetime, hashlib, json, os, pathlib, re, stat, ssl, time, urllib.error, urllib.request
-from common import NoRedirect, save, scrub, CANCEL
+import hashlib, json, os, pathlib, re, stat, ssl, time, urllib.error, urllib.request
+from common import NoRedirect, CANCEL
 
 
 class GitHub:
@@ -80,8 +80,6 @@ class Publisher:
             repo, self.root / "secrets/github-issues-token"
         )
         self.repo = repo
-        self.repository_key = hashlib.sha256(repo.encode()).hexdigest()
-        self.ledger = self.root / ("publisher." + self.repository_key + ".json")
 
     @staticmethod
     def fingerprint(finding):
@@ -101,32 +99,9 @@ class Publisher:
         ):
             raise ValueError("Only trusted twice-replayed findings are publishable")
         fp = self.fingerprint(finding)
-        record = (
-            json.loads(self.ledger.read_text())
-            if self.ledger.exists()
-            else {"attempts": [], "published": {}}
-        )
-        if fp in record["published"]:
-            return {
-                "status": "duplicate-local",
-                "fingerprint": fp,
-                "repository_key": self.repository_key,
-            }
-        versions = [r["version"] for r in finding["results"][:2]]
         failure_ids = [r.get("failure_identity") for r in finding["results"][1::2]]
         marker = "<!-- wendy-scout:" + fp + " -->"
         title = f"{finding['probe']}: {finding['kind']} {finding.get('field', '')} [{fp[:12]}]"
-        now = datetime.datetime.now(datetime.timezone.utc)
-        today = now.date().isoformat()
-        recent = record["attempts"]
-        if sum(x["day"] == today for x in recent) >= 2 or any(
-            now.timestamp() - x["time"] < 3600 for x in recent
-        ):
-            return {
-                "status": "rate-limited",
-                "fingerprint": fp,
-                "repository_key": self.repository_key,
-            }
 
         def matches(issue):
             body = issue.get("body") or ""
@@ -148,18 +123,6 @@ class Publisher:
                 "status": "duplicate",
                 "issue": duplicate["html_url"],
                 "fingerprint": fp,
-                "repository_key": self.repository_key,
-            }
-        now = datetime.datetime.now(datetime.timezone.utc)
-        today = now.date().isoformat()
-        recent = record["attempts"]
-        if sum(x["day"] == today for x in recent) >= 2 or any(
-            now.timestamp() - x["time"] < 3600 for x in recent
-        ):
-            return {
-                "status": "rate-limited",
-                "fingerprint": fp,
-                "repository_key": self.repository_key,
             }
         try:
             self.transport.request("GET", "labels/ai-found")
@@ -232,19 +195,13 @@ class Publisher:
             raise ValueError(
                 "Replay evidence exceeds issue body limit; publication held"
             )
-        recent.append({"day": today, "time": now.timestamp(), "fingerprint": fp})
-        record["attempts"] = recent[-20:]
-        save(self.ledger, record)
         issue = self.transport.request(
             "POST",
             "issues",
             {"title": title, "body": body, "labels": ["ai-found"]},
         )
-        record["published"][fp] = issue["html_url"]
-        save(self.ledger, record)
         return {
             "status": "published",
             "issue": issue["html_url"],
             "fingerprint": fp,
-            "repository_key": self.repository_key,
         }

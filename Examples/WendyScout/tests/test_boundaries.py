@@ -321,20 +321,25 @@ class PublisherTests(unittest.TestCase):
     def test_local_fake_publication_label_and_duplicate(self):
         d = self.pub.publish(self.finding())
         self.assertEqual(d["status"], "published")
-        self.assertEqual(self.pub.publish(self.finding())["status"], "duplicate-local")
+        self.assertEqual(self.pub.publish(self.finding())["status"], "duplicate")
         posts = [x for x in FakeGitHub.calls if x[0] == "POST"]
         self.assertEqual([x[1].split("/")[-1] for x in posts], ["labels", "issues"])
         self.assertEqual(posts[-1][2]["labels"], ["ai-found"])
         self.assertIn("WendyOS-0.17.0", posts[-1][2]["body"])
 
-    def test_closed_duplicate_and_rate_limit(self):
+    def test_closed_duplicate(self):
         self.pub.publish(self.finding())
-        self.pub.ledger.unlink()
         FakeGitHub.issues[0]["state"] = "closed"
         self.assertEqual(self.pub.publish(self.finding())["status"], "duplicate")
-        self.pub.publish(self.finding("gpuArch"))
         self.assertEqual(
-            self.pub.publish(self.finding("cpuArchitecture"))["status"], "rate-limited"
+            len(
+                [
+                    x
+                    for x in FakeGitHub.calls
+                    if x[0] == "POST" and x[1].endswith("/issues")
+                ]
+            ),
+            1,
         )
 
     def test_second_page_duplicate_and_distinct_failure_identity(self):
@@ -390,15 +395,6 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(
             [r["output"]["present"] for r in observed], [True, False, True, False]
         )
-
-    def test_repository_override_has_separate_ledger_and_rate_state(self):
-        self.pub.publish(self.finding())
-        FakeGitHub.issues = []
-        other = publisher.Publisher(
-            self.temp.name, repo="example/other", transport=self.pub.transport
-        )
-        self.assertNotEqual(self.pub.ledger, other.ledger)
-        self.assertEqual(other.publish(self.finding())["status"], "published")
 
     def test_scoped_transport_authenticates_private_duplicate_reads(self):
         token = pathlib.Path(self.temp.name) / "scoped-token"

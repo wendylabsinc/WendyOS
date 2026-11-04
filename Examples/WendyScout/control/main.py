@@ -57,7 +57,6 @@ class Scout:
         self.refreshed = 0
         self.ctx = None
         self.worker_seen = 0
-        self.publication_checked = 0
 
     def initialize(self):
         # Keep restart-abandoned runs bounded too; findings have independent storage.
@@ -202,70 +201,6 @@ class Scout:
             total=int(match[2]),
         )
 
-    def retry_finding(self):
-        secret = STATE / "secrets/github-issues-token"
-        if not secret.exists() or time.monotonic() - self.publication_checked < 1800:
-            return
-        self.publication_checked = time.monotonic()
-        for path in sorted((STATE / "findings").glob("*.json")):
-            finding = json.loads(path.read_text())
-            publication = finding.get("publication", {})
-            repo = os.environ.get("SCOUT_ISSUE_REPOSITORY", "wendylabsinc/WendyOS")
-            repository_key = __import__("hashlib").sha256(repo.encode()).hexdigest()
-            if publication.get("status") == "already-fixed" or (
-                publication.get("status")
-                in {"published", "duplicate", "duplicate-local"}
-                and publication.get("repository_key") == repository_key
-            ):
-                continue
-            baseline = next(
-                (
-                    k
-                    for k in ["past", "stable"]
-                    if self.versions[k]["tag"] == finding["results"][0]["version"]
-                ),
-                None,
-            )
-            if (
-                baseline is None
-                or finding["results"][1]["version"] != self.versions["nightly"]["tag"]
-            ):
-                continue
-            # A newly supplied approved credential never publishes stale evidence
-            # without replaying the command and current-stable contrast first.
-            self.probes.deadline = time.monotonic() + 90
-            fresh = self.probes.replay(
-                finding["probe"],
-                baseline,
-                "nightly",
-                None,
-                finding["kind"].removesuffix("-regression"),
-                finding.get("field", ""),
-            )
-            if not fresh.get("verified"):
-                finding["publication"] = {
-                    "status": "already-fixed"
-                    if fresh.get("already_fixed_in_newer_stable")
-                    else "held",
-                    "reason": "Fresh replay did not verify the retained candidate",
-                }
-            else:
-                finding = fresh
-                try:
-                    finding["publication"] = Publisher(
-                        STATE,
-                        repo=os.environ.get(
-                            "SCOUT_ISSUE_REPOSITORY", "wendylabsinc/WendyOS"
-                        ),
-                    ).publish(finding)
-                except Exception as e:
-                    finding["publication"] = {
-                        "status": "held",
-                        "reason": type(e).__name__,
-                    }
-            save(path, finding)
-            break
-
     def begin(self, report):
         if not self.ready or not self.model:
             return {
@@ -328,10 +263,6 @@ class Scout:
             self.probes.deadline = None
             if self.probes.run("info", "stable", None)["exit"] != 0:
                 raise RuntimeError("Self-device info preflight failed")
-            try:
-                self.retry_finding()
-            except Exception as e:
-                event("finding_retry_held", reason=type(e).__name__)
             self.probes.deadline = None
             ctx = self.ctx
             manifest = {
@@ -352,30 +283,6 @@ class Scout:
                     "worker": report.get("source_sha256", ""),
                 },
             }
-            # Bound repetition when public context and release pins are unchanged.
-            import hashlib
-
-            campaign = hashlib.sha256(
-                json.dumps(
-                    {
-                        "versions": {k: v["tag"] for k, v in self.versions.items()},
-                        "context": ctx,
-                        "worker_source": report.get("source_sha256", ""),
-                    },
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
-            progress_path = STATE / "progress.json"
-            progress = (
-                json.loads(progress_path.read_text()) if progress_path.exists() else {}
-            )
-            if progress.get("campaign") != campaign:
-                progress = {"campaign": campaign, "sessions": 0}
-            if progress["sessions"] >= 3:
-                return {"status": "waiting_context_change", "retry_after": 60}
-            progress["sessions"] += 1
-            save(progress_path, progress)
-            manifest["campaign"] = progress
             save(run / "manifest.json", manifest)
             save(run / "context.json", ctx)
             self.sessions[token] = {
