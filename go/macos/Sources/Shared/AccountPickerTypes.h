@@ -2,7 +2,7 @@
 #define WENDY_ACCOUNT_PICKER_TYPES_H
 #include "BridgeTypes.h"
 typedef struct {
- char *context, *email, *cloud, *organization_id, *organization_name;
+ char *context, *email, *cloud, *organization_id, *organization_name, *person;
  WDAccountState state;
  int32_t active;
 } WDAccountChoice;

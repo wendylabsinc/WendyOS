@@ -5,6 +5,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -194,6 +196,13 @@ type DesktopAccountInfo struct {
 	State                 uint32 // 0 signed out, 1 signed in, 2 sign-in required
 	Context, Cloud, Email string
 	Active                bool
+	// Person is shared by every saved sign-in of one person on one Cloud, so the
+	// apps can show one account with its organizations under it. It groups the
+	// display only: each organization is still its own context and credentials.
+	Person string
+	// OrganizationID is the organization of the context's certificate, and
+	// OrganizationName its last name seen from Cloud ("" when never seen).
+	OrganizationID, OrganizationName string
 }
 
 func DesktopAccount() (DesktopAccountInfo, error) {
@@ -208,6 +217,11 @@ func DesktopAccount() (DesktopAccountInfo, error) {
 	if err != nil {
 		return DesktopAccountInfo{}, err
 	}
+	for _, info := range desktopAccountList(cfg, auth) {
+		if info.Context == auth.Name {
+			return info, nil
+		}
+	}
 	info := desktopAccountInfo(*auth)
 	info.Active = true
 	return info, nil
@@ -219,13 +233,260 @@ func DesktopAccounts() ([]DesktopAccountInfo, error) {
 		return nil, err
 	}
 	current, _ := config.ResolveAuth(cfg, "", nil)
+	return desktopAccountList(cfg, current), nil
+}
+
+func desktopAccountList(cfg *config.Config, current *config.AuthConfig) []DesktopAccountInfo {
 	result := make([]DesktopAccountInfo, 0, len(cfg.Auth))
-	for _, auth := range cfg.Auth {
+	emails := make([]string, 0, len(cfg.Auth))
+	for i, auth := range cfg.Auth {
 		info := desktopAccountInfo(auth)
 		info.Active = current != nil && current.Name == auth.Name
+		if len(auth.Certificates) > 0 {
+			info.OrganizationID = auth.OrganizationKey()
+			info.OrganizationName = cachedCloudOrganizationName(&cfg.Auth[i])
+		}
 		result = append(result, info)
+		emails = append(emails, info.Email)
 	}
+	for i, person := range desktopAccountPeople(cfg.Auth, emails) {
+		result[i].Person = person
+	}
+	return result
+}
+
+// desktopAccountPeople returns, for each saved context, a key shared by all
+// contexts of the same person on the same Cloud. Cloud keeps one sign-in realm
+// per organization, so one person's operator ID differs between organizations
+// and the email in their tokens is what links them. Contexts are joined when
+// they share an operator ID or an email on one Cloud endpoint; a context with
+// neither stands alone. The key is display metadata, never an identity proof.
+func desktopAccountPeople(auths []config.AuthConfig, emails []string) []string {
+	parent := make([]int, len(auths))
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(i int) int {
+		if parent[i] != i {
+			parent[i] = find(parent[i])
+		}
+		return parent[i]
+	}
+	owners := map[string]int{}
+	identities := make([][]string, len(auths))
+	for i, auth := range auths {
+		cloud := strings.ToLower(auth.CloudGRPC)
+		if cloud == "" {
+			cloud = strings.ToLower(auth.CloudDashboard)
+		}
+		if email := strings.ToLower(strings.TrimSpace(emails[i])); email != "" {
+			identities[i] = append(identities[i], cloud+"|email:"+email)
+		}
+		if operator := desktopOperatorID(auth); operator != "" {
+			identities[i] = append(identities[i], cloud+"|operator:"+operator)
+		}
+		for _, identity := range identities[i] {
+			if j, ok := owners[identity]; ok {
+				parent[find(i)] = find(j)
+			} else {
+				owners[identity] = i
+			}
+		}
+	}
+	// Name each group by its smallest identity, so the key is stable across
+	// loads and an email (sorting before "operator:") names it when known.
+	names := map[int]string{}
+	for i := range auths {
+		root := find(i)
+		for _, identity := range identities[i] {
+			if current, ok := names[root]; !ok || identity < current {
+				names[root] = identity
+			}
+		}
+	}
+	result := make([]string, len(auths))
+	for i, auth := range auths {
+		if name, ok := names[find(i)]; ok {
+			result[i] = name
+		} else {
+			result[i] = "context:" + auth.Name
+		}
+	}
+	return result
+}
+
+// desktopOperatorID is the operator in the context's certificate principal
+// (spiffe://wendy.sh/tenant/<tenant>/operator/<operator-id>), or "".
+func desktopOperatorID(auth config.AuthConfig) string {
+	if len(auth.Certificates) == 0 {
+		return ""
+	}
+	principal := auth.Certificates[0].PrincipalURI
+	if principal == "" {
+		principal = auth.Certificates[0].CertificatePrincipal()
+	}
+	identity, err := certs.ParsePrincipal(principal)
+	if err != nil || identity.EntityType != certs.EntityUser || !strings.HasSuffix(principal, "/operator/"+identity.EntityID) {
+		return ""
+	}
+	return identity.EntityID
+}
+
+// DesktopSignOutResult reports the sign-ins a sign-out removed and the context
+// that is current afterwards ("" when none is).
+type DesktopSignOutResult struct {
+	Removed []string
+	Current string
+}
+
+// DesktopSignOut removes the named saved sign-ins (auth contexts) from this
+// device, like `wendy auth logout <name>`. Names that are already gone are
+// skipped. Only local data is deleted: Cloud is not told.
+func DesktopSignOut(ctx context.Context, contexts []string) (DesktopSignOutResult, error) {
+	if len(contexts) == 0 {
+		return DesktopSignOutResult{}, errors.New("choose an account to sign out of")
+	}
+	return removeAuthContexts(ctx, contexts, false)
+}
+
+// DesktopCurrentContext names the current context, or "" when none resolves.
+func DesktopCurrentContext() string {
+	cfg, err := config.Load()
+	if err != nil {
+		return ""
+	}
+	current, err := config.ResolveAuth(cfg, "", nil)
+	if err != nil {
+		return cfg.CurrentContext
+	}
+	return current.Name
+}
+
+// removeAuthContexts deletes saved sign-ins, the shared path of `wendy auth
+// logout` and the apps' sign-out. A nil names removes every context. It holds
+// the authentication refresh lock and edits under the config lock, so a token
+// or certificate refresh running beside it cannot write a removed sign-in
+// back. When the current context is removed, another organization of the same
+// person becomes current, then any other sign-in, then none. strict rejects
+// names that do not exist; otherwise they are skipped.
+func removeAuthContexts(ctx context.Context, names []string, strict bool) (DesktopSignOutResult, error) {
+	unlock, err := acquireAuthRefreshLock(ctx)
+	if err != nil {
+		return DesktopSignOutResult{}, err
+	}
+	defer unlock()
+	var result DesktopSignOutResult
+	var discarded []config.AuthConfig
+	err = config.Update(func(cfg *config.Config) (bool, error) {
+		result, discarded = DesktopSignOutResult{}, nil
+		selected := map[string]bool{}
+		for _, name := range names {
+			if _, ok := cfg.ContextByName(name); !ok && strict {
+				return false, fmt.Errorf("no auth context named %q; run 'wendy auth status' to list them", name)
+			}
+			selected[name] = true
+		}
+		current, _ := config.ResolveAuth(cfg, "", nil)
+		emails := make([]string, len(cfg.Auth))
+		for i, auth := range cfg.Auth {
+			emails[i] = desktopAccountInfo(auth).Email
+		}
+		people := desktopAccountPeople(cfg.Auth, emails)
+		currentPerson := ""
+		var kept, removed []config.AuthConfig
+		var keptPeople []string
+		for i, auth := range cfg.Auth {
+			if current != nil && auth.Name == current.Name {
+				currentPerson = people[i]
+			}
+			if names == nil || selected[auth.Name] {
+				removed = append(removed, auth)
+				result.Removed = append(result.Removed, auth.Name)
+				continue
+			}
+			kept = append(kept, auth)
+			keptPeople = append(keptPeople, people[i])
+		}
+		if len(removed) == 0 {
+			result.Current = cfg.CurrentContext
+			return false, nil
+		}
+		cfg.Auth = kept
+		// An unset current context stays unset: choosing one here would silently
+		// change which session cloud commands use.
+		if _, ok := cfg.ContextByName(cfg.CurrentContext); cfg.CurrentContext != "" && !ok {
+			cfg.CurrentContext = nextAuthContext(kept, keptPeople, currentPerson)
+		}
+		result.Current = cfg.CurrentContext
+		discarded = unsharedSecrets(removed, kept)
+		return true, nil
+	})
+	if err != nil {
+		return DesktopSignOutResult{}, err
+	}
+	if len(result.Removed) == 0 {
+		if names == nil {
+			_ = sessionbroker.InvalidateAll()
+		}
+		return result, nil
+	}
+	// Delete the Keychain items only after the config no longer references them:
+	// a failed save above leaves both intact for a retry.
+	config.DeleteStoredSecrets(&config.Config{Auth: discarded})
+	// A prepared session broker keeps an authenticated device transport; signing
+	// out must sever it too. Best-effort: the credentials are already gone.
+	_ = sessionbroker.InvalidateAll()
 	return result, nil
+}
+
+// nextAuthContext prefers another selectable organization of the same person,
+// then any selectable sign-in, then any sign-in.
+func nextAuthContext(kept []config.AuthConfig, people []string, person string) string {
+	for _, pass := range []func(int) bool{
+		func(i int) bool { return person != "" && people[i] == person && len(kept[i].Certificates) > 0 },
+		func(i int) bool { return len(kept[i].Certificates) > 0 },
+		func(int) bool { return true },
+	} {
+		for i := range kept {
+			if pass(i) {
+				return kept[i].Name
+			}
+		}
+	}
+	return ""
+}
+
+// unsharedSecrets drops the secret references a remaining sign-in still uses,
+// so deleting a removed context's Keychain items can never orphan another's.
+func unsharedSecrets(removed, kept []config.AuthConfig) []config.AuthConfig {
+	used := map[string]bool{}
+	for i := range kept {
+		for _, value := range authSecretFields(&kept[i]) {
+			if *value != "" {
+				used[*value] = true
+			}
+		}
+	}
+	out := make([]config.AuthConfig, 0, len(removed))
+	for _, auth := range removed {
+		auth.Certificates = append([]config.CertificateInfo(nil), auth.Certificates...)
+		for _, value := range authSecretFields(&auth) {
+			if used[*value] {
+				*value = ""
+			}
+		}
+		out = append(out, auth)
+	}
+	return out
+}
+
+func authSecretFields(auth *config.AuthConfig) []*string {
+	fields := []*string{&auth.APIKey, &auth.RefreshToken, &auth.DPoPPrivateKey, &auth.LitePrivateKey, &auth.RegistryPrivateKey}
+	for i := range auth.Certificates {
+		fields = append(fields, &auth.Certificates[i].PemPrivateKey)
+	}
+	return fields
 }
 
 func desktopAccountInfo(auth config.AuthConfig) DesktopAccountInfo {

@@ -362,6 +362,7 @@ func WDAccount() *C.WDAccountResult {
 	p := alloc[C.WDAccountResult](1)
 	p.status, p.state = status(err), C.WDAccountState(info.State)
 	p.context, p.cloud, p.email = C.CString(info.Context), C.CString(info.Cloud), C.CString(info.Email)
+	p.person, p.organization_id, p.organization_name = C.CString(info.Person), C.CString(info.OrganizationID), C.CString(info.OrganizationName)
 	return p
 }
 
@@ -371,6 +372,9 @@ func WDAccountFree(p *C.WDAccountResult) {
 		free(p.context)
 		free(p.email)
 		free(p.cloud)
+		free(p.person)
+		free(p.organization_id)
+		free(p.organization_name)
 		free(p.status.message)
 		free(p)
 	}
@@ -388,6 +392,7 @@ func WDAccounts() *C.WDAccountsResult {
 	for i, item := range items {
 		entry := &unsafe.Slice(p.items, len(items))[i]
 		entry.context, entry.cloud, entry.email = C.CString(item.Context), C.CString(item.Cloud), C.CString(item.Email)
+		entry.person, entry.organization_id, entry.organization_name = C.CString(item.Person), C.CString(item.OrganizationID), C.CString(item.OrganizationName)
 		entry.state = C.WDAccountState(item.State)
 		if item.Active {
 			entry.active = 1
@@ -405,10 +410,26 @@ func WDAccountsFree(p *C.WDAccountsResult) {
 		free(item.context)
 		free(item.cloud)
 		free(item.email)
+		free(item.person)
+		free(item.organization_id)
+		free(item.organization_name)
 	}
 	free(p.items)
 	free(p.status.message)
 	free(p)
+}
+
+//export WDSignOut
+func WDSignOut(contexts **C.char, count C.size_t) *C.WDStatus {
+	if contexts == nil || count == 0 || count > 1024 {
+		return statusResult(errors.New("choose an account to sign out of"))
+	}
+	names := make([]string, 0, int(count))
+	for _, name := range unsafe.Slice(contexts, int(count)) {
+		names = append(names, C.GoString(name))
+	}
+	_, err := desktop.SignOut(names)
+	return statusResult(err)
 }
 
 func thermalFlag(camera *pb.VideoDevice) C.int32_t {

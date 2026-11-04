@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -708,4 +709,30 @@ func (b *Backend) Accounts() ([]commands.DesktopAccountInfo, error) {
 	_, done := b.begin()
 	defer done()
 	return commands.DesktopAccounts()
+}
+
+// SignOut removes saved sign-ins from this device. When one is the current
+// sign-in, the device connection, its streams, the VPN relays and the embedded
+// Wendy Net participant stop first, while their credentials still exist.
+// Nearby discovery needs no sign-in and keeps working.
+func (b *Backend) SignOut(contexts []string) (commands.DesktopSignOutResult, error) {
+	active := slices.Contains(contexts, commands.DesktopCurrentContext())
+	if active {
+		b.cancelOperation()
+		b.ReserveConnection()
+	}
+	ctx, done := b.begin()
+	defer done()
+	if active {
+		b.pinSelector, b.pinTarget = "", ""
+		b.disconnect()
+		b.stopVPN()
+		drain, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := sessionbroker.SetEmbeddedActive(drain, false)
+		cancel()
+		if err != nil {
+			return commands.DesktopSignOutResult{}, err
+		}
+	}
+	return commands.DesktopSignOut(ctx, contexts)
 }

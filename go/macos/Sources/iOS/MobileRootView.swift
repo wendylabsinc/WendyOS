@@ -321,7 +321,9 @@ private struct MobileAccountsView: View {
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     let signIn: (Bool) -> Void
-    private var accounts: [SavedAccount] { model.mobileCloudAccounts }
+    @State private var pendingSignOut: AccountSignOut?
+    private var people: [AccountPerson] { AccountPerson.group(model.mobileCloudAccounts) }
+    private var busy: Bool { model.mobileCloudSelectionLoading || model.signingOut }
 
     var body: some View {
         actionContent.task { await actions.run() }
@@ -334,33 +336,13 @@ private struct MobileAccountsView: View {
                     NavigationLink { CloudManagementView(signIn: { signIn(false) }).navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
                     NavigationLink { MobileVPNView(model: model, vpn: model.vpn) } label: { Label("Connection settings", systemImage: "network") }
                 }
-                if accounts.isEmpty && model.account?.signedIn != true {
+                if people.isEmpty && model.account?.signedIn != true {
                     Text("Add an account to access your fleet and organization.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 } else {
-                    Section("Accounts") {
-                    ForEach(accounts) { entry in
-                        Button { actions.submit { await model.selectMobileCloudAccount(entry.id) } } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.account.email.isEmpty ? "Email unavailable" : entry.account.email)
-                                Text(entry.account.cloud).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if entry.id == model.mobileCloudAccount { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
-                        }.padding(.vertical, 4).foregroundStyle(.primary)
-                        }.buttonStyle(.plain).disabled(model.mobileCloudSelectionLoading)
-                    }
-                    }
-                    if !model.mobileCloudOrganizations.isEmpty {
-                        Section("Organization") {
-                            Picker("Organization", selection: $model.mobileCloudOrganization) {
-                                ForEach(model.mobileCloudOrganizations) { Text($0.name).tag($0.id) }
-                            }.labelsHidden().pickerStyle(.menu).disabled(model.mobileCloudSelectionLoading)
-                        }
-                    }
+                    ForEach(people) { person in personSection(person) }
                 }
-                if model.mobileCloudSelectionLoading { ProgressView() }
+                if model.mobileCloudSelectionLoading || model.signingOut { ProgressView() }
                 if let error = model.mobileCloudSelectionError { FailureNote(message: error) }
             }
             .scrollContentBackground(.hidden)
@@ -377,10 +359,70 @@ private struct MobileAccountsView: View {
             }
             .refreshable { await refresh() }
             .task { await refresh() }
+            .alert(pendingSignOut?.title ?? "Sign out?", isPresented: Binding(
+                get: { pendingSignOut != nil }, set: { if !$0 { pendingSignOut = nil } }
+            ), presenting: pendingSignOut) { request in
+                Button("Sign Out", role: .destructive) {
+                    pendingSignOut = nil
+                    // App-lifetime work: closing this window must not stop a
+                    // sign-out halfway through.
+                    model.cleanup.submit { await model.signOut(request) }
+                }
+                Button("Cancel", role: .cancel) { pendingSignOut = nil }
+            } message: { request in Text(request.message) }
         }
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private func personSection(_ person: AccountPerson) -> some View {
+        Section {
+            ForEach(person.accounts) { entry in
+                Button { actions.submit { await model.selectMobileCloudAccount(entry.id) } } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "building.2").foregroundStyle(entry.id == model.mobileCloudAccount ? Color.accentColor : .secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.organizationTitle(model.mobileCloudOrganizations))
+                            if entry.account.state != WD_ACCOUNT_SIGNED_IN {
+                                Text("Sign-in required").font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                        Spacer()
+                        if entry.id == model.mobileCloudAccount { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                    }.padding(.vertical, 4).foregroundStyle(.primary).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(busy)
+                .accessibilityLabel("Use " + entry.organizationTitle(model.mobileCloudOrganizations))
+                .accessibilityAddTraits(entry.id == model.mobileCloudAccount ? [.isSelected] : [])
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button { confirmSignOut(entry, of: person) } label: {
+                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }.tint(.red)
+                }
+                .contextMenu {
+                    Button("Sign Out of \(entry.organizationTitle(model.mobileCloudOrganizations))", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
+                        confirmSignOut(entry, of: person)
+                    }
+                }
+            }
+            Button("Sign in to another organization", systemImage: "plus") { signIn(person.development) }
+                .disabled(busy || model.signingIn)
+            Button("Sign Out", role: .destructive) {
+                pendingSignOut = AccountSignOut.person(person, known: model.mobileCloudOrganizations)
+            }
+            .frame(maxWidth: .infinity)
+            .disabled(busy)
+        } header: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(person.title).textCase(nil)
+                if !person.cloud.isEmpty { Text(person.cloud).font(.caption2).textCase(nil) }
+            }
+        }
+    }
+    private func confirmSignOut(_ entry: SavedAccount, of person: AccountPerson) {
+        guard !busy else { return }
+        pendingSignOut = AccountSignOut.organization(entry, person: person, known: model.mobileCloudOrganizations)
     }
     private func refresh() async {
         await model.refreshMobileCloudSelection()

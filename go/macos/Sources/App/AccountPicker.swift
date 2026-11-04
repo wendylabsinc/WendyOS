@@ -9,12 +9,18 @@ struct AccountChoice: Identifiable {
     var organizationName: String
     let state: WDAccountState
     let active: Bool
-    var accountKey: String { cloud + "\n" + (email.isEmpty ? id : email) }
+    /// Go groups one person's organization sign-ins under this key.
+    var person = ""
+    var accountKey: String { person.isEmpty ? cloud + "\n" + (email.isEmpty ? id : email) : person }
     var organizationTitle: String {
         let name = organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "Saved organization" : name
+        return name.isEmpty ? id : name
     }
     var accountTitle: String { email.isEmpty ? "Saved account" : email }
+    var saved: SavedAccount {
+        SavedAccount(account: CloudAccount(state: state, context: id, cloud: cloud, email: email, person: person,
+                                           organizationID: organizationID, organizationName: organizationName), active: active)
+    }
 }
 
 extension GoClient {
@@ -26,7 +32,7 @@ extension GoClient {
             return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map {
                 AccountChoice(id: Self.string($0.context), email: Self.string($0.email), cloud: Self.string($0.cloud),
                     organizationID: Self.string($0.organization_id), organizationName: Self.string($0.organization_name),
-                    state: $0.state, active: $0.active != 0)
+                    state: $0.state, active: $0.active != 0, person: Self.string($0.person))
             }
         }
     }
@@ -42,6 +48,11 @@ extension GoClient {
     @Published var error: String?
     private var generation = 0
     var active: AccountChoice? { choices.first { $0.active } }
+    /// The person whose organization is active, for the sidebar's Sign Out.
+    var activePerson: AccountPerson? { groups.first { $0.contains { $0.active } }.map(Self.person) }
+    static func person(_ group: [AccountChoice]) -> AccountPerson {
+        AccountPerson(id: group.first?.accountKey ?? "", accounts: group.map(\.saved))
+    }
     var groups: [[AccountChoice]] {
         Dictionary(grouping: choices, by: \.accountKey).values.map {
             $0.sorted { a, b in
@@ -107,6 +118,7 @@ struct AccountPicker: View {
     @StateObject private var picker = AccountPickerModel()
     @State private var presented = false
     @State private var hovering = false
+    @State private var pendingSignOut: AccountSignOut?
     private var title: String {
         if app.signingIn { return "Signing in…" }
         if app.account?.signedIn == true { return picker.active?.organizationTitle ?? "Wendy Cloud" }
@@ -147,8 +159,9 @@ struct AccountPicker: View {
             if let error = app.accountError { FailureNote(message: error).padding(.horizontal, 10) }
         }
         .padding(8)
-        .task(id: app.account?.context) { await picker.load() }
+        .task(id: "\(app.account?.context ?? "")#\(app.accountsRevision)") { await picker.load() }
         .onChange(of: app.signingIn) { _, value in if !value { actions.submit { await picker.load() } } }
+        .accountSignOutConfirmation($pendingSignOut, app: app)
     }
     private func avatar(_ name: String, signedIn: Bool) -> some View {
         ZStack {
@@ -179,7 +192,7 @@ struct AccountPicker: View {
                     VStack(alignment: .leading, spacing: 14) {
                         ForEach(picker.groups, id: \.first!.accountKey) { group in
                             VStack(alignment: .leading, spacing: 5) {
-                                if let first = group.first {
+                                if let first = group.first(where: { !$0.email.isEmpty }) ?? group.first {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(first.accountTitle).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
                                         if first.cloud != "api.wendy.dev:443" { Text(first.cloud).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1) }
@@ -221,12 +234,41 @@ struct AccountPicker: View {
                 SettingsLink {
                     AccountPickerFooterLabel(title: "Manage accounts", icon: "person.crop.circle", accessory: "chevron.right")
                 }.buttonStyle(.plain)
+                if let person = picker.activePerson {
+                    Button {
+                        presented = false
+                        // Present the confirmation on the window once the popover has closed.
+                        actions.submit {
+                            try? await Task.sleep(for: .milliseconds(250))
+                            pendingSignOut = AccountSignOut.person(person)
+                        }
+                    } label: {
+                        AccountPickerFooterLabel(title: "Sign Out…", icon: "rectangle.portrait.and.arrow.right", accessory: "")
+                    }.buttonStyle(.plain).disabled(app.signingIn || app.signingOut || picker.switching)
+                        .help("Sign out of \(person.title) on this Mac")
+                }
                 if app.signingIn {
                     if let url = app.loginURL { Link("Continue in browser", destination: url).padding(8) }
                     Button("Cancel sign-in") { actions.submit { await app.cancelLogin() } }.buttonStyle(.plain).padding(8)
                 }
             }.font(.system(size: 12)).padding(8)
         }.frame(width: 320).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+extension View {
+    /// The one confirmation every Mac sign-out control opens.
+    func accountSignOutConfirmation(_ request: Binding<AccountSignOut?>, app: AppModel) -> some View {
+        alert(request.wrappedValue?.title ?? "Sign out?", isPresented: Binding(
+            get: { request.wrappedValue != nil }, set: { if !$0 { request.wrappedValue = nil } }
+        ), presenting: request.wrappedValue) { pending in
+            Button("Sign Out", role: .destructive) {
+                request.wrappedValue = nil
+                // App-lifetime work: closing a window must not stop it halfway.
+                app.cleanup.submit { await app.signOut(pending) }
+            }
+            Button("Cancel", role: .cancel) { request.wrappedValue = nil }
+        } message: { pending in Text(pending.message) }
     }
 }
 
@@ -245,9 +287,11 @@ private struct AccountPickerFooterLabel: View {
                 .frame(width: 18)
             Text(title).font(.system(size: 13))
             Spacer(minLength: 12)
-            Image(systemName: accessory)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
+            if !accessory.isEmpty {
+                Image(systemName: accessory)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -7,27 +7,20 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
+// DesktopAccountChoice is one saved organization sign-in in the account picker.
 type DesktopAccountChoice struct {
 	DesktopAccountInfo
-	OrganizationID, OrganizationName string
 }
 
+// DesktopAccountChoices lists the same grouped account rows as DesktopAccounts.
 func DesktopAccountChoices() ([]DesktopAccountChoice, error) {
-	cfg, err := config.Load()
+	accounts, err := DesktopAccounts()
 	if err != nil {
 		return nil, err
 	}
-	current, _ := config.ResolveAuth(cfg, "", nil)
-	result := make([]DesktopAccountChoice, 0, len(cfg.Auth))
-	for _, auth := range cfg.Auth {
-		info := desktopAccountInfo(auth)
-		info.Active = current != nil && current.Name == auth.Name
-		organization := ""
-		if len(auth.Certificates) > 0 {
-			organization = auth.OrganizationKey()
-		}
-		result = append(result, DesktopAccountChoice{DesktopAccountInfo: info,
-			OrganizationID: organization, OrganizationName: config.OrganizationName(info.Cloud, organization)})
+	result := make([]DesktopAccountChoice, 0, len(accounts))
+	for _, info := range accounts {
+		result = append(result, DesktopAccountChoice{DesktopAccountInfo: info})
 	}
 	return result, nil
 }
