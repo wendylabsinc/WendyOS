@@ -83,6 +83,19 @@ mode: 0600
 ```
 
 This is the `wendy-scout` persist volume's `secrets/github-issues-token` file.
+After organization approval, the operator can transfer a new local mode-0600
+credential file without placing its contents in a command or terminal transcript:
+
+```sh
+python3 provision_token.py --device <explicit-dev-cloud-selector> --file <new-scoped-token-file>
+```
+
+This setup helper uses the existing authenticated Wendy device shell, checks the
+local Scout Development identity, waits until the receiver disables PTY echo,
+then reads and transfers the new file. It never reads an existing Mac token.
+It does not test publication or create an issue. Retained candidates are replayed
+before a later publication retry; stale release pins are held for investigation.
+
 Keep it out of images, source, command arguments, environment variables, logs
 and the worker volume. Never use `gh auth token` or copy an existing personal
 Mac profile. A token awaiting organization approval is not usable publication
@@ -148,7 +161,10 @@ IDs, camera serial paths, network addresses and credentials.
 
 The worker has its own network/PID namespaces with only loopback, no external
 route, admin socket, device mounts or publisher credentials. It communicates
-with control through a narrow root-owned Unix socket bridge. Pi's built-in
+with control through a narrow root-owned Unix socket bridge. The control socket additionally checks
+kernel peer credentials for UID 0. Worker root supervisor code is trusted; its
+preflight is a startup diagnostic, not an attestation against a compromised
+supervisor. The Wendy Agent enforces network:none outside the model process. Pi's built-in
 tools, ambient extensions, skills, context files, MCP discovery, package updates
 and telemetry are disabled. Only the packaged extension is loaded.
 
