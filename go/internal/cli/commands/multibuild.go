@@ -405,6 +405,9 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	printRunDiskUsageWarning(versionResp)
+	if err := checkAgentEntitlements(versionResp, networkConfigs...); err != nil {
+		return err
+	}
 	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
 	if architecture == "" {
@@ -509,6 +512,15 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		}
 	}
 
+	// Images that will be sent need room on the device, whichever machine
+	// builds them.
+	if len(skip) < len(services) {
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
+		ctx = withDeviceStorage(ctx, versionResp)
+	}
+
 	// Build all service images in parallel, then create and start containers.
 	// With --build-host the builds happen on that device instead and it
 	// delivers each image here; everything from this point on is identical,
@@ -526,6 +538,9 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		invalidateRemoteServiceDeployFingerprints(appCfg.AppID, deviceKey, services, skip)
 	} else {
 		if len(skip) < len(services) {
+			if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
+				return err
+			}
 			noteEmulatedBuild(platform, true)
 		}
 		failed, preparedContent, buildErr = buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)

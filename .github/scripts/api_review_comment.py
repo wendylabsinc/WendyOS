@@ -76,12 +76,12 @@ def inline(value: str) -> str:
 
 
 def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
-    if not isinstance(result, dict) or result.get("status") not in {"complete", "incomplete"}:
+    if not isinstance(result, dict) or result.get("status") not in {"complete", "incomplete", "skipped"}:
         raise ValueError("API review result has an invalid status")
     for name, expected in (("head_sha", head_sha), ("base_sha", base_sha)):
         if not re.fullmatch(r"[0-9a-f]{40}", expected) or result.get(name) != expected:
             raise ValueError(f"API review result has a mismatched {name}")
-    if result["status"] == "incomplete":
+    if result["status"] in {"incomplete", "skipped"}:
         if not isinstance(result.get("error"), str) or not result["error"].strip():
             raise ValueError("Incomplete API review must explain the failure")
         return
@@ -377,9 +377,15 @@ def review_intro(result: dict, repo: str) -> list[str]:
     return [
         "# API decisions", "",
         f"Reviewed [{head[:12]}](https://github.com/{repo}/commit/{head}). "
-        f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes "
-        f"across {result.get('review_batches', 1)} complete batch(es); no truncation.",
+        + (f"Input coverage: {result['source_coverage']['source_files']}/{result['changed_files']} source files, "
+         f"{result['source_coverage']['source_bytes']:,}/{result['diff_bytes']:,} diff bytes reviewed; "
+         f"{len(result['source_coverage']['excluded_generated_files'])} generated files excluded (not AI-reviewed); "
+         if "source_coverage" in result else
+         f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes ")
+        + f"across {result.get('review_batches', 1)} complete batch(es); no truncation.",
         "",
+        *(["Generated protocol output was excluded. External pins and source references remain in scope; upstream source bodies are not fetched by this review. Exclusions and generation checks do not establish API or behavior coverage.", ""]
+          if result.get("source_coverage", {}).get("excluded_generated_files") else []),
         ("Check a box to accept a pending or changed decision. Acceptance follows materially unchanged decisions across commits; "
          + "these checkboxes do not block merging automatically."),
         "",
@@ -673,7 +679,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         raise ValueError("Invalid repository or PR number")
     validate_result(result, head_sha, base_sha)
     diff = ""
-    if result["status"] == "complete":
+    if result["status"] in {"complete", "skipped"}:
         if len(diff_bytes) != result["diff_bytes"] or hashlib.sha256(diff_bytes).hexdigest() != result["diff_sha256"]:
             raise ValueError("API review diff does not match the complete result")
         try:
@@ -693,6 +699,15 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         return pull
 
     current_pull()
+    if result["status"] == "skipped":
+        # Independently verify the full immutable diff before leaving all prior
+        # checklists, acceptance and risk labels untouched. No reviewer request.
+        from review_sources import source_diff
+        source, coverage = source_diff(diff)
+        if source or coverage != result.get("source_coverage"):
+            raise ValueError("Generated-only skip does not match the complete diff")
+        print("Only generated protocol output changed; no AI review or state/label changes.")
+        return True
     existing = list_review_comments(repo, pr_number, github)
     primary = next((comment for comment in existing if part_index(comment["body"]) == 0), None)
     previous = primary["body"] if primary else ""

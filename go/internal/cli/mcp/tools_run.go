@@ -230,13 +230,17 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 			result["status"] = "failed"
 			result["readiness"] = "not_checked"
 		}
-		if result["message"] == nil {
+		refusalMessage, refusalNext, refused := runRefusal(output)
+		if refused {
+			result["message"] = refusalMessage
+			result["suggested_next_step"] = refusalNext
+		} else if result["message"] == nil {
 			result["message"] = "Deployment or readiness verification did not complete. Inspect device state before retrying; the command may already have created or started the container."
 		}
 		if output == "" && runErr != nil {
 			result["output"] = runErr.Error()
 		}
-		if next := runFailureNextStep(target, code); next != "" {
+		if next := runFailureNextStep(target, code); next != "" && !refused {
 			result["suggested_next_step"] = next
 		}
 		r := okResult(result)

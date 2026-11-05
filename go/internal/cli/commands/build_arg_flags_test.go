@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"io"
 	"reflect"
 	"slices"
 	"strings"
@@ -79,6 +80,29 @@ func TestRunBuildArgRejectsInvalidBeforeProjectSetup(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "secret") {
 				t.Fatalf("error exposed argument value: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunBuildArgInvalidWaitReadyJSONReportsFailure(t *testing.T) {
+	previous := jsonOutput
+	t.Cleanup(func() { jsonOutput = previous })
+	jsonOutput = true
+	for _, entry := range []string{"MISSING_VALUE", "NAME=secret\nline"} {
+		t.Run(entry, func(t *testing.T) {
+			cmd := newRunCmd()
+			cmd.SetArgs([]string{"--detach", "--wait-ready", "--build-arg", entry, "--prefix", "/nonexistent-project"})
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			var err error
+			stdout := captureStdout(t, func() { err = cmd.Execute() })
+			if !IsUsageError(err) || !strings.Contains(err.Error(), "--build-arg") {
+				t.Fatalf("expected build argument usage error before project setup, got %v", err)
+			}
+			checkFailedWaitReadyObject(t, stdout, err, "", "")
+			if strings.Contains(stdout, "secret") || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error exposed argument value: stdout=%q, error=%v", stdout, err)
 			}
 		})
 	}

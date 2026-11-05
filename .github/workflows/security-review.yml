@@ -354,6 +354,9 @@ jobs:
         run: |
           python3 .github/scripts/review_diff_test.py
           python3 .github/scripts/security_review_test.py
+          if [[ -f .github/scripts/review_sources_test.py ]]; then
+            python3 .github/scripts/review_sources_test.py
+          fi
 
       - name: Validate complete review input
         if: env.IS_DEPENDABOT != 'true'

@@ -312,7 +312,6 @@ func formatErrorParts(err error) formattedError {
 			"For full tunnel details rerun with WENDY_TLS_DEBUG=1")
 	}
 
-	isPKICoreCall := strings.Contains(prefix, "pki-core")
 	isCloudCall := strings.Contains(prefix, "issuing certificate") ||
 		strings.Contains(prefix, "refreshing certificate") ||
 		strings.Contains(prefix, "creating enrollment token") ||
@@ -365,31 +364,25 @@ func formatErrorParts(err error) formattedError {
 				"The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out.")
 		}
 		return rewrite("Could not resolve device host "+host+".", "Check the name, or connect by IP address.")
-	case strings.Contains(msg, "code = Unavailable") && isCertRejection && !isPKICoreCall && !isCloudCall:
+	case strings.Contains(msg, "code = Unavailable") && isCertRejection && !isCloudCall:
 		return rewrite("TLS handshake rejected by device (possible clock skew or cert mismatch).",
 			"If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.",
 			"For full TLS details rerun with WENDY_TLS_DEBUG=1")
-	case strings.Contains(msg, "code = Unavailable") && isTransportHandshakeDrop && !isPKICoreCall && !isCloudCall:
+	case strings.Contains(msg, "code = Unavailable") && isTransportHandshakeDrop && !isCloudCall:
 		return rewrite("Secure connection dropped during the TLS handshake.\n  The device may be offline or unreachable. If you are connecting through Wendy Cloud, the tunnel broker or the device's link to it may be down.",
 			"For full TLS details rerun with WENDY_TLS_DEBUG=1")
 	case strings.Contains(msg, "code = Unavailable") && strings.Contains(msg, "connection refused"):
-		if isPKICoreCall {
-			return rewrite("Could not connect to local pki-core. Check that the gRPC endpoint is reachable from this machine.")
-		}
 		if isCloudCall {
 			return rewrite("Could not connect to Wendy Cloud. Please try again later.")
 		}
 		return rewrite("Could not connect to " + device + ". Is it powered on and connected to the network?")
 	case strings.Contains(msg, "code = Unavailable"):
-		// Cloud and PKI services can return actionable dependency failures.
+		// Cloud services can return actionable dependency failures.
 		// Keep that explanation instead of replacing it with a generic outage.
-		if isPKICoreCall || isCloudCall {
+		if isCloudCall {
 			if desc, ok := grpcDesc(grpcText); ok {
 				return rewrite(desc)
 			}
-		}
-		if isPKICoreCall {
-			return rewrite("Local pki-core is unavailable.")
 		}
 		if isCloudCall {
 			return rewrite("Wendy Cloud is unavailable. Please try again later.")
