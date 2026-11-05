@@ -206,7 +206,8 @@ message GetAgentVersionResponse {
     optional string jetpack_version = 10;
     // CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
     optional string cuda_version = 11;
-    // STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+    // Medium of the disk backing / ("nvme", "emmc", "sd", "ufs", "usb"); when not recognised, the
+    // STORAGE value from /etc/wendyos/device-type (e.g. "disk"). Only present on WendyOS.
     optional string storage_medium = 12;
     // Root filesystem bytes currently used by the device. Only present when the agent can inspect disk usage.
     optional int64 disk_used_bytes = 13;

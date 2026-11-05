@@ -28,6 +28,10 @@ The device listens on TCP port 5054 and advertises itself via mDNS as `_wendy-li
 - **Unauthenticated TLS** — When not enrolled, the device uses a built-in default certificate; client identity is not verified. This is the factory default. The mDNS TXT record advertises `mtls=false`.
 - **mTLS** — When enrolled, the device uses a provisioned certificate and requires the client to present a certificate signed by the configured chain of trust. The mDNS TXT record advertises `mtls=true`.
 
+### Connection liveness
+
+WendyCom has no heartbeat over TCP. Instead, the device enables TCP keepalive on every connection, so it can clean up a connection when the client is lost without closing it, for example when the host loses power or the network path drops. After 15 seconds without incoming data the device sends a TCP keepalive probe, then another one every 15 seconds. If no probe is answered, the device closes the connection 45 seconds after it last received data, and frees its link slot. The host's TCP stack answers the probes, so the client does not need to send anything, and an idle client that is still reachable stays connected.
+
 ## WendyCom over USB Serial JTAG
 
 WendyCom runs over the ESP32 USB Serial JTAG peripheral. This link supports several modes, WendyCom being one of them; the host switches between them by sending escape sequences.
@@ -133,7 +137,9 @@ See [connect through Cloud](../lite-cloud-relay.md) for setup and troubleshootin
 
 The board maintains an outbound control connection, so its network does not need
 an inbound port. After handing a client connection over to the relay, it reconnects
-to Cloud so it can continue reporting presence.
+to Cloud so it can continue reporting presence. The relayed WendyCom connection then
+uses the same TCP keepalive as a LAN connection (see
+[Connection liveness](#connection-liveness)).
 
 ### Time synchronization for enrollment
 
