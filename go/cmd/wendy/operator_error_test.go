@@ -11,7 +11,7 @@ import (
 )
 
 func TestOperatorRecoveryJSONIsRetryableWithNextSteps(t *testing.T) {
-	st, err := status.New(codes.Unavailable, "local operator router has no authenticated peers").WithDetails(&errdetails.ErrorInfo{
+	st, err := status.New(codes.Unavailable, "this computer has no authenticated connections to nearby routers").WithDetails(&errdetails.ErrorInfo{
 		Domain: "wendy.sessionbroker", Reason: "OPERATOR_NO_PEERS",
 	})
 	if err != nil {
@@ -23,8 +23,8 @@ func TestOperatorRecoveryJSONIsRetryableWithNextSteps(t *testing.T) {
 	if !env.Error.Retryable || env.Error.Exit != exitUnreachable || len(env.Error.NextSteps) == 0 {
 		t.Fatalf("local reconnect should be actionable and retryable: %+v", env.Error)
 	}
-	if !strings.Contains(env.Error.Message, "no authenticated peers") || !strings.Contains(strings.Join(env.Error.NextSteps, " "), "first-hop board") {
-		t.Fatalf("local router cause or first-hop recovery missing: %+v", env.Error)
+	if !strings.Contains(env.Error.Message, "no authenticated connections") || !strings.Contains(strings.Join(env.Error.NextSteps, " "), "automatically") {
+		t.Fatalf("local router cause or automatic recovery missing: %+v", env.Error)
 	}
 	text := renderError(err)
 	for _, step := range env.Error.NextSteps {
