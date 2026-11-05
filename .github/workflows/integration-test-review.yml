@@ -70,8 +70,8 @@ jobs:
           import subprocess
 
           sys.path.insert(0, str(pathlib.Path('.github/scripts').resolve()))
-          # Automation stays on the immutable trusted base. The introducing PR
-          # continues the base policy until the source filter lands there.
+          # Automation stays on the immutable trusted base. A PR whose base predates
+          # the source filter continues the base policy until it merges main.
           source_filter = pathlib.Path('.github/scripts/review_sources.py').is_file()
           if source_filter:
               from review_sources import source_diff, parse_diff, is_generated_path, SOURCE_ONLY_RULE
@@ -81,8 +81,7 @@ jobs:
                   return False
               SOURCE_ONLY_RULE = ''
 
-          with open('pr.diff', encoding='utf-8') as f:
-              diff = f.read()
+          diff = pathlib.Path('pr.diff').read_bytes().decode('utf-8')
 
           if not diff.strip():
               print('Empty diff — skipping')
@@ -122,7 +121,10 @@ jobs:
           tests_context = ''
           total_bytes = 0
           for path in sorted(test_paths):
-              content = subprocess.check_output(['git', 'show', f'{revision}:{path}']).decode('utf-8')
+              try:
+                  content = subprocess.check_output(['git', 'show', f'{revision}:{path}']).decode('utf-8')
+              except UnicodeDecodeError:
+                  continue
               if total_bytes + len(content.encode()) <= 20000:
                   tests_context += f'\n### {path}\n```\n{content}\n```\n'
                   total_bytes += len(content.encode())
@@ -511,6 +513,7 @@ jobs:
           pr_number_text = os.environ['PR_NUMBER']
           comment_path = pathlib.Path(os.environ['COMMENT_FILE'])
           marker = '<!-- ai-integration-test-review:v1 -->'
+          partial_marker = '<!-- ai-integration-test-review:latest-partial -->'
 
           if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo_full_name):
               raise RuntimeError(f'Invalid REPO value: {repo_full_name}')
@@ -598,13 +601,67 @@ jobs:
 
           if os.environ.get('SOURCE_ONLY_REVIEW') == 'true':
               if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
-                  raise RuntimeError('Generated-only review skipped; prior integration test blockers remain open')
+                  raise RuntimeError(
+                      'Generated-only review skipped; prior integration test blockers remain open. A later push '
+                      'with a non-generated change gets a normal review, or a maintainer can delete the bot '
+                      'comment after triage.'
+                  )
               print('Generated-only review skipped; prior comments preserved')
               raise SystemExit(0)
 
           if os.environ.get('INTEGRATION_SOURCE_EXCERPTED') == 'true':
-              if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
-                  raise RuntimeError('Partial source review; prior integration test blockers remain open')
+              blocked = [comment for comment in existing if '#### 🛑 Error' in (comment.get('body') or '')]
+              if blocked:
+                  def split_partial_findings(text):
+                      # Finding headings inside suggested test code are not boundaries.
+                      sections = [(False, [])]
+                      fence = ''
+                      for line in text.splitlines():
+                          if fence:
+                              if re.fullmatch(r' {0,3}' + re.escape(fence[0]) + '{' + str(len(fence)) + r',}\s*', line):
+                                  fence = ''
+                          else:
+                              delimiter = re.match(r' {0,3}(`{3,}|~{3,})', line)
+                              heading = re.match(r'^#### (🛑 Error|⚠️ Concern|💡 Info)(?:\s|$)', line)
+                              if delimiter:
+                                  fence = delimiter[1]
+                              elif heading:
+                                  sections.append((heading[1] == '🛑 Error', []))
+                          sections[-1][1].append(line)
+                      blockers, notes = [], []
+                      for blocking, lines in sections:
+                          text = '\n'.join(lines).strip()
+                          if text:
+                              (blockers if blocking else notes).append(text)
+                      return blockers, '\n\n'.join(notes)
+
+                  # Keep blockers outside the replaceable notes, including blockers
+                  # published in the latest-partial section by earlier automation.
+                  prior = blocked[0]['body']
+                  update = comment_path.read_text(encoding='utf-8').replace(marker, '').strip() if comment_path.exists() else ''
+                  update = update.removeprefix('# AI Integration Test Review').strip()
+                  if update or partial_marker in prior:
+                      retained, _, legacy = prior.partition(partial_marker)
+                      body = retained.replace(marker, '').rstrip()
+                      legacy_blockers, _ = split_partial_findings(legacy.replace(marker, ''))
+                      new_blockers, notes = split_partial_findings(update)
+                      for blocker in legacy_blockers + new_blockers:
+                          if blocker not in body:
+                              body += f'\n\n{blocker}'
+                      if notes:
+                          body += f'\n\n{partial_marker}\n\n## Latest partial review\n\n{notes}'
+                      body_limit = 65000 - len(f'\n\n{marker}')
+                      if len(body) > body_limit:
+                          raise RuntimeError(
+                              'Partial review exceeds the 65,000-character comment limit; prior comments unchanged. '
+                              'Blockers cannot be truncated. Run a full review or have a maintainer triage them.'
+                          )
+                      request('PATCH', f'/repos/{owner}/{repo}/issues/comments/{blocked[0]["id"]}', {'body': f'{body}\n\n{marker}'})
+                  raise RuntimeError(
+                      'Partial source review; prior integration test blockers remain open. A partial review '
+                      'cannot clear them. Shrink the source diff under the 30,000-character excerpt limit so '
+                      'a full review runs, or have a maintainer delete the bot comment after triage.'
+                  )
               if not comment_path.exists():
                   print('No findings in supplied excerpt; omitted source is unreviewed and prior comments preserved')
                   raise SystemExit(0)
@@ -647,4 +704,7 @@ jobs:
         if: env.HAS_INTEGRATION_TEST_BLOCKER == 'true'
         run: |
           echo "Integration test review found a container-observable capability changed by this PR with no covering test. Add the test or push a follow-up commit before merging."
+          if [[ "${INTEGRATION_SOURCE_EXCERPTED:-}" == "true" ]]; then
+            echo "This review was partial, and a later partial review cannot clear this blocker. After adding the test, shrink the source diff under the 30,000-character excerpt limit so a full review runs, or have a maintainer delete the bot comment after triage."
+          fi
           exit 1

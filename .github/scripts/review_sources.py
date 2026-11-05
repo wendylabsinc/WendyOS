@@ -1,7 +1,9 @@
 """Fixed generator-output policy and complete Git patch parsing for AI reviews.
 
-Only paths produced by the repository's actual protocol generators are excluded.
-PR attributes, headers, vendor roots and lockfiles never define review policy.
+Exclusion is a path and suffix policy over the locations the repository's protocol
+generators write to. It does not confirm a file came from a generator, and most
+excluded outputs have no regeneration check. PR attributes, headers, vendor roots
+and lockfiles never define review policy.
 """
 from __future__ import annotations
 
@@ -172,7 +174,9 @@ def parse_diff(diff: str, *, allow_binary: bool = False) -> dict[str, Any]:
                 raise ReviewError("The PR diff has an incomplete or malformed hunk")
         elif line.startswith(("--- ", "+++ ")):
             side = "base" if line.startswith("--- ") else "head"
-            path = git_path(line[4:])
+            # Git appends one TAB to a path containing a space, outside any
+            # quotes. A real tab in a name is always C-quoted.
+            path = git_path(line[4:].removesuffix("\t"))
             prefix = "a/" if side == "base" else "b/"
             if path == "/dev/null":
                 current[side] = None
