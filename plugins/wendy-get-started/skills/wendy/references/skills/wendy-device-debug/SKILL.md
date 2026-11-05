@@ -44,7 +44,7 @@ ordinary app debugging, and do not publish credentials or device-specific secret
 Distinguish a device's ordinary LAN connection from this computer's Wendy Net
 router. A device with mesh participation disabled can still be managed over LAN.
 For mesh problems, inspect `wendy net status --device <target>` and
-`wendy --json device wendy-net topology --local-cli` separately. A ready local
+`wendy --json net topology --local-cli` separately. A ready local
 connection does not prove that the destination has a current route; verify it
 with a real command to the returned `mesh://...` destination.
 
