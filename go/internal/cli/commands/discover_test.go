@@ -489,8 +489,11 @@ func TestMergePickerItemPreservesLANFailureUntilLANRecovery(t *testing.T) {
 	// BLE metadata does not establish that the LAN connection recovered.
 	bleDev := models.BluetoothDevice{DisplayName: "board", AgentVersion: "1.2.3"}
 	mergePickerItem(&existing, tui.PickerItem{AgentVersion: bleDev.AgentVersion, Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{Bluetooth: &bleDev}}})
-	if existing.Hint == "" {
+	if existing.Value.(*pickerEntry).mergedDevice.LAN.ProbeFailure == nil {
 		t.Fatal("BLE version incorrectly erased LAN failure")
+	}
+	if existing.Hint != "" {
+		t.Fatalf("picker exposed LAN probe diagnostic: %s", existing.Hint)
 	}
 	dev.ProbeFailure = nil
 	dev.AgentVersion = "1.2.3"

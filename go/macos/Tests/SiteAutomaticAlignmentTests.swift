@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import SwiftUI
+@preconcurrency import SceneKit
 @testable import WendyDesktop
 
 @Suite struct AutomaticCameraAlignmentTests {
@@ -83,6 +85,126 @@ import Testing
         #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(solution, by: solution, first: first, second: second) }
         second = frame(2); second.received = first.received
         #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(solution, by: solution, first: first, second: second) }
+    }
+
+    @Test func ambiguousNativeFitIsDisplayOnly() throws {
+        var output = WSLocalization()
+        output.reason = 8; output.fitted_lens = 2; output.inliers = 12
+        output.fx = 640; output.fy = 640; output.cx = 320; output.cy = 240; output.rms = 1
+        output.world_from_camera = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1)
+        let revision = UUID()
+        do {
+            _ = try SiteLocalizationResult.decode(output, width: 640, height: 480, revision: revision, existing: nil)
+            Issue.record("An ambiguous candidate must never return a saveable alignment result")
+        } catch SiteLocalizationError.unsure(let candidate) {
+            #expect(candidate.pose.position == SitePoint(x: 1, y: 2, z: 3))
+            #expect(candidate.lens?.measured == false)
+            #expect(candidate.pose.isCurrent(revision: revision, now: Date()))
+            #expect(candidate.pose.validUntil.timeIntervalSince(candidate.pose.observedAt) == 300)
+        }
+        output.inliers = 0
+        #expect(throws: (any Error).self) {
+            try SiteLocalizationResult.decode(output, width: 640, height: 480, revision: revision, existing: nil)
+        }
+        output.fitted_lens = 0
+        do {
+            _ = try SiteLocalizationResult.decode(output, width: 640, height: 480, revision: revision, existing: nil)
+            Issue.record("A failed refinement must not supply a candidate")
+        } catch SiteLocalizationError.noSolution(let reason, _, _) {
+            #expect(reason == 8)
+        }
+    }
+
+    @Test func candidatesExpireAndCannotCrossWorkspaces() {
+        let now = Date()
+        let context = SiteAutomaticAlignmentContext(site: Site(name: "Room"), modelURL: URL(filePath: "/room.usdz"),
+            mapURL: URL(filePath: "/map.json"), gatewayID: "gateway", session: 7, enabled: true)
+        var solution = result(measured: false)
+        solution.pose.modelRevision = context.site.modelRevision
+        solution.pose.observedAt = now
+        solution.pose.validUntil = now.addingTimeInterval(300)
+        let candidates = SiteAlignmentCandidates(context: context,
+            values: ["camera": SiteCameraGeometry(pose: solution.pose, lens: solution.lens)])
+        #expect(candidates.visible(in: context, at: now).count == 1)
+        #expect(candidates.visible(in: context, at: now.addingTimeInterval(300)).isEmpty)
+        var changed = context; changed.session = 8
+        #expect(candidates.visible(in: changed, at: now).isEmpty)
+        changed = context; changed.site.replaceModel()
+        #expect(candidates.visible(in: changed, at: now).isEmpty)
+        changed = context; changed.enabled = false
+        #expect(candidates.visible(in: changed, at: now).isEmpty)
+        changed = context; changed.gatewayID = "other"
+        #expect(candidates.visible(in: changed, at: now).isEmpty)
+        changed = context; changed.mapURL = URL(filePath: "/new-map.json")
+        #expect(candidates.visible(in: changed, at: now).isEmpty)
+        changed = context; changed.site.cameras.append(.init(gatewayID: "gateway", sourceID: "camera", name: "Camera"))
+        #expect(candidates.visible(in: changed, at: now).isEmpty)
+    }
+
+    @MainActor @Test func twinRendersUnsureCandidateWithoutReplacingConfirmedOrManualPositions() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("unsure-room-\(UUID()).scn")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let room = SCNScene()
+        let floor = SCNNode(geometry: SCNBox(width: 4, height: 0.05, length: 4, chamferRadius: 0))
+        floor.geometry?.firstMaterial?.diffuse.contents = NSColor.darkGray
+        room.rootNode.addChildNode(floor)
+        #expect(room.write(to: url, options: nil, delegate: nil, progressHandler: nil))
+        var site = Site(name: "Candidate preview")
+        let camera = SiteCamera(gatewayID: "gateway", sourceID: "camera", name: "Camera")
+        site.cameras = [camera]
+        var solution = result(measured: false)
+        solution.pose.modelRevision = site.modelRevision
+        let candidate = SiteCameraGeometry(pose: solution.pose, lens: solution.lens)
+        func content(_ site: Site, confirmed: [UUID: SiteCameraGeometry] = [:],
+                     candidates: [UUID: SiteCameraGeometry]) -> SiteScene {
+            SiteScene(modelURL: url, site: site, cameraGeometry: confirmed, cameraCandidates: candidates,
+                      placingCamera: nil, select: { _ in }, place: { _, _ in })
+        }
+        let host = NSHostingView(rootView: content(site, candidates: [camera.id: candidate]))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        func settle() async throws {
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+        }
+        func findScene(_ view: NSView) -> SCNView? {
+            if let view = view as? SCNView { return view }
+            return view.subviews.lazy.compactMap { findScene($0) }.first
+        }
+        try await settle()
+        let view = try #require(findScene(host))
+        func marker() throws -> SCNNode {
+            try #require(view.scene?.rootNode.childNode(withName: "sensor:\(camera.id.uuidString)", recursively: true))
+        }
+        let unsure = try marker()
+        #expect(abs(unsure.opacity - 0.65) < 0.000001)
+        #expect(unsure.childNodes.contains { ($0.geometry as? SCNText)?.string as? String == "Unsure" })
+        #expect(unsure.childNode(withName: "camera-fov", recursively: true) != nil)
+        let image = view.snapshot()
+        let bitmap = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("wendy-unsure-candidate.png"))
+
+        host.rootView = content(site, confirmed: [camera.id: candidate], candidates: [camera.id: candidate])
+        try await settle()
+        #expect(try marker().opacity == 1)
+        #expect(try marker().childNodes.allSatisfy { !($0.geometry is SCNText) })
+
+        site.cameras[0].position = SitePoint(x: 1, y: 1, z: 1)
+        host.rootView = content(site, candidates: [camera.id: candidate])
+        try await settle()
+        #expect(try marker().position.x == 1)
+        #expect(try marker().opacity == 1)
+
+        site.cameras[0].position = nil
+        var expired = candidate
+        expired.pose.validUntil = Date().addingTimeInterval(-1)
+        host.rootView = content(site, candidates: [camera.id: expired])
+        try await settle()
+        #expect(view.scene?.rootNode.childNode(withName: "sensor:\(camera.id.uuidString)", recursively: true) == nil)
     }
 
     @Test func workspaceChangesInvalidateBackgroundWork() {

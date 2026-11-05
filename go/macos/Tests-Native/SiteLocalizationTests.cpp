@@ -84,6 +84,12 @@ int main(){
  // A wall can fit several focal lengths at very different distances. Low
  // reprojection error alone must not turn that ambiguity into a saved pose.
  assert(!estimatedFlat.success&&estimatedFlat.reason==8);
+ // Retain the best individually validated fit for an explicitly unsure marker.
+ assert(estimatedFlat.fitted_lens==2&&estimatedFlat.inliers>=WS_MIN_ESTIMATED_INLIERS);
+ assert(std::isfinite(estimatedFlat.rms)&&estimatedFlat.rms<=5);
+ assert(estimatedFlat.fx>0&&estimatedFlat.fy>0);
+ for(double value:estimatedFlat.world_from_camera)assert(std::isfinite(value));
+ assert(std::abs(estimatedFlat.world_from_camera[15]-1)<1e-9);
 
 
  // An assumed lens can support 8–10 independent points, but never upgrades

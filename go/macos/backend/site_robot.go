@@ -27,6 +27,13 @@ type SiteRobotSnapshot struct {
 	ObservationRevision                                  uint64
 	Route                                                []sitenav.Point // site X, -Z
 	Joints                                               []float64
+	Hazards                                              []SiteRobotHazard
+	HazardsReady                                         bool
+}
+
+type SiteRobotHazard struct {
+	X, Z, Size, Yaw float64
+	Drop            bool
 }
 
 // Each handle is bound to one authenticated device session and robot serial.
@@ -402,34 +409,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	}
 	grid := r.navigationGridLocked(r.departure)
 	if !grid.Transition(p, r.observed.Pose.Yaw, r.route[0]) {
-		if r.allowUnobservedFloor {
-			r.message = "Detected obstacle or drop on the route. Movement stopped."
-			r.stopLocked()
-			return
-		}
-		// Stop before planning a new route around changed occupied cells.
-		if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
-			r.message = "Could not confirm Stop."
-			r.stopLocked()
-			return
-		}
-		path, err := grid.PlanPose(p, r.observed.Pose.Yaw, r.goal)
-		if err != nil {
-			r.message = err.Error()
-			r.stopLocked()
-			return
-		}
-		arrivalYaw := sitenav.Heading(path[len(path)-2], r.goal)
-		if err := r.navigationGridLocked(nil).PoseClearanceError(r.goal, arrivalYaw, "the destination"); err != nil {
-			r.message = err.Error()
-			r.stopLocked()
-			return
-		}
-		r.route = path[1:]
-		r.routeOrigin = p
-		r.forwardOrigin = nil
-		// Planning can outlast a sensor or UI lease. Stay stopped until the
-		// next tick rechecks freshness before issuing another MOVE.
+		r.replanLocked(grid, p)
 		return
 	}
 	forward, turn := sitenav.Velocity(p, r.observed.Pose.Yaw, r.route[0])
@@ -437,8 +417,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	if turn != 0 {
 		stopYaw := r.observed.Pose.Yaw + math.Copysign(sitenav.TurnStoppingAngle, turn)
 		if !grid.Turn(p, r.observed.Pose.Yaw, stopYaw) {
-			r.message = "Obstacle or unobserved floor in the turning stopping area."
-			r.stopLocked()
+			r.replanLocked(grid, p)
 			return
 		}
 	}
@@ -448,8 +427,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		horizon := forward*.5 + forward*forward + .05
 		look := sitenav.Point{X: p.X + math.Cos(r.observed.Pose.Yaw)*horizon, Y: p.Y + math.Sin(r.observed.Pose.Yaw)*horizon}
 		if !grid.Sweep(p, look, r.observed.Pose.Yaw) {
-			r.message = "Obstacle or unobserved floor ahead."
-			r.stopLocked()
+			r.replanLocked(grid, p)
 			return
 		}
 	}
@@ -678,6 +656,13 @@ func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
 	s.MeasurementsReady = r.observed.MeasurementsReady(now) == nil && !r.closed && !r.stopUnconfirmed
 	s.ScanReady = (r.observed.SurfaceReady(now) == nil || r.observed.LocalizationReady(now) == nil) && !r.closed && !r.stopUnconfirmed
 	if err := r.observed.Ready(now); err == nil {
+		s.HazardsReady = s.Aligned
+		if s.HazardsReady {
+			for _, h := range r.observed.Grid.HazardFootprints() {
+				p := r.alignment.ToSite(h.Position)
+				s.Hazards = append(s.Hazards, SiteRobotHazard{X: p.X, Z: -p.Y, Size: h.Size, Yaw: r.alignment.Rotation, Drop: h.Drop})
+			}
+		}
 		s.Ready = s.Aligned && !r.closed && !r.stopUnconfirmed
 		if s.Ready && !r.moving {
 			var departure *sitenav.Departure

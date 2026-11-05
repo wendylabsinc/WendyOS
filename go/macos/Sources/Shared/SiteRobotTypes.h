@@ -2,6 +2,7 @@
 #define WENDY_SITE_ROBOT_TYPES_H
 #include "UnitreeTypes.h"
 typedef struct { double x, z; } WDSiteRoutePoint;
+typedef struct { double x, z, size, yaw; int32_t drop; } WDSiteRobotHazard;
 typedef struct { double x, z, yaw, floor_y, rms, coverage; } WDSiteRobotCandidate;
 typedef struct { WDStatus status; WDSiteRobotCandidate *items; size_t count; } WDSiteRobotCandidates;
 typedef struct {
@@ -17,6 +18,9 @@ typedef struct {
     size_t route_count;
     double *joints;
     size_t joint_count;
+    WDSiteRobotHazard *hazards;
+    size_t hazard_count;
+    int32_t hazards_ready;
 } WDSiteRobotState;
 WDUnitreeConnection *WDSiteRobotOpen(uint64_t session, char *serial);
 WDSiteRobotState *WDSiteRobotPoll(uint64_t handle);
