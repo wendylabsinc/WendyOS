@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -132,47 +133,94 @@ func confirmDisconnectAck(t *testing.T, stream grpc.BidiStreamingClient[agentpbv
 	}
 }
 
-func TestWiFiDisconnectAcknowledgedRequiresConfirmation(t *testing.T) {
-	for _, mode := range []string{"cancel", "half close", "phase deadline"} {
+func TestWiFiDisconnectAcknowledgedCommitsDespiteMissingConfirmation(t *testing.T) {
+	for _, mode := range []string{"cancel", "half close", "grace deadline", "invalid confirmation"} {
 		t.Run(mode, func(t *testing.T) {
-			nm := &disconnectAckNetwork{}
-			conn, tracker := startDisconnectAckServer(t, nm, nil, func(s *WiFiService) { s.disconnectPhaseTimeout = 200 * time.Millisecond })
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			stream := beginDisconnectAck(t, ctx, conn)
-			if nm.calls.Load() != 0 {
-				t.Fatal("preparation disconnected WiFi")
-			}
-			for i := 0; i < 2; i++ {
+			synctest.Test(t, func(t *testing.T) {
+				called := make(chan struct{})
+				nm := &disconnectAckNetwork{disconnect: func(context.Context) error { close(called); return nil }}
+				conn, tracker := startDisconnectAckServer(t, nm, nil, func(s *WiFiService) { s.disconnectConfirmationTimeout = time.Second })
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				stream := beginDisconnectAck(t, ctx, conn)
+				if nm.calls.Load() != 0 {
+					t.Fatal("disconnect started before confirmation or grace expiry")
+				}
+				switch mode {
+				case "cancel":
+					cancel()
+				case "half close":
+					if err := stream.CloseSend(); err != nil {
+						t.Fatal(err)
+					}
+				case "invalid confirmation":
+					if err := stream.Send(&agentpbv2.DisconnectWiFiControl{Control: &agentpbv2.DisconnectWiFiControl_Begin{Begin: &emptypb.Empty{}}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				event, err := stream.Recv()
+				if mode == "cancel" {
+					if status.Code(err) != codes.Canceled {
+						t.Fatalf("canceled stream = %v", err)
+					}
+				} else if err != nil || !event.GetCompleted().GetSuccess() {
+					t.Fatalf("committed completion = %v, error = %v", event, err)
+				}
+				for i := 0; i < 2; i++ {
+					select {
+					case <-tracker.done:
+					case <-time.After(2 * time.Second):
+						t.Fatal("accepted request or confirmation receive did not finish")
+					}
+				}
 				select {
-				case <-tracker.started:
-				case <-time.After(time.Second):
-					t.Fatal("confirmation receive did not start")
+				case <-called:
+				case <-time.After(2 * time.Second):
+					t.Fatal("accepted request did not attempt disconnect")
 				}
-			}
-			switch mode {
-			case "cancel":
-				cancel()
-			case "half close":
-				if err := stream.CloseSend(); err != nil {
-					t.Fatal(err)
+				if nm.calls.Load() != 1 || tracker.active.Load() != 0 {
+					t.Fatalf("disconnect calls = %d, active receives = %d", nm.calls.Load(), tracker.active.Load())
 				}
-			}
-			if _, err := stream.Recv(); err == nil {
-				t.Fatal("abandoned confirmation unexpectedly succeeded")
-			}
-			// Both the begin and the outstanding confirmation Recv must exit.
-			for i := 0; i < 2; i++ {
-				select {
-				case <-tracker.done:
-				case <-time.After(time.Second):
-					t.Fatal("an abandoned Recv goroutine was not released")
-				}
-			}
-			if nm.calls.Load() != 0 || tracker.active.Load() != 0 {
-				t.Fatalf("disconnect calls = %d, active receive calls = %d", nm.calls.Load(), tracker.active.Load())
-			}
+			})
 		})
+	}
+}
+
+type disconnectReadyFailureStream struct {
+	grpc.ServerStream
+	ctx        context.Context
+	readyError error
+	sends      int
+}
+
+func (s *disconnectReadyFailureStream) Context() context.Context { return s.ctx }
+func (s *disconnectReadyFailureStream) Recv() (*agentpbv2.DisconnectWiFiControl, error) {
+	return &agentpbv2.DisconnectWiFiControl{Control: &agentpbv2.DisconnectWiFiControl_Begin{Begin: &emptypb.Empty{}}}, nil
+}
+func (s *disconnectReadyFailureStream) Send(*agentpbv2.DisconnectWiFiEvent) error {
+	s.sends++
+	return s.readyError
+}
+func TestWiFiDisconnectAcknowledgedCommitsWhenReadyCannotBeDelivered(t *testing.T) {
+	nm := &disconnectAckNetwork{}
+	stream := &disconnectReadyFailureStream{ctx: context.Background(), readyError: status.Error(codes.Unavailable, "reply path lost")}
+	err := NewWiFiService(zap.NewNop(), nm).DisconnectWiFiAcknowledged(stream)
+	if status.Code(err) != codes.Unavailable || nm.calls.Load() != 1 || stream.sends != 1 {
+		t.Fatalf("accepted action lost or concurrent completion attempted: err=%v calls=%d sends=%d", err, nm.calls.Load(), stream.sends)
+	}
+}
+func TestWiFiDisconnectAcknowledgedDoesNotCommitWithoutBegin(t *testing.T) {
+	nm := &disconnectAckNetwork{}
+	conn, _ := startDisconnectAckServer(t, nm, nil)
+	stream, err := agentpbv2.NewWendyWiFiServiceClient(conn).DisconnectWiFiAcknowledged(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.InvalidArgument || nm.calls.Load() != 0 {
+		t.Fatalf("missing begin triggered action: err=%v calls=%d", err, nm.calls.Load())
 	}
 }
 
@@ -239,12 +287,12 @@ func TestWiFiDisconnectAcknowledgedCompletesAfterConfirmation(t *testing.T) {
 	}
 }
 
-func TestWiFiDisconnectAcknowledgedPreflightErrorDoesNotMutate(t *testing.T) {
-	nm := &disconnectAckNetwork{mockNetworkManager: mockNetworkManager{statusErr: errors.New("no WiFi device found")}}
+func TestWiFiDisconnectAcknowledgedDoesNotDependOnStatusRead(t *testing.T) {
+	nm := &disconnectAckNetwork{mockNetworkManager: mockNetworkManager{statusErr: errors.New("status unavailable")}}
 	conn, _ := startDisconnectAckServer(t, nm, nil)
 	result, err := grpcclient.NewFromConn(conn).DisconnectWiFi(context.Background())
-	if status.Code(err) != codes.FailedPrecondition || result.Acknowledged || nm.calls.Load() != 0 {
-		t.Fatalf("result = %+v, error = %v, calls = %d", result, err, nm.calls.Load())
+	if err != nil || !result.Acknowledged || !result.CompletionConfirmed || nm.calls.Load() != 1 {
+		t.Fatalf("accepted action depended on status query: result=%+v err=%v calls=%d", result, err, nm.calls.Load())
 	}
 }
 

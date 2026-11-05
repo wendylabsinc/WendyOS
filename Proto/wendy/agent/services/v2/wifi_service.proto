@@ -10,11 +10,12 @@ service WendyWiFiService {
     rpc GetWiFiStatus(GetWiFiStatusRequest) returns (GetWiFiStatusResponse);
     rpc DisconnectWiFi(DisconnectWiFiRequest) returns (DisconnectWiFiResponse);
 
-    // Opt-in acknowledgement before a disconnect can remove the caller's path.
-    // Send begin, receive ready, then send confirm. No disconnect occurs before
-    // confirm is received. Ready acknowledges the request, not its completion.
-    // The completed event is authoritative when delivered; a lost connection
-    // after ready leaves completion unknown. The legacy unary RPC is unchanged.
+    // Send begin, receive ready, then send confirm. A valid begin commits the
+    // device to attempting the disconnect. Ready acknowledges that commitment;
+    // confirm permits immediate execution. If confirmation is missing or the
+    // stream is lost, the device still proceeds within a bounded grace period.
+    // Only completed confirms the outcome; losing its reply leaves it unknown.
+    // The legacy unary RPC is unchanged.
     rpc DisconnectWiFiAcknowledged(stream DisconnectWiFiControl) returns (stream DisconnectWiFiEvent);
     rpc ListKnownWiFiNetworks(ListKnownWiFiNetworksRequest) returns (ListKnownWiFiNetworksResponse);
     rpc SetWiFiNetworkPriority(SetWiFiNetworkPriorityRequest) returns (SetWiFiNetworkPriorityResponse);
