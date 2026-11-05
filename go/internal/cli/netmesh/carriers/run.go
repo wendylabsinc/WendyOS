@@ -254,14 +254,6 @@ func Run(parent context.Context, cfg Config) error {
 				}
 				continue
 			}
-			if len(active) >= cfg.Limits.Connections {
-				// Discovery cost and identity are unverified hints. A failed or
-				// unsupported candidate must not retire an established carrier just
-				// to make room for its probe. Even a newly discovered cable waits
-				// for a natural slot; authenticated cheaper same-peer replacement
-				// above remains independent of candidate admission.
-				continue
-			}
 			serial++
 			child, closeChild := context.WithCancel(ctx)
 			a := &attempt{id: serial, candidate: c, cancel: closeChild}
