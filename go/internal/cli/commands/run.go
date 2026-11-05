@@ -646,11 +646,11 @@ func newRunCmd() *cobra.Command {
 		Long:  "Reads wendy.json from the current directory or --prefix directory, builds a container image, and deploys it to the target device.",
 		Args:  optionalRunDeviceArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if _, err := mergeBuildArgFlags(nil, opts.buildArgs); err != nil {
-				return err
-			}
 			return runReportingWaitReadyFailure(cmd.Context(), opts, func(ctx context.Context) error {
 				return runWithInterruptContext(ctx, func(runCtx context.Context) error {
+					if _, err := mergeBuildArgFlags(nil, opts.buildArgs); err != nil {
+						return err
+					}
 					if err := validateEnvFlag(opts.env); err != nil {
 						return err
 					}
