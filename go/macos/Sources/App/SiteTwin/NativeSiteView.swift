@@ -26,7 +26,13 @@ struct NativeSiteView: View {
             AnyView(SiteAutomaticAlignmentView(model: model, site: site, gatewayID: gatewayID, gatewayAliases: gateway.aliases,
                 enabled: scenePhase == .active && alignment == nil && !pairing && !editing,
                 worker: automaticAlignment))
-        }, alignmentStatuses: scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], colorCapture: { sourceIDs in
+        }, alignmentStatuses: scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], alignmentCandidates: { site in
+            automaticAlignment.candidates.visible(in: SiteAutomaticAlignmentContext(
+                site: site.site, modelURL: site.modelURL, mapURL: site.visualMapURL,
+                gatewayID: gatewayID, session: model.deviceSession,
+                enabled: scenePhase == .active && alignment == nil && !pairing,
+                gatewayAliases: gateway.aliases), at: Date())
+        }, colorCapture: { sourceIDs in
             AnyView(SiteCameraColorCapture(model: model, sourceIDs: sourceIDs))
         }) { sourceID in
             if let feed = model.cameraFeeds.first(where: { $0.camera.stableID == sourceID }) {

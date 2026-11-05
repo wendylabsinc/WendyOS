@@ -64,12 +64,18 @@ enum SiteCameraAlignment {
         let first = try await freshFrame(feed, check: check)
         var solution: SiteLocalizationResult
         do {
-            solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height,
-                revision: request.site.site.modelRevision, lens: measuredLens)
-        } catch SiteLocalizationError.noSolution(_, _, _) {
+            do {
+                solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height,
+                    revision: request.site.site.modelRevision, lens: measuredLens)
+            } catch SiteLocalizationError.noSolution(_, _, _) {
+                try check()
+                solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height,
+                    revision: request.site.site.modelRevision, lens: measuredLens, estimated: true)
+            }
+        } catch {
+            // A native solve can finish after the stream or workspace changes.
             try check()
-            solution = try await engine.localize(gray: first.gray, width: first.width, height: first.height,
-                revision: request.site.site.modelRevision, lens: measuredLens, estimated: true)
+            throw error
         }
         if solution.fittedLens { solution.lens.captureMode = "\(first.codec) \(first.width)x\(first.height)" }
         try check()

@@ -43,12 +43,35 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		return "", fmt.Errorf("%s has no valid HTTP entitlement", app)
 	}
 	managedModel := app == fmt.Sprintf("sh.wendy.models.ollama.%d", port)
-	if conn.RegistryDialer == nil && !managedModel {
+	dial := conn.RegistryDialer
+	if conn.AppDialer != nil {
+		// Mesh app ports use the selected agent's authenticated app stream.
+		// The registry dialer reaches auxiliary host sockets, not app ingress.
+		appDial := conn.AppDialer
+		dial = func(ctx context.Context, port int) (net.Conn, error) {
+			return appDial(ctx, uint16(port))
+		}
+	}
+	if dial == nil && !managedModel {
 		host := strings.Trim(conn.Host, "[]")
 		if host == "" || strings.HasPrefix(host, "unix:") {
 			return "", fmt.Errorf("device has no browser-accessible address")
 		}
 		return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(int(port))), Path: "/"}).String(), nil
+	}
+	if dial != nil {
+		// Binding a local listener does not prove the remote app is reachable.
+		// Report admission and connection errors before opening the browser,
+		// including when reusing a listener from an earlier successful open.
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		remote, err := dial(probeCtx, int(port))
+		if err == nil {
+			_ = remote.Close()
+		}
+		cancel()
+		if err != nil {
+			return "", fmt.Errorf("cannot open %s on the selected device's port %d: %w", app, port, err)
+		}
 	}
 	if forward := b.appForwards[port]; forward != nil {
 		return forward.url, nil
@@ -65,7 +88,7 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		b.appForwards = make(map[uint32]*appForward)
 	}
 	b.appForwards[port] = forward
-	if conn.RegistryDialer == nil {
+	if dial == nil {
 		transport, err := deviceChatTransport(conn, port)
 		if err != nil {
 			forward.Close()
@@ -80,7 +103,6 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		go func() { _ = forward.server.Serve(listener) }()
 		return forward.url, nil
 	}
-	dial := conn.RegistryDialer
 	go forward.serve(forwardCtx, func(ctx context.Context) (net.Conn, error) { return dial(ctx, int(port)) })
 	return forward.url, nil
 }

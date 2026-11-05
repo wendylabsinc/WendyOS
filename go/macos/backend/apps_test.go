@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -76,6 +77,43 @@ func TestOpenAppLANAndEntitlementValidation(t *testing.T) {
 	}
 }
 func TestOpenAppTunnelReusesPortAndClosesWithSession(t *testing.T) {
+	for _, transport := range []string{"cloud", "mesh", "mesh-with-registry"} {
+		t.Run(transport, func(t *testing.T) {
+			testOpenAppTunnel(t, transport)
+		})
+	}
+}
+
+func TestOpenAppReportsTunnelFailureWithoutFallingBack(t *testing.T) {
+	for _, transport := range []string{"cloud", "mesh"} {
+		t.Run(transport, func(t *testing.T) {
+			b := webBackend(t)
+			denied := errors.New("app port is not published")
+			dial := func(context.Context, int) (net.Conn, error) { return nil, denied }
+			if transport == "cloud" {
+				b.conn.RegistryDialer = dial
+			} else {
+				b.conn.AppDialer = func(ctx context.Context, port uint16) (net.Conn, error) {
+					return dial(ctx, int(port))
+				}
+				b.conn.RegistryDialer = func(context.Context, int) (net.Conn, error) {
+					t.Error("retried denied app access through the registry transport")
+					return nil, net.ErrClosed
+				}
+			}
+			address, err := b.OpenApp("web", 3)
+			if address != "" || !errors.Is(err, denied) || !strings.Contains(err.Error(), "8080") {
+				t.Fatalf("OpenApp = %q, %v", address, err)
+			}
+			if len(b.appForwards) != 0 {
+				t.Fatal("failed open left a local listener")
+			}
+		})
+	}
+}
+
+func testOpenAppTunnel(t *testing.T, transport string) {
+	t.Helper()
 	b := webBackend(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/page" || r.URL.RawQuery != "a=1" {
@@ -84,11 +122,25 @@ func TestOpenAppTunnelReusesPortAndClosesWithSession(t *testing.T) {
 		io.WriteString(w, "device webpage")
 	}))
 	defer upstream.Close()
-	b.conn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
+	dial := func(ctx context.Context, port int) (net.Conn, error) {
 		if port != 8080 {
 			t.Errorf("dialed undeclared port %d", port)
 		}
 		return (&net.Dialer{}).DialContext(ctx, "tcp", strings.TrimPrefix(upstream.URL, "http://"))
+	}
+	if transport == "cloud" {
+		b.conn.RegistryDialer = dial
+	} else {
+		b.conn.Host = "mesh://selected-device"
+		b.conn.AppDialer = func(ctx context.Context, port uint16) (net.Conn, error) {
+			return dial(ctx, int(port))
+		}
+		if transport == "mesh-with-registry" {
+			b.conn.RegistryDialer = func(context.Context, int) (net.Conn, error) {
+				t.Error("app request used the registry transport")
+				return nil, net.ErrClosed
+			}
+		}
 	}
 	address, err := b.OpenApp("web", 3)
 	if err != nil {

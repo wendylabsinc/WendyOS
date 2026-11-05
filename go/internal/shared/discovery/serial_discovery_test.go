@@ -2,11 +2,13 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
+	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
 // newTestSerialDiscovery returns a fresh, unshared SerialDiscovery so tests
@@ -56,7 +58,7 @@ func TestSerialDiscoveryAddsUnresponsivePort(t *testing.T) {
 	}
 	probeIdentityFn = func(port string) (*liteclient.DeviceIdentity, bool, error) {
 		if port == "/dev/responsive" {
-			return &liteclient.DeviceIdentity{ID: "esp", Name: "esp", DisplayName: "esp", EnrolledDeviceID: "enrolled-esp"}, true, nil
+			return &liteclient.DeviceIdentity{ID: "esp", Name: "esp", DisplayName: "esp", EnrolledDeviceID: "enrolled-esp", TenantID: "tenant"}, true, nil
 		}
 		return nil, true, errProbeTimeout
 	}
@@ -87,8 +89,50 @@ func TestSerialDiscoveryAddsUnresponsivePort(t *testing.T) {
 	if !responsive.Responsive {
 		t.Errorf("expected /dev/responsive to be responsive")
 	}
-	if responsive.ID != "esp" || responsive.DisplayName != "esp" || responsive.EnrolledDeviceID != "enrolled-esp" {
+	if responsive.ID != "esp" || responsive.DisplayName != "esp" || responsive.EnrolledDeviceID != "enrolled-esp" || responsive.TenantID != "tenant" {
 		t.Errorf("expected identity to be populated for a responsive port, got %+v", responsive)
+	}
+}
+
+type serialIdentityStub struct {
+	identity      liteclient.DeviceIdentity
+	status        *litepb.WendyComEnrollmentChallenge
+	err           error
+	statusTimeout time.Duration
+}
+
+func (s *serialIdentityStub) GetDeviceIdentity(time.Duration) (*liteclient.DeviceIdentity, error) {
+	return &s.identity, nil
+}
+
+func (s *serialIdentityStub) EnrollmentStatus(timeout time.Duration) (*litepb.WendyComEnrollmentChallenge, error) {
+	s.statusTimeout = timeout
+	return s.status, s.err
+}
+
+func TestSerialIdentityEnrollmentIsOptionalAndBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name, enrolledID, wantTenant string
+		status                       *litepb.WendyComEnrollmentChallenge
+		err                          error
+	}{
+		{name: "enrolled", enrolledID: "device", status: &litepb.WendyComEnrollmentChallenge{Enrolled: true, DeviceId: "device", TenantId: "tenant"}, wantTenant: "tenant"},
+		{name: "unsupported or timed out", enrolledID: "device", err: errors.New("unsupported")},
+		{name: "missing response", enrolledID: "device"},
+		{name: "identity changed", enrolledID: "device", status: &litepb.WendyComEnrollmentChallenge{Enrolled: true, DeviceId: "other", TenantId: "tenant"}},
+		{name: "enrollment reset", enrolledID: "device", status: &litepb.WendyComEnrollmentChallenge{DeviceId: "device", TenantId: "tenant"}},
+		{name: "unenrolled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &serialIdentityStub{identity: liteclient.DeviceIdentity{ID: "hardware", EnrolledDeviceID: tc.enrolledID}, status: tc.status, err: tc.err}
+			got, err := readSerialIdentity(reader)
+			if err != nil || got.ID != "hardware" || got.EnrolledDeviceID != tc.enrolledID || got.TenantID != tc.wantTenant {
+				t.Fatalf("identity: %+v, error: %v", got, err)
+			}
+			if tc.enrolledID == "" && reader.statusTimeout != 0 || tc.enrolledID != "" && reader.statusTimeout != 500*time.Millisecond {
+				t.Fatalf("unexpected enrollment probe budget: %v", reader.statusTimeout)
+			}
+		})
 	}
 }
 

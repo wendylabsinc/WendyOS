@@ -19,6 +19,7 @@
 		08287DD3EFF2E24E9258CFA7 /* ModelHardwareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */; };
 		0A7047CC4FA2C5F58264C38D /* DeviceOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB4ECB73A974D1CD7FE6DE57 /* DeviceOverview.swift */; };
 		0ADED3D12131FEB083901F77 /* InstallHardwareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF0F54AFF335D44D9766EEF /* InstallHardwareView.swift */; };
+		0C26213570590504DB81CE13 /* SiteRobotHazards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D36152E204290965912BE5 /* SiteRobotHazards.swift */; };
 		0C9DE9CE4C60F228AE998EAE /* CampaignEventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD35567E3E64E4A8791C0FD /* CampaignEventLog.swift */; };
 		0E941602585C6FD0784BBC99 /* AccountsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */; };
 		0EAC09E60BB332D21E0B19E0 /* SiteCameraPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B8A9451F3CCE3202F92697 /* SiteCameraPicker.swift */; };
@@ -175,6 +176,7 @@
 		9AD7934EF2A0226FF211A2B3 /* SiteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A956DDF27C46E379646AA3 /* SiteWorkspace.swift */; };
 		9F1B78165E6F7A5B6190BAF1 /* SimulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA96AC91DE1B6D4C296226BF /* SimulatorTests.swift */; };
 		A0816368E809449ABE7348D1 /* VisualRecognition.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D63AE3C5E01CE28F9A89C0EE /* VisualRecognition.cpp */; };
+		A0F2E9783DA73B448260B202 /* SiteRobotHazards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D36152E204290965912BE5 /* SiteRobotHazards.swift */; };
 		A1029715689BE1AA8B1537D6 /* SitePersonMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */; };
 		A13C1FEA6CDC52F709271853 /* CloudManagementClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D780434FF5B2190F955252 /* CloudManagementClient.swift */; };
 		A145DCEDD3D2194650AFCD76 /* SiteScanCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = C38BD757A6ABC31AF0C8562C /* SiteScanCoordinates.swift */; };
@@ -236,6 +238,7 @@
 		CBD2403F787423BA3A541EAE /* SiteFogOfWar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C1822E9898ED00F382F90EF /* SiteFogOfWar.swift */; };
 		CE67DE62A6448DF4CFB0416C /* WendyMobileNetwork.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 56198895936025F0A68D94CF /* WendyMobileNetwork.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		CEE58765B62B95A1902EE62E /* LiteDeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9769FE92218D369CAE4C7B1 /* LiteDeviceView.swift */; };
+		CF7B25CD87AA4249EC3FCABC /* SiteRobotHazardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F723F56E5BD07722817AD88 /* SiteRobotHazardTests.swift */; };
 		D0E481DF826074F1875DAFDD /* SiteCameraColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFC744729F358EB031585D5 /* SiteCameraColor.swift */; };
 		D17A0FC4CFBE9232DA7F6B34 /* CampaignSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */; };
 		D2D83E7D232E0FD0DC79BDD6 /* SiteRobotGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */; };
@@ -389,6 +392,7 @@
 		3FFC744729F358EB031585D5 /* SiteCameraColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteCameraColor.swift; sourceTree = "<group>"; };
 		40A7543FFAE45034DB228D85 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformServices.swift; sourceTree = "<group>"; };
 		4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDeviceCardView.swift; sourceTree = "<group>"; };
+		42D36152E204290965912BE5 /* SiteRobotHazards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotHazards.swift; sourceTree = "<group>"; };
 		453C94DF8A0078EC17B2D427 /* SiteVisualMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteVisualMap.swift; sourceTree = "<group>"; };
 		49A41BF0F5377D89682F1080 /* DataVisualizerTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerTimelineTests.swift; sourceTree = "<group>"; };
 		4AF0F54AFF335D44D9766EEF /* InstallHardwareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallHardwareView.swift; sourceTree = "<group>"; };
@@ -421,6 +425,7 @@
 		6CA03F0043D1569ECB9D2ECF /* SystemExtensions.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemExtensions.framework; path = System/Library/Frameworks/SystemExtensions.framework; sourceTree = SDKROOT; };
 		6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotGeometry.swift; sourceTree = "<group>"; };
 		6F559A36FB62C81768A4EC94 /* VPNController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNController.swift; sourceTree = "<group>"; };
+		6F723F56E5BD07722817AD88 /* SiteRobotHazardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotHazardTests.swift; sourceTree = "<group>"; };
 		6FA84112CE73CAEC643E214E /* SitePeopleTracking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitePeopleTracking.swift; sourceTree = "<group>"; };
 		70C401F859DE05580E5140F4 /* WendyMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WendyMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		71946209397441773DE68E8B /* DownloadedModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadedModelTests.swift; sourceTree = "<group>"; };
@@ -722,6 +727,7 @@
 				86688E5547A234D7615F2455 /* SiteFogTests.swift */,
 				5958890C690A885A313B8C83 /* SitePeopleTrackingTests.swift */,
 				99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */,
+				6F723F56E5BD07722817AD88 /* SiteRobotHazardTests.swift */,
 				4CFA098E992CF9B04070ED0F /* SiteRobotLocalizationTests.swift */,
 				C8C3E32837C8B119C15C3627 /* SiteTwinTests.swift */,
 				73F8A73277DE33706D2B45EA /* ThermalCameraTests.swift */,
@@ -795,6 +801,7 @@
 				F2B8E82B3B1B4139C89D7CAF /* SitePhotoReconstruction.swift */,
 				02EB82B6FACB20593A314081 /* SiteRobotClient.swift */,
 				6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */,
+				42D36152E204290965912BE5 /* SiteRobotHazards.swift */,
 				557F8A0DEA867210FC8AADCE /* SiteRobotLocalization.swift */,
 				325187846ED881AA053327DA /* SiteRobotPanel.swift */,
 				A0FD78A95A6F8642DAC85357 /* SiteRoomCapture.swift */,
@@ -1335,6 +1342,7 @@
 				02D7725C91B17BB9DA8CC191 /* SiteFogTests.swift in Sources */,
 				DA56924A4C743A950A9768A5 /* SitePeopleTrackingTests.swift in Sources */,
 				A1029715689BE1AA8B1537D6 /* SitePersonMarkerTests.swift in Sources */,
+				CF7B25CD87AA4249EC3FCABC /* SiteRobotHazardTests.swift in Sources */,
 				8829846641717B1154A66533 /* SiteRobotLocalizationTests.swift in Sources */,
 				418E98B787B336FCB956DFD5 /* SiteTwinTests.swift in Sources */,
 				94CB09115FCB6B4AFCB6F0C5 /* ThermalCameraTests.swift in Sources */,
@@ -1436,6 +1444,7 @@
 				C2BE74D5495048FCF105EDA3 /* SiteReferenceCapture.swift in Sources */,
 				D6032CBE6D896CD6A5BB9C99 /* SiteRobotClient.swift in Sources */,
 				C0AE509A4FD404191F002C8A /* SiteRobotGeometry.swift in Sources */,
+				0C26213570590504DB81CE13 /* SiteRobotHazards.swift in Sources */,
 				3DDFC907A8890ADC5C590545 /* SiteRobotLocalization.swift in Sources */,
 				79ACB5A28575C17B0CF8FCE6 /* SiteRobotPanel.swift in Sources */,
 				F8AD9AED45472BA4CC8AD062 /* SiteRoomCapture.swift in Sources */,
@@ -1577,6 +1586,7 @@
 				0241B66CD1765EBCC8719BE3 /* SitePhotoReconstruction.swift in Sources */,
 				F7A2875A123CFD53A077310A /* SiteRobotClient.swift in Sources */,
 				D2D83E7D232E0FD0DC79BDD6 /* SiteRobotGeometry.swift in Sources */,
+				A0F2E9783DA73B448260B202 /* SiteRobotHazards.swift in Sources */,
 				283EDB831778E1FAE64ED3FF /* SiteRobotLocalization.swift in Sources */,
 				4E16DD99AA51C9D3FA3CA9B3 /* SiteRobotPanel.swift in Sources */,
 				1E44FCF701782E2337236E5C /* SiteRoomCapture.swift in Sources */,

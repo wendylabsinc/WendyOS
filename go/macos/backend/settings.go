@@ -9,7 +9,9 @@ import (
 	"time"
 
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 type NetworkSettings struct {
@@ -22,11 +24,46 @@ type NetworkSettings struct {
 	WiFiError, ScanError, KnownError, MeshError string
 }
 
+type liteMeshConnection interface {
+	GetNetStatus(time.Duration) (*litepb.WendyComNetStatus, error)
+	SetNetConfig(*litepb.WendyComNetConfig, time.Duration) (*litepb.WendyComNetStatus, error)
+}
+
 func (b *Backend) NetworkSettings(session uint64) (NetworkSettings, error) {
 	ctx, done := b.begin()
 	defer done()
 	if session == 0 {
 		return NetworkSettings{}, errors.New("select a device first")
+	}
+	if err := b.validSession(session); err != nil {
+		return NetworkSettings{}, err
+	}
+	if b.lite != nil {
+		client, ok := b.lite.(liteMeshConnection)
+		if !ok {
+			return NetworkSettings{}, errors.New("mesh settings are unavailable on this connection")
+		}
+		status, err := client.GetNetStatus(10 * time.Second)
+		if err != nil {
+			return NetworkSettings{}, err
+		}
+		if status.GetDesired() == nil {
+			return NetworkSettings{}, errors.New("device returned no saved mesh settings")
+		}
+		config := status.GetDesired()
+		state := strings.ToLower(strings.TrimPrefix(status.GetState().String(), "WENDY_COM_NET_"))
+		if status.GetState() == litepb.WendyComNetState_WENDY_COM_NET_RUNNING && status.GetActiveLinks() == 0 {
+			state = "Waiting for peers"
+		}
+		mesh := &pb.LocalMeshStatus{
+			Configured: &pb.LocalMeshConfiguration{Participate: config.Enabled, Ble: config.Ble, InfrastructureWifi: config.InfrastructureWifi, Nan: config.Nan},
+			State:      state, RuntimeAvailable: status.GetState() == litepb.WendyComNetState_WENDY_COM_NET_RUNNING,
+			AuthenticatedPeers: status.GetActiveLinks(),
+		}
+		if status.GetErrorCode() != 0 {
+			mesh.Detail = fmt.Sprintf("Device reported mesh error %d.", status.GetErrorCode())
+		}
+		return NetworkSettings{Mesh: mesh}, nil
 	}
 	conn, err := b.connection(session)
 	if err != nil {
@@ -213,6 +250,36 @@ func (b *Backend) ConfigureMesh(session uint64, changed, enabled uint32) error {
 	defer done()
 	if session == 0 {
 		return errors.New("select a device first")
+	}
+	if err := b.validSession(session); err != nil {
+		return err
+	}
+	if b.lite != nil {
+		if changed != 1 || enabled & ^uint32(1) != 0 {
+			return errors.New("only mesh participation can be changed here on Wendy Lite")
+		}
+		client, ok := b.lite.(liteMeshConnection)
+		if !ok {
+			return errors.New("mesh settings are unavailable on this connection")
+		}
+		status, err := client.GetNetStatus(10 * time.Second)
+		if err != nil {
+			return err
+		}
+		if status.GetDesired() == nil {
+			return errors.New("device returned no saved mesh settings")
+		}
+		// Read immediately before writing and preserve carriers, limits, and unknown fields.
+		config := proto.Clone(status.Desired).(*litepb.WendyComNetConfig)
+		config.Enabled = enabled&1 != 0
+		updated, err := client.SetNetConfig(config, 20*time.Second)
+		if err != nil {
+			return err
+		}
+		if updated.GetDesired() == nil || updated.GetDesired().Enabled != config.Enabled {
+			return errors.New("device did not confirm the mesh participation setting")
+		}
+		return nil
 	}
 	conn, err := b.connection(session)
 	if err != nil {
