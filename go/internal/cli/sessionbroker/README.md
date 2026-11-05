@@ -14,7 +14,7 @@ by discovery can expire after five minutes without command activity or recent
 transit; explicit connect retains it until disconnect or credential invalidation.
 Explicit disconnect cancels and joins that participant.
 The non-secret recipe and installation state remain in the selected persistent
-profile, marked disconnected until an explicit `wendy device wendy-net connect`.
+profile, marked disconnected until an explicit `wendy net connect`.
 Ordinary mesh selections and Nearby discovery do not undo an explicit disconnect.
 Connect enables automatic discovery; saved first-hop choices are ignored.
 Observational reads never start or enable a context. Credential replacement
