@@ -15,9 +15,9 @@ Sign in to your organization and connect this computer to the mesh:
 
 ```sh
 wendy auth login
-wendy device wendy-net connect
+wendy net connect
 wendy discover --type mesh
-wendy device wendy-net services
+wendy net services
 ```
 
 The CLI automatically finds and authenticates nearby WendyOS and supported
@@ -35,13 +35,13 @@ Commands share one background router for the selected sign-in profile. After
 peers. Stop it when finished:
 
 ```sh
-wendy device wendy-net disconnect
+wendy net disconnect
 ```
 
 Disconnecting closes this computer's mesh connections and stops it forwarding
 traffic. Your saved sign-in and mesh identity remain available for reconnecting.
 Discovery and device commands leave the mesh disconnected until you explicitly
-run `wendy device wendy-net connect` again. Ordinary LAN management remains
+run `wendy net connect` again. Ordinary LAN management remains
 available while this computer is disconnected from the mesh.
 
 A requested Nearby or mesh discovery can also start a temporary router using the
@@ -81,7 +81,7 @@ ordinary device commands:
 wendy --device mesh://TENANT_UUID/DEVICE_UUID device info
 wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net status
 wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net topology
-wendy device wendy-net services --type _http._tcp
+wendy net services --type _http._tcp
 ```
 
 Discovery lists devices and services only while they have a current, verified
