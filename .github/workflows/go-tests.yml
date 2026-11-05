@@ -136,14 +136,21 @@ jobs:
         # the former 120s under -race on main (2026-10-06).
         run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
 
-      - name: Check camera discovery on a shared LAN
+      - name: Check camera DHCP lifecycle and migration
         # Privileged kernel fixtures run only for repository-owned branches.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         working-directory: go
         run: |
           go test -c -o "$RUNNER_TEMP/ipcam.test" ./internal/agent/ipcam
-          sudo unshare --mount --net --propagation private env WENDY_TEST_NETNS=1 \
-            "$RUNNER_TEMP/ipcam.test" -test.run '^TestDHCPLinuxSharedLANClient$' -test.v -test.timeout 30s
+          sudo unshare --mount --net --propagation private sh -eu -c '
+            # Carrier reads must see the interfaces in this network namespace.
+            mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
+            # Packet fixtures put both veth ends in this disposable namespace.
+            sysctl -qw net.ipv4.conf.all.accept_local=1 \
+              net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0
+            export WENDY_TEST_NETNS=1
+            exec "$1" -test.run "^TestDHCPLinux" -test.v -test.timeout 120s
+          ' sh "$RUNNER_TEMP/ipcam.test"
 
       - name: Check runtime skill packaging
         run: python3 scripts/sync-agent-skills.py --check
