@@ -23,4 +23,3 @@ the enabled set, so list every group you still need.
 - Enrollment (`setup`): `cloud_enroll_device` uses the current Cloud login;
   `provisioning_start` needs a supplied enrollment token; `provisioning_status`
   checks the result.
-
