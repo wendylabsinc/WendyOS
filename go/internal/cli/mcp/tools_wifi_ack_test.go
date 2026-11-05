@@ -104,6 +104,10 @@ func TestMCPWiFiDisconnectReportsOutcome(t *testing.T) {
 				if result.IsError || !outcome.Acknowledged || outcome.CompletionConfirmed || outcome.Success != nil || outcome.State != "requested" {
 					t.Fatalf("requested = %+v, error = %v", outcome, result.IsError)
 				}
+			case "cancel":
+				if !result.IsError || outcome.State != "requested" || !outcome.Acknowledged || outcome.CompletionConfirmed || outcome.Success != nil {
+					t.Fatalf("cancellation lost accepted request: %+v", outcome)
+				}
 			case "operation error":
 				if !result.IsError || !outcome.CompletionConfirmed || outcome.Success == nil || *outcome.Success {
 					t.Fatalf("operation error = %+v, error = %v", outcome, result.IsError)

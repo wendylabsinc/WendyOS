@@ -38,11 +38,12 @@ Shows the device's current WiFi connection.
 Disconnects the device from its current WiFi network. If that WiFi connection
 also carries your command, the device may disconnect before its final reply can
 reach you. The CLI distinguishes a confirmed disconnection from a request whose
-result is still unknown.
+result is still unknown. Once the device accepts the request, it attempts the
+disconnection shortly even if the CLI loses contact before finishing the exchange.
 
 If the result is unknown, reach the device over another working connection and
-run `wendy device wifi status`. A message saying the device received the request
-does not prove that WiFi disconnected. Older agents may lose contact without
+run `wendy device wifi status`. An accepted request means the device will attempt
+the disconnect; it does not prove that the operation succeeded. Older agents may lose contact without
 confirming receipt at all; an interrupted reply remains an unknown outcome.
 Wendy Lite and explicit Bluetooth operations keep their existing behavior.
 
