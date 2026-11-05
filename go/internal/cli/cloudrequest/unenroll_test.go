@@ -4,76 +4,45 @@ import (
 	"context"
 	"crypto/mldsa"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
-	"github.com/wendylabsinc/wendy/go/proto/gen/pkicorepb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
-type principalCloud struct {
+type deletionCloud struct {
 	*fakeCloud
-	requests     []*cloudpbv2.SignedRequest
-	responseWire []byte
+	requests []*cloudpbv2.SignedRequest
 }
 
-func (f *principalCloud) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
-	if method == cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName {
+func (f *deletionCloud) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+	if method == cloudpbv2.AssetService_DeleteAsset_FullMethodName {
 		f.requests = append(f.requests, proto.Clone(args.(*cloudpbv2.SignedRequest)).(*cloudpbv2.SignedRequest))
-		reply.(*pkicorepb.RevokeByPrincipalResponse).RevokedCount = 3
-		if f.responseWire != nil {
-			if err := proto.Unmarshal(f.responseWire, reply.(*pkicorepb.RevokeByPrincipalResponse)); err != nil {
-				return err
-			}
-		}
 	}
 	return f.fakeCloud.Invoke(ctx, method, args, reply, opts...)
 }
 
-func TestPrincipalRevocationReadsOldAndAdditiveResponses(t *testing.T) {
-	// The caller returns the existing count. Fencing annotations are server
-	// metadata, not a new client-side success requirement.
-	for _, tt := range []struct {
-		name  string
-		wire  string
-		count int
-	}{
-		{"old", "0807", 7},
-		{"with-fencing", "080910011a07626c6f636b6564", 9},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			auth, _, _ := testAuth(t)
-			response, err := hex.DecodeString(tt.wire)
-			if err != nil {
-				t.Fatal(err)
-			}
-			conn := &principalCloud{fakeCloud: &fakeCloud{t: t}, responseWire: response}
-			count, err := RevokePrincipalCertificates(context.Background(), conn, auth, "lite-441bf6804824")
-			if err != nil || count != tt.count || len(conn.requests) != 1 {
-				t.Fatalf("revocation = %d, %v, %d attempts", count, err, len(conn.requests))
-			}
-		})
-	}
-}
-
-func TestPrincipalRevocationSignsExactLiteIdentityAndFreshRetry(t *testing.T) {
+// DeleteAsset is the only carrier of the revoke_principal authority Cloud
+// relays to PKI (WDY-3939 #14). Lite identities are not UUIDs, and a retry
+// after a refused kid needs a fresh PKI replay identity.
+func TestDeleteAssetSignsExactLiteIdentityAndFreshRetry(t *testing.T) {
+	const device = "lite-441bf6804824"
 	auth, key, der := testAuth(t)
-	conn := &principalCloud{fakeCloud: &fakeCloud{t: t, refuse: []error{status.Error(codes.PermissionDenied, "kid unknown")}}}
-	count, err := RevokePrincipalCertificates(context.Background(), conn, auth, "lite-441bf6804824")
-	if err != nil || count != 3 || len(conn.requests) != 2 {
-		t.Fatalf("revocation = %d, %v, %d attempts", count, err, len(conn.requests))
+	conn := &deletionCloud{fakeCloud: &fakeCloud{t: t, refuse: []error{status.Error(codes.PermissionDenied, "kid unknown")}}}
+	request := &cloudpbv2.DeleteAssetRequest{Id: "6fab25c6-01d3-4840-abcc-9d47259069a4", ExpectedDeviceId: proto.String(device)}
+	if err := Invoke(context.Background(), conn, auth, cloudpbv2.AssetService_DeleteAsset_FullMethodName, request, &cloudpbv2.DeleteAssetResponse{}); err != nil || len(conn.requests) != 2 {
+		t.Fatalf("deletion = %v, %d attempts", err, len(conn.requests))
 	}
 	seen := map[string]bool{}
 	for _, signed := range conn.requests {
-		var req cloudpbv2.RevokePrincipalCertificatesRequest
-		if err := proto.Unmarshal(signed.Payload, &req); err != nil || req.GetOrganizationId() != testTenant || signed.PayloadType != "wendycloud.v2.RevokePrincipalCertificatesRequest" {
+		var req cloudpbv2.DeleteAssetRequest
+		if err := proto.Unmarshal(signed.Payload, &req); err != nil || !proto.Equal(&req, request) || signed.PayloadType != "wendycloud.v2.DeleteAssetRequest" {
 			t.Fatalf("wrong request scope: %v, %v", &req, err)
 		}
 		parts := strings.Split(string(signed.PkiManagementRequest), ".")
@@ -102,7 +71,7 @@ func TestPrincipalRevocationSignsExactLiteIdentityAndFreshRetry(t *testing.T) {
 		if err := json.Unmarshal(payload, &claims); err != nil {
 			t.Fatal(err)
 		}
-		if claims.Op != "revoke_principal" || claims.Tenant != testTenant || claims.Principal != "spiffe://wendy.sh/tenant/"+testTenant+"/device/lite-441bf6804824" || claims.Exp-claims.Iat != 30 {
+		if claims.Op != "revoke_principal" || claims.Tenant != testTenant || claims.Principal != "spiffe://wendy.sh/tenant/"+testTenant+"/device/"+device || claims.Exp-claims.Iat != 30 {
 			t.Fatalf("wrong management authority: %s", payload)
 		}
 		if _, err := uuid.Parse(claims.JTI); err != nil || seen[claims.JTI] {
@@ -119,12 +88,13 @@ func TestPrincipalRevocationSignsExactLiteIdentityAndFreshRetry(t *testing.T) {
 	}
 }
 
-func TestPrincipalRevocationRejectsInvalidDeviceBeforeRPC(t *testing.T) {
+func TestDeleteAssetRejectsUnsafeDeviceBeforeRPC(t *testing.T) {
 	auth, _, _ := testAuth(t)
 	for _, device := range []string{"", "../other", "id?query", "id#fragment", "id%2fother", "id\n", strings.Repeat("a", 65)} {
-		conn := &fakeCloud{t: t}
-		if _, err := RevokePrincipalCertificates(context.Background(), conn, auth, device); err == nil || len(conn.calls) != 0 {
-			t.Errorf("device %q: err %v, calls %v", device, err, conn.calls)
+		conn := &deletionCloud{fakeCloud: &fakeCloud{t: t}}
+		request := &cloudpbv2.DeleteAssetRequest{Id: "6fab25c6-01d3-4840-abcc-9d47259069a4", ExpectedDeviceId: proto.String(device)}
+		if err := Invoke(context.Background(), conn, auth, cloudpbv2.AssetService_DeleteAsset_FullMethodName, request, &cloudpbv2.DeleteAssetResponse{}); err == nil || len(conn.requests) != 0 {
+			t.Errorf("device %q: err %v, deletions %d", device, err, len(conn.requests))
 		}
 	}
 }

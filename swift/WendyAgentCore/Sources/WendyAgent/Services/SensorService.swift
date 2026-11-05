@@ -131,7 +131,7 @@ struct SensorService: Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol
         return (sampleRate: UInt32(format.sampleRate), channels: UInt32(format.channelCount))
     }
 
-    func micAuthorized() -> Bool {
+    var micAuthorized: @Sendable () -> Bool = {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 }
