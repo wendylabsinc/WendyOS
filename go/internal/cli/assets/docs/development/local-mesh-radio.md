@@ -121,8 +121,7 @@ discovered automatically rather than entered in a separate leaf list.
 
 Use matching operator-capable agents and clients. Upgrading the CLI stops and
 replaces an older local background router when needed. Previously saved router
-choices are no longer used: connections are discovered automatically. Existing
-explicit connections stay enabled.
+choices are no longer used: connections are discovered automatically. Previously enabled mesh participation stays enabled.
 
 Older agents may reject saved mesh identity data with `invalid directory
 receipt`. Downgrading after joining the mesh is not yet qualified. Do not delete
