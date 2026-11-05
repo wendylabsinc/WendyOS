@@ -203,7 +203,7 @@ func finishUnconfirmedWiFiDisconnect(ctx context.Context, result WiFiDisconnectR
 	if errors.Is(err, io.EOF) || status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded || status.Code(err) == codes.Canceled {
 		return result, nil
 	}
-	return result, fmt.Errorf("could not confirm the WiFi disconnect request: %w", err)
+	return result, fmt.Errorf("could not confirm completion of the WiFi disconnect: %w", err)
 }
 
 func disconnectWiFiLegacy(ctx context.Context, client agentpb.WendyAgentServiceClient) (WiFiDisconnectResult, error) {
