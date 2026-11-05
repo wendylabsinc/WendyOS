@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -109,6 +111,7 @@ type oidcEnrollmentServer struct {
 	md            metadata.MD
 	err           error
 	response      *cloudpbv2.EnrollDeviceResponse
+	enroll        func(*cloudpbv2.EnrollDeviceRequest) error
 }
 
 // EnrollDevice behaves like the WDY-3458 broker gate: a signature carried in a
@@ -124,6 +127,11 @@ func (s *oidcEnrollmentServer) EnrollDevice(ctx context.Context, in *cloudpbv2.S
 	s.signed, s.req = in, &cloudpbv2.EnrollDeviceRequest{}
 	if err := proto.Unmarshal(in.GetPayload(), s.req); err != nil {
 		return nil, status.Error(codes.PermissionDenied, "payload does not decode")
+	}
+	if s.enroll != nil {
+		if err := s.enroll(s.req); err != nil {
+			return nil, err
+		}
 	}
 	// Like Cloud, adopt the requested device UUID as the asset id unless the
 	// test names one.
@@ -381,6 +389,93 @@ func TestOIDCEnrollmentFailures(t *testing.T) {
 			}
 			if (cloud.req != nil) != tc.wantCloud || (agent.req != nil) != tc.wantAgent {
 				t.Fatal("unexpected RPC after failed enrollment step")
+			}
+		})
+	}
+}
+
+func TestOIDCEnrollmentNameConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		interactive bool
+		json        bool
+		cloudCode   codes.Code
+		promptErr   error
+		agentCode   codes.Code
+		wantPrompts int
+		wantCalls   int
+		wantCode    codes.Code
+		wantCancel  bool
+	}{
+		{name: "repeated conflicts", interactive: true, cloudCode: codes.AlreadyExists, wantPrompts: 2, wantCalls: 3},
+		{name: "noninteractive", cloudCode: codes.AlreadyExists, wantCalls: 1, wantCode: codes.AlreadyExists},
+		{name: "json", interactive: true, json: true, cloudCode: codes.AlreadyExists, wantCalls: 1, wantCode: codes.AlreadyExists},
+		{name: "cancel", interactive: true, cloudCode: codes.AlreadyExists, promptErr: tui.ErrCancelled, wantPrompts: 1, wantCalls: 1, wantCancel: true},
+		{name: "unavailable", interactive: true, cloudCode: codes.Unavailable, wantCalls: 1, wantCode: codes.Unavailable},
+		{name: "invalid argument", interactive: true, cloudCode: codes.InvalidArgument, wantCalls: 1, wantCode: codes.InvalidArgument},
+		{name: "agent conflict after mint", interactive: true, agentCode: codes.AlreadyExists, wantCalls: 1, wantCode: codes.AlreadyExists},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interactive, prompt, json := isInteractiveTerminalFn, promptEnrollmentReplacementNameFn, jsonOutput
+			t.Cleanup(func() {
+				isInteractiveTerminalFn, promptEnrollmentReplacementNameFn, jsonOutput = interactive, prompt, json
+			})
+			isInteractiveTerminalFn = func() bool { return tc.interactive }
+			jsonOutput = tc.json
+			names := []string{"joannis-agx-orin", "joannis-orin", "joannis-orin-two"}
+			prompts, calls := 0, 0
+			var deviceID string
+			agent := &acmeProvisioningServer{startErr: status.Error(tc.agentCode, "agent refused")}
+			promptEnrollmentReplacementNameFn = func(_ context.Context, taken string) (string, error) {
+				if prompts >= len(names)-1 {
+					t.Fatal("unexpected extra name prompt")
+				}
+				if taken != names[prompts] || agent.req != nil {
+					t.Fatalf("prompt for %q after agent request %v", taken, agent.req)
+				}
+				prompts++
+				return names[prompts], tc.promptErr
+			}
+			cloud := &oidcEnrollmentServer{
+				response: &cloudpbv2.EnrollDeviceResponse{CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)},
+				enroll: func(req *cloudpbv2.EnrollDeviceRequest) error {
+					if calls >= len(names) || req.GetName() != names[calls] {
+						return status.Error(codes.Internal, "unexpected name or extra mint attempt")
+					}
+					if calls == 0 {
+						deviceID = req.GetDeviceId()
+					} else if req.GetDeviceId() != deviceID {
+						return status.Error(codes.Internal, "name retry changed device identity")
+					}
+					calls++
+					if calls < len(names) {
+						return status.Error(tc.cloudCode, "enrollment refused")
+					}
+					return nil
+				},
+			}
+			conn, host := enrollmentServers(t, cloud, agent)
+			auth := oidcEnrollmentAuth(t)
+			auth.CloudGRPC = host
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := runEnrollDevice(ctx, conn, auth, names[0], 0)
+			if tc.wantCancel {
+				if !errors.Is(err, ErrUserCancelled) {
+					t.Fatalf("error = %v, want cancellation", err)
+				}
+			} else if status.Code(err) != tc.wantCode {
+				t.Fatalf("error = %v, want %v", err, tc.wantCode)
+			}
+			if prompts != tc.wantPrompts || calls != tc.wantCalls {
+				t.Fatalf("prompts = %d, calls = %d; want %d, %d", prompts, calls, tc.wantPrompts, tc.wantCalls)
+			}
+			if tc.wantCode == codes.OK && !tc.wantCancel {
+				if agent.req.GetDeviceId() != deviceID || agent.req.GetEabKeyId() != "eab-id" {
+					t.Fatal("accepted enrollment credential was not delivered")
+				}
+			} else if tc.agentCode == codes.OK && agent.req != nil {
+				t.Fatal("agent provisioning started after failed mint")
 			}
 		})
 	}

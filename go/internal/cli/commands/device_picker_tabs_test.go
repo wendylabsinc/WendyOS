@@ -2,10 +2,13 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -271,5 +274,33 @@ func TestDevicePickerEnrollmentUnavailable(t *testing.T) {
 				t.Fatalf("missing explanation %q: %q", tt.wantMessage, m.View())
 			}
 		})
+	}
+}
+
+func TestDevicePickerFitsWindowAsRowsArrive(t *testing.T) {
+	for _, width := range []int{60, 129} {
+		for _, height := range []int{16, 24, 74} {
+			t.Run(fmt.Sprintf("%dx%d", width, height), func(t *testing.T) {
+				picker := tui.NewPicker()
+				picker.MergeItem = mergePickerItem
+				m := newDevicePickerModel(context.Background(), picker, nil, 0, false, devicePickerLocalTab)
+				updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+				m = updated.(devicePickerModel)
+				for i := range 40 {
+					dev := models.LANDevice{DisplayName: fmt.Sprintf("board-%02d", i), Hostname: fmt.Sprintf("board-%02d.local", i), IPAddress: "192.168.100.126", AgentVersion: "2026.10.18-meshtopology-e56e1ef-dev", OSVersion: "WendyOS-0.20.1", ProbeFailure: missingLANCredentials()}
+					updated, _ = m.Update(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(dev, false, tui.ProbeFailed)}}})
+					m = updated.(devicePickerModel)
+					view := m.View()
+					if got := lipgloss.Height(view); got > height {
+						t.Fatalf("%d devices: view height %d exceeds %d:\n%s", i+1, got, height, view)
+					}
+					for _, line := range strings.Split(view, "\n") {
+						if got := ansi.StringWidth(line); got > width {
+							t.Fatalf("%d devices: line width %d exceeds %d: %q", i+1, got, width, line)
+						}
+					}
+				}
+			})
+		}
 	}
 }

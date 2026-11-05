@@ -234,6 +234,36 @@ struct RobotRotationOffer {
     mutating func dismiss() { offered = true; waitingSince = nil }
 }
 
+enum RobotRotationState: Equatable {
+    case idle, waitingForMeasurements
+    case checking(Int), turning(Int), matching(Int)
+    case stopped(String)
+
+    var title: String? {
+        switch self {
+        case .idle: nil
+        case .waitingForMeasurements: "Waiting for sensors"
+        case .checking: "Checking space to turn"
+        case .turning: "Looking around"
+        case .matching: "Finding Go2 in the room"
+        case .stopped: "Rotation stopped"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case .idle: nil
+        case .waitingForMeasurements: "Go2 will stay still until fresh LiDAR and odometry arrive, then continue automatically."
+        case .checking(let turn): "Checking clearance for turn \(turn) of 12."
+        case .turning(let turn): "Turn \(turn) of 12. Keep Go2 in sight and its turning area clear."
+        case .matching(let turn): "Comparing the view after turn \(turn) of 12 with your room."
+        case .stopped(let reason): reason
+        }
+    }
+
+    var canRetry: Bool { if case .stopped = self { true } else { false } }
+}
+
 // Only accepting the rotation prompt arms movement. Passive observations never do.
 struct RobotPositionSearch {
     enum Outcome { case exhausted, timedOut }

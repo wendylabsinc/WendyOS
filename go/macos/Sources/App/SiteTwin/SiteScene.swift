@@ -9,6 +9,7 @@ public struct SiteScene: View {
     let modelURL: URL
     let site: Site
     let cameraGeometry: [UUID: SiteCameraGeometry]
+    let cameraCandidates: [UUID: SiteCameraGeometry]
     let colorSources: [UUID: SiteCameraColorSource]
     let colorStatus: ([UUID: String]) -> Void
     let people: [SitePersonTrack]
@@ -27,6 +28,7 @@ public struct SiteScene: View {
         modelURL: URL,
         site: Site,
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
+        cameraCandidates: [UUID: SiteCameraGeometry] = [:],
         colorSources: [UUID: SiteCameraColorSource] = [:],
         colorStatus: @escaping ([UUID: String]) -> Void = { _ in },
         people: [SitePersonTrack] = [],
@@ -44,6 +46,7 @@ public struct SiteScene: View {
         self.modelURL = modelURL
         self.site = site
         self.cameraGeometry = cameraGeometry
+        self.cameraCandidates = cameraCandidates
         self.colorSources = colorSources
         self.colorStatus = colorStatus
         self.people = people
@@ -60,11 +63,12 @@ public struct SiteScene: View {
     }
 
     public var body: some View {
-        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled && colorSources.isEmpty && people.isEmpty)) { context in
+        TimelineView(.animation(minimumInterval: 0.25, paused: robot == nil && !fog.enabled && colorSources.isEmpty && people.isEmpty && cameraCandidates.isEmpty)) { context in
             SceneSurface(
                 modelURL: modelURL,
                 site: site,
                 cameraGeometry: cameraGeometry,
+                cameraCandidates: cameraCandidates,
                 colorSources: colorSources,
                 colorStatus: colorStatus,
                 people: people,
@@ -97,6 +101,7 @@ private struct SceneSurface {
     var modelURL: URL
     var site: Site
     var cameraGeometry: [UUID: SiteCameraGeometry]
+    var cameraCandidates: [UUID: SiteCameraGeometry]
     var colorSources: [UUID: SiteCameraColorSource]
     var colorStatus: ([UUID: String]) -> Void
     var people: [SitePersonTrack]
@@ -125,11 +130,13 @@ private struct SceneSurface {
         var needsFraming = true
         var robotRoot = SCNNode()
         var scanRoot = SCNNode()
+        var hazardsRoot = SCNNode()
         var robotModel = SCNNode()
         var orders = SCNNode()
         var selection = SCNNode()
         var lastCameras: [SiteCamera]?
         var lastCameraGeometry: [UUID: SiteCameraGeometry] = [:]
+        var lastCameraCandidates: [UUID: SiteCameraGeometry] = [:]
         var lastMarkerScale: Float?
         var lastRobot: SiteRobotRenderState?
         let fogRenderer = SiteFogRenderer()
@@ -174,8 +181,12 @@ private struct SceneSurface {
                     scanRoot = SCNNode()
                     scanRoot.name = "localization:scan"
                     scene.rootNode.addChildNode(scanRoot)
+                    hazardsRoot = SCNNode()
+                    hazardsRoot.name = "navigation:hazards"
+                    scene.rootNode.addChildNode(hazardsRoot)
                     lastCameras = nil
                     lastCameraGeometry = [:]
+                    lastCameraCandidates = [:]
                     lastRobot = nil
                     view.scene = scene
                     loadedURL = parent.modelURL
@@ -235,27 +246,49 @@ private struct SceneSurface {
             let currentGeometry = parent.cameraGeometry.filter {
                 $0.value.pose.isCurrent(revision: parent.site.modelRevision, now: Date())
             }
-            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry || lastMarkerScale != scale else { return }
+            let currentCandidates = parent.cameraCandidates.filter {
+                $0.value.pose.isCurrent(revision: parent.site.modelRevision, now: Date())
+            }
+            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry
+                    || lastCameraCandidates != currentCandidates || lastMarkerScale != scale else { return }
             lastCameras = parent.site.cameras
             lastCameraGeometry = currentGeometry
+            lastCameraCandidates = currentCandidates
             lastMarkerScale = scale
             SCNTransaction.flush()
             markers.childNodes.forEach { $0.removeFromParentNode() }
             for camera in parent.site.cameras {
-                let reported = parent.cameraGeometry[camera.id]
-                let current = reported?.pose.isCurrent(revision: parent.site.modelRevision, now: Date()) == true ? reported : nil
+                let candidate = camera.position == nil && currentGeometry[camera.id] == nil ? currentCandidates[camera.id] : nil
+                let unsure = candidate != nil
+                let current = currentGeometry[camera.id] ?? candidate
                 guard let position = current?.pose.position ?? camera.position else { continue }
                 let geometry = SCNSphere(radius: 0.08)
-                geometry.firstMaterial?.diffuse.contents = platformAccent
+                geometry.firstMaterial?.diffuse.contents = unsure ? platformEstimated : platformAccent
                 geometry.firstMaterial?.lightingModel = .constant
                 let node = SCNNode(geometry: geometry)
                 node.name = "sensor:\(camera.id.uuidString)"
                 node.position = SCNVector3(position.x, position.y, position.z)
-                if let current {
+                if let current, !unsure {
                     node.simdPosition = SiteCameraWallPlacement.displayPosition(
                         node.simdPosition, forward: SIMD3<Float>(current.pose.forward), in: model)
                 }
                 markers.addChildNode(node)
+                if unsure {
+                    node.opacity = 0.65
+                    let text = SCNText(string: "Unsure", extrusionDepth: 0)
+                    text.font = .systemFont(ofSize: 12, weight: .semibold)
+                    text.flatness = 0.2
+                    text.firstMaterial?.diffuse.contents = platformEstimated
+                    text.firstMaterial?.lightingModel = .constant
+                    let label = SCNNode(geometry: text)
+                    label.name = node.name
+                    let (low, high) = text.boundingBox
+                    label.pivot = SCNMatrix4MakeTranslation((low.x + high.x) / 2, low.y, 0)
+                    label.scale = SCNVector3(0.015, 0.015, 0.015)
+                    label.position = SCNVector3(0, 0.16, 0)
+                    label.constraints = [SCNBillboardConstraint()]
+                    node.addChildNode(label)
+                }
                 if let current, let rays = current.lens?.boundaryRays {
                     // Two metres is a drawing length, not sensor range or visible
                     // coverage. Surface occlusion and detection range are unknown.
@@ -309,7 +342,12 @@ private struct SceneSurface {
         }
 
         private func updateRobot() {
-            guard let state = parent.robot else { robotRoot.isHidden = true; orders.isHidden = true; scanRoot.isHidden = true; return }
+            guard let state = parent.robot else { robotRoot.isHidden = true; orders.isHidden = true; scanRoot.isHidden = true; hazardsRoot.isHidden = true; return }
+            hazardsRoot.isHidden = state.hazards.isEmpty || !state.fresh || state.placing ||
+                !(0...0.75).contains(parent.refreshDate.timeIntervalSince(state.receivedAt))
+            if lastRobot?.hazards != state.hazards {
+                SiteRobotHazardRenderer.update(hazardsRoot, hazards: state.hazards)
+            }
             scanRoot.isHidden = state.scan.isEmpty
             if lastRobot?.scan != state.scan {
                 scanRoot.childNodes.forEach { $0.removeFromParentNode() }

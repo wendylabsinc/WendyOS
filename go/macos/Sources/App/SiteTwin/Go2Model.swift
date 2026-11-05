@@ -14,6 +14,7 @@ public struct SiteRobotRenderState: Equatable {
     var destination: SitePoint?
     var placing = false
     var scan: [RobotScanPoint] = []
+    var hazards: [SiteRobotHazard] = []
 }
 
 /// Original Go2 meshes and kinematic hierarchy, not a generic quadruped icon.

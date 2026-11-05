@@ -1270,6 +1270,9 @@ func (m *PickerModel) refreshTableWithCursorKey(cursorKey string) {
 		// on a narrow window: the table gives up that many rows.
 		height = max(1, height-len(pickerKeyHintLines(m.keyHints(), m.width)))
 	}
+	if height > 0 && m.deviceLegend {
+		height = max(1, height-1)
+	}
 	if hintHeight := PickerHintHeight(visible, m.width, "  "); height > 0 && hintHeight > 0 {
 		height = max(1, height-hintHeight-2)
 	}

@@ -103,6 +103,7 @@ func TestSerialExternalDeviceResponsive(t *testing.T) {
 		Port: "/dev/cu.usbmodem2101", Responsive: true,
 		ID: "esp", Name: "esp", DisplayName: "esp",
 		EnrolledDeviceID: "0b8e3a52-6f1d-4c8e-9a47-2d5f1e6c7b90",
+		TenantID:         "11111111-1111-4111-8111-111111111111",
 	})
 
 	if dev.ConnectionInfo["needsInstall"] != "" {
@@ -115,6 +116,9 @@ func TestSerialExternalDeviceResponsive(t *testing.T) {
 	// row dedups with the board's LAN and BLE rows.
 	if dev.ConnectionInfo["deviceId"] != "esp" {
 		t.Errorf("deviceId = %q, want the hardware id %q", dev.ConnectionInfo["deviceId"], "esp")
+	}
+	if dev.ConnectionInfo["tenantId"] != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("lost enrollment tenant: %+v", dev.ConnectionInfo)
 	}
 	if got, want := dev.ConnectionInfo["enrolledDeviceId"], "0b8e3a52-6f1d-4c8e-9a47-2d5f1e6c7b90"; got != want {
 		t.Errorf("enrolledDeviceId = %q, want %q", got, want)

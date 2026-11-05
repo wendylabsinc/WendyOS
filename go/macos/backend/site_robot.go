@@ -27,6 +27,13 @@ type SiteRobotSnapshot struct {
 	ObservationRevision                                  uint64
 	Route                                                []sitenav.Point // site X, -Z
 	Joints                                               []float64
+	Hazards                                              []SiteRobotHazard
+	HazardsReady                                         bool
+}
+
+type SiteRobotHazard struct {
+	X, Z, Size, Yaw float64
+	Drop            bool
 }
 
 // Each handle is bound to one authenticated device session and robot serial.
@@ -54,6 +61,7 @@ type SiteRobot struct {
 	navigationCommands              []siteNavigationCommand
 	preview                         []sitenav.Point
 	goal                            sitenav.Point
+	personExclusion                 *sitenav.Point // robot frame; only set by spatial summon orders
 	moving                          bool
 	lookTurn                        *siteLookTurn
 	lookState                       int
@@ -379,6 +387,11 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		return
 	}
 	p := r.observed.Pose.Position
+	if r.personExclusion != nil && !personalSpaceClear(r.personExclusion, append([]sitenav.Point{p}, r.route...)) {
+		r.message = "Stopped to preserve clearance around the wearer."
+		r.stopLocked()
+		return
+	}
 	if !r.checkForwardProgressLocked() {
 		return
 	}
@@ -402,34 +415,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	}
 	grid := r.navigationGridLocked(r.departure)
 	if !grid.Transition(p, r.observed.Pose.Yaw, r.route[0]) {
-		if r.allowUnobservedFloor {
-			r.message = "Detected obstacle or drop on the route. Movement stopped."
-			r.stopLocked()
-			return
-		}
-		// Stop before planning a new route around changed occupied cells.
-		if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
-			r.message = "Could not confirm Stop."
-			r.stopLocked()
-			return
-		}
-		path, err := grid.PlanPose(p, r.observed.Pose.Yaw, r.goal)
-		if err != nil {
-			r.message = err.Error()
-			r.stopLocked()
-			return
-		}
-		arrivalYaw := sitenav.Heading(path[len(path)-2], r.goal)
-		if err := r.navigationGridLocked(nil).PoseClearanceError(r.goal, arrivalYaw, "the destination"); err != nil {
-			r.message = err.Error()
-			r.stopLocked()
-			return
-		}
-		r.route = path[1:]
-		r.routeOrigin = p
-		r.forwardOrigin = nil
-		// Planning can outlast a sensor or UI lease. Stay stopped until the
-		// next tick rechecks freshness before issuing another MOVE.
+		r.replanLocked(grid, p)
 		return
 	}
 	forward, turn := sitenav.Velocity(p, r.observed.Pose.Yaw, r.route[0])
@@ -437,8 +423,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	if turn != 0 {
 		stopYaw := r.observed.Pose.Yaw + math.Copysign(sitenav.TurnStoppingAngle, turn)
 		if !grid.Turn(p, r.observed.Pose.Yaw, stopYaw) {
-			r.message = "Obstacle or unobserved floor in the turning stopping area."
-			r.stopLocked()
+			r.replanLocked(grid, p)
 			return
 		}
 	}
@@ -447,9 +432,13 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		// 5 cm tracking tolerance. Slow approaches need less forward space.
 		horizon := forward*.5 + forward*forward + .05
 		look := sitenav.Point{X: p.X + math.Cos(r.observed.Pose.Yaw)*horizon, Y: p.Y + math.Sin(r.observed.Pose.Yaw)*horizon}
-		if !grid.Sweep(p, look, r.observed.Pose.Yaw) {
-			r.message = "Obstacle or unobserved floor ahead."
+		if !personalSpaceClear(r.personExclusion, []sitenav.Point{p, look}) {
+			r.message = "Stopped to preserve braking clearance around the wearer."
 			r.stopLocked()
+			return
+		}
+		if !grid.Sweep(p, look, r.observed.Pose.Yaw) {
+			r.replanLocked(grid, p)
 			return
 		}
 	}
@@ -490,12 +479,23 @@ func (r *SiteRobot) Align(sequence uint64, frame string, x, z, floor, yaw float6
 	}
 	r.alignment = sitenav.Alignment{Origin: r.observed.Pose.Position, Site: p, Rotation: yaw - r.observed.Pose.Yaw}
 	r.frame = frame
+	r.personExclusion = nil
 	r.floorY = floor
 	r.preview = nil
 	r.message = "Aligned to this site using robot odometry."
 	return nil
 }
 func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, move bool) error {
+	return r.destination(sequence, frame, x, z, move, nil)
+}
+
+// Summon keeps the headset's confirmed position protected throughout the order.
+// The UI separately owns headset freshness, preview expiry and wearer movement.
+func (r *SiteRobot) Summon(sequence uint64, frame string, x, z, wearerX, wearerZ float64, move bool) error {
+	return r.destination(sequence, frame, x, z, move, &sitenav.Point{X: wearerX, Y: -wearerZ})
+}
+
+func (r *SiteRobot) destination(sequence uint64, frame string, x, z float64, move bool, wearer *sitenav.Point) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sequence <= r.commandSequence {
@@ -521,6 +521,18 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		return errors.New("Invalid destination.")
 	}
 	goal := r.alignment.ToRobot(p)
+	var protected *sitenav.Point
+	if wearer != nil {
+		if !wearer.Valid() || math.Abs(p.Distance(*wearer)-1.5) > .05 {
+			return errors.New("A summon destination must stop 1.5 metres short of the wearer.")
+		}
+		position := r.alignment.ToRobot(*wearer)
+		distance := r.observed.Pose.Position.Distance(position)
+		if distance <= 1.8 || distance > 10 {
+			return errors.New("Summoning requires the wearer to be 1.8 to 10 metres from Go2.")
+		}
+		protected = &position
+	}
 	r.preview = nil
 	r.departure = nil
 	if r.underBodyAllowance {
@@ -530,6 +542,9 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 	if err != nil {
 		r.departure = nil
 		return err
+	}
+	if !personalSpaceClear(protected, path) {
+		return errors.New("The planned route passes too close to the wearer. Choose another position.")
 	}
 	arrivalYaw := r.observed.Pose.Yaw
 	if len(path) > 1 && path[len(path)-2].Distance(goal) > 1e-9 {
@@ -543,6 +558,7 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 	r.lastRouteRequest = &siteRouteRequest{At: time.Now(), Pose: r.observed.Pose, Alignment: r.alignment, SiteTarget: p, OdometryTarget: goal, Route: append([]sitenav.Point(nil), path...), Move: move}
 	r.navigationCommands = nil
 	r.preview = path
+	r.personExclusion = protected
 	r.routeOrigin = r.observed.Pose.Position
 	r.forwardOrigin = nil
 	r.goal = goal
@@ -678,6 +694,13 @@ func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
 	s.MeasurementsReady = r.observed.MeasurementsReady(now) == nil && !r.closed && !r.stopUnconfirmed
 	s.ScanReady = (r.observed.SurfaceReady(now) == nil || r.observed.LocalizationReady(now) == nil) && !r.closed && !r.stopUnconfirmed
 	if err := r.observed.Ready(now); err == nil {
+		s.HazardsReady = s.Aligned
+		if s.HazardsReady {
+			for _, h := range r.observed.Grid.HazardFootprints() {
+				p := r.alignment.ToSite(h.Position)
+				s.Hazards = append(s.Hazards, SiteRobotHazard{X: p.X, Z: -p.Y, Size: h.Size, Yaw: r.alignment.Rotation, Drop: h.Drop})
+			}
+		}
 		s.Ready = s.Aligned && !r.closed && !r.stopUnconfirmed
 		if s.Ready && !r.moving {
 			var departure *sitenav.Departure

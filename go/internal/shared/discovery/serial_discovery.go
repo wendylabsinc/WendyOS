@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
+	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
 // SerialDevice is an ESP32 board reachable over a serial port.
@@ -21,6 +22,7 @@ type SerialDevice struct {
 	// EnrolledDeviceID is the enrolled device UUID the board reported; empty
 	// when it is unenrolled or its firmware predates the field.
 	EnrolledDeviceID string
+	TenantID         string
 	// Responsive is false when Port matched the ESP32 USB VID/PID but never
 	// completed a Wendy Lite identity handshake — a board with no (or
 	// incompatible) Wendy Lite firmware installed. ID/Name/DisplayName are
@@ -48,14 +50,33 @@ var probeIdentityFn = func(port string) (identity *liteclient.DeviceIdentity, op
 		return nil, !errors.Is(err, liteclient.ErrSerialPortUnavailable), err
 	}
 	defer client.Close()
-	identity, err = client.GetDeviceIdentity(3 * time.Second)
+	identity, err = readSerialIdentity(client)
 	return identity, true, err
+}
+
+type serialIdentityReader interface {
+	GetDeviceIdentity(time.Duration) (*liteclient.DeviceIdentity, error)
+	EnrollmentStatus(time.Duration) (*litepb.WendyComEnrollmentChallenge, error)
+}
+
+func readSerialIdentity(client serialIdentityReader) (*liteclient.DeviceIdentity, error) {
+	identity, err := client.GetDeviceIdentity(3 * time.Second)
+	if err != nil || identity == nil || identity.EnrolledDeviceID == "" {
+		return identity, err
+	}
+	// Optional and read-only: unsupported/slow firmware must still appear over
+	// USB. Never associate a tenant with an identity changed during the probe.
+	status, err := client.EnrollmentStatus(500 * time.Millisecond)
+	if err == nil && status.GetEnrolled() && status.GetDeviceId() == identity.EnrolledDeviceID {
+		identity.TenantID = status.GetTenantId()
+	}
+	return identity, nil
 }
 
 // probeWatchdog bounds how long the scan loop waits on a single port's
 // probeIdentityFn call before giving up on it and reporting the port as
 // unresponsive anyway (WDY-2319). probeIdentityFn's own internal budgets
-// (~3s for the serial handshake, up to 3s more for the identity round-trip)
+// (~3s handshake, 3s identity, and an optional 500ms enrollment status read)
 // should keep it well under this in the overwhelming majority of cases —
 // but on some hardware/OS combinations the underlying go.bug.st/serial
 // blocking read syscall can enter a genuine kernel wait that is
@@ -73,8 +94,7 @@ var probeIdentityFn = func(port string) (identity *liteclient.DeviceIdentity, op
 // ever does return, its result is silently discarded), which is the
 // unavoidable cost of not hanging the entire scan pass over one wedged port.
 //
-// Comfortably above the ~6s legitimate worst case (3s handshake + 3s
-// identity) while leaving real margin under DiscoverDevices' 8s
+// Above the ~6.5s legitimate worst case while leaving margin under DiscoverDevices' 8s
 // serialIdleTimeout, so the fix is observable without that outer timeout
 // papering over it.
 var probeWatchdog = 7 * time.Second
@@ -384,6 +404,7 @@ func (d *SerialDiscovery) StartScan(repeatInterval time.Duration) {
 								Name:             identity.Name,
 								DisplayName:      identity.DisplayName,
 								EnrolledDeviceID: identity.EnrolledDeviceID,
+								TenantID:         identity.TenantID,
 								Responsive:       true,
 							}
 						}

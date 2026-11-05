@@ -15,6 +15,8 @@ struct SiteRobotReading: Sendable {
     var lookDirection: Int32 = 0
     var route: [SitePoint]
     var joints: [Double]
+    var hazards: [SiteRobotHazard] = []
+    var hazardsReady = false
 
     // Joint and pose samples animate the scene without rebuilding its controls.
     func hasSameControls(as other: Self) -> Bool {
@@ -22,7 +24,7 @@ struct SiteRobotReading: Sendable {
         aligned == other.aligned && moving == other.moving && arrivalTiming == other.arrivalTiming &&
         usingArrivalTiming == other.usingArrivalTiming && timingUnavailable == other.timingUnavailable &&
         allowUnobservedFloor == other.allowUnobservedFloor && scanReady == other.scanReady && measurementsReady == other.measurementsReady && underBodyAllowance == other.underBodyAllowance &&
-        floorY == other.floorY && route == other.route
+        floorY == other.floorY && route == other.route && hazardsReady == other.hazardsReady
     }
 }
 struct SiteRobotCandidate: Sendable {
@@ -36,7 +38,12 @@ protocol SiteRobotObserving: Sendable {
     func close(_ handle: UInt64) async
 }
 
-final class SiteRobotClient: SiteRobotObserving {
+protocol SiteRobotTurning: Sendable {
+    func look(_ handle: UInt64, sequence: UInt64, direction: Int32) async throws
+    func stop(_ handle: UInt64, sequence: UInt64) async
+}
+
+final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning {
     static let shared = SiteRobotClient()
     private let queue = DispatchQueue(label: "dev.wendy.site-robot", attributes: .concurrent)
     private func perform<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
@@ -64,7 +71,10 @@ final class SiteRobotClient: SiteRobotObserving {
                 timingUnavailable: s.timing_unavailable != 0, scanReady: s.scan_ready != 0, measurementsReady: s.measurements_ready != 0,
                 underBodyAllowance: s.under_body_allowance != 0, allowUnobservedFloor: s.allow_unobserved_floor != 0, x: s.x, z: s.z, yaw: s.yaw, floorY: s.floor_y, observationRevision: s.observation_revision, lookState: Int(s.look_state), lookDirection: s.look_direction,
                 route: UnsafeBufferPointer(start: s.route, count: s.route_count).map { SitePoint(x: $0.x, y: s.floor_y, z: $0.z) },
-                joints: Array(UnsafeBufferPointer(start: s.joints, count: s.joint_count)))
+                joints: Array(UnsafeBufferPointer(start: s.joints, count: s.joint_count)),
+                hazards: UnsafeBufferPointer(start: s.hazards, count: s.hazard_count).map {
+                    SiteRobotHazard(position: SitePoint(x: $0.x, y: s.floor_y, z: $0.z), size: $0.size, yaw: $0.yaw, drop: $0.drop != 0)
+                }, hazardsReady: s.hazards_ready != 0)
         }
     }
     func nextVideo(_ handle: UInt64) async throws -> Data {

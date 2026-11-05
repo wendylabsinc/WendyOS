@@ -131,6 +131,18 @@ func WDSiteRobotPoll(handle C.uint64_t) *C.WDSiteRobotState {
 	p.yaw = C.double(s.Yaw)
 	p.floor_y = C.double(s.FloorY)
 	p.observation_revision = C.uint64_t(s.ObservationRevision)
+	if s.HazardsReady {
+		p.hazards_ready = 1
+	}
+	p.hazard_count = C.size_t(len(s.Hazards))
+	p.hazards = alloc[C.WDSiteRobotHazard](len(s.Hazards))
+	for i, h := range s.Hazards {
+		out := &unsafe.Slice(p.hazards, len(s.Hazards))[i]
+		out.x, out.z, out.size, out.yaw = C.double(h.X), C.double(h.Z), C.double(h.Size), C.double(h.Yaw)
+		if h.Drop {
+			out.drop = 1
+		}
+	}
 	p.route_count = C.size_t(len(s.Route))
 	p.route = alloc[C.WDSiteRoutePoint](len(s.Route))
 	for i, v := range s.Route {
@@ -156,6 +168,7 @@ func WDSiteRobotStateFree(p *C.WDSiteRobotState) {
 	free(p.control_warning)
 	free(p.route)
 	free(p.joints)
+	free(p.hazards)
 	free(p)
 }
 

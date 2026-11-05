@@ -1,6 +1,53 @@
 package sitenav
 
-import "math"
+import (
+	"math"
+	"sort"
+)
+
+// HazardFootprint is the occupied area used by the collision checks, in odometry
+// coordinates. Full-cell hazards represent detected drops; raised returns keep
+// their measured voxel footprint rather than expanding to the lookup cell.
+type HazardFootprint struct {
+	Position Point
+	Size     float64
+	Drop     bool
+}
+
+func (g Grid) HazardFootprints() []HazardFootprint {
+	unique := make(map[HazardFootprint]struct{})
+	for c, occupied := range g.Obstacles {
+		if !occupied {
+			continue
+		}
+		if len(g.voxels[c]) == 0 {
+			unique[HazardFootprint{Point{(float64(c.X) + .5) * CellSize, (float64(c.Y) + .5) * CellSize}, CellSize, true}] = struct{}{}
+		} else {
+			for _, v := range g.voxels[c] {
+				unique[HazardFootprint{v.position, v.halfSize * 2, false}] = struct{}{}
+			}
+		}
+	}
+	result := make([]HazardFootprint, 0, len(unique))
+	for v := range unique {
+		result = append(result, v)
+	}
+	// Stable ordering lets the scene reuse geometry between unchanged polls.
+	sort.Slice(result, func(i, j int) bool {
+		a, b := result[i], result[j]
+		if a.Position.X != b.Position.X {
+			return a.Position.X < b.Position.X
+		}
+		if a.Position.Y != b.Position.Y {
+			return a.Position.Y < b.Position.Y
+		}
+		if a.Size != b.Size {
+			return a.Size < b.Size
+		}
+		return !a.Drop && b.Drop
+	})
+	return result
+}
 
 type obstacleVoxel struct {
 	position Point

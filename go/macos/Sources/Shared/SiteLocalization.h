@@ -26,6 +26,8 @@ typedef struct {
     double fx, fy, cx, cy, distortion[5], rms, world_from_camera[16];
 } WSLocalization;
 // fitted_lens: 0 = existing measured lens, 1 = measured joint fit, 2 = approximate fit.
+// A failed fit with reason=8 and fitted_lens=2 retains a validated single-frame
+// candidate for display only. It is ambiguous and must not be saved as alignment.
 // known_lens: fx,fy,cx,cy,k1,k2,p1,p2,k3, or null for joint calibration.
 WSLocalization WSLocalize(void *map, const uint8_t *gray, int32_t width, int32_t height, const double *known_lens);
 WSLocalization WSSolveCamera(const double *xyz, const double *uv, int32_t count, int32_t width, int32_t height, const double *known_lens);

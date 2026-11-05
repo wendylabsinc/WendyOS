@@ -229,6 +229,7 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 			// enrolled UUID is what lets this row meet the board's LAN and BLE
 			// rows (see ExternalDevice.LiteDedupID).
 			"enrolledDeviceId": dev.EnrolledDeviceID,
+			"tenantId":         dev.TenantID,
 		},
 		IsWendyDevice: true,
 	}

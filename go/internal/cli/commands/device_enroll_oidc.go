@@ -2,18 +2,31 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+var promptEnrollmentReplacementNameFn = func(ctx context.Context, taken string) (string, error) {
+	return tui.PromptText("Enter a different device name", "", func(name string) error {
+		if strings.EqualFold(name, taken) {
+			return fmt.Errorf("that name is already in use; choose a different name")
+		}
+		return validateHostnameArg(name)
+	}, tea.WithContext(ctx), tea.WithOutput(os.Stderr))
+}
 
 func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, directoryURL string) error {
 	_, err := runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, directoryURL)
@@ -64,10 +77,36 @@ func runOIDCEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConn
 	}
 	defer cloudConn.Close()
 
-	fmt.Printf("Enrolling %s with PKI...\n", name)
-	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
-	if err != nil {
-		return nil, err
+	var assetID string
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		fmt.Printf("Enrolling %s with PKI...\n", name)
+		cfg, assetID, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
+		if err == nil {
+			break
+		}
+		// MintEAB handles UUID collisions separately. AlreadyExists here is
+		// a name refusal before Cloud issues a credential, so retry only this
+		// step, never a failed credential handoff to the agent.
+		if status.Code(err) != codes.AlreadyExists {
+			return nil, err
+		}
+		if !isInteractiveTerminal() || jsonOutput {
+			return nil, fmt.Errorf("%w; retry with a different --name", err)
+		}
+		fmt.Fprintf(os.Stderr, "Device name %q is already in use in this organization.\n", name)
+		name, err = promptEnrollmentReplacementNameFn(ctx, name)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(err, tui.ErrCancelled) {
+			return nil, ErrUserCancelled
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	resp, err := agent.StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{

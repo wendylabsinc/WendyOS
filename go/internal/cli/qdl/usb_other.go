@@ -1,4 +1,4 @@
-//go:build (!darwin && !linux && !windows) || ios
+//go:build (!darwin && !linux && !windows) || ios || android
 
 package qdl
 
@@ -27,3 +27,7 @@ func (c *USBConn) Read([]byte, time.Duration) (int, error) { return 0, errUnsupp
 func (c *USBConn) Write([]byte, time.Duration) (int, error) { return 0, errUnsupported }
 
 func (c *USBConn) Close() error { return nil }
+
+// USB identifiers remain available for device descriptions on mobile hosts.
+const VendorQualcomm = 0x05c6
+const ProductEDL = 0x9008

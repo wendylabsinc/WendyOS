@@ -149,7 +149,7 @@ func TestLANPickerCachedDevicesStayHiddenUntilConfirmed(t *testing.T) {
 		{ev: discovery.LANEvent{Kind: discovery.LANCached, Device: dev}},
 		{ev: discovery.LANEvent{Kind: discovery.LANOffline, Device: dev}},
 		{ev: discovery.LANEvent{Kind: discovery.LANFound, Device: dev}, visible: true},
-		{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: dev, ProbeFailed: true}, visible: true, hint: true},
+		{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: dev, ProbeFailed: true}, visible: true},
 		{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: dev, Probed: true}, visible: true},
 		{ev: discovery.LANEvent{Kind: discovery.LANRetracted, Device: dev}},
 	}
