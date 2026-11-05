@@ -51,6 +51,12 @@ The setup sheet remains open when advertisements disappear and automatically ope
 
 ## Site models on macOS and iOS
 
+On macOS, the **Cameras** list, camera alignment details and **Go2** controls open
+in popovers. Opening a menu keeps the camera preview and bottom controls in place.
+Long lists and robot details scroll inside the popover. Go2's Stop button remains
+available on the bottom bar when a robot is paired; closing its controls retains
+the existing stop behavior.
+
 ### Automatic camera alignment
 
 Digital Twin aligns cameras automatically. While the view is

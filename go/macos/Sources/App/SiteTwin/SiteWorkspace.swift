@@ -57,6 +57,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var fog = SiteFogConfiguration()
     @State private var fogSummary = SiteFogSummary()
     @State private var cameraColorEnabled = false
+    #if os(macOS)
+    @State private var showingCameraDetails = false
+    #endif
     @State private var peopleEnabled = false
     @State private var peopleFloorY: Double?
     @State private var selectingPeopleFloor = false
@@ -94,7 +97,11 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var busy = false
     @State private var error: String?
     @State private var loadError = false
+    #if os(macOS)
+    @State private var camerasExpanded = false
+    #else
     @State private var camerasExpanded = true
+    #endif
     @State private var cameraListHeight: CGFloat?
     @State private var choosingCamera = false
     @State private var cameraToAdd: (camera: SiteCamera, siteID: UUID)?
@@ -630,16 +637,15 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         Text("Distance is uncertain. This position has not been saved.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    DisclosureGroup("Alignment details") {
-                    Text(geometryDescription(camera, now: Date())).font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if cameraColorEnabled {
-                        Text(colorStatus(camera)).font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let status = alignmentStatuses[camera.sourceID] {
-                        Text(status).font(.caption).foregroundStyle(.secondary)
-                    }
-                    }.font(.caption)
+                    #if os(macOS)
+                    Button("Alignment details", systemImage: "info.circle") { showingCameraDetails.toggle() }
+                        .buttonStyle(.plain).font(.caption)
+                        .popover(isPresented: $showingCameraDetails, arrowEdge: .leading) {
+                            cameraDetails(camera).padding(16).frame(width: 320, alignment: .leading)
+                        }
+                    #else
+                    DisclosureGroup("Alignment details") { cameraDetails(camera) }.font(.caption)
+                    #endif
                     if calibrate != nil {
                         Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
                             .buttonStyle(.borderedProminent)
@@ -662,6 +668,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         .accessibilityValue(camerasExpanded ? "Expanded" : "Collapsed")
                     Spacer()
                     Button("Add Camera", systemImage: "plus") {
+                        camerasExpanded = false
                         #if os(iOS)
                         pendingMobileCameraAction = .add; showingMobileCameras = false
                         #else
@@ -671,27 +678,56 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(availableFeeds.isEmpty || gatewayID.isEmpty || busy)
                 }
-                if camerasExpanded {
-                    ScrollView {
-                        cameraControls(current)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraListHeight = $0 }
-                    }
-                    .frame(height: min(cameraListHeight ?? CGFloat(max(1, current.site.cameras.count)) * 100,
-                                       max(75, min(240, size.height * 0.3))))
-                    .transition(.opacity)
-                }
+                #if os(iOS)
+                if camerasExpanded { cameraList(current, size: size) }
+                #endif
             }
         }
         #if os(macOS)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: camerasExpanded)
         .padding(14)
         .frame(width: min(380, max(0, size.width - 32)), alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .popover(isPresented: $camerasExpanded, arrowEdge: .leading) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Cameras").font(.headline)
+                    Spacer()
+                    Button { camerasExpanded = false } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).accessibilityLabel("Close cameras")
+                }
+                cameraList(current, size: size)
+            }
+            .padding(16)
+            .frame(width: 352)
+        }
         #else
         .frame(maxWidth: .infinity, alignment: .leading)
         .transaction { $0.animation = nil }
         #endif
+    }
+
+    private func cameraDetails(_ camera: SiteCamera) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(geometryDescription(camera, now: Date()))
+                .fixedSize(horizontal: false, vertical: true)
+            if cameraColorEnabled {
+                Text(colorStatus(camera)).foregroundStyle(.secondary)
+            }
+            if let status = alignmentStatuses[camera.sourceID] {
+                Text(status).foregroundStyle(.secondary)
+            }
+        }.font(.caption)
+    }
+
+    private func cameraList(_ current: StoredSite, size: CGSize) -> some View {
+        ScrollView {
+            cameraControls(current)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraListHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(cameraListHeight ?? CGFloat(max(1, current.site.cameras.count)) * 100,
+                           max(75, min(240, size.height * 0.3))))
     }
 
     private var availableFeeds: [SiteFeed] {
@@ -740,7 +776,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     #if os(iOS)
                     pendingMobileCameraAction = .place(camera.id); showingMobileCameras = false
                     #else
-                    pendingCamera = nil; placingCamera = camera.id
+                    camerasExpanded = false; pendingCamera = nil; placingCamera = camera.id
                     #endif
                 }.disabled(hasPose)
                 Button("Remove from Model", systemImage: "minus.circle", role: .destructive) {
@@ -770,6 +806,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             return
         }
         #endif
+        camerasExpanded = false
         calibrate?(current, camera)
     }
 
