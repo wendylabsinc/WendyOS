@@ -199,7 +199,7 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	if !locked {
-		return errors.New("the previous Wendy Net connection is still closing; wait a few seconds, then run 'wendy device wendy-net connect' again")
+		return errors.New("the previous Wendy Net connection is still closing; wait a few seconds, then run 'wendy net connect' again")
 	}
 	defer func() { releaseLock(owner); owner.Close() }()
 	data, err := json.Marshal(recipe)
