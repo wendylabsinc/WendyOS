@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -65,20 +66,21 @@ func bluetoothBackend(t *testing.T) (*Backend, *bluetoothAgent) {
 	return b, fake
 }
 func TestBluetoothScanKeepsLatestObservationAndStops(t *testing.T) {
-	b, fake := bluetoothBackend(t)
-	// Allow a loaded race-test runner time to deliver the real gRPC replies.
-	devices, err := scanBluetooth(context.Background(), pb.NewWendyBluetoothServiceClient(b.conn.Conn), time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(devices) != 1 || !devices[0].Connected {
-		t.Fatalf("expected latest observation, got %v", devices)
-	}
-	select {
-	case <-fake.scanStopped:
-	case <-time.After(time.Second):
-		t.Fatal("scan stream did not stop after its deadline")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		b, fake := bluetoothBackend(t)
+		devices, err := scanBluetooth(context.Background(), pb.NewWendyBluetoothServiceClient(b.conn.Conn), 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(devices) != 1 || !devices[0].Connected {
+			t.Fatalf("expected latest observation, got %v", devices)
+		}
+		select {
+		case <-fake.scanStopped:
+		case <-time.After(time.Second):
+			t.Fatal("scan stream did not stop after its deadline")
+		}
+	})
 }
 func TestBluetoothMutationGuardsAndPairingFailure(t *testing.T) {
 	b, fake := bluetoothBackend(t)
@@ -110,5 +112,51 @@ func TestBluetoothScanRejectsStaleSession(t *testing.T) {
 		if _, err := b.BluetoothScan(session); err == nil {
 			t.Fatal("scan accepted missing/stale session")
 		}
+	}
+}
+
+// A deadline can have elapsed before context's timer callback updates Err.
+// gRPC's RST_STREAM handler uses the deadline's timestamp in that interval.
+type bluetoothDeadlineSnapshot struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c bluetoothDeadlineSnapshot) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestBluetoothScanDeadlineCompletion(t *testing.T) {
+	now := time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC)
+	background := context.Background()
+	pending := bluetoothDeadlineSnapshot{background, now}
+	expired, cancelExpired := context.WithDeadline(background, time.Time{})
+	defer cancelExpired()
+	canceled, cancel := context.WithCancel(background)
+	cancel()
+	deadlineErr := status.Error(codes.DeadlineExceeded, "stream terminated by RST_STREAM with error code: CANCEL")
+	for _, tt := range []struct {
+		name         string
+		parent, scan context.Context
+		received     bool
+		err          error
+		want         bool
+	}{
+		{"callback pending at deadline", background, pending, true, deadlineErr, true},
+		{"callback pending after deadline", background, bluetoothDeadlineSnapshot{background, now.Add(-time.Second)}, true, deadlineErr, true},
+		{"callback completed", background, expired, true, deadlineErr, true},
+		{"early remote deadline", background, bluetoothDeadlineSnapshot{background, now.Add(time.Second)}, true, deadlineErr, false},
+		{"no observations", background, pending, false, deadlineErr, false},
+		{"permission failure", background, pending, true, status.Error(codes.PermissionDenied, "denied"), false},
+		{"transport cancellation", background, pending, true, status.Error(codes.Canceled, "connection closed"), false},
+		{"caller canceled", canceled, pending, true, deadlineErr, false},
+		{"caller deadline callback pending", pending, pending, true, deadlineErr, false},
+		{"caller deadline callback completed", expired, pending, true, deadlineErr, false},
+		{"caller still active", bluetoothDeadlineSnapshot{background, now.Add(time.Second)}, pending, true, deadlineErr, true},
+		{"no scan deadline", background, background, true, deadlineErr, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bluetoothScanDeadlineReached(tt.parent, tt.scan, tt.received, tt.err, now); got != tt.want {
+				t.Fatalf("deadline completion = %v, want %v (scan Err=%v)", got, tt.want, tt.scan.Err())
+			}
+		})
 	}
 }

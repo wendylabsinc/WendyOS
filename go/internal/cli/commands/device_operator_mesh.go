@@ -11,7 +11,7 @@ import (
 
 // Joining the local mesh is independent of selecting a destination device.
 func newDeviceOperatorMeshConnectCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "connect", Short: "Join Wendy Net automatically and stay connected", Long: "Join Wendy Net from this computer using your selected sign-in profile. The CLI automatically finds and authenticates nearby routers over LAN and Bluetooth, can keep multiple connections, and stays connected between commands. Use wendy discover to choose a destination device. No router address or Bluetooth identifier is needed. Run wendy device wendy-net disconnect to leave the mesh.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "connect", Short: "Join Wendy Net automatically and stay connected", Long: "Join Wendy Net from this computer using your selected sign-in profile. The CLI automatically finds and authenticates nearby routers over LAN and Bluetooth, can keep multiple connections, and stays connected between commands. Use wendy discover to choose a destination device. No router address or Bluetooth identifier is needed. Run wendy net disconnect to leave the mesh.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err

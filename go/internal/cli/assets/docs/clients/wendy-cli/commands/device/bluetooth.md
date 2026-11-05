@@ -131,9 +131,9 @@ again. Repeating an unchanged Lite setting does not request another change.
 To enable Bluetooth networking and select its profile together, use the Wendy Net command:
 
 ```sh
-wendy device wendy-net configure --device <device> \
+wendy net configure --device <device> \
   --participate=true --ble-mode=normal
-wendy device wendy-net status --device <device>
+wendy net status --device <device>
 ```
 
 `--ble-mode` accepts `off`, `normal`, `coded-s2`, or `coded-s8`. A value other than
