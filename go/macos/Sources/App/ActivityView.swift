@@ -470,10 +470,10 @@ private struct AppActivityDetail: View {
             }
         }.navigationTitle("App details").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                Menu {
+                OverflowMenu {
                     Button("Logs", systemImage: "doc.text") { model.logApp = appName; showingLogs = true }
                     AppDeleteMenu(model: model, app: appName)
-                } label: { Image(systemName: "ellipsis") }.accessibilityLabel("App actions")
+                }.accessibilityLabel("App actions")
             }
             .navigationDestination(isPresented: $showingLogs) { DeviceLogsPage(model: model) }
             .onAppear { visible = true }.onDisappear { visible = false }
