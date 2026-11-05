@@ -33,13 +33,6 @@ struct ReviewCommand: AsyncParsableCommand {
     )
     var diff: String?
 
-    @Option(
-        name: .long,
-        help:
-            "Trusted automation/base ref for the shared source policy. Defaults to WENDY_E2E_REVIEW_SOURCE_POLICY_REF or origin/main."
-    )
-    var sourcePolicyRef: String?
-
     @Flag(name: .long, help: "Overwrite existing review files.")
     var overwrite = false
 
@@ -75,14 +68,7 @@ extension ReviewCommand {
         repoURL: URL
     ) async throws {
         let reviewMode = try ReviewMode(diff: diff)
-        let context = try reviewMode.prepareContext(
-            runURL: runURL,
-            repoURL: repoURL,
-            adapterURL: repoURL.appendingPathComponent(".github/scripts/e2e_review_sources.py"),
-            policyRef: sourcePolicyRef
-                ?? ProcessInfo.processInfo.environment["WENDY_E2E_REVIEW_SOURCE_POLICY_REF"]
-                ?? "origin/main"
-        )
+        let context = try reviewMode.prepareContext(runURL: runURL, repoURL: repoURL)
         let promptURL = URL(
             fileURLWithPath: reviewPrompt
                 ?? packageURL.appendingPathComponent("Support/e2e-review.prompt.md").path
@@ -105,9 +91,6 @@ extension ReviewCommand {
         print("    Run:            \(runURL.path)")
         print("    Overview:       \(runOverviewURL(in: runURL).path)")
         print("    Mode:           \(reviewMode.name)")
-        print("    Source inputs:  \(context.sources.status)")
-        print("    Source scope:   \(context.sources.manifestURL.path)")
-        print("    Tool reads:     unrestricted; source-only filtering covers prepared inputs")
         print("    Reviewer:       \(reviewer)")
         print("    Review dir:     \(reviewDirectoryName)")
         if let range = reviewMode.diffRange {
@@ -149,7 +132,7 @@ extension ReviewCommand {
     }
 }
 
-enum ReviewMode {
+private enum ReviewMode {
     case full
     case diff(String)
 
@@ -178,33 +161,39 @@ enum ReviewMode {
         if case .diff(let range) = self { range } else { nil }
     }
 
-    func prepareContext(
-        runURL: URL,
-        repoURL: URL,
-        adapterURL: URL,
-        policyRef: String
-    ) throws -> ReviewContext {
-        let sources = try prepareReviewSourceInputs(
-            repoURL: repoURL,
-            runURL: runURL,
-            adapterURL: adapterURL,
-            policyRef: policyRef,
-            diff: diffRange
-        )
-        return ReviewContext(
-            mode: self,
-            changedFilesURL: diffRange == nil ? nil : sources.changedFilesURL,
-            diffstatURL: diffRange == nil ? nil : sources.diffstatURL,
-            sources: sources
-        )
+    func prepareContext(runURL: URL, repoURL: URL) throws -> ReviewContext {
+        switch self {
+        case .full:
+            return ReviewContext(mode: self, changedFilesURL: nil, diffstatURL: nil)
+        case .diff(let range):
+            let changedFilesURL = runURL.appendingPathComponent("git-diff-name-only.txt")
+            let diffstatURL = runURL.appendingPathComponent("git-diff-stat.txt")
+
+            try runGitDiffContext(
+                arguments: ["diff", "--name-only", range],
+                outputURL: changedFilesURL,
+                repoURL: repoURL,
+                diffRange: range
+            )
+            try runGitDiffContext(
+                arguments: ["diff", "--stat", range],
+                outputURL: diffstatURL,
+                repoURL: repoURL,
+                diffRange: range
+            )
+            return ReviewContext(
+                mode: self,
+                changedFilesURL: changedFilesURL,
+                diffstatURL: diffstatURL
+            )
+        }
     }
 }
 
-struct ReviewContext {
+private struct ReviewContext {
     var mode: ReviewMode
     var changedFilesURL: URL?
     var diffstatURL: URL?
-    var sources: ReviewSourceInputs
 }
 
 private struct RunReviewAttemptArtifact {
@@ -220,7 +209,7 @@ private struct RunReviewAttemptArtifact {
     }
 }
 
-struct ShellReviewHarness: Sendable {
+private struct ShellReviewHarness: Sendable {
     var harnessName: String
     var modelName: String
     var shellCommand: String
@@ -228,14 +217,8 @@ struct ShellReviewHarness: Sendable {
     var invocationSummary: String
     var authSummary: String
     var modelSource: String
-    var capturesClaudeJSON = false
 
-    func review(
-        prompt: String,
-        repoURL: URL,
-        runURL: URL,
-        output: FileHandle = .standardOutput
-    ) throws {
+    func review(prompt: String, repoURL: URL, runURL: URL) throws {
         let promptURL = runURL.appendingPathComponent(
             ".review-harness-prompt-\(UUID().uuidString).md"
         )
@@ -253,58 +236,9 @@ struct ShellReviewHarness: Sendable {
         process.currentDirectoryURL = repoURL
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
-
-        // Keep raw responses outside the uploaded run directory. A file avoids
-        // blocking the child on a full stdout pipe while waiting for it to exit.
-        let captureDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "wendy-e2e-review-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        let captureURL = captureDirectory.appendingPathComponent("stdout.json")
-        var capture: FileHandle?
-        defer {
-            try? capture?.close()
-            if capturesClaudeJSON { try? FileManager.default.removeItem(at: captureDirectory) }
-        }
-        if capturesClaudeJSON {
-            try FileManager.default.createDirectory(
-                at: captureDirectory,
-                withIntermediateDirectories: false,
-                attributes: [.posixPermissions: 0o700]
-            )
-            FileManager.default.createFile(
-                atPath: captureURL.path,
-                contents: nil,
-                attributes: [.posixPermissions: 0o600]
-            )
-            capture = try FileHandle(forWritingTo: captureURL)
-            process.standardOutput = capture
-            output.write(
-                Data("==> Claude review-only usage: pending (unavailable if interrupted)\n".utf8)
-            )
-        }
 
         try process.run()
         process.waitUntilExit()
-
-        if capturesClaudeJSON {
-            try? capture?.close()
-            let data = (try? Data(contentsOf: captureURL)) ?? Data()
-            let result = decodeClaudeReviewResult(data)
-            if let text = result?.result {
-                output.write(Data((text + "\n").utf8))
-            }
-            if result?.result == nil {
-                output.write(
-                    Data(
-                        "==> Claude review output had no usable JSON result; any result text was discarded.\n"
-                            .utf8
-                    )
-                )
-            }
-            output.write(Data(claudeReviewUsageSummary(result, authSummary: authSummary).utf8))
-        }
 
         guard process.terminationStatus == 0 else {
             throw ValidationError(
@@ -312,89 +246,6 @@ struct ShellReviewHarness: Sendable {
             )
         }
     }
-}
-
-private struct ClaudeReviewResult: Decodable {
-    struct Usage: Decodable {
-        var input_tokens: Int?
-        var output_tokens: Int?
-        var cache_creation_input_tokens: Int?
-        var cache_read_input_tokens: Int?
-    }
-
-    // Decode only the allowlisted fields. Bad or absent accounting must not
-    // discard the ordinary result text or turn unknown usage into zero.
-    var type: String?
-    var result: String?
-    var usage: Usage?
-    var totalCostUSD: Double?
-    var models: [String]?
-
-    private enum CodingKeys: String, CodingKey {
-        case type, result, usage, total_cost_usd, modelUsage
-    }
-
-    private struct ModelMetadata: Decodable {}
-
-    init(from decoder: any Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        type = try? values.decode(String.self, forKey: .type)
-        result = try? values.decode(String.self, forKey: .result)
-        usage = try? values.decode(Usage.self, forKey: .usage)
-        totalCostUSD = try? values.decode(Double.self, forKey: .total_cost_usd)
-        models = (try? values.decode([String: ModelMetadata].self, forKey: .modelUsage))?
-            .keys.sorted()
-    }
-}
-
-private func decodeClaudeReviewResult(_ data: Data) -> ClaudeReviewResult? {
-    func decode(_ data: Data) -> ClaudeReviewResult? {
-        let decoder = JSONDecoder()
-        if let result = try? decoder.decode(ClaudeReviewResult.self, from: data) {
-            return result
-        }
-        // A configured `verbose` setting prints the whole message array.
-        return (try? decoder.decode([ClaudeReviewResult].self, from: data))?
-            .last { $0.type == "result" }
-    }
-    if let result = decode(data) {
-        return result
-    }
-    // A login-shell profile can print around Claude's single JSON line. Its own
-    // JSON logging must not win, and any object decodes since every field is optional.
-    return data.split(separator: UInt8(ascii: "\n")).reversed().lazy
-        .compactMap { decode(Data($0)) }
-        .first { $0.type == "result" || $0.result != nil }
-}
-
-private func claudeReviewUsageSummary(
-    _ result: ClaudeReviewResult?,
-    authSummary: String
-) -> String {
-    func tokens(_ value: Int?) -> String {
-        guard let value, value >= 0 else { return "unavailable" }
-        return String(value)
-    }
-    let cost: String
-    if let value = result?.totalCostUSD, value.isFinite, value >= 0 {
-        cost = String(value)
-    } else {
-        cost = "unavailable"
-    }
-    let models =
-        result?.models?.map { promptSafeInline($0, maxLength: 160) }
-        .joined(separator: ", ") ?? ""
-    return """
-        ==> Claude review-only usage (excludes authentication probe)
-            Selected auth: \(authSummary)
-            Reported models: \(models.isEmpty ? "unavailable" : models)
-            input_tokens: \(tokens(result?.usage?.input_tokens))
-            output_tokens: \(tokens(result?.usage?.output_tokens))
-            cache_creation_input_tokens: \(tokens(result?.usage?.cache_creation_input_tokens))
-            cache_read_input_tokens: \(tokens(result?.usage?.cache_read_input_tokens))
-            total_cost_usd: \(cost) (Claude-reported estimate, not actual billed dollars)
-
-        """
 }
 
 enum ReviewHarnessPreference: String, ExpressibleByArgument {
@@ -545,14 +396,13 @@ private func claudeHarness(
         harnessName: "claude",
         modelName: model.name,
         shellCommand: apiKeyOnly
-            ? #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --bare --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --output-format json --print "$prompt""#
-            : #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --output-format json --print "$prompt""#,
+            ? #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --bare --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --print "$prompt""#
+            : #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --print "$prompt""#,
         commandSource: "Claude Code CLI",
         invocationSummary:
-            "claude\(bareFlag) --model \(model.name) --effort high --dangerously-skip-permissions --output-format json --print <generated prompt>",
+            "claude\(bareFlag) --model \(model.name) --effort high --dangerously-skip-permissions --print <generated prompt>",
         authSummary: authSummary,
-        modelSource: model.source,
-        capturesClaudeJSON: true
+        modelSource: model.source
     )
 }
 
@@ -661,6 +511,50 @@ private func isReviewRunDirectory(_ runURL: URL) throws -> Bool {
     )
 }
 
+private func runGitDiffContext(
+    arguments: [String],
+    outputURL: URL,
+    repoURL: URL,
+    diffRange: String
+) throws {
+    try Data().write(to: outputURL, options: .atomic)
+    let output = try FileHandle(forWritingTo: outputURL)
+    defer { try? output.close() }
+
+    let errorPipe = Pipe()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["git"] + arguments
+    process.currentDirectoryURL = repoURL
+    process.standardOutput = output
+    process.standardError = errorPipe
+
+    do {
+        try process.run()
+    } catch {
+        try? FileManager.default.removeItem(at: outputURL)
+        throw error
+    }
+    process.waitUntilExit()
+
+    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+    let errorText = String(decoding: errorData, as: UTF8.self)
+
+    guard process.terminationStatus == 0 else {
+        try? FileManager.default.removeItem(at: outputURL)
+        let command = (["git"] + arguments).joined(separator: " ")
+        var message =
+            "Could not resolve Git diff range `\(diffRange)` while generating Swift E2E review context."
+        message += " Ensure the repository has enough history and the range is fetchable."
+        message += " Command `\(command)` failed with exit status \(process.terminationStatus)."
+        let detail = errorText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !detail.isEmpty {
+            message += "\n\(detail)"
+        }
+        throw ValidationError(message)
+    }
+}
+
 private func runReviewDirectoryChildren(of url: URL) throws -> [URL] {
     guard FileManager.default.fileExists(atPath: url.path) else { return [] }
     return try FileManager.default.contentsOfDirectory(
@@ -682,7 +576,7 @@ private func runReviewRelativeFilePath(
     return reviewRelativePath(url, base: runURL)
 }
 
-func runReviewPrompt(
+private func runReviewPrompt(
     basePrompt: String,
     repoURL: URL,
     packageURL: URL,
@@ -737,11 +631,6 @@ private func runPromptHeader(
 ) -> [String] {
     var lines = [
         "# \(title)",
-        "",
-        context.sources.toolReadLimitation,
-        "",
-        "The following canonical source policy describes prepared inputs only:",
-        context.sources.policyRule,
         "",
         basePrompt.trimmingCharacters(in: .whitespacesAndNewlines),
         "",
@@ -1085,18 +974,6 @@ private func appendReviewContext(_ context: ReviewContext, repoURL: URL, to line
     lines.append("## Review mode")
     lines.append("")
     lines.append("- Mode: `\(context.mode.name)`")
-    lines.append("- Prepared source status: `\(context.sources.status)`")
-    lines.append(
-        "- Immutable refs, source coverage and exclusions: `\(context.sources.manifestURL.path)`"
-    )
-    lines.append("- Committed source file index: `\(context.sources.sourceFilesURL.path)`")
-    lines.append("")
-    lines.append(
-        "Use the prepared source index for additional source inspection. Do not read or report excluded generated implementation through file, search, shell, Git, MCP or custom-harness tools. Those tool responses are not automatically filtered. Uncommitted/untracked source and absent upstream schema bodies are not prepared or proven reviewed."
-    )
-    lines.append(
-        "Keep diagnosing actual failures, flakes, infrastructure problems and qualitative test-source AI requests using run/test evidence. A generated-only diff does not make a failed run pass. Findings from earlier CI runs are not supplied here, so do not claim to retain or resolve them. Exclusion counts and generation/build checks do not prove API or behavior coverage."
-    )
 
     guard case .diff(let range) = context.mode else {
         lines.append("")
@@ -1114,8 +991,18 @@ private func appendReviewContext(_ context: ReviewContext, repoURL: URL, to line
     lines.append(
         "Only report findings plausibly related to the supplied Git diff range. Treat unrelated pre-existing failures, flakes, or test quality issues as background unless the diff appears to introduce or worsen them."
     )
-    lines.append("- Prepared source patch: `\(context.sources.patchURL.path)`")
-    lines.append("Read that filtered patch and index instead of issuing unrestricted Git diffs.")
+    lines.append(
+        "Do not look for a saved full patch; inspect targeted diffs on demand with commands like:"
+    )
+    lines.append("")
+    lines.append("```bash")
+    let repo = shellQuoted(repoURL.path)
+    let quotedRange = shellQuoted(range)
+    lines.append("git -C \(repo) diff --stat \(quotedRange)")
+    lines.append("git -C \(repo) diff --name-only \(quotedRange)")
+    lines.append("git -C \(repo) diff \(quotedRange) -- <specific-file>")
+    lines.append("git -C \(repo) diff \(quotedRange) -U80 -- <specific-file>")
+    lines.append("```")
     lines.append("")
 }
 

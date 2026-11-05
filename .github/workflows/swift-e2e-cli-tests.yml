@@ -1,7 +1,6 @@
 name: Swift E2E CLI Tests
 
-# The E2E analysis CLI and its Python input adapter otherwise run for the first
-# time when a real E2E failure reaches the Analyze job.
+# Check the E2E analysis gates and reporting without running a model.
 
 on:
   push:
@@ -9,9 +8,6 @@ on:
     paths:
       - '.github/workflows/swift-e2e-cli-tests.yml'
       - '.github/workflows/swift-e2e-tests.yml'
-      - '.github/scripts/e2e_review_sources.py'
-      - '.github/scripts/review_diff.py'
-      - '.github/scripts/review_sources.py'
       - '.github/scripts/swift_e2e_gate_test.py'
       - 'swift/Scripts/E2EAnalyze.ps1'
       - 'swift/Scripts/E2EAnalyze.sh'
@@ -25,9 +21,6 @@ on:
     paths:
       - '.github/workflows/swift-e2e-cli-tests.yml'
       - '.github/workflows/swift-e2e-tests.yml'
-      - '.github/scripts/e2e_review_sources.py'
-      - '.github/scripts/review_diff.py'
-      - '.github/scripts/review_sources.py'
       - '.github/scripts/swift_e2e_gate_test.py'
       - 'swift/Scripts/E2EAnalyze.ps1'
       - 'swift/Scripts/E2EAnalyze.sh'

@@ -483,8 +483,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      CLAUDE_CODE_VERSION: '2.1.316'
-      WENDY_E2E_REVIEW_CLAUDE_MODEL: claude-sonnet-5-5
+      CLAUDE_CODE_VERSION: '2.1.199'
       # Slack posts go through the Wendy CI Slack app to the channel (ID or
       # #name) in FEED_E2E_SLACK_CHANNEL. Only this flag, never the bot token, is
       # in the job environment.
@@ -797,10 +796,6 @@ jobs:
         shell: bash
         env:
           DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
-          # PR events pin the policy modules to the base commit, while the adapter
-          # and harness run from the event head. On push and dispatch the policy
-          # ref is the event head.
-          WENDY_E2E_REVIEW_SOURCE_POLICY_REF: ${{ github.event.pull_request.base.sha || github.sha }}
           # Expose exactly one credential, chosen by the auth probe above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.review-auth.outputs.auth_mode == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           ANTHROPIC_API_KEY: ${{ steps.review-auth.outputs.auth_mode == 'api-key' && secrets.ANTHROPIC_API_KEY || '' }}
