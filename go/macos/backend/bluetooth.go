@@ -43,7 +43,7 @@ func scanBluetooth(parent context.Context, client pb.WendyBluetoothServiceClient
 	for {
 		response, receiveErr := stream.Recv()
 		if receiveErr != nil {
-			if receiveErr == io.EOF || (received && parent.Err() == nil && ctx.Err() == context.DeadlineExceeded && status.Code(receiveErr) == codes.DeadlineExceeded) {
+			if receiveErr == io.EOF || bluetoothScanDeadlineReached(parent, ctx, received, receiveErr, time.Now()) {
 				break
 			}
 			return nil, receiveErr
@@ -66,6 +66,22 @@ func scanBluetooth(parent context.Context, client pb.WendyBluetoothServiceClient
 		return result[i].GetName()+result[i].GetAddress() < result[j].GetName()+result[j].GetAddress()
 	})
 	return result, nil
+}
+
+// gRPC can classify an expired deadline before context's timer callback has
+// updated Err. Compare deadlines directly so callback scheduling cannot turn a
+// completed scan into an error. Caller cancellation/expiry and remote failures
+// remain errors, and at least one scan response must have arrived.
+func bluetoothScanDeadlineReached(parent, scan context.Context, received bool, err error, now time.Time) bool {
+	if !received || parent.Err() != nil || status.Code(err) != codes.DeadlineExceeded {
+		return false
+	}
+	deadline, ok := scan.Deadline()
+	if !ok || now.Before(deadline) {
+		return false
+	}
+	callerDeadline, ok := parent.Deadline()
+	return !ok || now.Before(callerDeadline)
 }
 
 // Actions are explicit: connect, pair and connect, disconnect, or forget.
