@@ -58,12 +58,12 @@ five minutes without command activity or transit traffic. To keep your computer
 available as a router between commands, enable it explicitly:
 
 ```sh
-wendy device wendy-net connect
+wendy net connect
 ```
 
 Stop this computer's mesh router and its connections with
-`wendy device wendy-net disconnect`. Discovery and device commands leave it
-disconnected until you explicitly run `wendy device wendy-net connect` again.
+`wendy net disconnect`. Discovery and device commands leave it
+disconnected until you explicitly run `wendy net connect` again.
 Ordinary LAN discovery remains available. Credential changes or expiry also
 end a session. Each installation has an independent, persistent router identity,
 so multiple computers can participate with the same operator account. Routing

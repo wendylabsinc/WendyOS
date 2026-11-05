@@ -5,7 +5,7 @@ user's intended computer to sign in and join:
 
 ```bash
 wendy auth login
-wendy device wendy-net connect
+wendy net connect
 wendy discover --json --type mesh --timeout 5s
 wendy --device mesh://TENANT_UUID/DEVICE_UUID device info
 ```
@@ -31,7 +31,7 @@ through Bluetooth while LAN is still waiting; verify the destination with a real
 device command rather than inferring reachability from a status label.
 
 `device_disconnect` ends the current MCP device connection. To stop the local
-mesh router itself, use `wendy device wendy-net disconnect` when requested.
+mesh router itself, use `wendy net disconnect` when requested.
 After that, discovery and device commands must leave it disabled until the user
-explicitly reconnects with `wendy device wendy-net connect`. Ordinary LAN device
+explicitly reconnects with `wendy net connect`. Ordinary LAN device
 management remains available.

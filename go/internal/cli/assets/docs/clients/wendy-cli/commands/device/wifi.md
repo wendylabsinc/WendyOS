@@ -46,7 +46,7 @@ does not prove that WiFi disconnected. Older agents may lose contact without
 confirming receipt at all; an interrupted reply remains an unknown outcome.
 Wendy Lite and explicit Bluetooth operations keep their existing behavior.
 
-#### Automation and MCP
+#### JSON output
 
 Use `--json` to inspect the result. If the device received the request but its
 completion reply was lost, the command can exit successfully with:
@@ -55,14 +55,10 @@ completion reply was lost, the command can exit successfully with:
 {"state":"requested","acknowledged":true,"completion_confirmed":false,"success":null}
 ```
 
-Report a successful disconnection only when `completion_confirmed` and `success`
-are both `true`. A confirmed result with `success: false` means the operation
-failed. An exit status of zero or a successful MCP tool call alone does not
-confirm disconnection.
-
-The MCP `wifi_disconnect` tool returns these same fields. After an unknown
-outcome, reconnect through another working path and use `wifi_status` before
-reporting completion or trying again.
+A confirmed disconnection has both `completion_confirmed` and `success` set to
+`true`. A confirmed result with `success: false` means the operation failed.
+When scripting this command, check these fields: an exit status of zero alone
+can mean the request was received but its completion could not be confirmed.
 
 ### `wendy device wifi rank`
 

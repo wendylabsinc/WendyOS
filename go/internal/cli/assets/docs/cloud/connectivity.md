@@ -25,7 +25,7 @@ remains valid. A local mesh connection alone does not prove Cloud access works.
 
 If a device is reachable locally but missing from Cloud:
 
-1. Read `wendy device wendy-net status --device DEVICE_SELECTOR`. For a device
+1. Read `wendy net status --device DEVICE_SELECTOR`. For a device
    borrowing Internet, check that roaming is enabled and a gateway is selected.
 2. Verify that the gateway has Internet access and sharing enabled. See
    [share an Internet connection](/docs/guides/wendy-net#4-share-an-internet-connection).

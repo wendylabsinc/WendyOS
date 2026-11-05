@@ -78,7 +78,7 @@ wendy device wifi rank --order "Home,Office,Cafe"
 Disconnecting WiFi can remove the connection carrying the command before its
 final reply arrives. If the CLI cannot confirm completion, reconnect through
 another working path and check WiFi status. A received request alone does not
-mean the device disconnected. CLI JSON and MCP expose the distinction; see
+mean the device disconnected. CLI JSON distinguishes receipt from completion; see
 [WiFi disconnect outcomes](../../clients/wendy-cli/commands/device/wifi.md#wendy-device-wifi-disconnect).
 
 ## Using `nmcli` directly on the device
