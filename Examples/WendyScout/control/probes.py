@@ -38,9 +38,10 @@ class Probes:
             )
         self.agent = None
         self.deadline = None
+        self.cancelled = lambda: False
 
     def run(self, kind, version, run):
-        if CANCEL.is_set() or (
+        if CANCEL.is_set() or self.cancelled() or (
             self.deadline is not None and time.monotonic() >= self.deadline
         ):
             raise TimeoutError("Probe batch deadline or shutdown")
@@ -141,9 +142,28 @@ class Probes:
             raise ValueError("Only implemented functional workflows may be replayed")
         if baseline not in {"past", "stable"} or nightly != "nightly":
             raise ValueError("Expected a stable/nightly comparison")
-        results = [
-            self.run(probe, v, run) for v in [baseline, nightly, baseline, nightly]
-        ]
+        results, current = [], []
+
+        def replay_one(version, rows):
+            try:
+                rows.append(self.run(probe, version, run))
+            finally:
+                # A cancelled/expired batch still leaves its actual observations,
+                # explicitly unverified, rather than losing the comparison.
+                if run:
+                    save(
+                        run / "replay.partial.json",
+                        {
+                            "verified": False,
+                            "probe": probe,
+                            "results": results,
+                            "current_stable": current,
+                            "reason": "Incomplete replay; not publication evidence",
+                        },
+                    )
+
+        for v in [baseline, nightly, baseline, nightly]:
+            replay_one(v, results)
         b, n = results[::2], results[1::2]
         good = all(
             r.get("completed")
@@ -162,11 +182,9 @@ class Probes:
             self.versions[baseline]["published_at"]
             <= self.versions[nightly]["published_at"]
         )
-        current = (
-            [self.run(probe, "stable", run), self.run(probe, "stable", run)]
-            if good and bad and chronological
-            else []
-        )
+        if good and bad and chronological:
+            for _ in range(2):
+                replay_one("stable", current)
         states = [
             (
                 r["outcome"]

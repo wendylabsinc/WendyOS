@@ -168,6 +168,7 @@ class OwnedArgumentTests(unittest.TestCase):
         p.versions = {"nightly": {"tag": "2026.11.04-165715", "binary": "fixture"}}
         p.socket = "/run/wendy/agent/agent.sock"
         p.deadline = None
+        p.cancelled = lambda: False
         targets = []
 
         def multi_stop(binary, argv, **kwargs):
@@ -190,6 +191,7 @@ class FreshMarkerTests(unittest.TestCase):
         p.versions = {"stable": {"tag": "2026.10.29-210857", "binary": "fixture"}}
         p.socket = "/run/wendy/agent/agent.sock"
         p.deadline = None
+        p.cancelled = lambda: False
         for marker, expected in [("old", False), ("current", True)]:
             with patch.object(
                 probes,

@@ -109,6 +109,9 @@ window and each probe batch is additionally bounded to 90 seconds and the remain
 window. Flash has fixed non-thinking sampling and at most 4096 output tokens; model
 requests cannot override backend/template settings. Worker memory/tasks, script
 CPU/wall/PID/file/output limits and bounded evidence retention remain enforced.
+Session finish cancels further replay steps and waits for the active tool's cleanup;
+it cannot delete/reset the fixture concurrently. Incomplete replays and private
+cleanup exception details persist. Unverified cleanup still holds further testing.
 
 ## Credentials and containment
 

@@ -156,6 +156,8 @@ def experiment(probes, kind, version, run):
     setup = False
     fixture = {}
     reason = ""
+    cleanup_error = None
+    evidence_id = "experiment-" + secrets.token_hex(8)
 
     def check(name, expected, actual):
         checks.append(
@@ -261,11 +263,17 @@ def experiment(probes, kind, version, run):
             if local.scratch_state() != "ABSENT":
                 raise CleanupError("Owned scratch still present")
         except Exception as e:
-            raise CleanupError("Owned scratch cleanup failed; testing held") from e
+            cleanup_error = e
+            reason = "CleanupError"
+            if run:
+                save(
+                    run / (evidence_id + ".private.json"),
+                    {"cleanup_traceback": __import__("traceback").format_exc()[-16384:]},
+                )
     failed = [x for x in checks if not x["passed"]]
     outcome = "blocked" if reason or not setup else "failed" if failed else "passed"
     result = {
-        "id": "experiment-" + secrets.token_hex(8),
+        "id": evidence_id,
         "evidence_kind": "functional_workflow",
         "kind": kind,
         "version": probes.versions[version]["tag"],
@@ -275,7 +283,7 @@ def experiment(probes, kind, version, run):
             __import__("pathlib").Path(__file__).read_bytes()
         ).hexdigest(),
         "completed": setup and bool(steps) and not reason,
-        "cleanup_verified": True,
+        "cleanup_verified": cleanup_error is None,
         "outcome": outcome,
         "exit": 0 if outcome == "passed" else 1,
         "reason": reason,
@@ -288,4 +296,6 @@ def experiment(probes, kind, version, run):
     }
     if run:
         save(run / (result["id"] + ".json"), result)
+    if cleanup_error is not None:
+        raise CleanupError("Owned scratch cleanup failed; testing held") from cleanup_error
     return result

@@ -113,8 +113,19 @@ class FunctionalTests(unittest.TestCase):
     def test_cleanup_failure_holds_and_does_not_become_publishable(self):
         p = Runner()
         p.local.cleanup_bad = True
-        with self.assertRaises(CleanupError):
-            experiment(p, "restart_persistence", "stable", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            run = pathlib.Path(tmp)
+            with self.assertRaises(CleanupError):
+                experiment(p, "restart_persistence", "stable", run)
+            record = json.loads(
+                next(p for p in run.glob("experiment-*.json")
+                     if not p.name.endswith(".private.json")).read_text()
+            )
+            self.assertFalse(record["completed"] or record["cleanup_verified"])
+            self.assertEqual(record["outcome"], "blocked")
+            self.assertFalse(confirmed_work([record], record["id"]))
+            detail = json.loads(next(run.glob("*.private.json")).read_text())
+            self.assertIn("fixture cleanup failure", detail["cleanup_traceback"])
 
     def test_successful_argument_contract_extension_is_not_automatically_a_bug(self):
         r = experiment(Runner("multi-target"), "reject_extra_args", "nightly", None)

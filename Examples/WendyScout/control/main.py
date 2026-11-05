@@ -407,6 +407,9 @@ class Scout:
             ):
                 raise ValueError("Session budget exhausted")
             s["calls"] += 1
+            # finish marks the session closed before waiting for this lock.
+            # A replay must not begin its next workflow after Pi has stopped.
+            self.probes.cancelled = lambda: s["finished"] or STOP.is_set()
             self.probes.deadline = min(s["started"] + 300, time.monotonic() + 90)
             operation = data.get("operation")
             v = data.get("version", "past")
@@ -469,7 +472,14 @@ class Scout:
 
     def finish(self, data):
         s = self.sessions[data["session"]]
+        # Signal an in-flight replay first, then serialize its final cleanup
+        # with session teardown. Never delete/reset the same app concurrently.
         s["finished"] = True
+        with self.lock:
+            return self._finish(data, s)
+
+    def _finish(self, data, s):
+        self.probes.cancelled = lambda: False
         summary = {
             "exit": data.get("exit"),
             "proof": data.get("proof") is True
@@ -483,7 +493,15 @@ class Scout:
             "seconds": time.monotonic() - s["started"],
         }
         save(s["run"] / "summary.json", summary)
-        self.local.cleanup_scratch()
+        try:
+            self.local.cleanup_scratch()
+        except Exception as e:
+            self.error = "Owned scratch cleanup failed; testing held"
+            save(
+                s["run"] / "finish-cleanup.private.json",
+                {"traceback": __import__("traceback").format_exc()[-16384:]},
+            )
+            raise CleanupError(self.error) from e
         event("session_finished", run=s["run"].name, exit=summary["exit"])
         # Keep metadata/findings separately; prune only completed run directories.
         import shutil
@@ -682,11 +700,15 @@ def main():
         page.server_close()
         server.shutdown()
         server.server_close()
-        if hasattr(scout, "local"):
+        # Never race an in-flight tool's finally block during app stop. Its
+        # cancellation/lease ends work; an owned leftover is recovered on start.
+        if hasattr(scout, "local") and scout.lock.acquire(timeout=2):
             try:
                 scout.local.cleanup_scratch()
             except Exception:
                 pass
+            finally:
+                scout.lock.release()
         for p in CHILDREN:
             try:
                 p.wait(timeout=5)
