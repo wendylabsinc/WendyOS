@@ -72,13 +72,13 @@ connection after LAN fails.
 Inspect the background router on this computer without starting it:
 
 ```sh
-wendy --json device wendy-net topology --local-cli
+wendy --json net topology --local-cli
 ```
 
 To inspect a device's mesh settings and running connections, select that device:
 
 ```sh
-wendy --device DEVICE_SELECTOR device wendy-net status
+wendy --device DEVICE_SELECTOR net status
 ```
 
 A ready Bluetooth connection can carry mesh traffic while LAN is still waiting
@@ -95,8 +95,8 @@ ordinary device commands:
 
 ```sh
 wendy --device mesh://TENANT_UUID/DEVICE_UUID device info
-wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net status
-wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net topology
+wendy --device mesh://TENANT_UUID/DEVICE_UUID net status
+wendy --device mesh://TENANT_UUID/DEVICE_UUID net topology
 wendy net services --type _http._tcp
 ```
 
@@ -114,7 +114,7 @@ To use a Lite guest's advertised TCP service from a local program, forward a
 local port to its published port:
 
 ```sh
-wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net forward 8080:80
+wendy --device mesh://TENANT_UUID/DEVICE_UUID net forward 8080:80
 ```
 
 The target must currently advertise port 80 as a TCP service. The command binds
@@ -128,9 +128,9 @@ Wendy Net is off by default on Lite. Select its existing management connection
 and enable supported carriers, for example over USB:
 
 ```sh
-wendy --device wendy-lite:PORT device wendy-net configure \
+wendy --device wendy-lite:PORT net configure \
   --participate=true --ble=true --infrastructure-wifi=true --nan=false
-wendy --device wendy-lite:PORT device wendy-net status
+wendy --device wendy-lite:PORT net status
 ```
 
 C5 devices with PSRAM can route across several peers. The constrained C6 profile
