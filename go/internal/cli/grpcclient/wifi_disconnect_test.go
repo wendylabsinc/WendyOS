@@ -142,7 +142,11 @@ func TestWiFiDisconnectClientCancellationIsNeverSuccess(t *testing.T) {
 			}
 			cancel()
 			got := <-done
-			if !errors.Is(got.err, context.Canceled) || got.result.State != "unknown" || got.result.CompletionConfirmed || got.result.Success != nil || got.result.Acknowledged != afterReady {
+			wantState := "unknown"
+			if afterReady {
+				wantState = "requested"
+			}
+			if !errors.Is(got.err, context.Canceled) || got.result.State != wantState || got.result.CompletionConfirmed || got.result.Success != nil || got.result.Acknowledged != afterReady {
 				t.Fatalf("cancellation became success: result = %+v, error = %v", got.result, got.err)
 			}
 		})

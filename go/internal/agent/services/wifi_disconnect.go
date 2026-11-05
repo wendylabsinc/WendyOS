@@ -15,11 +15,13 @@ import (
 )
 
 const wifiDisconnectPhaseTimeout = 30 * time.Second
+const wifiDisconnectConfirmationTimeout = 5 * time.Second
 const wifiDisconnectExecutionTimeout = 30 * time.Second
 
 // DisconnectWiFiAcknowledged leaves the legacy unary operation unchanged. The
-// client confirms that it received Ready before the operation may remove its
-// own transport. Ready is not a promise that the operation completed.
+// valid Begin commits the device to attempting the disconnect. Ready reports
+// that commitment; Confirm permits it immediately, while a missing Confirm or
+// lost stream only limits the acknowledgement grace period, not the operation.
 func (s *WiFiService) DisconnectWiFiAcknowledged(stream grpc.BidiStreamingServer[agentpbv2.DisconnectWiFiControl, agentpbv2.DisconnectWiFiEvent]) error {
 	if s.networkManager == nil {
 		return status.Error(codes.Unavailable, "WiFi management is not available (nmcli not found)")
@@ -33,26 +35,30 @@ func (s *WiFiService) DisconnectWiFiAcknowledged(stream grpc.BidiStreamingServer
 	if err := awaitWiFiDisconnectControl(phase, stream, false); err != nil {
 		return err
 	}
-	// Verify that WiFi management can inspect a device before acknowledging a
-	// request. Do not expose the SSID or mutate the device during preparation.
-	if _, _, err := s.networkManager.GetWiFiStatus(phase); err != nil {
-		return status.Errorf(codes.FailedPrecondition, "preparing WiFi disconnect: %v", err)
-	}
-	if err := sendWiFiDisconnectEvent(phase, stream, &agentpbv2.DisconnectWiFiEvent{
-		Event: &agentpbv2.DisconnectWiFiEvent_Ready{Ready: &emptypb.Empty{}},
-	}); err != nil {
-		return err
-	}
-	if err := awaitWiFiDisconnectControl(phase, stream, true); err != nil {
-		return err
-	}
+	// Begin is the commit point. Do not gate the operation on another status
+	// read or on successful delivery of Ready/Confirm: either can lose the
+	// requesting path after the device has already accepted the command.
 	cancelPhase()
+	confirmationTimeout := s.disconnectConfirmationTimeout
+	if confirmationTimeout <= 0 {
+		confirmationTimeout = wifiDisconnectConfirmationTimeout
+	}
+	confirmation, cancelConfirmation := context.WithTimeout(stream.Context(), confirmationTimeout)
+	readyErr := sendWiFiDisconnectEvent(confirmation, stream, &agentpbv2.DisconnectWiFiEvent{
+		Event: &agentpbv2.DisconnectWiFiEvent_Ready{Ready: &emptypb.Empty{}},
+	})
+	if readyErr == nil {
+		if err := awaitWiFiDisconnectControl(confirmation, stream, true); err != nil && s.logger != nil {
+			s.logger.Debug("WiFi disconnect proceeding without client confirmation", zap.Error(err))
+		}
+	}
+	cancelConfirmation()
 
 	executionTimeout := s.disconnectExecutionTimeout
 	if executionTimeout <= 0 {
 		executionTimeout = wifiDisconnectExecutionTimeout
 	}
-	// A confirmed disconnect must not be aborted just because it removes the
+	// An accepted disconnect must not be aborted just because it removes the
 	// requesting stream. Keep identity/trace values but impose a separate bound.
 	execution, cancelExecution := context.WithTimeout(context.WithoutCancel(stream.Context()), executionTimeout)
 	defer cancelExecution()
@@ -62,8 +68,13 @@ func (s *WiFiService) DisconnectWiFiAcknowledged(stream grpc.BidiStreamingServer
 		message := err.Error()
 		response.ErrorMessage = &message
 		if s.logger != nil {
-			s.logger.Warn("WiFi disconnect failed after client acknowledgement", zap.Error(err))
+			s.logger.Warn("WiFi disconnect failed after accepting the request", zap.Error(err))
 		}
+	}
+	// A failed Ready send can still own gRPC's send side. Do not attempt a
+	// concurrent completion send, and never let that failure cancel the action.
+	if readyErr != nil {
+		return readyErr
 	}
 	completion, cancelCompletion := context.WithTimeout(stream.Context(), phaseTimeout)
 	defer cancelCompletion()
