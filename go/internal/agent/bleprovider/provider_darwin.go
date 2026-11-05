@@ -29,7 +29,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	policy := localmesh.NewConnectionPolicy(cfg.Credentials.Device, true, localmesh.ConnectionLimits{Outgoing: 2, Attempts: 1, Total: 2})
+	var snapshot func() localmesh.NodeSnapshot
+	if node, ok := cfg.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
+		snapshot = node.Snapshot
+	}
+	policy := newDarwinConnectionPolicy(cfg.Credentials.Device, snapshot)
 	var wg sync.WaitGroup
 	defer func() { cancel(); wg.Wait() }()
 	var candidates localmesh.CandidateQueue
@@ -73,10 +77,7 @@ func Run(ctx context.Context, cfg Config) error {
 					}
 				}
 				matches++
-				if authenticatedRadios.suppressed(address, adv, cfg.Selection, time.Now()) {
-					continue
-				}
-				lease := policy.Reserve(address, meshid.Device{}, true)
+				lease := authenticatedRadios.reserve(policy, &candidates, address, adv, time.Now())
 				if lease == nil {
 					continue
 				}
