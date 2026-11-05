@@ -66,7 +66,8 @@ func bluetoothBackend(t *testing.T) (*Backend, *bluetoothAgent) {
 }
 func TestBluetoothScanKeepsLatestObservationAndStops(t *testing.T) {
 	b, fake := bluetoothBackend(t)
-	devices, err := scanBluetooth(context.Background(), pb.NewWendyBluetoothServiceClient(b.conn.Conn), 100*time.Millisecond)
+	// Allow a loaded race-test runner time to deliver the real gRPC replies.
+	devices, err := scanBluetooth(context.Background(), pb.NewWendyBluetoothServiceClient(b.conn.Conn), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
