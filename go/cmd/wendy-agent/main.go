@@ -909,8 +909,10 @@ func main() {
 
 		// WendyShellService opens an interactive *host* root shell. It is
 		// deliberately registered only on authenticated servers, so it is
-		// reachable only on a provisioned device over an authenticated,
-		// org-checked connection. It is intentionally not part of
+		// reachable only on a provisioned device over an authenticated connection
+		// admitted by the tenant and user policies (including legacy users in grace
+		// mode). The mandatory RPC policy rejects device credentials before
+		// HostShell. It is intentionally not part of
 		// registerAllServices: that would also expose it on the unauthenticated
 		// plaintext pre-provisioning server (handing anyone on the LAN a host
 		// root shell) and on the local admin socket.
