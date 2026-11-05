@@ -285,6 +285,21 @@ actual UTC clears that grace. This virtual policy neither steps OS time nor
 claims fresh public time; it adds no peer clock relay. Legacy physical-LAN and
 Cloud validation defaults remain unchanged.
 
+These anchors are local operating-system state, not independently signed fresh
+UTC. The policy assumes their writers are trusted administrators; an attacker
+who can alter them can influence the verification clock. Peer announcements
+cannot select an anchor, replace issuer trust or bypass signatures. Accepting a
+bounded future leaf NotBefore before direct time recovery is an explicit boot
+recovery trade-off, not proof of actual UTC validity.
+
+The mesh-native agent ingress is an in-process connection handoff with no
+routable listening address. It requires independent inner mTLS and the same
+mandatory tenant and RPC-role policy as the ordinary authenticated server.
+A device may open an outer app session without gaining operator authority:
+device credentials remain unable to invoke HostShell or either tunnel RPC,
+including during boot uncertainty. Authenticated operators retain management
+access under the bounded mesh certificate policy before time recovery.
+
 Each wendy net verifier may reuse successful certificate-path signature verification
 for up to one minute of monotonic time, within 256 entries and 8 MiB of certificate
 bytes. The key includes every presented DER entry, including unused issuers.
