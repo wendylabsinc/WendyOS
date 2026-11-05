@@ -47,7 +47,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	root := &cobra.Command{Use: "wendy-net", Aliases: []string{"local-mesh", "nan-mesh"}, Short: "Manage Wendy Net connections and Internet sharing",
 		Long: "Use connect and disconnect to join or leave Wendy Net from this computer. Use configure and status with --device to manage a device discovered by wendy discover. Omitted device settings are preserved; reading status does not enable mesh participation."}
 	configure := &cobra.Command{Use: "configure", Short: "Update selected Wendy Net settings", Args: cobra.NoArgs}
-	configure.Flags().Bool("participate", false, "Join and relay Wendy Net (false disconnects the device; saved connection settings are retained)")
+	configure.Flags().Bool("participate", false, "Join and relay Wendy Net (false leaves the mesh; saved connection settings are retained)")
 	configure.Flags().Bool("roam", false, "Use Wendy Net Internet when an independent uplink is unavailable")
 	configure.Flags().Bool("share-uplink", false, "Share this device's own Internet connection with Wendy Net")
 	configure.Flags().Bool("nan", false, "Connect over Wi-Fi Aware (NAN)")

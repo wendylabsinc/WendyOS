@@ -178,7 +178,7 @@ func operatorManagementTarget(view *pb.LocalMeshTopology, adjacent, target meshi
 			continue
 		}
 		if (hint.Platform != "WendyOS" && hint.Platform != "Lite") || hint.AgentTransport != "mtls-v1" {
-			return OperatorTargetInfo{}, status.Errorf(codes.Unimplemented, "mesh management adapter for platform %q transport %q is not implemented", hint.Platform, hint.AgentTransport)
+			return OperatorTargetInfo{}, status.Errorf(codes.Unimplemented, "this CLI does not support mesh management for platform %q using transport %q; check CLI and firmware versions", hint.Platform, hint.AgentTransport)
 		}
 		if hint.AgentPort == 0 || hint.AgentPort > 65535 {
 			return OperatorTargetInfo{}, status.Error(codes.Unavailable, "the device has not advertised a usable management port; check its agent or firmware version")
