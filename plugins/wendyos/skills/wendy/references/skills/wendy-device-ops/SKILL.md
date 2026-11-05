@@ -45,32 +45,9 @@ Passing the hostname to `set-default` avoids the interactive picker. Change the 
 
 ## Reach devices through Wendy Net
 
-For a device that is reachable only through the mesh, use a terminal on the
-user's intended computer to sign in and join:
-
-```bash
-wendy auth login
-wendy device wendy-net connect
-wendy discover --json --type mesh --timeout 5s
-wendy --device mesh://TENANT_UUID/DEVICE_UUID device info
-```
-
-Use the exact `mesh://...` destination returned by discovery. The CLI discovers
-nearby routers over LAN and Bluetooth automatically; do not ask the user for a
-router address, router UUID, Bluetooth identifier or PSM. Supported WendyOS and
-PSRAM Lite routers can connect the computer; a C6 is a destination leaf, not an
-entry router. A Lite destination supports its own management commands, not
-WendyOS-only container operations.
-
-With local MCP, `device_list` can list mesh destinations while the local
-background router is connected. Use `device_connect(device=...)` for a returned
-WendyOS mesh selector. `scan=true` adds ordinary LAN discovery; it does not
-enable mesh participation. Use the CLI for Lite operations not exposed by the
-connected MCP server. If no terminal is available on the intended computer,
-explain the missing access rather than inventing a mesh-join tool.
-
-`device_disconnect` ends the current MCP device connection. To stop the local
-mesh router itself, use `wendy device wendy-net disconnect` when requested.
+Before joining, selecting a mesh destination or disconnecting, read
+[Wendy Net access](references/wendy-net.md). Nearby routers are discovered
+automatically; choose only the destination device.
 
 ## Inspect device state
 
@@ -147,29 +124,8 @@ wendy --json device update --binary ./path/to/wendy-agent --device <hostname>
 
 ## With MCP tools
 
-The Wendy MCP server covers the same operations on its connected device. Enable
-the groups named below with `wendy_tools(groups=[...])` first; each call replaces
-the enabled set, so list every group you still need.
-
-- Inspect (core): `device_info` (versions, storage, battery) and
-  `hardware_capabilities(category=...)`.
-- Default device (`setup`): `device_set_default(address=...)`.
-- WiFi (`setup`): `wifi_status`, `wifi_list`, `wifi_known_networks`,
-  `wifi_connect(ssid=..., password=...)` and `wifi_disconnect`. Connecting drops
-  the current network, so the session may lose the device. Forget and rank have
-  no MCP tool; use the CLI.
-- Updates (`setup`): `device_update_agent` (`nightly`, `binary_path`) updates only
-  the agent, verifies it and reconnects. `os_update` starts an OS update;
-  `os_update_status` reports whether it committed or rolled back, and why.
-- Cameras and Bluetooth (`hardware`): `camera_list`, `camera_controls`,
-  `camera_set_control`, `camera_snapshot(device_id=...)` (activates the camera,
-  so ask first), `bluetooth_scan`, `bluetooth_connect` and `bluetooth_disconnect`.
-- Cloud (`cloud`): `cloud_discover`, `cloud_connect`, `cloud_ping`, and
-  `cloud_tunnel(local_port=..., remote_port=...)` with `cloud_tunnel_list` and
-  `cloud_tunnel_close(id=...)` for port forwards owned by this server.
-- Enrollment (`setup`): `cloud_enroll_device` uses the current Cloud login;
-  `provisioning_start` needs a supplied enrollment token; `provisioning_status`
-  checks the result.
+Read [MCP tools and groups](references/mcp-tools.md) before device operations.
+It lists supported tools, required groups and when to use the CLI instead.
 
 ## Routing
 
