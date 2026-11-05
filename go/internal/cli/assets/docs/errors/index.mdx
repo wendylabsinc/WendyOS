@@ -25,6 +25,18 @@ Follow the CLI's recovery hint. If the device clock may be wrong, run `wendy dev
 
 Simulator startup stops retrying when authentication is rejected. It reports the authentication error without the boot-console tail. See [simulator startup and authentication failures](/docs/advanced/clients/wendy-cli/device-selection#simulator-startup-and-authentication-failures).
 
+## Wendy Net connection limit
+
+If you see `Wendy Net is closing a backup connection to free a slot; retry shortly`,
+wait briefly and retry your command. The router is making room for another
+neighbour, and automatic discovery will retry the connection after the backup
+finishes closing.
+
+If the connection does not recover, inspect this computer's connections with
+`wendy net topology --local-cli` and check that nearby routers are reachable.
+`Wendy Net device connection limit reached` means the receiving router has no
+available connection slot. See [backup connections and recovery](/docs/advanced/development/local-mesh-radio#backup-connections-and-recovery).
+
 ## Image build fails
 
 Read the first build error above the deployment failure. For the HTTP quickstart, confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
