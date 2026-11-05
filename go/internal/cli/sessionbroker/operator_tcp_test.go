@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,7 +20,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 func TestOperatorAuxiliaryRegistryTLSUsesSelectedTargetAndSurvivesSetupCancel(t *testing.T) {
@@ -188,7 +189,7 @@ func TestOperatorAuxiliaryAndLiteStreamsShareBoundedAdmission(t *testing.T) {
 		}
 		streams = append(streams, conn)
 	}
-	if next, err := openOperatorTCP(ctx, cc, MeshSelector(target), 43022, nil); err == nil || !strings.Contains(err.Error(), "capacity") {
+	if next, err := openOperatorTCP(ctx, cc, MeshSelector(target), 43022, nil); status.Code(err) != codes.ResourceExhausted {
 		if next != nil {
 			next.Close()
 		}
