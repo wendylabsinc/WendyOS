@@ -60,8 +60,7 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 	}
 
 	// The storage stack needs a moment after Update-Disk before partitions
-	// are reliably enumerable by Get-Volume; mirrors the partprobe sleep on
-	// Linux.
+	// are reliably enumerable by Get-Volume.
 	time.Sleep(500 * time.Millisecond)
 
 	partNum, err := findConfigPartitionNumber(diskNum)
