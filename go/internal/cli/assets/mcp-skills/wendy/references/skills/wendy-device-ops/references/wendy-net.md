@@ -25,7 +25,7 @@ connected MCP server. If no terminal is available on the intended computer,
 explain the missing access rather than inventing a mesh-join tool.
 
 To inspect the existing router on this computer, use
-`wendy --json device wendy-net topology --local-cli`. Without `--local-cli`,
+`wendy --json net topology --local-cli`. Without `--local-cli`,
 `topology` inspects the selected device instead. Device mesh status can be active
 through Bluetooth while LAN is still waiting; verify the destination with a real
 device command rather than inferring reachability from a status label.
