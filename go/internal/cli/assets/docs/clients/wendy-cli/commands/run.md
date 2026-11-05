@@ -454,11 +454,11 @@ an app that reads stdin.
 
 ## Deploy path: `--chunking`
 
-`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push when it fails (`auto`, the default). Use `--chunking` to override this:
+`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push where supported when it fails (`auto`, the default). Use `--chunking` to override this:
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Try chunk-diff; fall back to a registry push on failure. |
+| `auto` (default) | Try chunk-diff. Missing chunk capabilities on old Agents keep the registry fallback, including over Cloud v2. LAN and legacy Cloud retain their broader fallback; an unrecovered Cloud v2 transport drop exits 5. |
 | `force` | Use chunk-diff only. If chunk-diff fails the error is returned and no registry-push fallback is attempted. Cancellation still exits cleanly. |
 | `off` | Skip chunk-diff entirely; go straight to the registry push. |
 
@@ -470,12 +470,39 @@ an app that reads stdin.
 > route for every device, as build hosts delivered before chunked delivery
 > existed.
 
-> **Note:** When `--deploy` is also passed, `--chunking force` and `--chunking off` are no-ops — `--deploy` always uses the registry path because it must create the container without starting it.
+> **Note:** For single-service runs, `--deploy` uses the registry path because it must create the container without starting it; `--chunking force` and `--chunking off` do not change that path. This registry alternative does not apply to Compose or multi-service runs.
 
 > **Note:** The `postStart` hook fires on both the chunk-diff and registry-push
 > paths. The deploy path does not affect hook execution.
 
 Any value other than `auto`, `force`, or `off` is rejected with an error before the build starts.
+
+### Uploads over Cloud v2
+
+After a real Cloud v2 connection drop, automatic registry fallback is off for
+that failed deployment. The CLI reports the device (or its Cloud ID if unnamed)
+and bytes sent across resume attempts against the largest upload plan. Check
+that the device is online with `wendy cloud discover`, then retry. A single-service
+upload gets up to three attempts and skips chunks already staged on the device.
+An unrecovered connection loss during upload, a failed upload reconnect (including
+its deadline), or a disconnect while waiting for the app's start acknowledgement
+is `device_unreachable`: exit status 5, with `retryable: true` in JSON mode.
+
+In `auto` mode, an old Agent missing the required chunk RPCs still takes the
+existing authorized registry route. Image preparation refusals and other
+non-transport failures are reported separately. `force` keeps registry fallback
+off, including for missing capabilities; update the Agent to use that mode.
+
+The Compose and multi-service **chunk-upload path** requires `--builder docker`.
+Apple Container keeps its existing direct registry route in `auto`; existing
+Apple Container setups can also select it explicitly with
+`--builder apple-container --chunking=off`. This does not add BuildKit Compose
+registry support.
+
+`--chunking=off` explicitly uploads through the registry, subject to the usual
+registry authentication and Cloud authorization. Single-service `--deploy` is
+another registry alternative; it is not a Compose alternative. Set
+`WENDY_TLS_DEBUG=1` to log underlying upload and reconnect diagnostics.
 
 ## Environment variables
 

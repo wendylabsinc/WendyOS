@@ -29,6 +29,22 @@ Simulator startup stops retrying when authentication is rejected. It reports the
 
 Read the first build error above the deployment failure. For the HTTP quickstart, confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
 
+## Cloud v2 upload connection lost
+
+Check that the device is online with `wendy cloud discover`, then retry the
+upload. The CLI identifies unnamed devices by their Cloud ID and reports bytes
+sent across resume attempts. A lost connection during upload or while waiting
+for the app's start acknowledgement exits with status 5
+(`device_unreachable`, retryable). Automatic registry fallback is off after that
+transport failure. Use `--chunking=off` to upload through the registry, subject to
+the usual authorization. Old Agents without the chunk RPCs keep their registry
+fallback in `auto`.
+Set `WENDY_TLS_DEBUG=1` to print the underlying upload and reconnect diagnostics
+to stderr. The Compose and multi-service chunk-upload path uses `--builder docker`.
+Apple Container keeps its direct registry route; use
+`--builder apple-container --chunking=off` to select it explicitly. In `force`,
+a missing capability requires an Agent update. See [Cloud v2 uploads](/docs/advanced/clients/wendy-cli/commands/run#uploads-over-cloud-v2).
+
 ## Host port already in use
 
 Another process may own the app's port, which is 5001 for the quickstart app. Stop that process or change the app's listening port and its readiness configuration together. The simulator forwards the declared TCP readiness port onto your development machine. See [simulator networking](/docs/installation/wendyos-virtual-machine#reaching-an-app-you-deployed).
