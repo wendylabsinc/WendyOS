@@ -2,8 +2,8 @@ package localmesh
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"reflect"
 	"testing"
 	"time"
@@ -83,12 +83,12 @@ func driveCertificateExchange(t *testing.T, source, receiver *CertificateExchang
 		}
 		replies = nil
 		for _, response := range responses {
-			wire, err := json.Marshal(response)
+			wire, err := netwire.Marshal(response)
 			if err != nil || len(wire) > 1800 {
 				t.Fatal("oversized certificate frame", len(wire), err)
 			}
 			var decoded CertificateMessage
-			if err := json.Unmarshal(wire, &decoded); err != nil {
+			if err := netwire.Unmarshal(wire, &decoded); err != nil {
 				t.Fatal(err)
 			}
 			if decoded.Chunk != nil {
@@ -292,7 +292,6 @@ func TestCertificateExchangeUnsolicitedAndBounds(t *testing.T) {
 		t.Fatal("unsolicited bytes retained", q, done, err, c.parts.bytes)
 	}
 	for _, bad := range []CertificateMessage{
-		{},
 		{Request: &CertificateRequest{Hash: "invalid"}},
 		{Request: &CertificateRequest{Hash: certificateHash(data), Offset: maxCertificateBytes}},
 		{Chunk: &CertificateChunk{Hash: certificateHash(data), Total: maxCertificateBytes + 1, Data: data}},

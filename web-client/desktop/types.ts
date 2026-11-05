@@ -93,7 +93,7 @@ export type DeviceSnapshot = {
 };
 export type DiscoveredDevice = { name: string; target: string; address: string; transport: string; version?: string };
 export interface DesktopAPI extends DeviceLogsAPI {
-  meshDiscover(): Promise<{ devices: MeshDevice[]; warnings: string[] }>;
+  meshDiscover(): Promise<{ devices: MeshDevice[]; warnings: string[]; retainPrevious?: boolean }>;
   meshTopology(args: { target: string }): Promise<MeshResult>;
   status(): Promise<HostStatus>;
   containers(runtime: Runtime): Promise<Container[]>;

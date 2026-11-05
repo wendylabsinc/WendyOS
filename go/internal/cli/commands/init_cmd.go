@@ -419,6 +419,7 @@ func runInitWizard(args []string, opts initOptions) error {
 	if err := scaffoldProject(cwd, appID, target, language); err != nil {
 		return err
 	}
+	scaffoldInitAgentsFiles(cwd, appID, target, language)
 
 	// Step 6: Offer AI assistant session.
 	if err := resolveInitAssistant(appID, target, language, entitlements, opts); err != nil {
@@ -878,6 +879,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 	if len(addedEntitlements) > 0 {
 		cliLogln("  Entitlements added from flags: %s", strings.Join(addedEntitlements, ", "))
 	}
+	scaffoldInitAgentsFiles(destDir, appID, target, language)
 
 	// Offer git init.
 	if err := maybeGitInit(destDir, opts); err != nil {

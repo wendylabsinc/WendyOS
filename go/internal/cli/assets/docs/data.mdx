@@ -56,6 +56,10 @@ wendy data sources --device workshop.local
 wendy data record --device workshop.local --name commissioning --source telemetry
 ```
 
+`sources` lists each camera, microphone and ROS 2 graph with the ID to pass to
+`--source` and a status that says what the agent checked. A `*` marks the
+sources `record` captures when you pass no `--source`.
+
 The recording runs on the device after the command returns.
 `wendy data status --device workshop.local` shows how long it has been running
 and how much it has written. Stop it when you have captured enough data, then
@@ -119,6 +123,12 @@ records, use `episodes`, `inspect`, and `download` as above. Check the manifest
 for the sources that actually recorded and any errors. A successful deployment
 means the campaign is armed, not that a recording has already succeeded.
 
+To switch the campaign off without losing its plan or episodes, run
+`wendy data campaign disarm machine-faults`; it stays off across restarts and
+redeploys until `wendy data campaign arm machine-faults`. To delete the plan,
+run `wendy data campaign remove machine-faults`. Every episode it recorded is
+kept.
+
 On a cloud-enrolled device, deployment also registers `campaign:<name>` in Cloud
 Apps. For an intentionally offline deployment, pass `--skip-cloud-registration`.
 Unenrolled devices skip registration automatically.
@@ -130,7 +140,7 @@ Replace `sources` with selectors from `wendy data sources`. For example:
 ```yaml
 sources:
   - camera: v4l2:/dev/video0
-  - audio: audio:16777217
+  - audio: audio:alsa_input.usb-046d_HD_Pro_Webcam_C920_C2DD0F9F-02.analog-stereo
   - ros2: /lidar/points
   - ros2: /vehicle/odometry
   - telemetry: true

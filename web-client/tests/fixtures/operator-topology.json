@@ -1,0 +1,87 @@
+{
+  "selfPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+  "selfTenantId": "11111111-1111-4111-8111-111111111111",
+  "selfDeviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "selfMeshAddress": "fd45:b891:5680:cca:1cd7:f65e:b581:101b",
+  "capturedAtUnixMs": "1793000000000",
+  "runtimeAvailable": true,
+  "peers": [
+    {
+      "linkId": "9",
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "deviceId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "meshAddress": "fd45:b891:5680:2a58:92f9:474c:30e0:a233",
+      "transport": "ethernet",
+      "cost": 128
+    },
+    {
+      "linkId": "18446744073709551615",
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "deviceId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "meshAddress": "fd45:b891:567f:4bbb:8bbb:bbbb:bbbb:bbbb",
+      "transport": "ble",
+      "cost": 8192
+    }
+  ],
+  "routes": [
+    {
+      "prefix": "fd45:b891:567f:4bbb:8bbb:bbbb:bbbb:bbbb/128",
+      "originRouterId": "18446744073709551614",
+      "sequenceNumber": 42,
+      "metric": 8192,
+      "linkId": "18446744073709551615",
+      "nextHopPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "nextHopAddress": "fd45:b891:567f:4bbb:8bbb:bbbb:bbbb:bbbb",
+      "originPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "signedRouteExpiresAtUnixMs": "1793000300000",
+      "originAuthorized": true
+    },
+    {
+      "prefix": "fd45:b891:5680:2a58:92f9:474c:30e0:a233/128",
+      "originRouterId": "9",
+      "sequenceNumber": 1,
+      "metric": 128,
+      "linkId": "9",
+      "nextHopPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "nextHopAddress": "fd45:b891:5680:2a58:92f9:474c:30e0:a233",
+      "originPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "signedRouteExpiresAtUnixMs": "1793000300000",
+      "originAuthorized": true
+    },
+    {
+      "prefix": "fd45:b891:5680:cca:1cd7:f65e:b581:101b/128",
+      "originRouterId": "7",
+      "local": true,
+      "originPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice"
+    }
+  ],
+  "announcements": [
+    {
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "deviceId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "name": "C6 neighbor",
+      "issuedAtUnixMs": "1792999999000",
+      "expiresAtUnixMs": "1793000300000",
+      "revision": "18446744073709551615",
+      "prefix": "fd45:b891:567f:4bbb:8bbb:bbbb:bbbb:bbbb/128",
+      "originRouterId": "18446744073709551614",
+      "sequenceNumber": 42,
+      "trustState": "verified-at-snapshot",
+      "agentPort": 5054,
+      "agentTransport": "mtls-v1",
+      "platform": "Lite"
+    },
+    {
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "deviceId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "name": "Other CLI installation",
+      "issuedAtUnixMs": "1792999999000",
+      "expiresAtUnixMs": "1793000300000",
+      "revision": "3",
+      "prefix": "fd45:b891:5680:2a58:92f9:474c:30e0:a233/128",
+      "originRouterId": "9",
+      "sequenceNumber": 1,
+      "trustState": "verified-at-snapshot"
+    }
+  ]
+}

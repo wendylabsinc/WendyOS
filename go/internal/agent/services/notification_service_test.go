@@ -1054,7 +1054,7 @@ func TestCloudNotificationSenderHeaderProofOnlyForLegacy(t *testing.T) {
 			appID := "dev.wendy.demo"
 			var err error
 			if tc.campaign {
-				appID = "campaign:demo"
+				appID = "sh.wendy.campaign.demo"
 				err = (&CampaignCloudSender{Cloud: sender}).Send(ctx, "", DetectionNotification{ID: notificationID, Campaign: "demo", Event: "person_detected"})
 			} else {
 				_, err = sender.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{NotificationId: notificationID, AppId: &appID,

@@ -24,6 +24,7 @@ Runs your app on a Wendy-enabled device:
 | `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
 | `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. Cannot be combined with `--build-host`. |
+| `--build-arg KEY=VALUE` | Repeatable build argument for container builds targeting WendyOS devices. Overrides device defaults and Compose build args for every built service; the last occurrence wins. See [Image build-args](#image-build-args) for examples and restrictions. |
 | `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
 | `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
 | `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
@@ -224,7 +225,19 @@ The error explains the project/target mismatch and tells you to set `platform: "
 
 ## Image build-args
 
-When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as `--build-arg` values so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`:
+When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as build arguments so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`.
+
+Pass your own values with repeatable `--build-arg KEY=VALUE` flags:
+
+```sh
+wendy run --device my-wendy.local --build-arg WENDY_VERSION=2026.11.03-074612 --build-arg 'OPTIONS=a,b=c with spaces' --build-arg EMPTY=
+```
+
+Explicit values override device-reported defaults and Compose `build.args` for every built service. Repeating a key uses its last value. Arguments apply to single-container, multi-service and Compose builds on WendyOS devices, including supported `--build-host` builds. Changing an argument invalidates the build-input cache.
+
+Empty values are allowed, and commas, spaces and additional `=` characters stay in the value; quote shell arguments as needed. Keys must start with a letter or underscore and contain only letters, digits and underscores. Values cannot start with `-` or contain control characters. Invalid arguments fail before project setup without printing their values.
+
+`--build-arg` is incompatible with `--stagefile-backend=llb` (including when selected through `WENDY_STAGEFILE_BACKEND`); use `--stagefile-backend=dockerfile` instead. External provider targets such as `--device docker` or `--device apple-container`, native Swift builds, Xcode projects and `run.command` apps do not support this flag.
 
 On Apple silicon Macs with Apple's `container` runtime, Wendy tries
 Apple Container first when `--builder` is omitted. If Apple Container is

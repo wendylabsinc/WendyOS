@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -75,5 +77,33 @@ func TestROS2Error_RewritesCLIHints(t *testing.T) {
 	r := ros2Error(status.Error(codes.Unimplemented, "unknown service"))
 	if text := toolResultText(t, r); !strings.Contains(text, "`/home/u/.wendy/bin/wendy device update`") {
 		t.Errorf("ros2Error text = %q, want the rewritten update hint", text)
+	}
+}
+
+func TestCodeFromGRPCDistinguishesRPCIdentityDenial(t *testing.T) {
+	foreign, err := status.New(codes.PermissionDenied, "other policy").WithDetails(&errdetails.ErrorInfo{
+		Domain: "other.example", Reason: rpcauth.IdentityDenied,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want errorCode
+	}{
+		{"device identity", rpcauth.Denied("sign in with operator credentials"), errCodeRPCIdentityDenied},
+		{"app entitlement", status.Error(codes.PermissionDenied, "missing camera entitlement"), errCodeEntitlementDenied},
+		{"foreign error domain", foreign.Err(), errCodeEntitlementDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Preserve ErrorInfo across the same protobuf boundary as an RPC.
+			wire := status.FromProto(status.Convert(tc.err).Proto()).Err()
+			for _, err := range []error{wire, fmt.Errorf("calling agent: %w", wire)} {
+				if got := codeFromGRPC(err); got != tc.want {
+					t.Fatalf("codeFromGRPC(%v)=%s, want %s", err, got, tc.want)
+				}
+			}
+		})
 	}
 }

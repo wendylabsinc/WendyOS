@@ -22,7 +22,10 @@ and reuse the session's single device connection.
    WendyOS targets, `wait_ready=true` waits for configured TCP readiness or
    process stability; `readiness_timeout_seconds=30` bounds that wait within
    `timeout_seconds`. Set `wait_ready=false` to skip the wait and report
-   `readiness: "not_checked"`; local Docker/Podman require this opt-out.
+   `readiness: "not_checked"`. When `wait_ready` is omitted, `run` also skips
+   the wait for targets and projects it cannot wait for: local Docker/Podman,
+   `device_name` deploys, and Compose, multi-service, Xcode, native-command,
+   host-built Swift or build-host projects.
    Create-only requests skip readiness unless an incompatible explicit wait is requested.
    Success returns a compact receipt. Read `build_log_uri` for the bounded log
    tail (last eight runs in this server session), or set `include_output=true`.
@@ -80,10 +83,12 @@ its own permission policy.
   app name while its device is connected.
 
 Errors carry an `error_code` to branch on: `NOT_CONNECTED`, `DEVICE_UNREACHABLE`,
-`ENTITLEMENT_DENIED`, `AUTH_REQUIRED`, `INVALID_ARGUMENT`, `NOT_FOUND`,
+`ENTITLEMENT_DENIED`, `RPC_IDENTITY_DENIED`, `AUTH_REQUIRED`, `INVALID_ARGUMENT`, `NOT_FOUND`,
 `MULTIPLE_SESSIONS`, `UNSUPPORTED`, `TIMEOUT`, `CANCELLED`, `INTERNAL`, or
-`DENIED` when a `wendy cloud mcp` relay policy refuses the call. List
-results nest rows under one key such as `devices`, `containers` or `logs`. Ask
+`DENIED` when a `wendy cloud mcp` relay policy refuses the call.
+`RPC_IDENTITY_DENIED` means the caller's certificate role or tenant is refused.
+Use operator credentials for management; app entitlements cannot grant RPC access.
+List results nest rows under one key such as `devices`, `containers` or `logs`. Ask
 before calls that interrupt or erase: `container_stop`, `container_delete`,
 `wifi_connect` (the device leaves its current network), `os_update`,
 `device_update_agent` and `simulator_delete`.

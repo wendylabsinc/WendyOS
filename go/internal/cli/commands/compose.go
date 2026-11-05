@@ -1322,6 +1322,10 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 		for k, v := range buildArgs {
 			allBuildArgs[k] = v
 		}
+		allBuildArgs, err = mergeBuildArgFlags(allBuildArgs, opts.buildArgs)
+		if err != nil {
+			return err
+		}
 
 		appCfg := svcCfgs[name]
 		imageIdentity := normalizeImageRef(svc.Image)

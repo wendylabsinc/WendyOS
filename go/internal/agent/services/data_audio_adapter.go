@@ -187,35 +187,55 @@ func isAudioHubDMAEndpoint(detail string) bool {
 	return admaifEndpointPattern.MatchString(detail)
 }
 
+// audioHubUnusableReason is the short form of audioHubDMAEndpointReason, for
+// the one-line status `wendy data sources` prints. The full reason stays in
+// the source detail.
+const audioHubUnusableReason = "silent audio-hub channel"
+
 const (
 	pipewireCaptureClockDomain = "PIPEWIRE_CAPTURE/AGENT_RECEIPT"
 	alsaCaptureClockDomain     = "ALSA_CAPTURE/AGENT_RECEIPT"
 )
 
-func (a *audioDataAdapter) Discover(ctx context.Context) []data.Source {
+// captureNodes enumerates the capture endpoints Discover lists and Start opens,
+// and the clock domain their stamps are in: the PipeWire graph when a session
+// is up, raw ALSA otherwise, plus paired sensor-link microphones on either.
+func (a *audioDataAdapter) captureNodes(ctx context.Context) ([]audio.Node, string, error) {
 	var nodes []audio.Node
 	domain := pipewireCaptureClockDomain
 	if audio.Available() {
 		var err error
 		nodes, _, err = audio.ListNodes(ctx)
 		if err != nil {
-			return nil
+			return nil, "", err
 		}
 		nodes = append(nodes, a.audio.sensorLinkCaptureNodes(ctx)...)
 	} else {
 		var err error
 		nodes, err = audio.ListAlsaNodes(ctx)
 		if err != nil {
-			return nil
+			return nil, "", err
 		}
 		nodes = a.audio.nameSensorLinkMounts(nodes)
 		domain = alsaCaptureClockDomain
 	}
-	out := make([]data.Source, 0, len(nodes))
+	captures := nodes[:0:0]
 	for _, n := range nodes {
-		if n.IsSink {
-			continue
+		if !n.IsSink {
+			captures = append(captures, n)
 		}
+	}
+	return captures, domain, nil
+}
+
+func (a *audioDataAdapter) Discover(ctx context.Context) []data.Source {
+	nodes, domain, err := a.captureNodes(ctx)
+	if err != nil {
+		return nil
+	}
+	ids := audioSourceIDs(nodes)
+	out := make([]data.Source, 0, len(nodes))
+	for i, n := range nodes {
 		nodeDomain := domain
 		// A sensor-link microphone is recorded through arecord even on a
 		// PipeWire host (captureTarget), so its stamps are ALSA receipts.
@@ -223,34 +243,181 @@ func (a *audioDataAdapter) Discover(ctx context.Context) []data.Source {
 			nodeDomain = alsaCaptureClockDomain
 		}
 		detail := strings.TrimSpace(n.Description + " " + n.Name)
-		healthy := true
+		healthy, reason := true, ""
 		if isAudioHubDMAEndpoint(detail) {
-			healthy = false
+			healthy, reason = false, audioHubUnusableReason
 			detail = strings.TrimSpace(detail + "; " + audioHubDMAEndpointReason)
 		}
-		out = append(out, data.Source{
-			ID:          fmt.Sprintf("audio:%d", n.ID),
-			Kind:        "audio",
-			ClockDomain: nodeDomain,
-			Healthy:     healthy,
-			Detail:      detail,
-		})
+		source := data.Source{
+			ID:             ids[i],
+			Kind:           "audio",
+			ClockDomain:    nodeDomain,
+			Healthy:        healthy,
+			Detail:         detail,
+			Name:           audioSourceName(n),
+			UnusableReason: reason,
+		}
+		// The number this microphone was listed under before it had a stable
+		// ID still selects it, for now, so existing commands and campaign plans
+		// keep working; the manager warns whenever one is used.
+		if legacy := legacyAudioSourceID(n); legacy != source.ID {
+			source.Aliases = []string{legacy}
+		}
+		out = append(out, source)
 	}
 	return out
 }
 
+// legacyAudioSourceID is the ID agents listed a capture node under before
+// microphones had stable IDs. It is the node's session-local number, which
+// data.IsLegacyAudioSourceID explains, and it is only ever an alias now.
+func legacyAudioSourceID(n audio.Node) string {
+	return fmt.Sprintf("%s%d", data.LegacyAudioSourcePrefix, n.ID)
+}
+
+// audioSourceIDs assigns each capture node its stable source ID: "audio:" and
+// the node's audio.Node.StableName, so
+//
+//	audio:alsa_input.usb-046d_HD_Pro_Webcam_C920_C2DD0F9F-02.analog-stereo  (PipeWire node.name)
+//	audio:alsa:C920:0                                                       (ALSA fallback, card id and device)
+//	audio:sensor-link:esp32-cam:microphone                                  (paired microphone)
+//
+// It survives a reboot and a replug, which the number it replaces did not, and
+// it is the ID a new episode records. Characters a shell or a YAML plain scalar
+// would act on become underscores. A node with no stable name keeps its
+// session-local number, and a name that two nodes share after that mapping is
+// told apart by a ".2", ".3" suffix in enumeration order. Neither is expected:
+// PipeWire and the kernel already keep node names and card ids unique.
+//
+// Discover and Start both call this over the same enumeration, which is what
+// lets Start map a selected ID back onto the node it names.
+func audioSourceIDs(nodes []audio.Node) []string {
+	ids := make([]string, len(nodes))
+	taken := make(map[string]bool, len(nodes))
+	for i, n := range nodes {
+		id := legacyAudioSourceID(n)
+		if name := sourceIDText(n.StableName); name != "" {
+			id = data.LegacyAudioSourcePrefix + name
+			// Never mint a stable ID that reads as the old numeric form.
+			if data.IsLegacyAudioSourceID(id) {
+				id = data.LegacyAudioSourcePrefix + "node-" + name
+			}
+		}
+		unique := id
+		for suffix := 2; taken[unique]; suffix++ {
+			unique = fmt.Sprintf("%s.%d", id, suffix)
+		}
+		taken[unique] = true
+		ids[i] = unique
+	}
+	return ids
+}
+
+// sourceIDText keeps the characters of s that a shell and a YAML plain scalar
+// take literally (letters, digits, '.', '_', '-' and ':') and maps every other
+// one to '_'.
+func sourceIDText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' || r == ':' {
+			return r
+		}
+		return '_'
+	}, strings.TrimSpace(s))
+}
+
+// stableNamePart is sourceIDText for one ':'-separated component of a stable
+// name, so a component can never introduce a separator of its own.
+func stableNamePart(s string) string {
+	return strings.ReplaceAll(sourceIDText(s), ":", "_")
+}
+
+// pipewireProfileSuffix matches the profile half of a PipeWire node
+// description, which WirePlumber composes as "<card> <profile>": "Built-in
+// Audio Analog Stereo", "C920 PRO HD Webcam Analog Stereo".
+var pipewireProfileSuffix = regexp.MustCompile(`(?i)\s+(?:(?:analog|digital)\s+)?(?:stereo|mono|multichannel|surround\s+[0-9.]+)(?:\s+\([^)]*\))?$`)
+
+// alsaCardLongName matches the bracketed long card name in an "arecord -l"
+// line: "C920 [HD Pro Webcam C920], device 0: USB Audio [USB Audio]".
+var alsaCardLongName = regexp.MustCompile(`^\S+\s+\[([^\]]+)\],\s+device\s+([0-9]+):`)
+
+// audioSourceName is the friendly name `wendy data sources` prints for a
+// capture node: the card as a person would call it, without the profile, the
+// ALSA device numbering or the node name.
+func audioSourceName(n audio.Node) string {
+	description := strings.TrimSpace(n.Description)
+	if pairing, ok := strings.CutPrefix(description, "sensor-link: "); ok {
+		return pairing
+	}
+	if match := alsaCardLongName.FindStringSubmatch(description); match != nil {
+		name := strings.TrimSpace(match[1])
+		if match[2] != "0" {
+			name += ", device " + match[2]
+		}
+		return name
+	}
+	if trimmed := strings.TrimSpace(pipewireProfileSuffix.ReplaceAllString(description, "")); trimmed != "" {
+		return trimmed
+	}
+	if description != "" {
+		return description
+	}
+	return n.Name
+}
+
+// audioDeviceID parses the old numeric form of an audio source ID. Episodes
+// select stable IDs now, which resolveAudioDeviceIDs maps onto nodes; this
+// remains for an ID that is still numeric, such as one from a test harness.
 func audioDeviceID(sourceID string) (uint32, bool) {
-	if !strings.HasPrefix(sourceID, "audio:") {
+	if !data.IsLegacyAudioSourceID(sourceID) {
 		return 0, false
 	}
-	n, err := strconv.ParseUint(strings.TrimPrefix(sourceID, "audio:"), 10, 32)
+	n, err := strconv.ParseUint(strings.TrimPrefix(sourceID, data.LegacyAudioSourcePrefix), 10, 32)
 	return uint32(n), err == nil
 }
 
+// resolveAudioDeviceIDs maps the selected audio sources onto the capture nodes
+// they name right now, by enumerating once and assigning IDs exactly as
+// Discover does. A numeric ID is taken as the node number it is. A stable ID
+// whose node has gone is an error: the microphone was unplugged between the
+// listing and the start.
+func (a *audioDataAdapter) resolveAudioDeviceIDs(ctx context.Context, selected []data.Source) (map[string]uint32, error) {
+	out := map[string]uint32{}
+	var byStable map[string]uint32
+	for _, source := range selected {
+		if !strings.HasPrefix(source.ID, data.LegacyAudioSourcePrefix) {
+			continue
+		}
+		if devID, ok := audioDeviceID(source.ID); ok {
+			out[source.ID] = devID
+			continue
+		}
+		if byStable == nil {
+			nodes, _, err := a.captureNodes(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("enumerating microphones: %w", err)
+			}
+			byStable = make(map[string]uint32, len(nodes))
+			for i, id := range audioSourceIDs(nodes) {
+				byStable[id] = nodes[i].ID
+			}
+		}
+		devID, ok := byStable[source.ID]
+		if !ok {
+			return nil, fmt.Errorf("%s: microphone is no longer present", source.ID)
+		}
+		out[source.ID] = devID
+	}
+	return out, nil
+}
+
 func (a *audioDataAdapter) Start(ctx context.Context, session data.CaptureSession, selected []data.Source) (runningDataCapture, error) {
+	devices, err := a.resolveAudioDeviceIDs(ctx, selected)
+	if err != nil {
+		return nil, err
+	}
 	group := &audioCaptureGroup{}
 	for _, source := range selected {
-		devID, ok := audioDeviceID(source.ID)
+		devID, ok := devices[source.ID]
 		if !ok {
 			continue
 		}
