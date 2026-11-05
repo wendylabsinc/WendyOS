@@ -48,6 +48,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     let calibrate: ((StoredSite, SiteCamera) -> Void)?
     let automaticAlignment: ((StoredSite, Bool) -> AnyView)?
     let alignmentStatuses: [String: String]
+    let alignmentCandidates: ((StoredSite) -> [String: SiteCameraGeometry])?
     let colorCapture: (([String]) -> AnyView)?
     let robotSession: UInt64
     let robotGatewayName: String
@@ -115,6 +116,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         calibrate: ((StoredSite, SiteCamera) -> Void)? = nil,
         automaticAlignment: ((StoredSite, Bool) -> AnyView)? = nil,
         alignmentStatuses: [String: String] = [:],
+        alignmentCandidates: ((StoredSite) -> [String: SiteCameraGeometry])? = nil,
         colorCapture: (([String]) -> AnyView)? = nil,
         @ViewBuilder preview: @escaping (String) -> Preview
     ) {
@@ -130,6 +132,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         self.calibrate = calibrate
         self.automaticAlignment = automaticAlignment
         self.alignmentStatuses = alignmentStatuses
+        self.alignmentCandidates = alignmentCandidates
         self.colorCapture = colorCapture
         self.preview = preview
     }
@@ -491,6 +494,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     modelURL: current.modelURL,
                     site: current.site,
                     cameraGeometry: cameraGeometry(current.site),
+                    cameraCandidates: cameraCandidates(current),
                     colorSources: colorSources(current.site),
                     colorStatus: { cameraColorStatuses = $0 },
                     people: peopleEnabled && !selectingPeopleFloor && placingCamera == nil ? people : [],
@@ -620,6 +624,12 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     preview(camera.sourceID)
                         .frame(height: min(200, size.height * 0.3))
                         .clipShape(RoundedRectangle(cornerRadius: 10))
+                    if candidateGeometry(camera, now: Date()) != nil {
+                        Label("Unsure · Candidate position", systemImage: "questionmark.circle")
+                            .font(.callout).foregroundStyle(.orange)
+                        Text("Distance is uncertain. This position has not been saved.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     DisclosureGroup("Alignment details") {
                     Text(geometryDescription(camera, now: Date())).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
@@ -711,7 +721,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         let feed = onGateway(camera) ? feeds.first { $0.id == camera.sourceID } : nil
         let label = SiteCameraLabel(name: camera.name, sourceID: camera.sourceID)
         let hasPose = current.map { cameraMetadata(camera)?.pose(in: $0.site, now: now) != nil } ?? false
-        let status = camera.position == nil && !hasPose ? "Not positioned" : (feed == nil ? "Unavailable on this gateway" : (feed?.isReceiving(at: now) == true ? "Receiving video" : "Ready to preview"))
+        let status = camera.position == nil && !hasPose ? (candidateGeometry(camera, now: now) != nil ? "Unsure · Candidate position" : "Not positioned") : (feed == nil ? "Unavailable on this gateway" : (feed?.isReceiving(at: now) == true ? "Receiving video" : "Ready to preview"))
         return HStack(spacing: 10) {
             Button { selectedCamera = camera.id; camerasExpanded = false } label: {
                 HStack(spacing: 10) {
@@ -769,6 +779,23 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         return matches.count == 1 ? matches.first : nil
     }
 
+    private func candidateGeometry(_ camera: SiteCamera, now: Date) -> SiteCameraGeometry? {
+        guard let current, placingCamera == nil, !scanning, !busy, !choosingCamera, !importing,
+              onGateway(camera), camera.position == nil,
+              cameraMetadata(camera)?.pose(in: current.site, now: now) == nil,
+              let candidate = alignmentCandidates?(current)[camera.sourceID],
+              candidate.pose.isCurrent(revision: current.site.modelRevision, now: now) else { return nil }
+        return candidate
+    }
+
+    private func cameraCandidates(_ current: StoredSite) -> [UUID: SiteCameraGeometry] {
+        var result: [UUID: SiteCameraGeometry] = [:]
+        for camera in current.site.cameras {
+            result[camera.id] = candidateGeometry(camera, now: Date())
+        }
+        return result
+    }
+
     private func cameraGeometry(_ site: Site) -> [UUID: SiteCameraGeometry] {
         var result: [UUID: SiteCameraGeometry] = [:]
         for camera in site.cameras {
@@ -779,6 +806,10 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     }
 
     private func geometryDescription(_ camera: SiteCamera, now: Date) -> String {
+        if let candidate = candidateGeometry(camera, now: now),
+           let horizontal = candidate.lens?.horizontalFOV, let vertical = candidate.lens?.verticalFOV {
+            return String(format: "Unsure FOV %.0f° × %.0f°\nCandidate yaw %.0f° · Pitch %.0f°", horizontal, vertical, candidate.pose.yaw, candidate.pose.pitch)
+        }
         guard let site = current?.site, let record = cameraMetadata(camera) else { return "Needs camera alignment and lens calibration" }
         var parts: [String] = []
         if let lens = record.lens, let horizontal = lens.horizontalFOV, let vertical = lens.verticalFOV {

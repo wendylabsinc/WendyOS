@@ -17,6 +17,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -116,11 +117,7 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		if d.ConnectionInfo["needsInstall"] == "true" {
 			continue
 		}
-		address := d.ConnectionInfo["ip"]
-		if d.ConnectionType() == "USB" {
-			address = d.ConnectionInfo["serialPort"]
-		}
-		result = append(result, DesktopDevice{ID: d.ID, Name: d.DisplayName, Selector: d.ID, Transport: d.ConnectionType(), Address: address, Lite: true})
+		result = append(result, desktopNearbyLiteDevice(d))
 	}
 	// The legacy LAN projection cannot represent native Lite management. Merge
 	// the current broker directory as canonical mesh selectors for both platforms.
@@ -244,6 +241,19 @@ func desktopAccountInfo(auth config.AuthConfig) DesktopAccountInfo {
 		}
 	}
 	return DesktopAccountInfo{State: state, Context: auth.Name, Cloud: authStatusEndpoint(auth), Email: email}
+}
+
+func desktopNearbyLiteDevice(d models.ExternalDevice) DesktopDevice {
+	address := d.ConnectionInfo["ip"]
+	if d.ConnectionType() == "USB" {
+		address = d.ConnectionInfo["serialPort"]
+	}
+	id := d.ID
+	principal := certs.DeviceSPIFFEURI(d.ConnectionInfo["tenantId"], d.ConnectionInfo["enrolledDeviceId"])
+	if _, err := certs.ParseDevicePrincipal(principal); err == nil {
+		id = principal
+	}
+	return DesktopDevice{ID: id, Name: d.DisplayName, Selector: d.ID, Transport: d.ConnectionType(), Address: address, Lite: true}
 }
 
 func desktopNearbyDevice(d models.LANDevice) DesktopDevice {

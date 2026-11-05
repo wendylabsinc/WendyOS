@@ -211,7 +211,7 @@ static WSLocalization solveCamera(const double*xyz,const double*uv,int32_t n,int
    for(int col=0;col<3;++col)trace+=fit.world_from_camera[col*4+row]*best.world_from_camera[col*4+row];
   }
   double angle=std::acos(std::clamp((trace-1)*.5,-1.,1.));
-  if(std::sqrt(distance)>.30||angle>10*CV_PI/180){best.success=0;best.reason=8;return best;}
+  if(std::sqrt(distance)>.30||angle>10*CV_PI/180){best.success=0;best.reason=8;best.fitted_lens=2;return best;}
  }
  best.fitted_lens=2;
  return best;

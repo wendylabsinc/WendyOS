@@ -200,7 +200,13 @@ Estimated alignment validates each focal-length candidate before choosing one.
 When the references have enough depth variation, it also refines focal length
 and pose together, keeping the principal point centred and distortion zero.
 Comparable fits that differ by more than 30 cm or 10 degrees are rejected as
-distance-ambiguous. Later attempts re-estimate an assumed lens rather than
+distance-ambiguous. In Digital Twin, automatic alignment shows the best individually
+validated fit as a translucent orange marker and cone labeled **Unsure**. This is
+a temporary single-frame candidate, not a saved alignment. It expires after five
+minutes and clears when the workspace changes or a later attempt fails without
+a candidate. Confirmed alignments and manual placements take precedence. Candidates
+are excluded from camera color projection, people positioning, and site exports.
+Later attempts re-estimate an assumed lens rather than
 locking retries to an earlier guess. A measured lens remains fixed.
 
 Camera markers and viewing cones that intersect a nearby RoomPlan wall are drawn
@@ -807,8 +813,8 @@ later. A publisher must renew its evidence; clients hide expired poses. Visual
 localization records also require an inlier count and reprojection RMS.
 
 This API stores pose evidence; it does not derive it from a device appearance
-match. The viewfinder and RoomPlan scanning share the local appearance recognizer
-described below. Those matches do not establish enrolled identity or a calibrated
+match. The device viewfinder uses the local appearance recognizer described below.
+Those matches do not establish enrolled identity or a calibrated
 camera pose. Automatic alignment needs the separately captured visual reference
 map described under [Importing and viewing sites](#importing-and-viewing-sites);
 a geometry-only RoomPlan export is insufficient. Older gateways and cameras
@@ -850,9 +856,28 @@ provide lens calibration or automatic identity verification. Remove references
 through the stack icon. At most 12 references and 32 MiB are stored atomically in
 Application Support/WendyDeviceRecognition/references.json. No cloud sync occurs.
 
-Room scanning uses the same recognizer with RoomPlan's ARSession and shows a
-recognized appearance during capture. It does not place cameras or infer their
-viewing angles from an appearance-only reference. The native C++ layer supports
+Room scanning runs RoomPlan and visual-reference capture without the device
+appearance recognizer, reducing concurrent image-processing memory. Reference
+capture copies the image and depth data before background processing so it does
+not retain AR camera buffers across suspension. An iOS memory warning during
+scanning stops capture without starting reconstruction and reports that the scan
+was not saved. Retry over a smaller area and tap Finish sooner. Memory warnings
+are not guaranteed before iOS terminates an app; large-room capture still needs
+physical-device testing. SwiftUI retains the capture controller with StateObject,
+and Finish, Cancel, and view teardown share one session stop. RoomPlan owns the
+underlying AR session pause.
+
+`PhysicalRoomCaptureTests` provides an opt-in device startup stress test. Set
+`WENDY_ROOM_CAPTURE_REPRO=legacy` in the test target's `.xctestrun`
+`EnvironmentVariables` to exercise the original concurrent device recognition and
+AR reconfiguration, or `roomplan` to let RoomPlan manage startup. Run only this
+class on an unlocked LiDAR iPhone. Each mode opens ten three-second captures and
+reports camera/depth samples and reference counts. It does not save scans or
+modify the device-recognition library. A stationary-phone pass does not reproduce
+a walk through a large room; camera movement and the reported room remain manual
+qualification steps.
+
+The native C++ layer supports
 metric planar references and checked PnP poses, tested with a synthetic calibrated
 fixture, but bundled photographs and user captures have no measured physical
 plane and deliberately cannot produce a pose. That code is not evidence of
@@ -1090,7 +1115,16 @@ Overhead returns above the body top are excluded from navigation obstacles,
 but remain available for localization. The body top is at least 40 cm above
 the measured floor and rises with the odometry base, allowing 10 cm from the
 base to the top. Voxel half-height is included in the vertical overlap check.
-Measured drops still block their entire floor cells. Attachments beyond the
+Measured drops still block their entire floor cells. **Show navigation obstacles**
+is enabled by default on Mac and iOS. Red footprints show the occupied voxel
+areas used by the planner; orange cells show detected drops. The overlay follows
+the confirmed site alignment and updates from each accepted navigation scan,
+including during movement and after a rejected route. It hides when telemetry
+is stale, the connection closes, or alignment is lost. These are floor-projected
+footprints, not reconstructed object heights. Unmarked areas do not establish
+clear floor, and Unitree's accumulated map can retain old obstacles.
+
+Attachments beyond the
 standard body dimensions require a larger envelope. The planner
 retains arrival heading at each search node and checks the actual odometry
 heading during movement. Translation and rotation are separate, walking is
@@ -1102,8 +1136,16 @@ does not change its posture or motion mode.
 
 This is supervised waypoint movement. Unitree's voxel map accumulates observations
 and is not a safety-rated live obstacle sensor. Keep the route clear and remain
-with the robot. The controller stops on stale observations, lost UI activity,
-failed commands or a blocked route. The agent separately expires MOVE after
+with the robot. When an obstacle blocks the route or its stopping area, the
+controller confirms Stop, then searches for a replacement route to the same
+destination in both navigation modes. Detours reserve space for heading
+corrections, the command lease and braking, including beyond bends. A replacement
+can therefore require more room than a footprint-only route. Movement resumes
+on a later control tick only after telemetry and UI freshness pass again. The
+original 30-second deadline and floor policy remain in effect. If planning fails,
+the robot stays stopped and reports that no alternative route was found.
+The controller also stops on stale observations, lost UI activity and failed
+commands. The agent separately expires MOVE after
 500 ms. Tests cover synthetic closed-loop arrival, obstacle/unknown-floor
 rejection, source timestamps, command ordering, failed Stop, and lost leases;
 they do not establish physical navigation performance.
@@ -1114,8 +1156,14 @@ with a live pose but insufficient scan structure. **Not now** keeps passive
 matching active and suppresses further popups for that observation session.
 The popup disappears if the pose is lost, Go2 moves, or its position is aligned.
 There is no **Locate Go2** button. Accepting the popup starts a bounded search:
-match, turn if ambiguous, stop, wait for a fresh view, then match again. If the
-lens has no measurement, the checkerboard sheet comes first. The search stops
+check clearance, turn, stop, wait for a fresh view, then match and turn again if
+ambiguous. A missing camera frame or lens calibration does not block LiDAR-based
+search. A calibrated camera adds visual evidence when available; **Calibrate
+camera** remains available separately. The panel shows sensor waits, clearance
+checks, turn progress and matching without opening Details. A rejected turn
+shows its reason with **Try rotation again** and **Place manually** actions;
+retrying requires accepting the rotation popup again. **Cancel search** stops
+pending and active searches. The search stops
 when a suggestion is available, after a full circle of up to twelve 30-degree turns, after five
 minutes excluding calibration, or on Stop/fault. It never confirms a pose.
 If a full rotation or the time limit produces no match, the panel keeps a

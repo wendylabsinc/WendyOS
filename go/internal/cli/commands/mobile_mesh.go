@@ -75,7 +75,7 @@ func DesktopMeshDevices(snapshot sessionbroker.OperatorDirectory) []DesktopDevic
 				continue
 			}
 		}
-		result = append(result, DesktopDevice{ID: row.Selector, Name: row.Name, Selector: row.Selector, Transport: "Mesh", Lite: lite})
+		result = append(result, DesktopDevice{ID: row.Principal, Name: row.Name, Selector: row.Selector, Transport: "Mesh", Lite: lite})
 	}
 	return result
 }

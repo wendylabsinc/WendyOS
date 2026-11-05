@@ -71,7 +71,7 @@ func TestDiscoveryFailureSurfaces(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for surface, output := range map[string]string{"TUI": ansi.Strip(dm.View()), "text": ansi.Strip(renderDeviceTable(collection)), "picker": ansi.Strip(pm.(tui.PickerModel).View()), "JSON": string(data), "clipboard": string(clipboard)} {
+			for surface, output := range map[string]string{"TUI": ansi.Strip(dm.View()), "text": ansi.Strip(renderDeviceTable(collection)), "JSON": string(data), "clipboard": string(clipboard)} {
 				if !strings.Contains(strings.Join(strings.Fields(output), " "), tc.phrase) {
 					t.Errorf("%s missing %q: %s", surface, tc.phrase, output)
 				}
@@ -81,6 +81,12 @@ func TestDiscoveryFailureSurfaces(t *testing.T) {
 				if tc.code != "credentials_missing" && tc.code != "device_org_mismatch" && strings.Contains(output, "auth login") {
 					t.Errorf("%s incorrectly suggests login: %s", surface, output)
 				}
+			}
+			if view := ansi.Strip(pm.(tui.PickerModel).View()); strings.Contains(view, tc.phrase) || picker.Hint != "" {
+				t.Fatalf("picker displayed probe diagnostic: %s", view)
+			}
+			if picker.Value.(*pickerEntry).mergedDevice.LAN.ProbeFailure == nil {
+				t.Fatal("picker lost the probe failure payload")
 			}
 			if !strings.Contains(string(data), `"code":"`+tc.code+`"`) {
 				t.Fatalf("missing JSON failure code: %s", data)

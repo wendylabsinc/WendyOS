@@ -220,7 +220,8 @@ func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
-		msg.Height = max(1, msg.Height-strings.Count(m.purpose.header(msg.Width), "\n"))
+		// Reserve the tab strip and blank line above each child picker.
+		msg.Height = max(1, msg.Height-2-strings.Count(m.purpose.header(msg.Width), "\n"))
 		var cmds []tea.Cmd
 		local, localCmd := m.updateLocal(msg)
 		m = local

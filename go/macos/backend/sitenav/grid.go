@@ -31,7 +31,8 @@ type Grid struct {
 	Floor, Obstacles map[Cell]bool
 	// Occupied voxels retain their measured footprint within the coarse grid.
 	// A blocked cell without voxel detail is a drop or a full-cell obstacle.
-	voxels map[Cell][]obstacleVoxel
+	voxels       map[Cell][]obstacleVoxel
+	stoppingRoom bool
 }
 
 // ObservedClearFloor returns measured cells only. Call on the original scan,
@@ -203,7 +204,60 @@ func (g Grid) Transition(a Point, yaw float64, b Point) bool {
 		return g.ClearPose(a, yaw)
 	}
 	heading := Heading(a, b)
-	return g.Turn(a, yaw, heading) && g.Sweep(a, b, heading)
+	return g.planningTurn(a, yaw, heading) && g.planningSweep(a, b, heading)
+}
+
+// Detours must leave room for the same command lease and braking checks as the
+// controller. Otherwise a shortest path can graze an obstacle and stop again
+// at its first bend. Ordinary footprint inspection still uses the raw grid.
+func (g Grid) PlanDetour(start Point, yaw float64, goal Point) ([]Point, error) {
+	g.stoppingRoom = true
+	return g.PlanPose(start, yaw, goal)
+}
+
+func (g Grid) planningTurn(p Point, from, to float64) bool {
+	if !g.Turn(p, from, to) {
+		return false
+	}
+	if !g.stoppingRoom {
+		return true
+	}
+	// Either correction direction can be needed as odometry approaches a bend.
+	return g.Turn(p, to, to+TurnStoppingAngle) && g.Turn(p, to, to-TurnStoppingAngle)
+}
+
+func (g Grid) stoppingEnd(a, b Point) Point {
+	if !g.stoppingRoom {
+		return b
+	}
+	heading := Heading(a, b)
+	distance := WalkingSpeed*.5 + WalkingSpeed*WalkingSpeed + .05
+	return Point{b.X + math.Cos(heading)*distance, b.Y + math.Sin(heading)*distance}
+}
+
+func (g Grid) planningSweep(a, b Point, heading float64) bool {
+	if !g.stoppingRoom {
+		return g.Sweep(a, b, heading)
+	}
+	end := g.stoppingEnd(a, b)
+	return g.stoppingSweeps(heading, func(yaw, padding float64) bool {
+		return g.sweptCells(a, end, yaw, padding, func(c Cell) bool {
+			return g.Floor[c] && !g.obstacleOverlaps(c, a, end, yaw, padding)
+		})
+	})
+}
+
+// Small heading corrections can happen anywhere along a leg, not just at a
+// waypoint. Reserve their turning stop envelope plus the tracking tolerance.
+func (g Grid) stoppingSweeps(heading float64, visit func(float64, float64) bool) bool {
+	steps := int(math.Ceil(2 * TurnStoppingAngle / (math.Pi / 90)))
+	padding := .05 + math.Hypot(HalfLength+Clearance, HalfWidth+Clearance)*TurnStoppingAngle/float64(steps)
+	for i := 0; i <= steps; i++ {
+		if !visit(heading-TurnStoppingAngle+2*TurnStoppingAngle*float64(i)/float64(steps), padding) {
+			return false
+		}
+	}
+	return true
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
@@ -256,7 +310,7 @@ func (g Grid) PlanPose(start Point, yaw float64, goal Point) ([]Point, error) {
 	for step := 1; step <= 8 && time.Now().Before(deadline); step++ {
 		distance := float64(step) * CellSize
 		exit := Point{start.X + distance*math.Cos(yaw), start.Y + distance*math.Sin(yaw)}
-		if !g.Sweep(start, exit, yaw) {
+		if !g.planningSweep(start, exit, yaw) {
 			break
 		}
 		tail, tailErr := g.planPose(exit, yaw, goal, deadline)
@@ -318,8 +372,19 @@ func (g Grid) planPose(start Point, yaw float64, goal Point, deadline time.Time)
 			collect := func(c Cell) bool { cells[Cell{c.X - root.cell.X, c.Y - root.cell.Y}] = true; return true }
 			targetYaw := float64(to) * math.Pi / 4
 			g.turnCells(start, angle(at), targetYaw, collect)
+			if g.stoppingRoom {
+				g.turnCells(start, targetYaw, targetYaw+TurnStoppingAngle, collect)
+				g.turnCells(start, targetYaw, targetYaw-TurnStoppingAngle, collect)
+			}
 			end := Point{start.X + float64(d.X)*CellSize, start.Y + float64(d.Y)*CellSize}
-			g.sweptCells(start, end, targetYaw, 0, collect)
+			if g.stoppingRoom {
+				end = g.stoppingEnd(start, end)
+				g.stoppingSweeps(targetYaw, func(yaw, padding float64) bool {
+					return g.sweptCells(start, end, yaw, padding, collect)
+				})
+			} else {
+				g.sweptCells(start, end, targetYaw, 0, collect)
+			}
 			for c := range cells {
 				mask = append(mask, c)
 			}

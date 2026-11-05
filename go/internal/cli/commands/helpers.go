@@ -4504,13 +4504,8 @@ func lanPickerEventMsg(ev discovery.LANEvent) tea.Msg {
 // lanPickerItem is the run picker's row for a LAN device.
 func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tui.PickerItem {
 	devCopy := dev
-	// While the probe is still in flight the Agent/OS columns show a
-	// spinner, so suppress the probe-failure hint until we actually know the
-	// probe failed.
-	hint := ""
-	if probe != tui.ProbePending {
-		hint = lanProbeHint(&devCopy)
-	}
+	// Keep probe diagnostics in the payload for discovery and connection
+	// errors. Selecting a device should not display a diagnostic footer.
 	kind := "LAN"
 	if dev.Mesh {
 		kind = "Mesh"
@@ -4530,7 +4525,6 @@ func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tu
 		OS:            os,
 		OSVersion:     dev.OSVersion,
 		Provisioned:   lanProvisionedDisplay(&devCopy),
-		Hint:          hint,
 		Probe:         probe,
 		DedupKey:      deviceDedupKey(dev.HostKey(), dev.DisplayName),
 		SortKey:       deviceSortKey(dev.DisplayName, dev.USB),
