@@ -81,7 +81,7 @@ func TestOperatorDisconnectBlocksImplicitRejoin(t *testing.T) {
 		{"directory discovery", func() error { _, err := prepareOperatorDirectory(context.Background()); return err }},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
-			if err := operation.run(); err == nil || !strings.Contains(err.Error(), "disconnected") || !strings.Contains(err.Error(), "wendy device wendy-net connect") {
+			if err := operation.run(); err == nil || !strings.Contains(err.Error(), "disconnected") || !strings.Contains(err.Error(), "wendy net connect") {
 				t.Fatalf("missing explicit reconnect guidance: %v", err)
 			}
 		})
