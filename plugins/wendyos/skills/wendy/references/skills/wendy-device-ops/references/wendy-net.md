@@ -29,4 +29,3 @@ mesh router itself, use `wendy device wendy-net disconnect` when requested.
 After that, discovery and device commands must leave it disabled until the user
 explicitly reconnects with `wendy device wendy-net connect`. Ordinary LAN device
 management remains available.
-
