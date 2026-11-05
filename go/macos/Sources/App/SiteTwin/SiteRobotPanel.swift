@@ -648,9 +648,9 @@ struct SiteRobotPanel: View {
     let availableHeight: CGFloat
     @Environment(\.scenePhase) private var scenePhase
     @State private var pairing = false
-    @State private var expanded = true
+    @State private var expanded = false
     @State private var settingsExpanded = false
-    @State private var contentHeight: CGFloat = 320
+    @State private var contentHeight: CGFloat = 160
 
     private var panelContent: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -663,16 +663,15 @@ struct SiteRobotPanel: View {
                         .keyboardShortcut(.escape, modifiers: [])
                 }
                 Button {
-                    if expanded { model.stop() }
-                    expanded.toggle()
-                } label: { Image(systemName: expanded ? "chevron.down" : "chevron.up") }
-                    .buttonStyle(.plain).accessibilityLabel("Toggle robot controls")
+                    expanded = false
+                } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).accessibilityLabel("Close robot controls")
             }
             if expanded {
                 if model.robots.isEmpty {
                     Text("Pair Go2 with \(gatewayName) to locate it on this floor.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Pair Go2", systemImage: "link") { pairing = true }
+                    Button("Pair Go2", systemImage: "link") { expanded = false; pairing = true }
                         .buttonStyle(.borderedProminent).disabled(session == 0)
                 } else {
                     if model.robots.count > 1 {
@@ -715,7 +714,7 @@ struct SiteRobotPanel: View {
                             Text("Position follows aligned odometry. LiDAR can retain old observations.")
                                 .font(.caption2).foregroundStyle(.secondary)
                             HStack {
-                                Button("Manage pairing") { model.stop(); pairing = true }
+                                Button("Manage pairing") { model.stop(); expanded = false; pairing = true }
                             }.font(.caption)
                         }.padding(.top, 8)
                     }.font(.caption)
@@ -728,12 +727,38 @@ struct SiteRobotPanel: View {
     }
 
     var body: some View {
-        ScrollView { panelContent }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(width: 286, height: min(contentHeight, max(160, availableHeight)))
+        HStack(spacing: 12) {
+            Button { expanded.toggle() } label: {
+                Label("Go2", systemImage: "pawprint").font(.headline)
+                Image(systemName: "chevron.up.chevron.down").font(.caption)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Go2 controls")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .popover(isPresented: $expanded, arrowEdge: .top) {
+                ScrollView { panelContent }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(width: 286, height: min(contentHeight, min(480, max(160, availableHeight))))
+            }
+            Spacer()
+            if !model.robots.isEmpty {
+                Button("Stop", systemImage: "stop.fill") { model.stop() }
+                    .buttonStyle(.borderedProminent).tint(.red)
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
+        }
+        .padding(16).frame(width: 286)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(model.selected ? Color.green.opacity(0.5) : Color.white.opacity(0.1)))
+        .onChange(of: expanded) { _, visible in
+            if !visible { model.stop() }
+        }
+        .onChange(of: model.selected) { _, selected in
+            if selected { expanded = true }
+        }
+        .onChange(of: model.destination != nil) { _, hasDestination in
+            if hasDestination { expanded = true }
+        }
         .modifier(SiteRobotRotationPrompt(model: model, onStart: { expanded = true }))
         .task { await model.actions.run() }
         .task(id: session) { await model.load(session: session) }
