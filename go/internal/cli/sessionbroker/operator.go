@@ -195,7 +195,7 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	if !locked {
-		return errors.New("the previous Wendy Net connection is still closing; wait a few seconds, then run 'wendy device wendy-net connect' again")
+		return errors.New("the previous Wendy Net connection is still closing; wait a few seconds, then run 'wendy net connect' again")
 	}
 	defer func() { releaseLock(owner); owner.Close() }()
 	data, err := json.Marshal(recipe)
@@ -231,7 +231,7 @@ func lockOperatorFile(ctx context.Context, path string) (*os.File, error) {
 	}
 }
 
-var errOperatorDisconnected = errors.New("this computer is disconnected from Wendy Net; run 'wendy device wendy-net connect' to rejoin")
+var errOperatorDisconnected = errors.New("this computer is disconnected from Wendy Net; run 'wendy net connect' to rejoin")
 
 func operatorRecipeCurrent(spec Spec) error {
 	directory, err := configDir()
