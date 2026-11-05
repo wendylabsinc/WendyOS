@@ -51,13 +51,13 @@ func completePeerCertificates(chain []*x509.Certificate, candidates IssuerCandid
 	}
 	complete := candidates(wire, now)
 	if len(complete) < len(wire) || len(complete) > 16 {
-		return nil, errors.New("invalid completed operator peer certificate bundle")
+		return nil, errors.New("the completed router certificate bundle is invalid")
 	}
 	result := append([]*x509.Certificate(nil), chain...)
 	for i, der := range complete {
 		if i < len(wire) {
 			if !bytes.Equal(der, chain[i].Raw) {
-				return nil, errors.New("completed operator peer certificates changed the TLS presentation")
+				return nil, errors.New("the completed router certificate bundle does not preserve the certificates presented during TLS authentication")
 			}
 			continue
 		}
