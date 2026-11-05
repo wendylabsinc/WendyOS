@@ -354,12 +354,14 @@ func TestLiteUnenrollChecksConfiguredTenantBeforeAbsentAssetReset(t *testing.T) 
 			} else if err != nil || strings.Join(d.calls, ",") != "preflight,challenge,reset,verify,reboot,wait" {
 				t.Fatalf("same-tenant/unconfigured recovery failed: err=%v calls=%v", err, d.calls)
 			}
-			var wantMutations int32
+			var wantDeletes int32
 			if mode == "same tenant asset" {
-				wantMutations = 1
+				wantDeletes = 1
 			}
-			if service.revokes.Load() != wantMutations || service.deletes.Load() != wantMutations {
-				t.Fatal("cloud cleanup did not match the configured tenant inventory")
+			// The UUID-keyed asset is fenced by DeleteAsset itself: the board is
+			// reset after DeleteAsset alone, with no PKIAdminService call.
+			if service.pkiCalls.Load() != 0 || service.deletes.Load() != wantDeletes {
+				t.Fatalf("cloud cleanup did not match the configured tenant inventory: pkiCalls=%d deletes=%d", service.pkiCalls.Load(), service.deletes.Load())
 			}
 		})
 	}

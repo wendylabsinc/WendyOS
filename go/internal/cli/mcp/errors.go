@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -15,6 +16,7 @@ const (
 	errCodeInvalidArgument   errorCode = "INVALID_ARGUMENT"
 	errCodeDeviceUnreachable errorCode = "DEVICE_UNREACHABLE"
 	errCodeEntitlementDenied errorCode = "ENTITLEMENT_DENIED"
+	errCodeRPCIdentityDenied errorCode = "RPC_IDENTITY_DENIED"
 	errCodeAuthRequired      errorCode = "AUTH_REQUIRED"
 	errCodeMultipleSessions  errorCode = "MULTIPLE_SESSIONS"
 	errCodeNotFound          errorCode = "NOT_FOUND"
@@ -50,6 +52,9 @@ func codeFromGRPC(err error) errorCode {
 	case codes.Unavailable, codes.DeadlineExceeded:
 		return errCodeDeviceUnreachable
 	case codes.PermissionDenied:
+		if rpcauth.IsIdentityDenied(err) {
+			return errCodeRPCIdentityDenied
+		}
 		return errCodeEntitlementDenied
 	case codes.NotFound:
 		return errCodeNotFound

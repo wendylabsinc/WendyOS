@@ -695,7 +695,8 @@ type GetAgentVersionResponse struct {
 	JetpackVersion *string `protobuf:"bytes,10,opt,name=jetpack_version,json=jetpackVersion,proto3,oneof" json:"jetpack_version,omitempty"`
 	// CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
 	CudaVersion *string `protobuf:"bytes,11,opt,name=cuda_version,json=cudaVersion,proto3,oneof" json:"cuda_version,omitempty"`
-	// STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+	// Medium of the disk backing / ("nvme", "emmc", "sd", "ufs", "usb"); when not recognised, the
+	// STORAGE value from /etc/wendyos/device-type (e.g. "disk"). Only present on WendyOS.
 	StorageMedium *string `protobuf:"bytes,12,opt,name=storage_medium,json=storageMedium,proto3,oneof" json:"storage_medium,omitempty"`
 	// Root filesystem bytes currently used by the device. Only present when the agent can inspect disk usage.
 	DiskUsedBytes *int64 `protobuf:"varint,13,opt,name=disk_used_bytes,json=diskUsedBytes,proto3,oneof" json:"disk_used_bytes,omitempty"`
