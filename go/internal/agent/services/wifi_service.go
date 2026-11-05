@@ -14,11 +14,12 @@ import (
 
 type WiFiService struct {
 	agentpbv2.UnimplementedWendyWiFiServiceServer
-	logger                     *zap.Logger
-	networkManager             NetworkManager
-	regulatoryCommand          func(context.Context, ...string) ([]byte, error)
-	disconnectPhaseTimeout     time.Duration
-	disconnectExecutionTimeout time.Duration
+	logger                        *zap.Logger
+	networkManager                NetworkManager
+	regulatoryCommand             func(context.Context, ...string) ([]byte, error)
+	disconnectPhaseTimeout        time.Duration
+	disconnectConfirmationTimeout time.Duration
+	disconnectExecutionTimeout    time.Duration
 }
 
 func NewWiFiService(logger *zap.Logger, nm NetworkManager) *WiFiService {

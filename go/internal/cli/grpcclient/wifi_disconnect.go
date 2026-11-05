@@ -30,8 +30,8 @@ type WiFiDisconnectResult struct {
 	Error               string `json:"error,omitempty"`
 }
 
-// DisconnectWiFi acknowledges the request before allowing the agent to remove
-// its transport. It observes completion briefly, rather than waiting for a dead
+// DisconnectWiFi acknowledges receipt of the device's commitment before it
+// removes its transport. It observes completion briefly, rather than waiting for a dead
 // WiFi TCP connection's retransmission timeout. An old agent keeps the legacy
 // unary behavior and is never inferred successful from a lost reply.
 func (c *AgentConnection) DisconnectWiFi(ctx context.Context) (result WiFiDisconnectResult, err error) {
@@ -120,9 +120,8 @@ func disconnectWiFi(ctx context.Context, acknowledged agentpbv2.WendyWiFiService
 		case *agentpbv2.DisconnectWiFiEvent_Ready:
 			ready = message.Ready != nil
 		case *agentpbv2.DisconnectWiFiEvent_Completed:
-			// Completion is authoritative only after this client acknowledges
-			// Ready with Confirm. Never report an unrequested effect as complete.
-			return unknownWiFiDisconnectResult(), errors.New("the device returned a WiFi disconnect result before the request was confirmed (protocol error; check CLI and agent versions)")
+			// Ready must identify the accepted request before its result.
+			return unknownWiFiDisconnectResult(), errors.New("the device returned a WiFi disconnect result before acknowledging the request (protocol error; check CLI and agent versions)")
 		case nil:
 			if len(event.ProtoReflect().GetUnknown()) != 0 {
 				continue
@@ -139,17 +138,17 @@ func disconnectWiFi(ctx context.Context, acknowledged agentpbv2.WendyWiFiService
 	result := WiFiDisconnectResult{
 		State:        "requested",
 		Acknowledged: true,
-		Message:      "The device received the WiFi disconnect request, but completion is unconfirmed. Check WiFi status using another working connection.",
+		Message:      "The device accepted the WiFi disconnect request and will attempt it shortly. Completion is unconfirmed; check WiFi status using another working connection.",
 	}
 	if err := ctx.Err(); err != nil {
-		result.State = "unknown"
 		return result, err
 	}
 	if err := stream.Send(&agentpbv2.DisconnectWiFiControl{Control: &agentpbv2.DisconnectWiFiControl_Confirm{Confirm: &emptypb.Empty{}}}); err != nil {
 		return finishUnconfirmedWiFiDisconnect(ctx, result, err)
 	}
 	// Keep the stream alive while the server consumes confirmation. Canceling
-	// immediately after Send could discard the confirmation before it arrives.
+	// immediately after Send could discard the confirmation and force the target
+	// to use its grace period instead of disconnecting promptly.
 	if err := stream.CloseSend(); err != nil {
 		return finishUnconfirmedWiFiDisconnect(ctx, result, err)
 	}
@@ -174,17 +173,14 @@ func disconnectWiFi(ctx context.Context, acknowledged agentpbv2.WendyWiFiService
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		result.State = "unknown"
 		return result, ctx.Err()
 	case <-timer.C:
 		if err := ctx.Err(); err != nil {
-			result.State = "unknown"
 			return result, err
 		}
 		return result, nil
 	case reply := <-replies:
 		if err := ctx.Err(); err != nil {
-			result.State = "unknown"
 			return result, err
 		}
 		if reply.err != nil {
@@ -202,7 +198,6 @@ func disconnectWiFi(ctx context.Context, acknowledged agentpbv2.WendyWiFiService
 
 func finishUnconfirmedWiFiDisconnect(ctx context.Context, result WiFiDisconnectResult, err error) (WiFiDisconnectResult, error) {
 	if cause := ctx.Err(); cause != nil {
-		result.State = "unknown"
 		return result, cause
 	}
 	if errors.Is(err, io.EOF) || status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded || status.Code(err) == codes.Canceled {
