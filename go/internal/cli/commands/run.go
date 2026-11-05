@@ -521,6 +521,7 @@ type runOptions struct {
 	managedRobot     bool
 	buildType        string
 	dockerfile       string
+	buildArgs        []string
 	builder          string
 	stagefileBackend string
 	// buildHost names a WendyOS device that builds the image instead of this
@@ -647,6 +648,9 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReportingWaitReadyFailure(cmd.Context(), opts, func(ctx context.Context) error {
 				return runWithInterruptContext(ctx, func(runCtx context.Context) error {
+					if _, err := mergeBuildArgFlags(nil, opts.buildArgs); err != nil {
+						return err
+					}
 					if err := validateEnvFlag(opts.env); err != nil {
 						return err
 					}
@@ -688,6 +692,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().Lookup("hil").NoOptDefVal = optionalDevicePickerValue
 	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Build file to build from: a Dockerfile, Containerfile, or Stagefile (e.g. Dockerfile.prod, Containerfile, prod.stagefile.yaml); shows a selection menu when multiple build files exist")
 	cmd.Flags().StringVar(&opts.builder, "builder", "", "Image builder to force for Dockerfile/Containerfile builds: docker, apple-container, or buildkit")
+	cmd.Flags().StringArrayVar(&opts.buildArgs, "build-arg", nil, "Build argument KEY=VALUE for container builds on WendyOS devices (repeatable; overrides defaults and Compose args)")
 	cmd.Flags().StringVar(&opts.stagefileBackend, "stagefile-backend", "", "Stagefile compiler backend: dockerfile (default) or llb")
 	cmd.Flags().StringVar(&opts.gpuArch, "gpu-arch", "", fmt.Sprintf("GPU architecture a Stagefile cuda: stage targets (%s); read from the device when one is selected", strings.Join(gpu.KnownArches(), ", ")))
 	cmd.Flags().StringVar(&opts.buildHost, "build-host", "", "Build on another WendyOS device; omit the device to open a picker, or use --build-host=DEVICE")
@@ -994,6 +999,9 @@ func debugRequiresDebugpy(cwd string, appCfg *appconfig.AppConfig) error {
 }
 
 func runCommand(ctx context.Context, opts runOptions) (retErr error) {
+	if _, err := mergeBuildArgFlags(nil, opts.buildArgs); err != nil {
+		return err
+	}
 	if !opts.managedRobot {
 		var finish func(error)
 		ctx, finish = startActivationOperation(ctx, "run", "wendy run")
@@ -1014,6 +1022,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	useLLB, err := stagefileBackendLLB(opts.stagefileBackend, normalizedBuilder)
 	if err != nil {
 		return classifyCommandError(errConfigInvalid, err)
+	}
+	if useLLB && len(opts.buildArgs) > 0 {
+		return usageErrorf("--build-arg requires --stagefile-backend=dockerfile")
 	}
 	ctx = withStagefileBackend(ctx, opts.stagefileBackend)
 	if opts.maxConcurrency < 0 {
@@ -1858,6 +1869,9 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, entitlements []appconfig.Entitlement, opts runOptions) error {
+	if len(opts.buildArgs) > 0 {
+		return usageErrorf("--build-arg currently requires a WendyOS device target")
+	}
 	if opts.waitReady || opts.readinessTimeout != 0 {
 		return commandErrorf(errConfigInvalid, "--wait-ready and --readiness-timeout require a WendyOS device target")
 	}
@@ -2312,6 +2326,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	}
 
 	if appCfg.Run != nil && appCfg.Run.Command != "" {
+		if len(opts.buildArgs) > 0 {
+			return usageErrorf("--build-arg requires a container build; it cannot be used with run.command")
+		}
 		if !strings.EqualFold(agentOS, "darwin") || platformOS(platform) != "darwin" {
 			return commandErrorf(errProjectTargetMismatch, "run.command requires a native Darwin agent target")
 		}
@@ -2321,6 +2338,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 
 	// Xcode projects: always use the local-build + file-sync path (darwin only).
 	if projectType == "xcode" {
+		if len(opts.buildArgs) > 0 {
+			return usageErrorf("--build-arg requires a container build; it cannot be used with Xcode projects")
+		}
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "Xcode projects"); err != nil {
 			return err
 		}
@@ -2353,6 +2373,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		needsHostSwift := explicitSwift || !hasContainerBuildFile(cwd)
 
 		if needsHostSwift {
+			if len(opts.buildArgs) > 0 {
+				return usageErrorf("--build-arg requires a container build; provide a Dockerfile or Containerfile for this Swift project")
+			}
 			if err := rejectUnsupportedBuildHostProject(opts.buildHost, "native Swift projects"); err != nil {
 				return err
 			}
@@ -2408,6 +2431,10 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// Dockerfiles can apply their own defaults on older agents; device-reported
 	// values that fail build-arg validation are skipped rather than fatal.
 	applyDeviceBuildArgHints(buildArgs, versionResp)
+	buildArgs, err = mergeBuildArgFlags(buildArgs, opts.buildArgs)
+	if err != nil {
+		return err
+	}
 
 	// wendy.json env plus --env and fleet-injected env, appended last so they win
 	// on key clash. Feeds the remote-build path below, the fingerprint, and

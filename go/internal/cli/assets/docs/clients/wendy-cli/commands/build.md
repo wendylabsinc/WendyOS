@@ -175,6 +175,8 @@ Docker for local provider runs.
 | `WENDY_CUDA_VERSION` | e.g. `12.6` | Jetson only |
 | `WENDY_GPU_ARCH` | e.g. `sm_87` | GPU architecture identifier; absent when no GPU is reported |
 
+Explicit `wendy run --build-arg KEY=VALUE` flags override the matching defaults above and Compose `build.args`; repeated keys use the last value. See [Image build-args](run.md#image-build-args) for usage and restrictions. `wendy build` does not accept `--build-arg`.
+
 Example — selecting a base image by platform:
 
 ```dockerfile

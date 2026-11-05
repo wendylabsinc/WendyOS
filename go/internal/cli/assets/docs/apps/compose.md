@@ -179,7 +179,7 @@ For a compose file with more than one service, `WENDY_APP_ID` is the project dir
 
 ## Flags
 
-All `wendy run` flags work with compose projects:
+The following `wendy run` flags apply to Compose projects:
 
 | Flag | Description |
 |------|-------------|
@@ -189,6 +189,7 @@ All `wendy run` flags work with compose projects:
 | `--restart-on-failure` | Set restart policy to `on-failure` for all services. |
 | `--no-restart` | Disable restart for all services. |
 | `--debug` | Enable debug logging during build and run. |
+| `--build-arg KEY=VALUE` | Repeatable. Override device defaults and Compose `build.args` for every built service targeting a WendyOS device; the last occurrence wins. Empty values and commas are allowed. Incompatible with `--stagefile-backend=llb` and external provider targets such as `--device docker`. See [Image build-args](../clients/wendy-cli/commands/run.md#image-build-args). |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
 | `--watch` | Redeploy on changes and stream app logs between deploys. Requires a Wendy agent target when attached; use `--watch --detach` for provider targets. |
 
