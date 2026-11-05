@@ -40,11 +40,12 @@ type WendyWiFiServiceClient interface {
 	ConnectToWiFi(ctx context.Context, in *ConnectToWiFiRequest, opts ...grpc.CallOption) (*ConnectToWiFiResponse, error)
 	GetWiFiStatus(ctx context.Context, in *GetWiFiStatusRequest, opts ...grpc.CallOption) (*GetWiFiStatusResponse, error)
 	DisconnectWiFi(ctx context.Context, in *DisconnectWiFiRequest, opts ...grpc.CallOption) (*DisconnectWiFiResponse, error)
-	// Opt-in acknowledgement before a disconnect can remove the caller's path.
-	// Send begin, receive ready, then send confirm. No disconnect occurs before
-	// confirm is received. Ready acknowledges the request, not its completion.
-	// The completed event is authoritative when delivered; a lost connection
-	// after ready leaves completion unknown. The legacy unary RPC is unchanged.
+	// Send begin, receive ready, then send confirm. A valid begin commits the
+	// device to attempting the disconnect. Ready acknowledges that commitment;
+	// confirm permits immediate execution. If confirmation is missing or the
+	// stream is lost, the device still proceeds within a bounded grace period.
+	// Only completed confirms the outcome; losing its reply leaves it unknown.
+	// The legacy unary RPC is unchanged.
 	DisconnectWiFiAcknowledged(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DisconnectWiFiControl, DisconnectWiFiEvent], error)
 	ListKnownWiFiNetworks(ctx context.Context, in *ListKnownWiFiNetworksRequest, opts ...grpc.CallOption) (*ListKnownWiFiNetworksResponse, error)
 	SetWiFiNetworkPriority(ctx context.Context, in *SetWiFiNetworkPriorityRequest, opts ...grpc.CallOption) (*SetWiFiNetworkPriorityResponse, error)
@@ -183,11 +184,12 @@ type WendyWiFiServiceServer interface {
 	ConnectToWiFi(context.Context, *ConnectToWiFiRequest) (*ConnectToWiFiResponse, error)
 	GetWiFiStatus(context.Context, *GetWiFiStatusRequest) (*GetWiFiStatusResponse, error)
 	DisconnectWiFi(context.Context, *DisconnectWiFiRequest) (*DisconnectWiFiResponse, error)
-	// Opt-in acknowledgement before a disconnect can remove the caller's path.
-	// Send begin, receive ready, then send confirm. No disconnect occurs before
-	// confirm is received. Ready acknowledges the request, not its completion.
-	// The completed event is authoritative when delivered; a lost connection
-	// after ready leaves completion unknown. The legacy unary RPC is unchanged.
+	// Send begin, receive ready, then send confirm. A valid begin commits the
+	// device to attempting the disconnect. Ready acknowledges that commitment;
+	// confirm permits immediate execution. If confirmation is missing or the
+	// stream is lost, the device still proceeds within a bounded grace period.
+	// Only completed confirms the outcome; losing its reply leaves it unknown.
+	// The legacy unary RPC is unchanged.
 	DisconnectWiFiAcknowledged(grpc.BidiStreamingServer[DisconnectWiFiControl, DisconnectWiFiEvent]) error
 	ListKnownWiFiNetworks(context.Context, *ListKnownWiFiNetworksRequest) (*ListKnownWiFiNetworksResponse, error)
 	SetWiFiNetworkPriority(context.Context, *SetWiFiNetworkPriorityRequest) (*SetWiFiNetworkPriorityResponse, error)
