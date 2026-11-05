@@ -1235,3 +1235,10 @@ a completed recording, and a failed upload or unavailable sensor. Check cited
 IDs/times against Data, open the recording card, and repeat after disconnecting.
 Queries must report unavailable evidence rather than reuse another device's data.
 Paid model inference and device QA are separate from deterministic backend tests.
+
+## Android companion
+
+The native Android companion lives in [`../android`](../android/README.md). It
+shares this app's Go backend and has its own Kotlin/Compose UI and Android
+NSD, Bluetooth, camera and VPN adapters. Its README documents build instructions,
+validation and the remaining differences from the Apple apps.
