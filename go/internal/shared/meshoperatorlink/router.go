@@ -123,7 +123,7 @@ func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	}()
 	s := c.ConnectionState()
 	if len(candidates) > 1 || len(s.PeerCertificates) == 0 || len(s.PeerCertificates) > 16 {
-		return nil, errors.New("invalid operator peer certificate bundle")
+		return nil, errors.New("the router returned an invalid TLS certificate bundle")
 	}
 	var complete IssuerCandidates
 	if len(candidates) == 1 {
