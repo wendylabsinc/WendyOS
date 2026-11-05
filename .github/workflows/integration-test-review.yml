@@ -612,19 +612,50 @@ jobs:
           if os.environ.get('INTEGRATION_SOURCE_EXCERPTED') == 'true':
               blocked = [comment for comment in existing if '#### 🛑 Error' in (comment.get('body') or '')]
               if blocked:
-                  # A partial review cannot clear a blocker. The blocker's text stays,
-                  # and only the latest partial findings published beneath it change.
+                  def split_partial_findings(text):
+                      # Finding headings inside suggested test code are not boundaries.
+                      sections = [(False, [])]
+                      fence = ''
+                      for line in text.splitlines():
+                          if fence:
+                              if re.fullmatch(r' {0,3}' + re.escape(fence[0]) + '{' + str(len(fence)) + r',}\s*', line):
+                                  fence = ''
+                          else:
+                              delimiter = re.match(r' {0,3}(`{3,}|~{3,})', line)
+                              heading = re.match(r'^#### (🛑 Error|⚠️ Concern|💡 Info)(?:\s|$)', line)
+                              if delimiter:
+                                  fence = delimiter[1]
+                              elif heading:
+                                  sections.append((heading[1] == '🛑 Error', []))
+                          sections[-1][1].append(line)
+                      blockers, notes = [], []
+                      for blocking, lines in sections:
+                          text = '\n'.join(lines).strip()
+                          if text:
+                              (blockers if blocking else notes).append(text)
+                      return blockers, '\n\n'.join(notes)
+
+                  # Keep blockers outside the replaceable notes, including blockers
+                  # published in the latest-partial section by earlier automation.
                   prior = blocked[0]['body']
                   update = comment_path.read_text(encoding='utf-8').replace(marker, '').strip() if comment_path.exists() else ''
                   update = update.removeprefix('# AI Integration Test Review').strip()
                   if update or partial_marker in prior:
-                      body = prior.split(partial_marker, 1)[0].replace(marker, '').rstrip()
-                      if update:
-                          body += f'\n\n{partial_marker}\n\n## Latest partial review\n\n{update}'
+                      retained, _, legacy = prior.partition(partial_marker)
+                      body = retained.replace(marker, '').rstrip()
+                      legacy_blockers, _ = split_partial_findings(legacy.replace(marker, ''))
+                      new_blockers, notes = split_partial_findings(update)
+                      for blocker in legacy_blockers + new_blockers:
+                          if blocker not in body:
+                              body += f'\n\n{blocker}'
+                      if notes:
+                          body += f'\n\n{partial_marker}\n\n## Latest partial review\n\n{notes}'
                       body_limit = 65000 - len(f'\n\n{marker}')
                       if len(body) > body_limit:
-                          truncation_notice = '\n\n*(truncated)*'
-                          body = body[:body_limit - len(truncation_notice)].rstrip() + truncation_notice
+                          raise RuntimeError(
+                              'Partial review exceeds the 65,000-character comment limit; prior comments unchanged. '
+                              'Blockers cannot be truncated. Run a full review or have a maintainer triage them.'
+                          )
                       request('PATCH', f'/repos/{owner}/{repo}/issues/comments/{blocked[0]["id"]}', {'body': f'{body}\n\n{marker}'})
                   raise RuntimeError(
                       'Partial source review; prior integration test blockers remain open. A partial review '

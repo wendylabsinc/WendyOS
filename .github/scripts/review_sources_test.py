@@ -635,17 +635,74 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(writes, [('DELETE', None)])
         self.assertIsNone(failure)
 
-    def test_partial_review_keeps_a_new_blocker_and_the_comment_size_limit(self):
+    def test_partial_review_keeps_both_blockers_after_an_empty_partial_run(self):
+        marker = '<!-- ai-integration-test-review:v1 -->'
+        prior = f'#### 🛑 Error Blocker A\n\nA details\n\n{marker}'
+        writes, failure = self.post_integration_comment(prior, '#### 🛑 Error Blocker B\n\nB details')
+        self.assertIn('blockers remain open', failure)
+        prior_with_b = writes[0][1]
+        writes, failure = self.post_integration_comment(prior_with_b)
+        self.assertIn('blockers remain open', failure)
+        # An unchanged comment needs no PATCH.
+        published = writes[0][1] if writes else prior_with_b
+        self.assertIn('Blocker A\n\nA details', published)
+        self.assertIn('Blocker B\n\nB details', published)
+        writes, failure = self.post_integration_comment(published, excerpted=False)
+        self.assertEqual(writes, [('DELETE', None)])
+        self.assertIsNone(failure)
+
+    def test_partial_review_keeps_both_blockers_after_an_info_only_run(self):
+        marker = '<!-- ai-integration-test-review:v1 -->'
+        prior = f'#### 🛑 Error Blocker A\n\nA details\n\n{marker}'
+        writes, failure = self.post_integration_comment(prior, '#### 🛑 Error Blocker B\n\nB details')
+        self.assertIn('blockers remain open', failure)
+        writes, failure = self.post_integration_comment(writes[0][1], '#### 💡 Info Latest note')
+        self.assertIn('blockers remain open', failure)
+        retained, latest = writes[0][1].split('<!-- ai-integration-test-review:latest-partial -->')
+        self.assertIn('Blocker A\n\nA details', retained)
+        self.assertIn('Blocker B\n\nB details', retained)
+        self.assertIn('Latest note', latest)
+        self.assertNotIn('#### 🛑 Error', latest)
+
+    def test_partial_review_migrates_blockers_from_legacy_latest_section(self):
+        marker = '<!-- ai-integration-test-review:v1 -->'
+        prior = ('#### 🛑 Error Blocker A\n\nA details\n\n'
+                 '<!-- ai-integration-test-review:latest-partial -->\n\n## Latest partial review\n\n'
+                 f'#### 🛑 Error Blocker B\n\nB details\n\n#### ⚠️ Concern Old note\n\n{marker}')
+        for update in (None, '#### 💡 Info Latest note'):
+            with self.subTest(update=update):
+                writes, failure = self.post_integration_comment(prior, update)
+                self.assertIn('blockers remain open', failure)
+                retained = writes[0][1].split('<!-- ai-integration-test-review:latest-partial -->')[0]
+                self.assertIn('Blocker A\n\nA details', retained)
+                self.assertIn('Blocker B\n\nB details', retained)
+                self.assertNotIn('Old note', writes[0][1])
+
+    def test_partial_review_does_not_split_headings_inside_test_code(self):
+        marker = '<!-- ai-integration-test-review:v1 -->'
+        prior = f'#### 🛑 Error Blocker A\n\n{marker}'
+        blocker = ('#### 🛑 Error Blocker B\n\n<details>\n\n````text\n'
+                   '#### 💡 Info This is test code\n```\n\n</details>\n````\n\n</details>')
+        writes, failure = self.post_integration_comment(prior, blocker + '\n\n#### 💡 Info Latest note')
+        self.assertIn('blockers remain open', failure)
+        retained, latest = writes[0][1].split('<!-- ai-integration-test-review:latest-partial -->')
+        self.assertIn(blocker, retained)
+        self.assertIn('Latest note', latest)
+        self.assertNotIn('This is test code', latest)
+
+    def test_partial_review_preserves_prior_comment_when_blockers_exceed_size_limit(self):
         marker = '<!-- ai-integration-test-review:v1 -->'
         prior = f'#### 🛑 Error Prior blocker\n\n{"p" * 40000}\n\n{marker}\n'
-        writes, failure = self.post_integration_comment(prior, f'#### 🛑 Error New blocker\n\n{"n" * 40000}')
-        self.assertIn('blockers remain open', failure)
-        published = writes[0][1]
-        self.assertIn('#### 🛑 Error Prior blocker', published)
-        self.assertIn('#### 🛑 Error New blocker', published)
-        self.assertLessEqual(len(published), 65000)
-        self.assertIn('*(truncated)*', published)
-        self.assertTrue(published.endswith(marker))
+        legacy = (f'#### 🛑 Error Blocker A\n\n{"a" * 30000}\n\n'
+                  '<!-- ai-integration-test-review:latest-partial -->\n\n## Latest partial review\n\n'
+                  f'#### 🛑 Error Blocker B\n\n{"b" * 30000}\n\n{marker}')
+        for previous, update in ((prior, f'#### 🛑 Error New blocker\n\n{"n" * 40000}'),
+                                 (legacy, f'#### 💡 Info Latest note\n\n{"n" * 10000}')):
+            with self.subTest(legacy=previous == legacy):
+                writes, failure = self.post_integration_comment(previous, update)
+                self.assertIn('65,000-character', failure)
+                self.assertIn('prior comments unchanged', failure)
+                self.assertEqual(writes, [])
 
     def test_partial_blocker_failure_step_names_the_exit_paths(self):
         text = (ROOT / '.github/workflows/integration-test-review.yml').read_text()
