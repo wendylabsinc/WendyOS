@@ -278,12 +278,16 @@ func runCloudDeviceUnenrollAndReset(cmd *cobra.Command, cloudGRPC, selector, dev
 		}
 	}
 	var result cloudunenroll.Result
+	// Only numeric Cloud v1 counts the certificates it revokes. A v2
+	// DeleteAsset revokes them itself and reports no count to show.
+	legacy, certsRevoked := false, 0
 	if assetAbsent {
 		err = nil
 	} else if device.v2 != nil {
 		result, err = cloudunenroll.Remove(cloudCtx, conn, auth, device.v2)
 	} else {
-		result.CertificatesRevoked, result.AssetDeleted, err = cloudUnenrollCleanupClient(cloudCtx, conn, device.legacy.GetId())
+		legacy = true
+		certsRevoked, result.AssetDeleted, err = cloudUnenrollCleanupClient(cloudCtx, conn, device.legacy.GetId())
 	}
 	var resetErr error
 	deviceReset := false
@@ -294,8 +298,11 @@ func runCloudDeviceUnenrollAndReset(cmd *cobra.Command, cloudGRPC, selector, dev
 	if jsonOutput {
 		out := map[string]any{
 			"assetId": device.key, "cloud": auth.CloudGRPC, "deviceReset": deviceReset,
-			"certsRevoked": result.CertificatesRevoked, "credentialsRevoked": result.CredentialsRevoked,
-			"assetDeleted": result.AssetDeleted,
+			"credentialsRevoked": result.CredentialsRevoked, "assetDeleted": result.AssetDeleted,
+			"enrollmentFenced": result.EnrollmentFenced,
+		}
+		if legacy {
+			out["certsRevoked"] = certsRevoked
 		}
 		if err != nil {
 			out["cloudError"] = err.Error()
@@ -316,8 +323,12 @@ func runCloudDeviceUnenrollAndReset(cmd *cobra.Command, cloudGRPC, selector, dev
 	} else if err == nil {
 		if assetAbsent {
 			fmt.Fprintf(cmd.OutOrStdout(), "No cloud enrollment for %q exists in the selected organization in %s.\n", label, auth.CloudGRPC)
+		} else if legacy {
+			fmt.Fprintf(cmd.OutOrStdout(), "Unenrolled %s: revoked %d certificate(s) and %d enrollment credential(s), and deleted cloud asset %s.\n", device.GetName(), certsRevoked, result.CredentialsRevoked, device.key)
+		} else if result.EnrollmentFenced {
+			fmt.Fprintf(cmd.OutOrStdout(), "Unenrolled %s: Cloud revoked its certificates and enrollment credentials and deleted cloud asset %s.\n", device.GetName(), device.key)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Unenrolled %s: revoked %d certificate(s) and %d enrollment credential(s), and deleted cloud asset %s.\n", device.GetName(), result.CertificatesRevoked, result.CredentialsRevoked, device.key)
+			fmt.Fprintf(cmd.OutOrStdout(), "Unenrolled %s: revoked %d enrollment credential(s); Cloud revoked the device certificates and deleted cloud asset %s.\n", device.GetName(), result.CredentialsRevoked, device.key)
 		}
 		if deviceReset {
 			fmt.Fprintln(cmd.OutOrStdout(), "Cleared the board's enrollment identity. WiFi settings and apps were preserved. Run 'wendy device enroll' to enroll again.")
@@ -327,8 +338,11 @@ func runCloudDeviceUnenrollAndReset(cmd *cobra.Command, cloudGRPC, selector, dev
 			fmt.Fprintln(cmd.OutOrStdout(), "The device was not reset. If it still holds an issued identity, clear it through device recovery before enrolling again.")
 		}
 	}
+	if err != nil && legacy {
+		return fmt.Errorf("cloud unenrollment of asset %s failed after revoking %d certificate(s) and %d enrollment credential(s): %w", device.key, certsRevoked, result.CredentialsRevoked, err)
+	}
 	if err != nil {
-		return fmt.Errorf("cloud unenrollment of asset %s failed after revoking %d certificate(s) and %d enrollment credential(s): %w", device.key, result.CertificatesRevoked, result.CredentialsRevoked, err)
+		return fmt.Errorf("cloud unenrollment of asset %s failed after revoking %d enrollment credential(s): %w", device.key, result.CredentialsRevoked, err)
 	}
 	if resetErr != nil {
 		return fmt.Errorf("cloud enrollment is absent in the selected organization in %s, but clearing the board's stored identity failed: %w; keep it connected over USB and retry 'wendy device unenroll'", auth.CloudGRPC, resetErr)

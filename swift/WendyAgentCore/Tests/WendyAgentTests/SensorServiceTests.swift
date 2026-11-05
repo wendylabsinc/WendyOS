@@ -96,7 +96,7 @@ private func makeServerContext(method: String) -> ServerContext {
 
 @Test func manifestReportsMicAndStreamYieldsPCMFrames() async throws {
     // Inject a no-op camera so this test never touches real capture hardware.
-    let svc = SensorService(audio: FakeAudio(), camera: FakeCamera())
+    let svc = SensorService(audio: FakeAudio(), camera: FakeCamera(), micAuthorized: { true })
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(
