@@ -565,8 +565,16 @@ func TestWalkingDeadbandAndStoppingHorizon(t *testing.T) {
 	// faster walking envelope. The destination footprint itself is clear.
 	r.observed.Grid.Obstacles[sitenav.Cell{X: 11, Y: 0}] = true
 	r.stepLocked(time.Now())
-	if r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
-		t.Fatal("speed increase bypassed forward stopping clearance")
+	if len(f.commands) == 0 {
+		t.Fatal("stopping clearance did not issue Stop")
+	}
+	for _, command := range f.commands {
+		if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+			t.Fatal("speed increase bypassed forward stopping clearance")
+		}
+	}
+	if r.moving && (len(r.route) < 2 || r.goal != (sitenav.Point{X: .2})) {
+		t.Fatal("blocked direct approach did not get a detour to the original goal")
 	}
 }
 
@@ -602,7 +610,8 @@ func TestSupervisedUnobservedFloorStillStopsForHazardsAndLostTelemetry(t *testin
 			}
 			switch fault {
 			case "obstacle":
-				r.observed.Grid.Obstacles[sitenav.Cell{X: 5, Y: 0}] = true
+				// A blocked current footprint cannot be escaped by replanning.
+				r.observed.Grid.Obstacles[sitenav.Cell{X: 0, Y: 0}] = true
 			case "stale-pose":
 				r.observed.Pose.Received = time.Now().Add(-time.Second)
 			case "stale-scan":
@@ -699,8 +708,16 @@ func TestRouteTurnChecksClearanceBeyondItsTargetHeading(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.stepLocked(time.Now())
-		if r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
-			t.Fatal("turn ignored its stopping sweep")
+		if len(f.commands) == 0 {
+			t.Fatal("stopping sweep did not issue Stop")
+		}
+		for _, command := range f.commands {
+			if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+				t.Fatal("turn ignored its stopping sweep")
+			}
+		}
+		if r.moving && (len(r.route) < 2 || r.goal != target) {
+			t.Fatal("blocked turn did not get a detour to the original goal")
 		}
 	}
 }

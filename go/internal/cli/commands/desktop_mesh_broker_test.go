@@ -36,7 +36,7 @@ func TestDesktopMeshIncludesNativeLiteAndRejectsStaleOrUntrustedRows(t *testing.
 	row := sessionbroker.OperatorTargetInfo{Selector: selector, Principal: "spiffe://wendy.sh/tenant/" + tenant + "/device/" + device, Tenant: tenant, Device: device, Name: "C6", Platform: "Lite", Transport: "mtls-v1", Address: "[fd00::1234]:43024", Expires: now.Add(time.Minute).UnixMilli()}
 	snapshot := sessionbroker.OperatorDirectory{State: "ready", Captured: now.UnixMilli(), Devices: []sessionbroker.OperatorTargetInfo{row}}
 	got := DesktopMeshDevices(snapshot)
-	if len(got) != 1 || got[0].Selector != selector || !got[0].Lite || got[0].Transport != "Mesh" {
+	if len(got) != 1 || got[0].ID != row.Principal || got[0].Selector != selector || !got[0].Lite || got[0].Transport != "Mesh" {
 		t.Fatalf("missing native Lite: %+v", got)
 	}
 	snapshot.Captured = now.Add(-time.Minute).UnixMilli()

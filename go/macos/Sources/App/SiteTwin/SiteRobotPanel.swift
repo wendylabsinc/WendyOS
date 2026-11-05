@@ -32,9 +32,12 @@ struct SiteRobotCameraHost: View {
 @MainActor
 final class SiteRobotMapModel: ObservableObject {
     private let observationClient: any SiteRobotObserving
+    private let turningClient: any SiteRobotTurning
 
-    init(observationClient: any SiteRobotObserving = SiteRobotClient.shared) {
+    init(observationClient: any SiteRobotObserving = SiteRobotClient.shared,
+         turningClient: any SiteRobotTurning = SiteRobotClient.shared) {
         self.observationClient = observationClient
+        self.turningClient = turningClient
     }
 
     @Published var robots: [UnitreeRobot] = []
@@ -49,6 +52,7 @@ final class SiteRobotMapModel: ObservableObject {
     @Published var localizing = false
     @Published var fusionReport: RobotFusionReport?
     @Published var showScan = false
+    @Published var showObstacles = true
     @Published var visualStatus = "Waiting for a fresh Go2 camera frame."
     @Published var referenceCount = 0
     private var cameraFrame: CameraCalibrationFrame?
@@ -60,6 +64,8 @@ final class SiteRobotMapModel: ObservableObject {
     private var positionSearch = RobotPositionSearch()
     @Published private(set) var searchConclusion: String?
     @Published private(set) var searchTurns = 0
+    @Published private(set) var rotationState: RobotRotationState = .idle
+    private var rotationStartPending = false
     @Published private(set) var measuredLens: SiteCameraLens?
     private var lensSession: RobotLensSession?
     private var visual = RobotVisualLocalization()
@@ -94,7 +100,10 @@ final class SiteRobotMapModel: ObservableObject {
         if reading?.disconnected == true || (handle == 0 && error != nil) { return "Go2 disconnected" }
         if lensCalibrating { return "Measuring camera lens…" }
         if searchConclusion != nil { return "Search finished without a match" }
-        if reading?.moving == true { return "Moving" }
+        if let title = rotationState.title { return title }
+        if reading?.moving == true {
+            return reading?.message == "Route changed to avoid a blocked area." ? "Moving along an alternative route" : "Moving"
+        }
         if localizing { return searchTurns > 0 ? "Matching view after turn \(searchTurns) of 12…" : "Locating Go2…" }
         if !candidates.isEmpty { return "Confirm suggested position" }
         if reading?.ready == true {
@@ -156,7 +165,8 @@ final class SiteRobotMapModel: ObservableObject {
         let position = placing ? anchor : candidate?.position ?? lastPosition
         return SiteRobotRenderState(explorationEpoch: explorationEpoch, receivedAt: lastReadingAt, position: position,
             yaw: candidate?.yaw ?? lastYaw, joints: reading?.joints ?? [], selected: selected,
-            fresh: live && candidate == nil, moving: reading?.moving == true, route: reading?.route ?? [], destination: destination, placing: placing, scan: showScan ? fusionReport?.overlay ?? [] : [])
+            fresh: live && candidate == nil, moving: reading?.moving == true, route: reading?.route ?? [], destination: destination, placing: placing, scan: showScan ? fusionReport?.overlay ?? [] : [],
+            hazards: showObstacles && live && !placing && candidate == nil && reading?.hazardsReady == true ? reading?.hazards ?? [] : [])
     }
     func load(session: UInt64) async {
         guard session != 0 else { robots = []; serial = ""; return }
@@ -189,6 +199,7 @@ final class SiteRobotMapModel: ObservableObject {
         telemetry.reading = nil; reading = nil; anchor = nil; lastPosition = nil; lastYaw = 0; destination = nil; placing = false; error = nil
         handle = 0; connecting = false
         searchConclusion = nil; searchTurns = 0
+        rotationState = .idle; rotationStartPending = false
         showRotationPrompt = false; rotationOffer = RobotRotationOffer()
         lensSession = nil; lensCalibrating = false; measuredLens = nil; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel(); showLensCalibration = false
         candidates = []; localizing = false; candidateIndex = 0
@@ -222,12 +233,14 @@ final class SiteRobotMapModel: ObservableObject {
                 if awaitingLook && pollWasAwaitingLook && polledAction == actionGeneration && !result.moving && result.lookState != 1 {
                     awaitingLook = false
                     if result.lookState == 2 {
+                        rotationState = .matching(searchTurns)
                         positionSearch.recordDirection(result.lookDirection)
                         rematchAfterLook = true
                         nextAutomaticAttempt = Date.now.addingTimeInterval(1)
                         automaticAttempts = 0; automaticPaused = false
                     } else {
                         positionSearch.cancel(); automaticPaused = true
+                        rotationState = .stopped(result.message)
                         error = result.message
                     }
                 }
@@ -250,7 +263,8 @@ final class SiteRobotMapModel: ObservableObject {
                     !automaticPaused && !lensCalibrating && !showRotationPrompt && Date.now >= nextAutomaticAttempt {
                     automaticAttempts += 1
                     nextAutomaticAttempt = Date.now.addingTimeInterval(5)
-                    locate()
+                    if rotationStartPending { lookAutomatically() }
+                    else { locate() }
                 }
                 offerRotationIfNeeded()
                 try await Task.sleep(for: .milliseconds(100))
@@ -266,6 +280,7 @@ final class SiteRobotMapModel: ObservableObject {
             handle = 0; connecting = false; telemetry.reading = nil; reading = nil; showRotationPrompt = false
             positionSearch.cancel(); awaitingLook = false; rematchAfterLook = false
             candidates = []; localizing = false; destination = nil; fusionReport = nil
+            rotationState = .idle; rotationStartPending = false
         }
         return retry && epoch == generation && !Task.isCancelled
     }
@@ -379,6 +394,7 @@ final class SiteRobotMapModel: ObservableObject {
     private func lookAutomatically() {
         guard handle != 0, !lensCalibrating, reading?.moving != true else { return }
         guard reading?.measurementsReady == true else {
+            rotationState = .waitingForMeasurements
             waitForLocalizationMeasurements()
             return
         }
@@ -387,18 +403,22 @@ final class SiteRobotMapModel: ObservableObject {
             return
         }
         searchTurns = 12 - positionSearch.remainingTurns
+        rotationStartPending = false
+        rotationState = .checking(searchTurns)
         actionGeneration += 1
         let request = actionGeneration, h = handle, epoch = generation
         automaticPaused = true; candidates = []; localizing = false; placing = false; destination = nil; error = nil
         actions.submit {
             guard request == self.actionGeneration, epoch == self.generation else { return }
             do {
-                try await SiteRobotClient.shared.look(h, sequence: request, direction: self.positionSearch.direction)
+                try await self.turningClient.look(h, sequence: request, direction: self.positionSearch.direction)
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 self.awaitingLook = true
+                self.rotationState = .turning(self.searchTurns)
             } catch {
                 if request == self.actionGeneration, epoch == self.generation {
                     self.positionSearch.cancel(); self.error = error.localizedDescription
+                    self.rotationState = .stopped(error.localizedDescription)
                 }
             }
         }
@@ -406,13 +426,15 @@ final class SiteRobotMapModel: ObservableObject {
 
     func stop() {
         actionGeneration += 1
+        error = nil
         automaticPaused = true; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel()
         candidates = []; localizing = false
         placing = false; destination = nil
         searchConclusion = nil; searchTurns = 0
+        rotationState = .idle; rotationStartPending = false
         dismissRotationPrompt()
         let h = handle, request = actionGeneration
-        actions.submit { if h != 0 { await SiteRobotClient.shared.stop(h, sequence: request) } }
+        actions.submit { if h != 0 { await self.turningClient.stop(h, sequence: request) } }
     }
 
     private func scheduleAutomaticLocalization() {
@@ -422,13 +444,14 @@ final class SiteRobotMapModel: ObservableObject {
     }
 
     private func waitForLocalizationMeasurements() {
+        if positionSearch.active { rotationState = .waitingForMeasurements }
         error = "Waiting for fresh LiDAR and odometry. The position search will resume automatically."
         scheduleAutomaticLocalization()
     }
 
     var canStartRotationSearch: Bool {
         handle != 0 && reading?.pose == true && reading?.aligned != true && reading?.moving != true &&
-        !localizing && !lensCalibrating && !showLensCalibration && !placing && candidates.isEmpty && !awaitingLook
+        !localizing && !lensCalibrating && !showLensCalibration && !placing && candidates.isEmpty && !awaitingLook && !positionSearch.active
     }
 
     private func offerRotationIfNeeded(failedMatch: Bool = false) {
@@ -445,12 +468,19 @@ final class SiteRobotMapModel: ObservableObject {
     }
 
     func startRotationSearch() {
-        guard canStartRotationSearch else { dismissRotationPrompt(); return }
+        guard canStartRotationSearch else {
+            dismissRotationPrompt()
+            let reason = "Go2 is not ready to turn. Wait for a live, stationary robot and finish any placement or calibration first."
+            error = reason
+            if !positionSearch.active { rotationState = .stopped(reason) }
+            return
+        }
         dismissRotationPrompt()
         searchConclusion = nil; searchTurns = 0
         positionSearch.start(now: .now)
+        rotationStartPending = true
         scheduleAutomaticLocalization()
-        locate()
+        lookAutomatically()
     }
 
     private func finishUnmatchedSearch() {
@@ -472,6 +502,7 @@ final class SiteRobotMapModel: ObservableObject {
         let request = actionGeneration, h = handle, epoch = generation, f = frame, scale = geometryScale, robot = serial, revision = siteRevision
         rematchAfterLook = false
         localizing = true; candidates = []; placing = false; destination = nil; error = nil
+        if positionSearch.active { rotationState = .matching(searchTurns) }
         actions.submit {
             var noMatch = false
             defer {
@@ -504,25 +535,24 @@ final class SiteRobotMapModel: ObservableObject {
                         let lens = profile?.lens ?? (previous?.measured == true || !recalibrate ? previous : nil)
                         self.measuredLens = lens?.measured == true ? lens : nil
                         if self.positionSearch.active && self.measuredLens == nil {
-                            self.automaticPaused = true
-                            self.showLensCalibration = true
-                            return
-                        }
-                        try await self.visual.load(model: url, frame: f, revision: revision)
-                        let result = try await self.visual.locate(first: first, lens: lens) {
-                            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-                            while ContinuousClock.now < deadline {
-                                try Task.checkCancellation()
-                                guard request == self.actionGeneration, epoch == self.generation else { throw CancellationError() }
-                                if let next = self.cameraFrame, next.sequence != first.sequence,
-                                   next.received.timeIntervalSince(first.received) >= 0.5, next.isFresh(at: Date()) { return next }
-                                try await Task.sleep(for: .milliseconds(100))
+                            self.visualStatus = "Matching LiDAR geometry. Calibrate the camera to include visual measurements."
+                        } else {
+                            try await self.visual.load(model: url, frame: f, revision: revision)
+                            let result = try await self.visual.locate(first: first, lens: lens) {
+                                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                                while ContinuousClock.now < deadline {
+                                    try Task.checkCancellation()
+                                    guard request == self.actionGeneration, epoch == self.generation else { throw CancellationError() }
+                                    if let next = self.cameraFrame, next.sequence != first.sequence,
+                                       next.received.timeIntervalSince(first.received) >= 0.5, next.isFresh(at: Date()) { return next }
+                                    try await Task.sleep(for: .milliseconds(100))
+                                }
+                                throw WendyError(message: "Waiting for a second fresh camera frame.")
                             }
-                            throw WendyError(message: "Waiting for a second fresh camera frame.")
+                            hint = result.0
+                            if result.1.measured { stored.lens = result.1 }
+                            self.visualStatus = result.1.measured ? "Calibrated camera pose verified on two frames." : "Estimated camera pose verified on two frames; used as supporting evidence."
                         }
-                        hint = result.0
-                        if result.1.measured { stored.lens = result.1 }
-                        self.visualStatus = result.1.measured ? "Calibrated camera pose verified on two frames." : "Estimated camera pose verified on two frames; used as supporting evidence."
                     } catch is CancellationError { throw CancellationError() }
                     catch SiteLocalizationError.noSolution(let reason, let matches, let inliers) {
                         let detail: String
@@ -537,14 +567,6 @@ final class SiteRobotMapModel: ObservableObject {
                     catch { self.visualStatus = "Camera: \(error.localizedDescription)" }
                 } else {
                     self.visualStatus = "No fresh camera reference yet. Matching measured geometry."
-                    if self.positionSearch.active {
-                        // A delayed IDR frame is not a cancelled search. Stay
-                        // stopped and let polling retry within the search's
-                        // original deadline, without requiring another click.
-                        self.visualStatus = "Waiting for a fresh Go2 camera frame. The position search will resume automatically."
-                        self.scheduleAutomaticLocalization()
-                        return
-                    }
                 }
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 self.savedMap = stored
@@ -575,10 +597,11 @@ final class SiteRobotMapModel: ObservableObject {
                     try await BlockingWork.run(on: .global(qos: .utility)) { try RobotReferenceStore.save(value, model: url) }
                 }
                 guard request == self.actionGeneration, epoch == self.generation else { return }
-                if !self.candidates.isEmpty { self.positionSearch.cancel() }
+                if !self.candidates.isEmpty { self.positionSearch.cancel(); self.rotationState = .idle }
                 else if self.positionSearch.active { self.lookAutomatically() }
             } catch {
                 if request == self.actionGeneration, epoch == self.generation {
+                    if self.positionSearch.active { self.rotationState = .stopped(error.localizedDescription) }
                     self.positionSearch.cancel(); self.error = error.localizedDescription
                 }
             }
@@ -686,9 +709,6 @@ struct SiteRobotPanel: View {
                     DisclosureGroup("Details", isExpanded: $settingsExpanded) {
                         VStack(alignment: .leading, spacing: 12) {
                             RobotLocalizationDiagnostics(model: model)
-                            if let error = model.error, error != model.reading?.message {
-                                Text(error).font(.caption).foregroundStyle(.secondary)
-                            }
                             SiteRobotTimingControls(model: model)
                             Text("Click to preview · Right-click to move · Esc to stop")
                                 .font(.caption2).foregroundStyle(.secondary)
@@ -714,7 +734,7 @@ struct SiteRobotPanel: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(model.selected ? Color.green.opacity(0.5) : Color.white.opacity(0.1)))
-        .modifier(SiteRobotRotationPrompt(model: model))
+        .modifier(SiteRobotRotationPrompt(model: model, onStart: { expanded = true }))
         .task { await model.actions.run() }
         .task(id: session) { await model.load(session: session) }
         .task(id: "\(session)/\(model.serial)/\(site.id)/\(site.modelRevision)/\(scenePhase)/\(model.reconnectGeneration)") {
@@ -746,7 +766,7 @@ struct SiteRobotRotationPrompt: ViewModifier {
             }.disabled(!model.canStartRotationSearch)
             Button("Not now", role: .cancel) { model.dismissRotationPrompt() }
         } message: {
-            Text("No reliable position match was found. Go2 will turn in 30° steps and retry matching after each turn. Keep Go2 in sight and its turning area clear.")
+            Text("No reliable position match was found. Go2 will check clearance, turn in 30° steps, and match its LiDAR observations after each turn. A calibrated camera can also help. Keep Go2 in sight and its turning area clear.")
         }
     }
 }
@@ -758,15 +778,94 @@ struct SiteRobotStatus: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(model.reading?.ready == true ? Color.green : .orange).frame(width: 6, height: 6)
-                Text(model.statusLabel).font(.caption)
+                Text(model.rotationState == .idle ? model.statusLabel : "Go2 position search").font(.caption)
                 if model.connecting { ProgressView().controlSize(.small) }
             }
-            if showsDetails, let message = model.reading?.message, !message.isEmpty,
+            RobotRotationFeedback(model: model)
+            if showsDetails, model.rotationState == .idle, let message = model.reading?.message, !message.isEmpty,
                message != "Live LiDAR and odometry.", message != "Route ready", message != model.statusLabel {
                 Text(message).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if model.rotationState == .idle, let error = model.error, !error.isEmpty {
+                Text(error).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if model.handle != 0 { SiteRobotObstacleStatus(model: model) }
         }.sheet(isPresented: $model.showLensCalibration) { RobotLensCalibrationView(model: model) }
+    }
+}
+
+struct SiteRobotObstacleStatus: View {
+    @ObservedObject var model: SiteRobotMapModel
+    @ObservedObject private var telemetry: SiteRobotTelemetry
+
+    init(model: SiteRobotMapModel) {
+        self.model = model
+        self.telemetry = model.telemetry
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Show navigation obstacles", isOn: $model.showObstacles).font(.caption)
+            if model.showObstacles {
+                if telemetry.reading?.aligned != true || model.placing || !model.candidates.isEmpty {
+                    Text("Confirm or place Go2's position to show its obstacles on this floor.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else if telemetry.reading?.hazardsReady != true {
+                    Text("Waiting for fresh floor and obstacle data. The overlay is hidden.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    HStack(spacing: 10) {
+                        Label("Obstacle", systemImage: "square.fill").foregroundStyle(.red)
+                        Label("Drop", systemImage: "square.fill").foregroundStyle(.orange)
+                    }.font(.caption2)
+                    Text(telemetry.reading?.hazards.isEmpty == true
+                         ? "No obstacle footprints in the current scan. Unmarked floor may be unobserved."
+                         : "Measured footprints on the floor. Unmarked floor may be unobserved.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }.fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+struct RobotRotationFeedback: View {
+    @ObservedObject var model: SiteRobotMapModel
+
+    var body: some View {
+        if let title = model.rotationState.title {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    if model.rotationState.canRetry {
+                        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(title).font(.caption.weight(.semibold))
+                }
+                if let detail = model.rotationState.detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.rotationState.canRetry {
+                    HStack {
+                        Button("Try again") { model.offerRotationRetry() }
+                            .accessibilityLabel("Try rotation again")
+                            .disabled(!model.canStartRotationSearch)
+                        Button("Place manually") { model.beginAlignment() }
+                            .disabled(model.reading?.pose != true)
+                    }.font(.caption).buttonStyle(.bordered)
+                } else {
+                    Button("Cancel search", role: .cancel) { model.stop() }
+                        .font(.caption).buttonStyle(.bordered)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            .accessibilityElement(children: .contain)
+        }
     }
 }
 
@@ -796,7 +895,7 @@ struct SiteRobotTimingControls: View {
             get: { model.reading?.allowUnobservedFloor ?? true },
             set: { model.setAllowUnobservedFloor($0) }
         )).font(.caption).disabled(model.reading == nil)
-        Text("Allows unobserved floor along the route. Detected obstacles, drops and lost telemetry still stop Go2. Unseen hazards cannot be ruled out; stay with Go2 and keep Stop within reach.")
+        Text("Allows unobserved floor along the route. Go2 stops and tries another route around detected obstacles or drops. Lost telemetry stops movement. Stay with Go2 and keep Stop within reach.")
             .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         Group {
             Toggle("Allow hidden floor beneath Go2", isOn: Binding(
@@ -832,7 +931,7 @@ struct SiteRobotLocalizationControls: View {
                         .disabled(model.reading?.pose != true)
                 }.buttonStyle(.bordered)
             }
-        } else if model.localizing {
+        } else if model.localizing && model.rotationState == .idle {
             ProgressView("Locating Go2…").font(.caption)
         } else if model.candidates.indices.contains(model.candidateIndex) {
             let candidate = model.candidates[model.candidateIndex]
