@@ -29,7 +29,7 @@ The CLI discovers nearby routers over LAN and Bluetooth automatically and
 authenticates them with the primary operator certificate, organization chain
 and profile pins. It does not accept a manually selected first-hop router,
 address, transport or Bluetooth PSM. Legacy pinned recipes migrate to automatic
-discovery while preserving an explicitly enabled connection.
+discovery while preserving the saved intent to stay connected.
 
 The same shared node can own additional authenticated carriers. The bounded
 scheduler holds at most 256 candidates, eight connections, two BLE connections
