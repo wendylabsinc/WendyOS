@@ -1,0 +1,509 @@
+package mcp
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
+)
+
+// Exercise connectAppMCP itself, including the local TCP listener and StreamMCP,
+// against the retained mcp-go HTTP server rather than an SDK-only fixture.
+type httpAppAgent struct {
+	agentpb.UnimplementedWendyContainerServiceServer
+	address string
+}
+
+func (a *httpAppAgent) StreamMCP(stream grpc.BidiStreamingServer[agentpb.MCPChunk, agentpb.MCPChunk]) error {
+	conn, err := (&net.Dialer{}).DialContext(stream.Context(), "tcp", a.address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(stream.Context(), func() { _ = conn.Close() })
+	defer stop()
+	done := make(chan error, 1)
+	go func() {
+		for {
+			chunk, err := stream.Recv()
+			if err != nil {
+				done <- err
+				return
+			}
+			if _, err := conn.Write(chunk.Data); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			if err := stream.Send(&agentpb.MCPChunk{Data: buf[:n]}); err != nil {
+				return err
+			}
+		}
+		if err != nil {
+			return err
+		}
+		select {
+		case err := <-done:
+			return err
+		default:
+		}
+	}
+}
+
+func appHTTPFixture(t *testing.T, handler http.Handler) (*grpcclient.AgentConnection, context.Context, context.CancelFunc) {
+	t.Helper()
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+	listener := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	agentpb.RegisterWendyContainerServiceServer(srv, &httpAppAgent{address: httpServer.Listener.Addr().String()})
+	go func() { _ = srv.Serve(listener) }()
+	t.Cleanup(func() { srv.Stop(); _ = listener.Close() })
+	cc, err := grpc.NewClient("passthrough:///app", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+		return listener.DialContext(ctx)
+	}), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	return grpcclient.NewFromConn(cc), ctx, cancel
+}
+
+func connectHTTPFixture(t *testing.T, handler http.Handler) (appMCPClient, context.Context, context.CancelFunc) {
+	t.Helper()
+	conn, ctx, cancel := appHTTPFixture(t, handler)
+	initCtx, initCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer initCancel()
+	client, err := connectAppMCP(ctx, initCtx, conn, "test-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client, ctx, cancel
+}
+
+func TestAppHTTPInteroperability(t *testing.T) {
+	protocol := server.NewMCPServer("app", "1", server.WithPaginationLimit(1))
+	var tool mcpgo.Tool
+	if err := json.Unmarshal([]byte(`{"name":"echo","description":"Echo input","inputSchema":{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"number"}]}},"required":["value"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"ok":{"type":"boolean"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false},"_meta":{"app":"test"}}`), &tool); err != nil {
+		t.Fatal(err)
+	}
+	var want *mcpgo.CallToolResult
+	rawResult := json.RawMessage(`{"content":[{"type":"text","text":"hello","annotations":{"audience":["user"],"priority":0.5}},{"type":"image","data":"aGk=","mimeType":"image/png"},{"type":"audio","data":"aGk=","mimeType":"audio/wav"},{"type":"resource","resource":{"uri":"file:///test","mimeType":"text/plain","text":"resource"}},{"type":"resource_link","uri":"file:///link","name":"link"}],"structuredContent":{"ok":true},"_meta":{"source":"app"},"isError":true}`)
+	var err error
+	want, err = mcpgo.ParseCallToolResult(&rawResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocol.AddTool(tool, func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		if !reflect.DeepEqual(req.GetArguments(), map[string]any{"value": "hello"}) {
+			return nil, fmt.Errorf("unexpected arguments: %v", req.GetArguments())
+		}
+		return want, nil
+	})
+	for _, name := range []string{"another", "last"} {
+		protocol.AddTool(mcpgo.NewTool(name), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			return mcpgo.NewToolResultText("ok"), nil
+		})
+	}
+	var pages atomic.Int32
+	handler := server.NewStreamableHTTPServer(protocol)
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var request struct {
+				Method string
+				Params struct {
+					ProtocolVersion string
+					ClientInfo      mcpgo.Implementation
+				}
+			}
+			_ = json.Unmarshal(body, &request)
+			if request.Method == "initialize" && (request.Params.ProtocolVersion != mcpgo.LATEST_PROTOCOL_VERSION || request.Params.ClientInfo.Name != "wendy-app-proxy") {
+				t.Errorf("unexpected initialize: %s", body)
+			}
+			if request.Method == "tools/list" {
+				pages.Add(1)
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
+	client, ctx, _ := connectHTTPFixture(t, wrapped)
+	tools, err := client.ListTools(ctx, mcpgo.ListToolsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Tools) != 3 || pages.Load() != 4 || tools.NextCursor != "" {
+		t.Fatalf("pagination lost tools: %+v, pages=%d", tools, pages.Load())
+	}
+	for _, got := range tools.Tools {
+		if got.Name == "echo" {
+			assertMCPJSON(t, tool, got)
+		}
+	}
+	req := mcpgo.CallToolRequest{}
+	req.Params.Name, req.Params.Arguments = "echo", map[string]any{"value": "hello"}
+	got, err := client.CallTool(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMCPJSON(t, want, got)
+	want.IsError = false
+	got, err = client.CallTool(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMCPJSON(t, want, got)
+	req.Params.Name = "missing"
+	if result, err := client.CallTool(ctx, req); err == nil || result != nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("protocol error became a tool result: %+v, %v", result, err)
+	}
+}
+
+func assertMCPJSON(t *testing.T, want, got any) {
+	t.Helper()
+	var a, b any
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &a); err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &b); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("MCP semantics changed:\nwant %v\ngot  %v", a, b)
+	}
+}
+
+func TestAppHTTPRejectsRedirects(t *testing.T) {
+	for _, stage := range []string{"initialize", "tools/list", "tools/call", "GET", "DELETE"} {
+		for _, code := range []int{301, 302, 303, 307, 308} {
+			t.Run(fmt.Sprintf("%s/%d", stage, code), func(t *testing.T) {
+				var hits, redirected atomic.Int32
+				target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); w.WriteHeader(500) }))
+				defer target.Close()
+				protocol := server.NewMCPServer("app", "1")
+				protocol.AddTool(mcpgo.NewTool("echo"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+					return mcpgo.NewToolResultText("ok"), nil
+				})
+				handler := server.NewStreamableHTTPServer(protocol)
+				conn, ctx, _ := appHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					method := r.Method
+					if method == "POST" {
+						body, _ := io.ReadAll(r.Body)
+						r.Body = io.NopCloser(bytes.NewReader(body))
+						var req struct{ Method string }
+						_ = json.Unmarshal(body, &req)
+						method = req.Method
+					}
+					if method == stage {
+						redirected.Add(1)
+						http.Redirect(w, r, target.URL, code)
+						return
+					}
+					handler.ServeHTTP(w, r)
+				}))
+				client, err := connectAppMCP(ctx, ctx, conn, "app")
+				if stage == "initialize" {
+					if err == nil {
+						_ = client.Close()
+						t.Fatal("redirected initialize succeeded")
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if stage == "tools/list" {
+						if _, err := client.ListTools(ctx, mcpgo.ListToolsRequest{}); err == nil {
+							t.Fatal("redirected list succeeded")
+						}
+					}
+					if stage == "tools/call" {
+						req := mcpgo.CallToolRequest{}
+						req.Params.Name = "echo"
+						if _, err := client.CallTool(ctx, req); err == nil {
+							t.Fatal("redirected call succeeded")
+						}
+					}
+					if stage == "GET" {
+						waitContainerMCP(t, func() bool { return redirected.Load() > 0 })
+					}
+					_ = client.Close()
+				}
+				if redirected.Load() == 0 || hits.Load() != 0 {
+					t.Fatalf("redirect attempts=%d, escaped requests=%d", redirected.Load(), hits.Load())
+				}
+			})
+		}
+	}
+}
+
+func TestAppHTTPCancellationAndClose(t *testing.T) {
+	for _, action := range []string{"cancel-call", "cancel-lifetime", "close"} {
+		t.Run(action, func(t *testing.T) {
+			started, stopped := make(chan struct{}), make(chan struct{})
+			protocol := server.NewMCPServer("app", "1")
+			protocol.AddTool(mcpgo.NewTool("wait"), func(ctx context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+				close(started)
+				<-ctx.Done()
+				close(stopped)
+				return nil, ctx.Err()
+			})
+			protocol.AddTool(mcpgo.NewTool("echo"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+				return mcpgo.NewToolResultText("ok"), nil
+			})
+			client, ctx, cancelLifetime := connectHTTPFixture(t, server.NewStreamableHTTPServer(protocol))
+			callCtx, cancelCall := context.WithCancel(ctx)
+			defer cancelCall()
+			result := make(chan error, 1)
+			go func() {
+				req := mcpgo.CallToolRequest{}
+				req.Params.Name = "wait"
+				_, err := client.CallTool(callCtx, req)
+				result <- err
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("call did not start")
+			}
+			switch action {
+			case "cancel-call":
+				cancelCall()
+			case "cancel-lifetime":
+				cancelLifetime()
+			case "close":
+				if err := client.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case err := <-result:
+				if err == nil {
+					t.Fatal("canceled call succeeded")
+				}
+				if action == "cancel-call" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation lost: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("call did not stop")
+			}
+			select {
+			case <-stopped:
+			case <-time.After(2 * time.Second):
+				t.Fatal("server operation not canceled")
+			}
+			if action == "cancel-call" {
+				req := mcpgo.CallToolRequest{}
+				req.Params.Name = "echo"
+				if _, err := client.CallTool(ctx, req); err != nil {
+					t.Fatalf("cancellation broke session: %v", err)
+				}
+			}
+			first := client.Close()
+			if action != "cancel-lifetime" && first != nil {
+				t.Fatal(first)
+			}
+			if second := client.Close(); second != first {
+				t.Fatalf("close not idempotent: %v, %v", first, second)
+			}
+		})
+	}
+}
+
+func TestAppHTTPListCancellationOnLaterPage(t *testing.T) {
+	for _, action := range []string{"caller", "lifetime", "close"} {
+		t.Run(action, func(t *testing.T) {
+			protocol := server.NewMCPServer("app", "1", server.WithPaginationLimit(1))
+			for _, name := range []string{"first", "second", "third"} {
+				protocol.AddTool(mcpgo.NewTool(name), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+					return mcpgo.NewToolResultText("ok"), nil
+				})
+			}
+			laterPage, release := make(chan struct{}), make(chan struct{})
+			defer close(release)
+			var pages atomic.Int32
+			handler := server.NewStreamableHTTPServer(protocol)
+			client, ctx, cancelLifetime := connectHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "POST" {
+					body, _ := io.ReadAll(r.Body)
+					r.Body = io.NopCloser(bytes.NewReader(body))
+					var req struct {
+						Method string
+						Params struct{ Cursor string }
+					}
+					_ = json.Unmarshal(body, &req)
+					if req.Method == "tools/list" {
+						pages.Add(1)
+						if req.Params.Cursor != "" {
+							close(laterPage)
+							select {
+							case <-release:
+							case <-r.Context().Done():
+							}
+							return
+						}
+					}
+				}
+				handler.ServeHTTP(w, r)
+			}))
+			listCtx, cancelList := context.WithCancel(ctx)
+			defer cancelList()
+			done := make(chan error, 1)
+			go func() {
+				result, err := client.ListTools(listCtx, mcpgo.ListToolsRequest{})
+				if result != nil {
+					done <- errors.New("returned a partial list")
+					return
+				}
+				done <- err
+			}()
+			select {
+			case <-laterPage:
+			case <-ctx.Done():
+				t.Fatal("did not request second page")
+			}
+			switch action {
+			case "caller":
+				cancelList()
+			case "lifetime":
+				cancelLifetime()
+			case "close":
+				_ = client.Close()
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("expected cancellation, got %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("later page did not cancel")
+			}
+			if pages.Load() != 2 {
+				t.Fatalf("unexpected page count: %d", pages.Load())
+			}
+		})
+	}
+}
+
+func TestAppHTTPFailedConnectCleansProxy(t *testing.T) {
+	for _, mode := range []string{"error", "init-canceled", "lifetime-canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			hosts := make(chan string, 1)
+			release := make(chan struct{})
+			defer close(release)
+			conn, lifetimeCtx, cancelLifetime := appHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case hosts <- r.Host:
+				default:
+				}
+				if mode != "error" {
+					select {
+					case <-release:
+					case <-r.Context().Done():
+					}
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			initCtx, cancelInit := context.WithCancel(context.Background())
+			defer cancelInit()
+			done := make(chan error, 1)
+			go func() {
+				client, err := connectAppMCP(lifetimeCtx, initCtx, conn, "app")
+				if client != nil {
+					_ = client.Close()
+					done <- errors.New("failed connect returned client")
+					return
+				}
+				done <- err
+			}()
+			var address string
+			select {
+			case address = <-hosts:
+			case <-lifetimeCtx.Done():
+				t.Fatal("initialize did not reach app")
+			}
+			if mode == "init-canceled" {
+				cancelInit()
+			}
+			if mode == "lifetime-canceled" {
+				cancelLifetime()
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("connect succeeded")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("failed connect did not finish")
+			}
+			if c, err := net.DialTimeout("tcp", address, time.Second); err == nil {
+				_ = c.Close()
+				t.Fatal("failed initialization left proxy listener open")
+			}
+		})
+	}
+}
+
+func TestAppHTTPCloseBoundsSessionTermination(t *testing.T) {
+	protocol := server.NewMCPServer("app", "1")
+	handler := server.NewStreamableHTTPServer(protocol)
+	deleting, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	client, _, _ := connectHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			close(deleting)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	done := make(chan error, 1)
+	go func() { done <- client.Close() }()
+	select {
+	case <-deleting:
+	case <-time.After(time.Second):
+		t.Fatal("no session termination request")
+	}
+	select {
+	case <-done:
+	case <-time.After(7 * time.Second):
+		t.Fatal("unresponsive app held close open")
+	}
+}
