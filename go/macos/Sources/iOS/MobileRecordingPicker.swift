@@ -36,7 +36,8 @@ struct RecordingEpisodePicker: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(library.device.title).font(.title3.bold()).fixedSize(horizontal: false, vertical: true)
+                    Text(library.device.title).font(.title3.bold())
+                        .lineLimit(textSize.isAccessibilitySize ? 2 : 1).truncationMode(.tail)
                     Text("\(library.episodes.count) \(library.episodes.count == 1 ? "episode" : "episodes") · \(library.sizeText)")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -150,7 +151,8 @@ struct RecordingEpisodePicker: View {
             HStack(spacing: 12) {
                 RecordingThumbnail(device: library.device, episode: episode).frame(width: 84, height: 54).clipShape(.rect(cornerRadius: 10))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(episode.title).font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(episode.title).font(.subheadline.weight(.semibold))
+                        .lineLimit(textSize.isAccessibilitySize ? 2 : 1).truncationMode(.tail)
                     Text([episode.started?.formatted(date: .omitted, time: .shortened),
                           episode.duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) },
                           episode.kind.rawValue].compactMap { $0 }.joined(separator: " · "))
@@ -159,6 +161,7 @@ struct RecordingEpisodePicker: View {
                         HStack(spacing: 4) {
                             Circle().fill(RecordingAppearance.dot(trigger)).frame(width: 6, height: 6)
                             Text(trigger).font(.caption2.weight(.semibold))
+                                .lineLimit(textSize.isAccessibilitySize ? 2 : 1).truncationMode(.tail)
                         }
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
