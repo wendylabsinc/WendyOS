@@ -2,13 +2,21 @@ name: Integration Test Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
+
+concurrency:
+  # Unrelated label events must not cancel an active requested review.
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: integration-tests' && github.run_id || 'review' }}"
+  cancel-in-progress: true
 
 jobs:
   integration-test-review:
     name: Review integration test coverage
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'review: integration-tests') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'review: integration-tests') &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read

@@ -15,7 +15,7 @@ name: AI Security Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 concurrency:
@@ -29,7 +29,7 @@ env:
 jobs:
   security-review:
     name: Claude Security Review
-    if: github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')
+    if: "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'ai-suggestion')"
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
