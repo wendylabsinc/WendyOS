@@ -5,11 +5,12 @@ WendyOS edge devices (Raspberry Pi, NVIDIA Jetson, x86 SBCs, and more).
 
 ## Pull request descriptions
 
-Every PR created from now on must use only the sections below, in this order.
-Keep each section concise, list only affected items, and write `None` when a
-section does not apply. Do not add a summary, test plan, checklist, or other
-sections. These limits apply to the PR description, not to performing tests or
-other required checks.
+Every PR created from now on must use only the applicable sections below, in
+this order. Keep each section concise and describe only what changed. Omit
+sections that do not apply instead of writing `None` or describing unchanged
+behavior. Always include the Risk section. Do not add a summary, test plan,
+checklist, or other sections. These limits apply to the PR description, not to
+performing tests or other required checks.
 
 1. **Affected build products**
    - WendyOS
@@ -44,11 +45,7 @@ other required checks.
 6. **Architectural changes**
    - Explicitly describe any broad architectural change, such as adding a major
      ecosystem component or changing responsibilities between components.
-   - If the PR is solely a bugfix or a feature users could reasonably expect to
-     already exist, and makes no architectural change, state that here. For
-     example: `No architectural change. This fixes existing expected behavior.`
-     This lets reviewers avoid unnecessary architecture review. It does not
-     replace disclosure of breaking changes, added APIs, or risk above.
+   - Include this section only when the PR changes the architecture.
 
 ## Optional AI reviews
 
