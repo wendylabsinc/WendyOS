@@ -235,11 +235,11 @@ def summary(rows):
         groups[(row["agent"], row["target"], row["task"], row.get("kind", "task"))].append(row)
     output = []
     for (agent, target, task, kind), trials in sorted(groups.items()):
-        eligible = [r for r in trials if r["status"] not in UNSCORED_STATUSES]
+        eligible = [r for r in trials if scored(r)]
         passed = [r for r in eligible if r["success"]]
         times = sorted(r["task_seconds"] for r in passed)
         token_values = [r["metrics"]["tokens"]["input_tokens"] + r["metrics"]["tokens"]["output_tokens"]
-                        for r in eligible if r["metrics"]["usage_complete"]]
+                        for r in eligible if r["metrics"].get("usage_complete")]
         all_usage = len(token_values) == len(eligible) and bool(eligible)
         costs = [r["metrics"].get("estimated_cost_usd") if r["metrics"].get("estimated_cost_usd") is not None
                  else r["metrics"].get("reported_cost_usd") for r in eligible]
@@ -319,8 +319,9 @@ def rescore(results_dir, tasks, scenarios):
                                     went_around=sc.is_local(row.get("target_config") or {}))
                               if item.get("expect") else None)
         agent = row.get("stages", {}).get("agent")
-        # A setup_error attempt never reached a verdict (it may have aborted after the agent ran).
-        if scenario and isinstance(agent, dict) and row.get("status") != "setup_error":
+        # A setup_error attempt never reached a verdict (it may have aborted after the agent ran), and an
+        # infra status or an interruption is a limit a new verdict would erase.
+        if scenario and isinstance(agent, dict) and row.get("status") not in NO_VERDICT_STATUSES:
             row["status"], row["success"] = scenario_verdict(adapter, live, agent, row["tool_choice"])
         rows.append(row)
     (out / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -533,7 +534,7 @@ def coverage_results(coverage, rows, agents, repetitions):
         for agent in agents:
             matching = [r for r in rows if (r["agent"], r["target"], r["task"], r.get("kind", "task")) ==
                         (agent, entry["target"], entry["task"], entry.get("kind", "task"))]
-            attempts = [r for r in matching if r["status"] not in UNSCORED_STATUSES]
+            attempts = [r for r in matching if scored(r)]
             entry["agents"][agent] = {"attempts": len(attempts), "passed": sum(r["success"] for r in attempts),
                                       "unscored": len(matching) - len(attempts),
                                       "setup_errors": sum(r["status"] == "setup_error" for r in matching),
@@ -549,8 +550,21 @@ def disposable(config, env=os.environ):
 
 # Attempts that ended on a limit the model didn't cause stay out of its score.
 UNSCORED_STATUSES = frozenset({"context_exceeded", "model_server_down", "interrupted", "timeout", "setup_error"})
+NO_VERDICT_STATUSES = frozenset({"setup_error", "context_exceeded", "model_server_down", "interrupted"})
 CONTEXT_OVERFLOW = re.compile(r"exceed_context_size|exceeds? the available context", re.I)
 ERROR_EVENTS = ("error", "turn.failed")
+
+
+def scored(row):
+    """Whether an attempt counts in a pass rate. Infra limits and setup errors never do. A timeout or an
+    interruption is unscored only on the local target; on a laptop it stays the model's attempt."""
+    status = row.get("status")
+    if status in ("context_exceeded", "model_server_down", "setup_error"):
+        return False
+    if status in ("timeout", "interrupted"):
+        import scenarios as sc  # imported here: scenarios.py imports this module
+        return not sc.is_local(row.get("target_config") or {})
+    return True
 
 
 def model_server_healthy(config, timeout=5):
@@ -605,6 +619,42 @@ def load_rows(path):
         if isinstance(value, dict):
             rows.append(value)
     return rows
+
+
+def repair_rows(path):
+    """load_rows for a resumed pass, rewriting the file from its valid rows when a line was torn, so the
+    next append starts on a line of its own. Says so when it skips a line."""
+    path = Path(path)
+    rows = load_rows(path)
+    if not path.exists():
+        return rows
+    text = path.read_text(errors="replace")
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) != len(rows) or (text and not text.endswith("\n")):
+        if len(lines) != len(rows):
+            print(f"Skipped {len(lines) - len(rows)} unreadable line(s) in {path.name}; rewrote it from the valid rows.")
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        os.replace(temporary, path)
+    return rows
+
+
+def recovered_rows(output, rows):
+    """Rows for attempts whose result.json was saved but whose row never reached results.jsonl (the pass
+    stopped during the sweep). What the sweep did is unknown."""
+    known = {row.get("id") for row in rows}
+    made = []
+    for path in sorted(Path(output).glob("*/result.json")):
+        try:
+            row = json.loads(path.read_text())
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or not row.get("id") or row["id"] in known or "status" not in row:
+            continue
+        row.setdefault("stages", {})["sweep"] = {"unknown": True}
+        known.add(row["id"])
+        made.append(row)
+    return made
 
 
 def remaining_plan(plan, rows):
@@ -1185,7 +1235,7 @@ def main():
         output = args.output.resolve() / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6])
         output.mkdir(parents=True)
     first = not (output / "manifest.json").exists()  # a resumed pass keeps the manifest it started with
-    saved = load_rows(output / "results.jsonl") if args.resume else []
+    saved = repair_rows(output / "results.jsonl") if args.resume else []
     dump(output / "coverage.json", coverage_results(coverage, saved, agents, args.repetitions))
     snapshot = {"config": config, "tasks": tasks, "seed": args.seed,
                 "config_sha256": hashlib.sha256(args.config.read_bytes()).hexdigest(),
@@ -1331,6 +1381,10 @@ def main():
     if first:
         dump(output / "manifest.json", snapshot)
     rows = list(saved)
+    for row in recovered_rows(output, rows) if args.resume else []:
+        with (output / "results.jsonl").open("a") as f:
+            f.write(json.dumps(row) + "\n")
+        rows.append(row)
     for row in interrupted_rows(output, rows) if args.resume else []:
         # An attempt that started and saved nothing: record it now, so the next start doesn't find it again.
         next(output.glob(f"*-{row['id']}")).joinpath("result.json").write_text(json.dumps(row, indent=2) + "\n")
@@ -1339,6 +1393,14 @@ def main():
         rows.append(row)
     total, plan = len(plan), remaining_plan(plan, rows)
     ran = []
+    if on_disposable and not first:
+        # The interrupted attempt may have left an app or a held port; clear them before the first attempt
+        # so that failure isn't scored against the model.
+        sweep = sweep_env_run(lambda env: sc.sweep_apps(wendy, baseline, sc.BENCHMARK_APP, env))
+        history = json.loads((output / "resume_sweeps.json").read_text()) if (output / "resume_sweeps.json").exists() else []
+        dump(output / "resume_sweeps.json", history + [sweep])
+        if sweep["failed"] or sweep["list_error"] is not None:
+            sweep_failures += 1
     try:
         for i, (kind, agent, target, task) in enumerate(plan, total - len(plan) + 1):
             reserve = config.get("scenario_reserve_usd", .5) if kind == "scenario" else config.get("trial_reserve_usd", 15)
@@ -1389,6 +1451,8 @@ def main():
     print(f"Results: {output / 'summary.md'}")
     if halt:
         return 3
+    if on_disposable:  # the runner records only exit 0 as finished; attempt outcomes are in the report
+        return 0 if len(ran) == len(plan) else 1
     configured = all(entry["status"] == "ready" for entry in coverage)
     return 0 if configured and len(ran) == len(plan) and all(r["success"] and r["cleanup_ok"] for r in ran) else 1
 

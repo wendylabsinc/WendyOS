@@ -1251,7 +1251,7 @@ class ExecuteTests(unittest.TestCase):
             self.assertIn("WENDY_AGENT_SOCKET", err)
             self.assertEqual(trials, [])
         code, err, trials = self.local_task_main()
-        self.assertEqual((code, len(trials)), (1, 1), err)
+        self.assertEqual((code, len(trials)), (0, 1), err)  # a finished disposable pass exits 0
 
     def test_plan_only_still_allows_a_local_target_without_either(self):
         code, err, trials = self.local_task_main(flag=False, socket=False, execute=False)
@@ -1310,7 +1310,7 @@ class ExecuteTests(unittest.TestCase):
                                                 "--target", "local", "--repetitions", "1", "--execute"]), \
                 contextlib.redirect_stdout(out):
             code = b.main()
-        self.assertEqual(code, 1, out.getvalue()[-600:])
+        self.assertEqual(code, 0, out.getvalue()[-600:])
         [(target, task, wendy, shim, tools)] = seen
         self.addCleanup(shutil.rmtree, Path(shim).parent, True)
         self.assertEqual((target, task, wendy), ("local", "deploy-http", FAKE))
@@ -1341,7 +1341,7 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual([r["cleanup_ok"] for r in rows], [False, True, True])
         self.assertFalse((output / "halt.json").exists())
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)  # a finished pass on a disposable device exits 0 whatever the attempts did
 
     def test_two_failed_sweeps_halt_and_write_the_reason(self):
         bad = {"removed": [], "failed": [], "list_error": "no route"}
@@ -1393,7 +1393,8 @@ class ExecuteTests(unittest.TestCase):
         code, text, rows = self.resume_main(directory, "--repetitions", "2", baseline=("old", "leftover"))
         self.assertEqual(len(rows), 2, text)
         self.assertEqual(json.loads((directory / "baseline_apps.json").read_text()), ["old"])
-        self.assertEqual(self.sweep_calls, [(["old"], sc.BENCHMARK_APP)])  # the leftover is still swept
+        # the resume sweeps once before the attempt, then after it, both against the saved baseline
+        self.assertEqual(self.sweep_calls, [(["old"], sc.BENCHMARK_APP)] * 2)
 
     def test_resume_removes_a_stale_halt_reason(self):
         directory = self.root / "pass"
@@ -1408,7 +1409,7 @@ class ExecuteTests(unittest.TestCase):
         halted = self.root / "again"
         self.resume_main(halted, "--repetitions", "4", sweeps=[bad, bad])
         code, _, rows = self.resume_main(halted, "--repetitions", "4", sweeps=[bad, bad])
-        self.assertEqual((code, len(rows)), (3, 4))
+        self.assertEqual((code, len(rows)), (3, 3))  # the resume sweep failed once, the next attempt's sweep again
         self.assertTrue((halted / "halt.json").exists())
 
     def test_resume_records_an_interrupted_attempt_and_retries_it(self):
@@ -1423,6 +1424,77 @@ class ExecuteTests(unittest.TestCase):
         # the next start doesn't record it again
         code, text, rows = self.resume_main(directory, "--repetitions", "2")
         self.assertEqual(len(rows), 3)
+
+    def test_a_torn_results_line_is_repaired_on_resume(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        with (directory / "results.jsonl").open("a") as f:
+            f.write('{"id": "torn", "tru')
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual(len(rows), 2, text)
+        self.assertIn("Skipped 1 unreadable", text)
+        lines = (directory / "results.jsonl").read_text().splitlines()
+        self.assertEqual(len(lines), 2)
+        [json.loads(line) for line in lines]
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual(len(rows), 2, text)  # nothing re-ran
+
+    def test_resume_recovers_an_attempt_that_saved_its_result_but_not_its_row(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        attempt = directory / "fake-local-probe-0123456789ab"
+        attempt.mkdir()
+        row = {"id": "0123456789ab", "kind": "scenario", "agent": "fake", "target": "local", "task": "probe",
+               "status": "passed", "success": True, "cleanup_ok": True, "task_seconds": 1, "workspace": None,
+               "metrics": {}, "stages": {}, "tool_choice": None}
+        (attempt / "task.json").write_text(json.dumps({"id": "probe", "group": "core", "agent": "fake", "target": "local"}))
+        (attempt / "result.json").write_text(json.dumps(row))
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual(len(rows), 2, text)  # the recovered attempt counted, so nothing re-ran
+        self.assertEqual(rows[1]["id"], "0123456789ab")
+        self.assertEqual(rows[1]["stages"]["sweep"], {"unknown": True})
+        self.assertEqual(len(self.sweep_calls), 1)  # only the resume sweep
+
+    def test_a_disposable_resume_sweeps_before_the_first_attempt(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        bad = {"removed": [], "failed": ["stuck"], "list_error": None}
+        code, text, rows = self.resume_main(directory, "--repetitions", "2", sweeps=[bad])
+        self.assertEqual(len(self.sweep_calls), 2)
+        saved = json.loads((directory / "resume_sweeps.json").read_text())
+        self.assertEqual(saved[-1]["failed"], ["stuck"])
+        self.assertTrue(rows[1]["cleanup_ok"])  # the attempt's own sweep was clean
+
+    def test_two_failed_sweeps_across_the_resume_sweep_and_first_attempt_halt(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        bad = {"removed": [], "failed": ["stuck"], "list_error": None}
+        code, text, rows = self.resume_main(directory, "--repetitions", "4", sweeps=[bad, bad])
+        self.assertEqual((code, len(rows)), (3, 2))
+
+    def test_a_fresh_resume_directory_does_not_sweep_first(self):
+        self.resume_main(self.root / "new", "--repetitions", "1")
+        self.assertEqual(len(self.sweep_calls), 1)
+
+    def test_a_disposable_pass_with_a_failed_attempt_still_exits_0(self):
+        with mock.patch.dict(MINIMAL, {"expect": {"right": [{"tool": "never_called"}]}}):
+            code, text, output = self.disposable_main("--repetitions", "2")
+        self.assertEqual(code, 0, text)
+        rows = [json.loads(line) for line in (output / "results.jsonl").read_text().splitlines()]
+        self.assertEqual([r["success"] for r in rows], [False, False])
+
+    def test_a_disposable_pass_that_ends_short_of_its_plan_does_not_exit_0(self):
+        self.config["budget_usd"] = 0
+        code, text, output = self.disposable_main("--repetitions", "2")
+        self.assertEqual(code, 1, text)
+
+    def test_a_laptop_pass_with_a_failed_attempt_still_exits_1(self):
+        self.scenarios.write_text(json.dumps([dict(MINIMAL, expect={"right": [{"tool": "never_called"}]})]))
+        code, text = self.main("--scenario", "probe", "--repetitions", "1", "--execute")
+        self.assertEqual(code, 1, text)
+        output = next((self.root / "results").iterdir())
+        for line in (output / "results.jsonl").read_text().splitlines():
+            self.addCleanup(shutil.rmtree, json.loads(line)["workspace"], True)
 
     def test_unreadable_capabilities_halt_a_disposable_pass_with_a_reason(self):
         self.config["targets"]["local"] = dict(LOCAL_TARGET)  # capabilities None: read under --execute

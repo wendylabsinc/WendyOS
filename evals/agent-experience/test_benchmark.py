@@ -622,11 +622,25 @@ class UnscoredAndResumeTests(unittest.TestCase):
         (attempt / "task.json").write_text(json.dumps({"id": "probe", "group": "core", "agent": "a", "target": "local"}))
         self.assertEqual(b.interrupted_rows(self.root, [])[0]["kind"], "scenario")
 
+    @staticmethod
+    def summary_row(status, success=False, outcome=None, kind="local"):
+        return {"agent": "a", "target": "t", "task": "t", "status": status, "success": success,
+                "task_seconds": 1, "tool_choice": {"outcome": outcome} if outcome else None,
+                "target_config": {"kind": kind}, "metrics": {"usage_complete": False, "tokens": None}}
+
+    def test_scored_follows_the_target(self):
+        row = self.summary_row
+        for status in ("context_exceeded", "model_server_down", "setup_error"):
+            self.assertFalse(b.scored(row(status, kind="simulator")), status)
+            self.assertFalse(b.scored(row(status)), status)
+        for status in ("timeout", "interrupted"):
+            self.assertFalse(b.scored(row(status)), status)
+            self.assertTrue(b.scored(row(status, kind="simulator")), status)
+            self.assertTrue(b.scored({"status": status}), status)  # no target config: a laptop row
+        self.assertTrue(b.scored(row("failed")))
+
     def test_summary_keeps_unscored_attempts_out_of_the_denominator(self):
-        def row(status, success=False, outcome=None):
-            return {"agent": "a", "target": "local", "task": "t", "status": status, "success": success,
-                    "task_seconds": 1, "tool_choice": {"outcome": outcome} if outcome else None,
-                    "metrics": {"usage_complete": False, "tokens": None}}
+        row = self.summary_row
         rows = [row("passed", True, "right"), row("failed", outcome="went_around"), row("context_exceeded"),
                 row("model_server_down"), row("interrupted"), row("timeout"), row("setup_error")]
         result = b.summary(rows)[0]
@@ -635,6 +649,35 @@ class UnscoredAndResumeTests(unittest.TestCase):
         self.assertEqual(result["tool_choice"]["went_around"], 1)
         self.assertEqual(result["timeouts"], 1)
         self.assertEqual(b.choice_cell(result["tool_choice"]), "1/0/0/0/1")
+
+    def test_laptop_timeouts_still_count_against_the_pass_rate(self):
+        row = self.summary_row
+        rows = [row("passed", True, kind="simulator"), row("timeout", kind="simulator"),
+                row("timeout", kind="simulator")]
+        result = b.summary(rows)[0]
+        self.assertEqual((result["successes"], result["attempts"], result["timeouts"]), (1, 3, 2))
+        coverage = b.coverage_results([{"task": "t", "target": "t"}],
+                                      [dict(r, kind="task") for r in rows], ["a"], 3)
+        self.assertEqual(coverage[0]["agents"]["a"]["attempts"], 3)
+
+    def test_rescore_keeps_infra_statuses_on_scenario_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            make = MetricsTests._rescore_dir(self, path)
+            agent = {"exit_code": 0, "timed_out": False, "interrupted": False, "seconds": 1.0}
+            for status in ("context_exceeded", "model_server_down", "interrupted"):
+                d = make(status, kind="scenario", group="core", task="s", stages={"agent": agent}, status=status,
+                         success=False, target_config={"kind": "local"})
+                (d / "agent.stdout").write_text(json.dumps({"type": "tool_start", "id": "1", "tool": "run", "arguments": {}}) + "\n")
+                (d / "proxy.jsonl").write_text(json.dumps({"tool": "run"}) + "\n")
+                (d / "cli.jsonl").write_text("")
+            manifest = json.loads((path / "manifest.json").read_text())
+            manifest["config"]["agents"]["c"]["adapter"] = "wendy"
+            (path / "manifest.json").write_text(json.dumps(manifest))
+            out = b.rescore(path, [], [{"id": "s", "expect": {"right": [{"tool": "run"}]}}])
+            rows = [json.loads(line) for line in (out / "results.jsonl").read_text().splitlines()]
+            self.assertEqual(sorted((r["status"], r["success"]) for r in rows),
+                             [("context_exceeded", False), ("interrupted", False), ("model_server_down", False)])
 
     def test_attempt_records_device_markers(self):
         uptime = self.root / "uptime"
