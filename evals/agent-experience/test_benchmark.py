@@ -482,5 +482,61 @@ class MetricsTests(unittest.TestCase):
             self.assertEqual(row["tool_choice"]["outcome"], "right")
 
 
+class DisposableDeviceTests(unittest.TestCase):
+    SOCKET = {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}
+
+    def test_disposable_needs_both_the_flag_and_the_socket(self):
+        for flag in (True, False, None):
+            for socket in (True, False):
+                config = {} if flag is None else {"disposable_device": flag}
+                env = dict(self.SOCKET) if socket else {}
+                with self.subTest(flag=flag, socket=socket):
+                    self.assertIs(b.disposable(config, env), flag is True and socket)
+        self.assertFalse(b.disposable({"disposable_device": "yes"}, self.SOCKET))
+        self.assertFalse(b.disposable({"disposable_device": True}, {"WENDY_AGENT_SOCKET": ""}))
+
+    def test_agent_seconds_override(self):
+        config = {"agent_seconds": {"scenario": 900, "task": 3600}}
+        scenario = {"id": "s", "group": "core", "timeout_seconds": 120}
+        task = {"id": "t", "timeout_seconds": 600}
+        self.assertEqual(b.agent_timeout(config, scenario), 900)
+        self.assertEqual(b.agent_timeout(config, task), 3600)
+        # max_agent_seconds still caps the override
+        self.assertEqual(b.agent_timeout(dict(config, max_agent_seconds=300), task), 300)
+        # with no override the minimum rule is unchanged
+        self.assertEqual(b.agent_timeout({}, scenario), 120)
+        self.assertEqual(b.agent_timeout({"max_agent_seconds": 60}, task), 60)
+        self.assertEqual(b.agent_timeout({}, {"id": "t"}), 900)
+
+    def row(self, **changes):
+        return dict({"status": "passed", "kind": "scenario", "cleanup_ok": True,
+                     "metrics": {"estimated_cost_usd": .1}, "stages": {"agent": {"interrupted": False}}}, **changes)
+
+    def test_stop_reason_on_a_laptop_is_unchanged(self):
+        config = {}
+        self.assertIsNone(b.stop_reason(self.row(), config, {}))
+        self.assertIn("Cleanup failed", b.stop_reason(self.row(cleanup_ok=False), config, {}))
+        unknown = self.row(kind="task", metrics={"estimated_cost_usd": None, "reported_cost_usd": None})
+        self.assertIn("Usage cost is unknown", b.stop_reason(unknown, config, {}))
+        self.assertIn("Claude reported no MCP server list",
+                      b.stop_reason(self.row(status="mcp_unverified", metrics={}), config, {}))
+        unrouted = {"transcript_mcp_calls": 2, "proxy_calls": 0}
+        self.assertIn("never reached the recording proxy",
+                      b.stop_reason(self.row(status="mcp_unverified", metrics=unrouted), config, {}))
+        self.assertIn("Another Wendy MCP server", b.stop_reason(self.row(status="mcp_contaminated"), config, {}))
+        self.assertIn("interrupted", b.stop_reason(self.row(stages={"agent": {"interrupted": True}}), config, {}))
+        # a flag without the socket is still a laptop
+        self.assertIn("Cleanup failed", b.stop_reason(self.row(cleanup_ok=False), {"disposable_device": True}, {}))
+
+    def test_stop_reason_on_a_disposable_device(self):
+        config, env = {"disposable_device": True}, self.SOCKET
+        self.assertIsNone(b.stop_reason(self.row(cleanup_ok=False), config, env))
+        unknown = self.row(kind="task", metrics={"estimated_cost_usd": None, "reported_cost_usd": None})
+        self.assertIsNone(b.stop_reason(unknown, config, env))
+        self.assertIsNotNone(b.stop_reason(self.row(status="mcp_unverified", metrics={}), config, env))
+        self.assertIsNotNone(b.stop_reason(self.row(status="mcp_contaminated"), config, env))
+        self.assertIsNotNone(b.stop_reason(self.row(stages={"agent": {"interrupted": True}}), config, env))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -469,6 +469,57 @@ def vm_snapshot(wendy, device, env):
     return sorted(entries, key=lambda entry: json.dumps(entry, sort_keys=True))
 
 
+# The benchmark's own app on a disposable device; a sweep never removes it.
+BENCHMARK_APP = "sh.wendy.evals.model-tool-report"
+SWEEP_ERRORS = (OSError, RuntimeError, ValueError, subprocess.SubprocessError)
+
+
+def list_apps(wendy, env, run=subprocess.run):
+    """Names of the apps on the local device. Raises RuntimeError when the list can't be read."""
+    done = run([wendy, "--json", "--device", "local", "device", "apps", "list"], env=env,
+               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    if done.returncode != 0:
+        raise RuntimeError(f"listing apps failed: {(done.stderr or done.stdout).strip()}")
+    apps = json.loads(done.stdout)
+    if not isinstance(apps, list):
+        raise RuntimeError("unexpected app list")
+    return [app["name"] for app in apps if isinstance(app, dict) and app.get("name")]
+
+
+def baseline_apps(path, wendy, env, run=subprocess.run):
+    """The apps present when the pass first started. A later start keeps the saved list, so an app
+    left over from before the restart is still swept."""
+    path = Path(path)
+    if path.exists():
+        return json.loads(path.read_text())
+    names = list_apps(wendy, env, run)
+    b.dump(path, names)
+    return names
+
+
+def sweep_apps(wendy, baseline, protected, env, run=subprocess.run):
+    """Remove every app that was not there at the start, except the protected one(s). A model can pick its own app id."""
+    keep = set(baseline) | ({protected} if isinstance(protected, str) else set(protected))
+    result = {"removed": [], "failed": [], "list_error": None}
+    try:
+        names = list_apps(wendy, env, run)
+    except SWEEP_ERRORS as error:
+        result["list_error"] = str(error)
+        return result
+    for name in names:
+        if name in keep:
+            continue
+        try:
+            done = run([wendy, "--device", "local", "device", "apps", "remove", name, "--force", "--cleanup",
+                        "--delete-volumes"], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                       timeout=300)
+            ok = done.returncode == 0
+        except SWEEP_ERRORS:
+            ok = False
+        result["removed" if ok else "failed"].append(name)
+    return result
+
+
 def _target_snapshot(wendy, device, target, run_vm):
     # The runner's own state, never the attempt's, so the check leaves nothing for the agent to find.
     if run_vm is not None:
@@ -603,7 +654,9 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
             except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
                 row["stages"]["reset"] = {"exit_code": 1, "before": before,
                                           "error": f"reading the target after the attempt: {error}"}
-        row["cleanup_ok"] = row["stages"].get("reset", {}).get("exit_code") == 0
+        # On a disposable device the sweep owns leftover apps; the reset stage still records the change.
+        row["cleanup_ok"] = (row["stages"].get("reset", {}).get("exit_code") == 0
+                             or (b.disposable(config) and "after" in row["stages"].get("reset", {})))
         if state is not None:
             b.discard_device_state(state, row["cleanup_ok"])  # unlinks the shared store; the VM stays
             if state.exists() and not any(state.iterdir()):

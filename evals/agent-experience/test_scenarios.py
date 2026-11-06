@@ -6,9 +6,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import benchmark as b
@@ -694,6 +696,54 @@ class LocalTargetTests(unittest.TestCase):
                                                                 sc.canned_dir_for({"kind": "simulator"}, root / "empty")))
 
 
+class SweepTests(unittest.TestCase):
+    PROTECTED = "sh.wendy.evals.model-tool-report"
+    APPS = [PROTECTED, "old", "dev.wendy.eval.a", "made-up-by-model"]
+
+    def fake_run(self, apps=None, list_code=0, fail=()):
+        self.calls = []
+        def run(argv, **kwargs):
+            self.calls.append(argv)
+            if argv[-3:] == ["device", "apps", "list"]:
+                return SimpleNamespace(returncode=list_code, stdout=json.dumps([{"name": a} for a in apps or self.APPS]),
+                                       stderr="no route" if list_code else "")
+            return SimpleNamespace(returncode=1 if argv[argv.index("remove") + 1] in fail else 0, stdout="", stderr="nope")
+        return run
+
+    def test_sweep_removes_only_new_apps(self):
+        result = sc.sweep_apps("wendy", ["old"], self.PROTECTED, {}, run=self.fake_run())
+        removes = [c for c in self.calls if "remove" in c]
+        self.assertEqual(removes, [["wendy", "--device", "local", "device", "apps", "remove", name,
+                                    "--force", "--cleanup", "--delete-volumes"]
+                                   for name in ("dev.wendy.eval.a", "made-up-by-model")])
+        self.assertEqual(result, {"removed": ["dev.wendy.eval.a", "made-up-by-model"], "failed": [], "list_error": None})
+
+    def test_sweep_reports_a_failed_removal(self):
+        result = sc.sweep_apps("wendy", ["old"], [self.PROTECTED], {}, run=self.fake_run(fail=("made-up-by-model",)))
+        self.assertEqual((result["removed"], result["failed"]), (["dev.wendy.eval.a"], ["made-up-by-model"]))
+        self.assertIsNone(result["list_error"])
+
+    def test_sweep_reports_a_failed_list(self):
+        result = sc.sweep_apps("wendy", ["old"], self.PROTECTED, {}, run=self.fake_run(list_code=1))
+        self.assertIn("no route", result["list_error"])
+        self.assertEqual((result["removed"], result["failed"]), ([], []))
+        self.assertFalse([c for c in self.calls if "remove" in c])
+
+    def test_sweep_survives_a_command_that_cannot_run(self):
+        def run(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, 120)
+        self.assertIn("timed out", sc.sweep_apps("wendy", [], self.PROTECTED, {}, run=run)["list_error"])
+
+    def test_baseline_survives_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "baseline_apps.json"
+            self.assertEqual(sc.baseline_apps(path, "wendy", {}, run=self.fake_run(apps=["old"])), ["old"])
+            self.assertEqual(json.loads(path.read_text()), ["old"])
+            # a restart after a leftover appeared must not adopt the leftover as baseline
+            self.assertEqual(sc.baseline_apps(path, "wendy", {}, run=self.fake_run(apps=["old", "leftover"])), ["old"])
+            self.assertEqual(json.loads(path.read_text()), ["old"])
+
+
 class MainTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -758,6 +808,46 @@ class MainTests(unittest.TestCase):
         self.assertEqual(coverage["sim-list"]["reason"], "no matching target configured")
         self.assertEqual(coverage["on-local"]["target"], "local")
 
+    def plan_order(self, disposable):
+        config = json.loads(self.config.read_text())
+        config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
+        if disposable:
+            config["disposable_device"] = True
+        self.config.write_text(json.dumps(config))
+        self.scenarios.write_text(json.dumps([dict(MINIMAL, id=name, environments=["local"]) for name in ("s1", "s2")]))
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}):
+            code, text = self.main("--scenario", "all", "--task", "stop-app", "--task", "start-app", "--target", "local",
+                                   "--agent", "codex", "--repetitions", "2")
+        self.assertEqual(code, 0)
+        decoder = json.JSONDecoder()
+        _, end = decoder.raw_decode(text)
+        plan, _ = decoder.raw_decode(text[end:].lstrip())
+        return [item["task"] for item in plan]
+
+    def test_laptop_plan_keeps_its_shuffled_order(self):
+        self.assertEqual(self.plan_order(False),
+                         ["start-app", "s1", "start-app", "s2", "s2", "stop-app", "s1", "stop-app"])
+
+    def test_disposable_pass_runs_scenarios_first(self):
+        self.assertEqual(self.plan_order(True),
+                         ["s1", "s2", "s2", "s1", "start-app", "start-app", "stop-app", "stop-app"])
+
+    def test_a_flag_without_the_socket_keeps_the_laptop_order(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("WENDY_AGENT_SOCKET", None)
+            config = json.loads(self.config.read_text())
+            config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
+            config["disposable_device"] = True
+            self.config.write_text(json.dumps(config))
+            self.scenarios.write_text(json.dumps([dict(MINIMAL, id=name, environments=["local"]) for name in ("s1", "s2")]))
+            code, text = self.main("--scenario", "all", "--task", "stop-app", "--task", "start-app", "--target", "local",
+                                   "--agent", "codex", "--repetitions", "2")
+        decoder = json.JSONDecoder()
+        _, end = decoder.raw_decode(text)
+        plan, _ = decoder.raw_decode(text[end:].lstrip())
+        self.assertEqual([item["task"] for item in plan],
+                         ["start-app", "s1", "start-app", "s2", "s2", "stop-app", "s1", "stop-app"])
+
     def test_device_requires_scenario(self):
         with self.assertRaises(SystemExit):
             self.main("--device", "192.0.2.10:50051")
@@ -800,8 +890,8 @@ class ExecuteTests(unittest.TestCase):
             shutil.rmtree(run_vm["state"], True)
         return {"exit_code": 0}
 
-    def main(self, *argv, failures=(), capabilities=("wifi",), real_prepare=False, refuse=False, prepare=None):
-        """refuse: the run must stop before running anything, so a missed check can't start a real agent."""
+    def main(self, *argv, failures=(), capabilities=("wifi",), real_prepare=False, refuse=False, prepare=None, snapshots=None):
+        """snapshots: successive app lists the scenario reset check reads. refuse: the run must stop before running anything, so a missed check can't start a real agent."""
         path = self.root / "config.json"
         path.write_text(json.dumps(self.config))
         run_vm = {"state": self.run_state, "name": "wendy-eval-run", "device": "vm:wendy-eval-run",
@@ -817,7 +907,7 @@ class ExecuteTests(unittest.TestCase):
                    mock.patch.object(sc, "detect_board", return_value=(list(capabilities), {"capabilities": capabilities})),
                    mock.patch.object(sc, "prepare_run_vm", side_effect=prepare),
                    mock.patch.object(sc, "remove_run_vm", side_effect=self.remove),
-                   mock.patch.object(sc, "vm_snapshot", return_value=[]),
+                   mock.patch.object(sc, "vm_snapshot", **({"side_effect": snapshots} if snapshots else {"return_value": []})),
                    mock.patch.object(sc, "robot_prerequisites", return_value=[]),
                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)]
         if refuse:
@@ -855,6 +945,87 @@ class ExecuteTests(unittest.TestCase):
         self.assertTrue((output / "bin/wendy").exists() and (output / "tools.json").exists())
         coverage = json.loads((output / "coverage.json").read_text())
         self.assertEqual({(c["task"], c["status"]) for c in coverage}, {("probe", "ready"), ("wifi", "ready")})
+
+    def disposable_main(self, *argv, flag=True, sweeps=None, baseline=("old",), **kwargs):
+        """A scenario pass on the local target with the agent socket set; sweeps are the sweep_apps results in order."""
+        self.config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
+        if flag:
+            self.config["disposable_device"] = True
+        self.scenarios.write_text(json.dumps([dict(MINIMAL, environments=["local"])]))
+        ok = {"removed": [], "failed": [], "list_error": None}
+        results = iter(sweeps or [])
+        self.sweep_calls = []
+        def sweep(wendy, base, protected, env, run=None):
+            self.sweep_calls.append((base, protected))
+            return next(results, ok)
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}), \
+                mock.patch.object(sc, "sweep_apps", side_effect=sweep), \
+                mock.patch.object(sc, "list_apps", return_value=list(baseline)):
+            code, text = self.main("--scenario", "probe", "--target", "local", "--execute", *argv, **kwargs)
+        outputs = list((self.root / "results").iterdir()) if (self.root / "results").exists() else []
+        output = outputs[0] if outputs else None
+        if output and (output / "results.jsonl").exists():
+            for line in (output / "results.jsonl").read_text().splitlines():
+                self.addCleanup(shutil.rmtree, json.loads(line)["workspace"], True)
+        return code, text, output
+
+    def test_preflight_still_refuses_without_the_flag(self):
+        code, text, output = self.disposable_main("--repetitions", "1", flag=False, failures=["another wendy"])
+        self.assertEqual(code, 2)
+        self.assertIn("Host check failed: another wendy", text)
+        self.assertFalse((output / "results.jsonl").exists())
+
+    def test_a_disposable_device_skips_preflight_and_says_so(self):
+        code, text, output = self.disposable_main("--repetitions", "1", failures=["another wendy"])
+        self.assertEqual(code, 0, text)
+        self.assertNotIn("Host check failed", text)
+        self.assertEqual(json.loads((output / "manifest.json").read_text())["preflight"], "skipped: disposable_device")
+        self.assertEqual(self.sweep_calls, [(["old"], sc.BENCHMARK_APP)])
+        self.assertEqual(json.loads((output / "baseline_apps.json").read_text()), ["old"])
+        self.assertNotIn("Usage unknown; charged", text)
+
+    def test_one_failed_sweep_does_not_halt(self):
+        bad = {"removed": [], "failed": ["stuck"], "list_error": None}
+        code, text, output = self.disposable_main("--repetitions", "3", sweeps=[bad])
+        rows = [json.loads(line) for line in (output / "results.jsonl").read_text().splitlines()]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([r["cleanup_ok"] for r in rows], [False, True, True])
+        self.assertFalse((output / "halt.json").exists())
+        self.assertEqual(code, 1)
+
+    def test_two_failed_sweeps_halt_and_write_the_reason(self):
+        bad = {"removed": [], "failed": [], "list_error": "no route"}
+        code, text, output = self.disposable_main("--repetitions", "4", sweeps=[bad, bad])
+        self.assertEqual(code, 3)
+        rows = (output / "results.jsonl").read_text().splitlines()
+        self.assertEqual(len(rows), 2)
+        reason = json.loads((output / "halt.json").read_text())["reason"]
+        self.assertIn("sweep failed twice", reason)
+        self.assertIn(reason, text)
+
+    def test_a_failed_sweep_then_a_clean_one_resets_the_count(self):
+        bad = {"removed": [], "failed": ["stuck"], "list_error": None}
+        ok = {"removed": [], "failed": [], "list_error": None}
+        code, text, output = self.disposable_main("--repetitions", "4", sweeps=[bad, ok, bad])
+        self.assertEqual(len((output / "results.jsonl").read_text().splitlines()), 4)
+        self.assertFalse((output / "halt.json").exists())
+
+    def test_a_laptop_still_stops_on_failed_cleanup(self):
+        code, text, output = self.disposable_main("--repetitions", "3", flag=False,
+                                                  snapshots=[[], [{"name": "new"}], [], []])
+        # without the flag this is a laptop run: preflight ran, nothing swept, and the changed app list stopped it
+        self.assertEqual(self.sweep_calls, [])
+        self.assertIn("Cleanup failed. Stopping before another trial can inherit this state.", text)
+        self.assertEqual(len((output / "results.jsonl").read_text().splitlines()), 1)
+        self.assertFalse((output / "halt.json").exists())
+
+    def test_a_changed_app_list_is_recorded_but_does_not_stop_a_disposable_pass(self):
+        code, text, output = self.disposable_main("--repetitions", "3", snapshots=[[], [{"name": "new"}], [], [], [], []])
+        rows = [json.loads(line) for line in (output / "results.jsonl").read_text().splitlines()]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["stages"]["reset"]["exit_code"], 1)
+        self.assertTrue(rows[0]["cleanup_ok"])
+        self.assertNotIn("Cleanup failed", text)
 
     def test_interrupted_run_vm_preparation_still_removes_the_vm(self):
         def fixture_vm(config, variables, workspace, directory, env):

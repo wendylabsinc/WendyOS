@@ -535,8 +535,15 @@ def coverage_results(coverage, rows, agents, repetitions):
     return result
 
 
+def disposable(config, env=os.environ):
+    """True only for a device that is allowed to break: the config says so and the agent socket is set."""
+    return config.get("disposable_device") is True and bool(env.get("WENDY_AGENT_SOCKET"))
+
+
 def agent_timeout(config, task):
-    values = [task.get("timeout_seconds", 900)]
+    # A scenario is any item with a group key. The config may override the task's own limit.
+    override = (config.get("agent_seconds") or {}).get("scenario" if "group" in task else "task")
+    values = [override if override is not None else task.get("timeout_seconds", 900)]
     if config.get("max_agent_seconds") is not None:
         values.append(config["max_agent_seconds"])
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0 for v in values):
@@ -595,7 +602,7 @@ def scenario_verdict(adapter, metric, result, tool_choice):
     return ("passed" if success else status), success
 
 
-def charge(spend, row, config):
+def charge(spend, row, config, quiet=False):
     """Return (new spend, whether to continue). Unknown cost stops end-to-end runs; scenarios pay a reserve."""
     cost = row["metrics"].get("estimated_cost_usd")
     if cost is None:
@@ -604,9 +611,30 @@ def charge(spend, row, config):
         return spend + cost, True
     if row.get("kind") == "scenario":
         reserve = config.get("scenario_reserve_usd", .5)
-        print(f"Usage unknown; charged the scenario reserve of ${reserve:.2f}.")
+        if not quiet:
+            print(f"Usage unknown; charged the scenario reserve of ${reserve:.2f}.")
         return spend + reserve, True
     return spend, False
+
+
+def stop_reason(row, config, env=os.environ):
+    """Why the pass must stop after this attempt, or None. A disposable device keeps going past a failed
+    cleanup and an unknown cost, because those become findings; the MCP and interruption stops stay."""
+    if row["status"] == "mcp_contaminated":
+        return "Another Wendy MCP server was loaded into Claude; stopping."
+    if row["status"] == "mcp_unverified":
+        if unrouted(row["metrics"]):
+            return "The agent's Wendy MCP calls never reached the recording proxy; stopping."
+        return "Claude reported no MCP server list; stopping because a second Wendy server can't be ruled out."
+    if any(stage.get("interrupted") for stage in row["stages"].values()):
+        return "Experiment interrupted; logs and cleanup result retained."
+    if disposable(config, env):
+        return None
+    if row["status"] != "setup_error" and not charge(0, row, config, quiet=True)[1]:
+        return "Usage cost is unknown. Stopping before spending on another trial."
+    if not row["cleanup_ok"]:
+        return "Cleanup failed. Stopping before another trial can inherit this state."
+    return None
 
 
 def trial(config, agent_name, target_name, task, output, wendy, treatment_root=ROOT):
@@ -878,6 +906,8 @@ def main():
                  if scenario["id"] in selected_scenarios for target in targets
                  if (scenario["id"], target) in ready for agent in agents]
         random.Random(args.seed).shuffle(plan)
+        if disposable(config):
+            plan.sort(key=lambda item: item[0] != "scenario")  # stable: short scenarios first, then real tasks
         if args.limit:
             plan = plan[:args.limit]
         print(json.dumps({"coverage": coverage}, indent=2))
@@ -1000,6 +1030,15 @@ def main():
     if not isinstance(spend, (int, float)) or not math.isfinite(spend) or spend < 0:
         parser.error("prior_spend_usd must be a finite nonnegative number")
     run_vms, removed_vms, unprepared, shim = {}, {}, {}, None
+    on_disposable = disposable(config)
+    baseline, sweep_failures, halt = None, 0, None
+
+    def sweep_env_run(action):
+        state = isolated_device_state({"kind": "local"})
+        try:
+            return action(sc.private_env(state, keep_socket=True))
+        finally:
+            shutil.rmtree(state, ignore_errors=True)
 
     def remove_run_vms(profiles=None):
         for profile in list(run_vms) if profiles is None else profiles:
@@ -1017,7 +1056,11 @@ def main():
         import preflight
         (output / "bin").mkdir()
         shim = eval_wendy.write_shim(output / "bin")
-        failures = preflight.check_host(shim, dict(os.environ, PATH=str(shim.parent) + os.pathsep + os.environ.get("PATH", "")))
+        if on_disposable:
+            failures = []  # the agent runs on the device under test, so another reachable wendy is expected
+            snapshot["preflight"] = "skipped: disposable_device"
+        else:
+            failures = preflight.check_host(shim, dict(os.environ, PATH=str(shim.parent) + os.pathsep + os.environ.get("PATH", "")))
         if failures:
             for failure in failures:
                 print(f"Host check failed: {failure}")
@@ -1059,6 +1102,13 @@ def main():
         except BaseException:
             remove_run_vms()
             raise
+    if on_disposable:
+        try:
+            baseline = sweep_env_run(lambda env: sc.baseline_apps(output / "baseline_apps.json", wendy, env))
+        except sc.SWEEP_ERRORS as error:
+            remove_run_vms()
+            print(f"Could not read the apps on the device before the pass: {error}")
+            return 2
     snapshot["run_vms"] = {p: {"name": v["name"], "device": v["device"]} for p, v in run_vms.items()}
     snapshot["unprepared_run_vms"] = unprepared
     dump(output / "manifest.json", snapshot)
@@ -1080,36 +1130,37 @@ def main():
                                         output / "tools.json", sc.canned_dir_for(config["targets"][target]), treatment_root)
             else:
                 row = trial(config, agent, target, task, output, wendy, treatment_root)
+            if on_disposable:
+                # Anything the attempt left behind is removed before the next one; the sweep's result is part of the row.
+                sweep = sweep_env_run(lambda env: sc.sweep_apps(wendy, baseline, sc.BENCHMARK_APP, env))
+                row["stages"]["sweep"] = sweep
+                swept_ok = not sweep["failed"] and sweep["list_error"] is None
+                row["cleanup_ok"] &= swept_ok
+                sweep_failures = 0 if swept_ok else sweep_failures + 1
             rows.append(row)
             with (output / "results.jsonl").open("a") as f:
                 f.write(json.dumps(row) + "\n")
             report(rows, output)
             dump(output / "coverage.json", coverage_results(coverage, rows, agents, args.repetitions))
-            if row["status"] == "mcp_contaminated":
-                print("Another Wendy MCP server was loaded into Claude; stopping.")
+            reason = stop_reason(row, config)
+            if reason is None and on_disposable and sweep_failures >= 2:
+                reason = "The app sweep failed twice running; stopping before more leftovers pile up."
+            if reason:
+                print(reason)
+                if on_disposable:
+                    halt = reason
                 break
-            if row["status"] == "mcp_unverified":
-                if unrouted(row["metrics"]):
-                    print("The agent's Wendy MCP calls never reached the recording proxy; stopping.")
-                else:
-                    print("Claude reported no MCP server list; stopping because a second Wendy server can't be ruled out.")
-                break
-            if any(stage.get("interrupted") for stage in row["stages"].values()):
-                print("Experiment interrupted; logs and cleanup result retained.")
-                break
-            if row["status"] != "setup_error":
-                spend, keep_going = charge(spend, row, config)
-                if not keep_going:
-                    print("Usage cost is unknown. Stopping before spending on another trial.")
-                    break
+            if row["status"] != "setup_error" and not on_disposable:
+                spend, _ = charge(spend, row, config)
             print(f"  {row['status']} ({row['task_seconds']:.1f}s)", flush=True)
-            if not row["cleanup_ok"]:
-                print("Cleanup failed. Stopping before another trial can inherit this state.")
-                break
     finally:
         if run_vms:
             remove_run_vms()
+    if halt:
+        dump(output / "halt.json", {"reason": halt})
     print(f"Results: {output / 'summary.md'}")
+    if halt:
+        return 3
     configured = all(entry["status"] == "ready" for entry in coverage)
     return 0 if configured and len(rows) == len(plan) and all(r["success"] and r["cleanup_ok"] for r in rows) else 1
 
