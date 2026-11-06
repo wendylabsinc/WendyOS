@@ -4,7 +4,7 @@ import CoreGraphics
 import simd
 
 public struct SiteVisualMap: Codable, Sendable {
-    public static let maximumBytes = 12 * 1024 * 1024
+    public static let maximumBytes = SiteArchivePayload.maximumMapBytes
     var version = 1
     var modelRevision: UUID
     var modelSHA256: String

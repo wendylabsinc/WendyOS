@@ -56,6 +56,7 @@ struct AccountsSettingsView: View {
                         .alignmentGuide(.listRowSeparatorTrailing) { dimensions in dimensions.width }
                     }.listStyle(.inset)
                 }
+                SharedLoginView(onImport: { await model.refreshAccount(); await refresh() })
                 HStack {
                     Menu("Add Account") {
                         Button("Wendy Cloud") { actions.submit { await model.signIn() } }
@@ -69,7 +70,7 @@ struct AccountsSettingsView: View {
                 }
             }.padding(24)
                 .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
-        }.desktopFrame(width: 620, height: 450)
+        }.desktopFrame(width: 680, height: 690)
             .task(id: "\(model.account?.context ?? ""):\(model.signingIn)") {
                 if !model.signingIn { await refresh() }
             }

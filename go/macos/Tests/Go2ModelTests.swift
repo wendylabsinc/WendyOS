@@ -4,6 +4,36 @@ import Combine
 @preconcurrency import SceneKit
 @testable import WendyDesktop
 
+@MainActor @Test func roomPlanFloorUsesUpperSurface() throws {
+    let scene = SCNScene()
+    let parent = SCNNode()
+    parent.position.y = 2
+    parent.eulerAngles.y = 0.4
+    scene.rootNode.addChildNode(parent)
+    let floor = SCNNode(geometry: SCNBox(width: 4, height: 0.16, length: 6, chamferRadius: 0))
+    floor.name = "Floor0"
+    floor.position.y = -3
+    parent.addChildNode(floor)
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".scn")
+    defer { try? FileManager.default.removeItem(at: url) }
+    #expect(scene.write(to: url, options: nil, delegate: nil, progressHandler: nil))
+    let triangles = try SiteRobotGeometry.triangles(url, scale: 2)
+    #expect(triangles.count == 18)
+    for i in stride(from: 1, to: triangles.count, by: 3) {
+        #expect(abs(triangles[i] - (-1.84)) < 0.00001)
+    }
+    // Picking the rendered slab must agree with the geometry sent to matching.
+    scene.rootNode.scale = SCNVector3(2, 2, 2)
+    SCNTransaction.flush()
+    let hits = scene.rootNode.hitTestWithSegment(from: SCNVector3(0, 1, 0), to: SCNVector3(0, -5, 0), options: [
+        SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.all.rawValue,
+        SCNHitTestOption.backFaceCulling.rawValue: false,
+    ])
+    let picked = try #require(hits.first)
+    #expect(abs(Double(picked.worldCoordinates.y) - triangles[1]) < 0.00001)
+    #expect(SiteScenePicking.isLevel(picked, minimumUp: 0.98))
+}
+
 @MainActor @Test func go2MeshesHaveRealScaleAndIndependentJoints() throws {
     let first = Go2Model.make()
     let second = Go2Model.make()

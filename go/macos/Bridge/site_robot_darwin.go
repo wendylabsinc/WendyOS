@@ -177,6 +177,15 @@ func WDSiteRobotDestination(handle, sequence C.uint64_t, frame *C.char, x, z C.d
 	return statusResult(err)
 }
 
+//export WDSiteRobotSummon
+func WDSiteRobotSummon(handle, sequence C.uint64_t, frame *C.char, x, z, wearerX, wearerZ C.double, move C.int32_t) *C.WDStatus {
+	r, err := siteRobot(handle)
+	if err == nil {
+		err = r.Summon(uint64(sequence), C.GoString(frame), float64(x), float64(z), float64(wearerX), float64(wearerZ), move != 0)
+	}
+	return statusResult(err)
+}
+
 //export WDSiteRobotStop
 func WDSiteRobotStop(handle, sequence C.uint64_t) {
 	if r, err := siteRobot(handle); err == nil {

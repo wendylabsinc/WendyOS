@@ -2,11 +2,7 @@ import CoreGraphics
 import MetalKit
 @preconcurrency import SceneKit
 
-public struct SiteCameraColorFrame: Sendable {
-    let image: CGImage
-    let received: Date
-    let sequence: UInt64
-
+extension SiteCameraColorFrame {
     func matches(_ lens: SiteCameraLens, at now: Date) -> Bool {
         lens.isValid && image.width == lens.width && image.height == lens.height
             && (0...3).contains(now.timeIntervalSince(received))

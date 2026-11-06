@@ -10,9 +10,13 @@ struct AccountChoice: Identifiable {
     let state: WDAccountState
     let active: Bool
     var accountKey: String { cloud + "\n" + (email.isEmpty ? id : email) }
+    var needsOrganizationName: Bool {
+        organizationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !organizationID.isEmpty
+    }
     var organizationTitle: String {
         let name = organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "Saved organization" : name
+        if !name.isEmpty { return name }
+        return organizationID.isEmpty ? "Account \(id)" : "Organization \(organizationID)"
     }
     var accountTitle: String { email.isEmpty ? "Saved account" : email }
 }
@@ -54,29 +58,40 @@ extension GoClient {
             return (a.first?.accountKey ?? "") < (b.first?.accountKey ?? "")
         }
     }
-    func load() async {
+    func load(
+        readChoices: () async throws -> [AccountChoice] = { try await GoClient.shared.accountChoices() },
+        organizations: (String) async throws -> [CloudOrganization] = { try await CloudManagementClient().organizations(account: $0) }
+    ) async {
         generation += 1
         let request = generation
         loading = true; error = nil
         defer { if request == generation { loading = false } }
         do {
-            let values = try await GoClient.shared.accountChoices()
+            let values = try await readChoices()
             guard request == generation, !Task.isCancelled else { return }
             choices = values
             // Saved context IDs remain the selection authority. Cloud membership
             // only supplies display names; it never creates selectable sessions.
-            let unresolved = groups.compactMap { group in group.first(where: { $0.organizationName.isEmpty && !$0.organizationID.isEmpty }) }
+            // A saved session can only see its own tenant. Try each unresolved
+            // context, even when several contexts share the same email address.
+            let unresolved = groups.flatMap { $0 }.filter(\.needsOrganizationName)
+            var lookupError: Error?
             for account in unresolved {
                 guard request == generation, !Task.isCancelled else { return }
+                guard choices.contains(where: { $0.id == account.id && $0.needsOrganizationName }) else { continue }
                 do {
-                    let organizations = try await CloudManagementClient().organizations(account: account.id)
+                    let organizations = try await organizations(account.id)
                     guard request == generation, !Task.isCancelled else { return }
                     for i in choices.indices where choices[i].accountKey == account.accountKey {
                         if let organization = organizations.first(where: { $0.id == choices[i].organizationID }) {
                             choices[i].organizationName = organization.name
                         }
                     }
-                } catch { /* Saved accounts remain selectable when Cloud is offline. */ }
+                } catch { lookupError = error }
+            }
+            guard request == generation, !Task.isCancelled else { return }
+            if choices.contains(where: \.needsOrganizationName), let lookupError {
+                error = "Could not load organization names. " + lookupError.localizedDescription
             }
         } catch { if request == generation { self.error = error.localizedDescription } }
     }
@@ -144,6 +159,7 @@ struct AccountPicker: View {
             .accessibilityLabel("Account and organization")
             .accessibilityValue(title + ", " + subtitle)
             .popover(isPresented: $presented, arrowEdge: .bottom) { popover }
+            .onChange(of: presented) { _, value in if value { actions.submit { await picker.load() } } }
             if let error = app.accountError { FailureNote(message: error).padding(.horizontal, 10) }
         }
         .padding(8)
@@ -192,7 +208,7 @@ struct AccountPicker: View {
                                         HStack(spacing: 10) {
                                             Image(systemName: "building.2").foregroundStyle(choice.active ? Color.accentColor : .secondary).frame(width: 18)
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text(choice.organizationTitle).font(.system(size: 13, weight: choice.active ? .semibold : .regular)).lineLimit(1)
+                                                Text(choice.organizationTitle).font(.system(size: 13, weight: choice.active ? .semibold : .regular)).lineLimit(1).truncationMode(.middle)
                                                 if choice.state != WD_ACCOUNT_SIGNED_IN { Text("Sign-in required").font(.caption).foregroundStyle(.orange) }
                                             }
                                             Spacer()
@@ -201,6 +217,7 @@ struct AccountPicker: View {
                                             .background(choice.active ? Color.accentColor.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 7))
                                             .contentShape(RoundedRectangle(cornerRadius: 7))
                                     }.buttonStyle(.plain).disabled(picker.switching || app.signingIn)
+                                        .help(choice.organizationTitle)
                                         .accessibilityAddTraits(choice.active ? [.isSelected] : [])
                                 }
                             }

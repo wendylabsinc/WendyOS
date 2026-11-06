@@ -54,5 +54,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>WendySharedKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)dev.wendy.shared-login</string>
 </dict>
 </plist>
