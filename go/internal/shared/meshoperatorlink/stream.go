@@ -118,7 +118,7 @@ func verifyRouterState(state tls.ConnectionState, cfg ClientConfig, now time.Tim
 	if peer != cfg.Router {
 		return time.Time{}, errors.New("operator attachment router identity differs from target")
 	}
-	return certs.VerifyPeerCertificateChainExpiry(chain[0], chain[1:], cfg.Roots, x509.ExtKeyUsageServerAuth, now, now)
+	return certs.VerifyLivePeerCertificateChainExpiry(chain[0], chain[1:], cfg.Roots, x509.ExtKeyUsageServerAuth, now, now)
 }
 
 // ClientTLSConfig replaces hostname verification with the exact authenticated

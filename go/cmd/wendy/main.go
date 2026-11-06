@@ -18,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/memguard"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"google.golang.org/grpc/status"
 )
@@ -43,6 +44,7 @@ func main() {
 	// context, keeps Ctrl+C effective no matter how many TUIs have already run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go revocation.Default.Run(ctx)
 
 	executed, err := executeInvocation(ctx, cmd, os.Args[1:])
 	if !isReadOnlyInvocation(executed) {

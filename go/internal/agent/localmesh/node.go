@@ -24,9 +24,10 @@ import (
 )
 
 type nodePeer struct {
-	reconcileNeeded bool // Actor-owned: retry a change after bounded queue pressure.
-	closeDiagnostic sync.Once
-	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
+	authenticatedChain [][]byte
+	reconcileNeeded    bool // Actor-owned: retry a change after bounded queue pressure.
+	closeDiagnostic    sync.Once
+	ingress            *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
 	assembler      IPAssembler
 	id             babel.LinkID
@@ -351,6 +352,9 @@ func (n *Node) Run() error {
 				return err
 			}
 		case <-maintenance.C:
+			if err := n.revalidatePeerCertificates(time.Now()); err != nil {
+				return err
+			}
 			n.gate.Lock()
 			err := n.kernel.ReconcileBase()
 			n.gate.Unlock()
@@ -744,7 +748,7 @@ func (n *Node) AttachWithCost(ctx context.Context, peer meshid.Device, conn *qui
 	if err != nil {
 		return err
 	}
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "quic")), peer, cost, &quicNodeLink{conn: conn, stream: stream, sendIP: &carrierIPSender{sender: conn, negotiated: maxIP}, receiveIP: WholeIPDatagramLimit})
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "quic")), peer, cost, &quicNodeLink{conn: conn, stream: stream, sendIP: &carrierIPSender{sender: conn, negotiated: maxIP}, receiveIP: WholeIPDatagramLimit}, conn.ConnectionState().TLS.PeerCertificates)
 }
 
 // AttachStream admits a mutually authenticated TLS 1.3 byte stream. The
@@ -763,7 +767,7 @@ func (n *Node) AttachStream(ctx context.Context, peer meshid.Device, conn net.Co
 		return err
 	}
 	peer = boundPeer
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn))
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn), tlsConn.ConnectionState().PeerCertificates)
 }
 
 func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certificate) error {
@@ -806,7 +810,7 @@ func (n *Node) writeControls(ctx context.Context, p *nodePeer) error {
 	}
 }
 
-func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink) error {
+func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, link nodeLink, certificates []*x509.Certificate) error {
 	defer link.Close()
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
@@ -815,6 +819,13 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
 		return nil
 	}
+	if len(certificates) == 0 || len(certificates) > 16 {
+		return errors.New("missing or oversized authenticated carrier chain")
+	}
+	for _, certificate := range certificates {
+		p.authenticatedChain = append(p.authenticatedChain, append([]byte(nil), certificate.Raw...))
+	}
+
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
 		return err
 	}
@@ -1043,6 +1054,29 @@ func (n *Node) Send(d babel.Datagram) error {
 		_ = p.link.Close()
 		// A failed carrier must withdraw its link, not stop the shared node.
 		return nil
+	}
+	return nil
+}
+
+// Recheck the actual carrier certificate, not a newer leaf for the same
+// principal learned through gossip. Closing and removing the link withdraws
+// routes and tears down its forwarding interface through the normal owner.
+func (n *Node) revalidatePeerCertificates(now time.Time) error {
+	if _, err := n.Credentials.Verify(n.Credentials.Certificate.Certificate, now); err != nil {
+		return fmt.Errorf("mesh local credential: %w", err)
+	}
+	for id, p := range n.peers {
+		if len(p.authenticatedChain) == 0 {
+			continue
+		}
+		identity, err := n.Credentials.VerifyTLS(p.authenticatedChain, now)
+		if err == nil && identity.Device.Principal() == p.device.Principal() {
+			continue
+		}
+		n.closePeer(p, "certificate-revalidation", err)
+		if err := n.handle(nodeEvent{id: id, remove: true}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
