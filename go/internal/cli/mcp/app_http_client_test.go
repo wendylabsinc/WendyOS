@@ -209,7 +209,7 @@ func assertMCPJSON(t *testing.T, want, got any) {
 }
 
 func TestAppHTTPRejectsRedirects(t *testing.T) {
-	for _, stage := range []string{"initialize", "tools/list", "tools/call", "GET", "DELETE"} {
+	for _, stage := range []string{"initialize", "tools/list", "tools/call", "DELETE"} {
 		for _, code := range []int{301, 302, 303, 307, 308} {
 			t.Run(fmt.Sprintf("%s/%d", stage, code), func(t *testing.T) {
 				var hits, redirected atomic.Int32
@@ -257,9 +257,6 @@ func TestAppHTTPRejectsRedirects(t *testing.T) {
 						if _, err := client.CallTool(ctx, req); err == nil {
 							t.Fatal("redirected call succeeded")
 						}
-					}
-					if stage == "GET" {
-						waitContainerMCP(t, func() bool { return redirected.Load() > 0 })
 					}
 					_ = client.Close()
 				}
@@ -505,5 +502,54 @@ func TestAppHTTPCloseBoundsSessionTermination(t *testing.T) {
 	case <-done:
 	case <-time.After(7 * time.Second):
 		t.Fatal("unresponsive app held close open")
+	}
+}
+
+// The client has no consumer for server-initiated messages. A standalone GET
+// would only let the app stall connect and kill the session by dropping it.
+func TestAppHTTPOpensNoStandaloneStream(t *testing.T) {
+	protocol := server.NewMCPServer("app", "1")
+	protocol.AddTool(mcpgo.NewTool("echo"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText("ok"), nil
+	})
+	handler := server.NewStreamableHTTPServer(protocol)
+	var gets atomic.Int32
+	conn, ctx, _ := appHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets.Add(1)
+			<-r.Context().Done()
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	initCtx, cancelInit := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelInit()
+	type connected struct {
+		client appMCPClient
+		err    error
+	}
+	done := make(chan connected, 1)
+	go func() {
+		client, err := connectAppMCP(ctx, initCtx, conn, "app")
+		done <- connected{client, err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		defer got.client.Close()
+		result, err := got.client.ListTools(ctx, mcpgo.ListToolsRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Tools) != 1 {
+			t.Fatalf("tools = %d, want 1", len(result.Tools))
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatalf("connect outlived its 2s init deadline; GET requests: %d", gets.Load())
+	}
+	if n := gets.Load(); n != 0 {
+		t.Fatalf("GET requests = %d, want 0", n)
 	}
 }

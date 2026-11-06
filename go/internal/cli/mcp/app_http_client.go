@@ -37,7 +37,8 @@ func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, clo
 	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
 		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
 	session, err := client.Connect(initCtx, &sdk.StreamableClientTransport{
-		Endpoint: endpoint,
+		Endpoint:             endpoint,
+		DisableStandaloneSSE: true,
 		HTTPClient: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
