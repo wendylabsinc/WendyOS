@@ -34,9 +34,14 @@ type response struct {
 }
 
 type Client struct {
-	vpnControl sync.Mutex
-	vpnMu      sync.Mutex
-	engine     *vpn.Engine
+	vpnControl      sync.Mutex
+	vpnMu           sync.Mutex
+	engine          *vpn.Engine
+	vpnConfig       vpn.Config
+	vpnController   vpn.Config
+	vpnContext      context.Context
+	vpnCancel       context.CancelFunc
+	vpnReachability vpn.ReachabilityState
 
 	backend    *backend.Backend
 	initialize sync.Once
@@ -52,7 +57,7 @@ func New() *Client {
 	// This allowlist is deliberately explicit. Adding a public Backend method does
 	// not automatically expose it to Android. The UI owns destructive confirmations.
 	c.methods = map[string]any{
-		"StartVPN": c.startVPN, "StopVPN": c.stopVPN, "VPNRead": c.readPacket, "VPNWrite": c.writePacket,
+		"StartVPN": c.startVPN, "RefreshVPN": c.refreshVPN, "CancelVPN": c.cancelVPN, "StopVPN": c.stopVPN, "VPNRead": c.readPacket, "VPNWrite": c.writePacket,
 		"NearbyDiscover": b.NearbyDiscover, "NearbyOpen": b.NearbyOpen, "NearbyClose": b.NearbyClose, "NearbyAction": b.NearbyAction,
 		"Nearby": b.Nearby, "Cloud": b.Cloud, "Account": b.Account, "Accounts": b.Accounts,
 		"Login": b.Login, "CancelLogin": b.CancelLogin, "SetMobileState": c.setMobileState,
@@ -264,6 +269,8 @@ func invoke(method any, args []json.RawMessage) (any, error) {
 }
 
 func (c *Client) setMobileState(active bool, account, organization string) error {
+	c.vpnControl.Lock()
+	defer c.vpnControl.Unlock()
 	c.vpnMu.Lock()
 	running := c.engine != nil
 	c.vpnMu.Unlock()
@@ -272,32 +279,118 @@ func (c *Client) setMobileState(active bool, account, organization string) error
 	}
 	return c.backend.SetMobileState(active, account, organization)
 }
-func (c *Client) startVPN(routes []vpn.Route) (vpn.Config, error) {
+func (c *Client) startVPN(account, organization string) (vpn.Config, error) {
 	c.vpnControl.Lock()
 	defer c.vpnControl.Unlock()
 	c.vpnMu.Lock()
-	defer c.vpnMu.Unlock()
-	if c.engine != nil {
+	running := c.engine != nil
+	c.vpnMu.Unlock()
+	if running {
 		return vpn.Config{}, errors.New("stop the current VPN first")
 	}
-	config, err := c.backend.StartVPN(routes)
-	if err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	c.vpnMu.Lock()
+	c.vpnContext, c.vpnCancel = ctx, cancel
+	c.vpnMu.Unlock()
+	// Consent backgrounds the Activity. Restore the broker before starting the
+	// same automatic controller used by the iOS packet tunnel extension.
+	if err := c.backend.SetMobileState(true, account, organization); err != nil {
+		cancel()
 		return vpn.Config{}, err
 	}
-	engine, err := vpn.NewEngine(config)
-	if err != nil {
-		_ = c.backend.StopVPN()
+	if err := ctx.Err(); err != nil {
 		return vpn.Config{}, err
 	}
-	c.engine = engine
-	return config, nil
+	controller, err := c.backend.StartVPN(nil, "auto")
+	if err != nil {
+		cancel()
+		return vpn.Config{}, err
+	}
+	initial, stop := context.WithTimeout(ctx, 25*time.Second)
+	config, err := vpn.Refresh(initial, controller, true)
+	stop()
+	if err == nil {
+		var engine *vpn.Engine
+		engine, err = newVPNEngine(config)
+		if err == nil {
+			c.vpnMu.Lock()
+			c.engine, c.vpnConfig, c.vpnController = engine, config, controller
+			c.vpnMu.Unlock()
+			c.vpnReachability = vpn.ReachabilityState{}
+			return config, nil
+		}
+	}
+	cancel()
+	_ = c.backend.StopVPN()
+	return vpn.Config{}, err
 }
+
+func (c *Client) refreshVPN() (*vpn.Config, error) {
+	c.vpnControl.Lock()
+	defer c.vpnControl.Unlock()
+	c.vpnMu.Lock()
+	session, controller := c.vpnContext, c.vpnController
+	running := c.engine != nil
+	c.vpnMu.Unlock()
+	if !running || session == nil {
+		return nil, errors.New("VPN is stopped")
+	}
+	ctx, cancel := context.WithTimeout(session, vpn.RefreshTimeout+10*time.Second)
+	defer cancel()
+	online := c.vpnReachability.Observe(vpn.InternetReachable(ctx))
+	return c.refreshVPNConfig(ctx, controller, online)
+}
+
+// Caller holds vpnControl. A failed refresh retains the last device routes,
+// matching iOS; a lost controller ends the session instead of showing a dead VPN.
+func (c *Client) refreshVPNConfig(ctx context.Context, controller vpn.Config, online bool) (*vpn.Config, error) {
+	config, err := vpn.Refresh(ctx, controller, online)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !vpn.Healthy(ctx, controller) {
+			return nil, errors.New("Wendy lost its mesh relay. Turn the VPN off and on again.")
+		}
+		return nil, nil
+	}
+	c.vpnMu.Lock()
+	current := c.vpnConfig.Endpoint
+	c.vpnMu.Unlock()
+	if config.Endpoint == current {
+		return nil, nil
+	}
+	next, err := newVPNEngine(config)
+	if err != nil {
+		return nil, nil
+	}
+	c.vpnMu.Lock()
+	old := c.engine
+	c.engine, c.vpnConfig = next, config
+	c.vpnMu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	return &config, nil
+}
+
+func (c *Client) cancelVPN() {
+	c.vpnMu.Lock()
+	cancel := c.vpnCancel
+	c.vpnMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (c *Client) stopVPN() error {
+	c.cancelVPN()
 	c.vpnControl.Lock()
 	defer c.vpnControl.Unlock()
 	c.vpnMu.Lock()
 	engine := c.engine
-	c.engine = nil
+	c.engine, c.vpnContext, c.vpnCancel = nil, nil, nil
+	c.vpnConfig, c.vpnController = vpn.Config{}, vpn.Config{}
 	c.vpnMu.Unlock()
 	if engine != nil {
 		engine.Close()
