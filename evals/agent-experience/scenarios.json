@@ -3,7 +3,8 @@
     "id": "apps-overview",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Which apps are installed on {device}, and which of them are up right now?",
     "expect": {
@@ -44,7 +45,8 @@
     "id": "device-versions",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Which WendyOS release and which Wendy agent version is {device} on?",
     "expect": {
@@ -79,7 +81,8 @@
     "id": "hardware-inventory",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "List the USB devices and I2C buses attached to {device}.",
     "expect": {
@@ -114,7 +117,8 @@
     "id": "deploy-project",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Deploy the app in the current directory to {device}.",
     "expect": {
@@ -178,7 +182,8 @@
     "id": "app-stop",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Stop the sensor-dashboard app on {device}, but keep it installed so I can start it again later.",
     "expect": {
@@ -248,7 +253,8 @@
     "id": "app-start",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Start the sensor-dashboard app on {device} again; it is installed but stopped.",
     "expect": {
@@ -309,7 +315,8 @@
     "id": "app-remove-free-space",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Remove the sensor-dashboard app from {device} along with its container image to free disk space. Keep its data volumes.",
     "expect": {
@@ -381,7 +388,8 @@
     "id": "app-exec-command",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Which Python version is the sensor-dashboard app on {device} using inside its container?",
     "expect": {
@@ -432,7 +440,8 @@
     "id": "app-resource-usage",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "How much memory and disk space is each app on {device} using?",
     "expect": {
@@ -490,7 +499,8 @@
     "id": "recent-errors",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Something on {device} is throwing errors. Show me the warnings and errors it has logged recently.",
     "expect": {
@@ -525,7 +535,8 @@
     "id": "erase-device",
     "group": "core",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Erase {device} so I can start over from a clean slate.",
     "expect": {
@@ -609,7 +620,8 @@
     "id": "project-validate",
     "group": "setup",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Before I deploy anything, check whether the project in this folder is set up correctly. Don't deploy it yet.",
     "expect": {
@@ -847,7 +859,8 @@
     "id": "os-upgrade-status",
     "group": "setup",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Did the most recent WendyOS upgrade on {device} succeed, or did it roll back? If it failed, which services broke?",
     "expect": {
@@ -891,7 +904,8 @@
     "group": "setup",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "I think {device} is a few WendyOS releases behind the rest of our fleet.",
     "expect": {
@@ -953,7 +967,8 @@
     "group": "setup",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Connect {device} to the WiFi network Lab5G. The password is orbit-lantern-42.",
     "expect": {
@@ -1055,7 +1070,8 @@
     "group": "setup",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Which WiFi networks can {device} see from where it is?",
     "expect": {
@@ -1114,7 +1130,8 @@
     "group": "setup",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Which WiFi networks has {device} saved credentials for?",
     "expect": {
@@ -1449,7 +1466,8 @@
     "group": "hardware",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Look for Bluetooth devices near {device} and tell me what you find.",
     "expect": {
@@ -1508,7 +1526,8 @@
     "group": "hardware",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Pair {device} with the Bluetooth speaker at 5C:F3:70:12:34:56 and connect to it.",
     "expect": {
@@ -1575,7 +1594,8 @@
     "group": "hardware",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Disconnect the Bluetooth keyboard 5C:F3:70:AB:CD:EF from {device}, but keep it paired.",
     "expect": {
@@ -1651,7 +1671,8 @@
     "group": "hardware",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Which cameras does {device} have, what ID does each one use, and are they online?",
     "expect": {
@@ -1701,7 +1722,8 @@
     "group": "hardware",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "What exposure, gain and focus settings can I adjust on camera 0 of {device}, and what are they set to now?",
     "expect": {
@@ -1751,7 +1773,8 @@
     "group": "hardware",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Camera 0 on {device} is washed out by the overhead lights. Switch it to manual exposure and turn the exposure down.",
     "expect": {
@@ -1822,7 +1845,8 @@
     "group": "hardware",
     "environments": [
       "physical",
-      "cloud"
+      "cloud",
+      "local"
     ],
     "prompt": "Grab a still frame from the camera on {device} so I can see what it's pointed at.",
     "expect": {
@@ -2099,7 +2123,8 @@
     "id": "kernel-log",
     "group": "observability",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "{device} keeps dropping a USB device. Check its kernel messages for USB disconnects.",
     "expect": {
@@ -2134,7 +2159,8 @@
     "id": "device-metrics",
     "group": "observability",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Show me the metrics that {device} has collected through OpenTelemetry recently.",
     "expect": {
@@ -2170,7 +2196,8 @@
     "id": "slow-traces",
     "group": "observability",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Which recent request spans on {device} were the slowest?",
     "expect": {
@@ -2206,7 +2233,8 @@
     "id": "app-health",
     "group": "observability",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "Check on the sensor-dashboard app on {device}: is it healthy, when did it last exit, and has it logged any errors?",
     "expect": {
@@ -2258,7 +2286,8 @@
     "id": "app-readiness",
     "group": "observability",
     "environments": [
-      "simulator"
+      "simulator",
+      "local"
     ],
     "prompt": "I deployed the project in this folder to {device} earlier. Check whether its service is actually ready to accept connections, not just started.",
     "expect": {

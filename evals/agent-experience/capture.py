@@ -20,6 +20,8 @@ DEFAULT_DIR = Path(__file__).resolve().parent / "canned"
 
 
 def device_kind(selector):
+    if selector == "local":
+        return "local"
     if selector.startswith("vm:"):
         return "simulator"
     if selector.startswith("cloud://"):

@@ -626,6 +626,74 @@ def rescored_outcome(output, config, scenarios):
     return json.loads((out / "results.jsonl").read_text().splitlines()[0])["tool_choice"]["outcome"]
 
 
+LOCAL_TARGET = {"kind": "local", "device": "local", "prompt_device": "this device", "canned_dir": "canned-local",
+                "capabilities": None, "fixtures": {}}
+LOCAL_SCENARIOS = {
+    "apps-overview", "device-versions", "hardware-inventory", "deploy-project", "app-stop", "app-start",
+    "app-remove-free-space", "app-exec-command", "app-resource-usage", "recent-errors", "erase-device",
+    "project-validate", "os-upgrade-status", "os-upgrade", "wifi-scan", "wifi-saved-networks", "wifi-connect",
+    "bt-scan", "bt-connect", "bt-disconnect", "camera-list", "camera-controls", "camera-exposure", "camera-snapshot",
+    "kernel-log", "device-metrics", "slow-traces", "app-health", "app-readiness"}
+LOCAL_TASKS = {
+    "deploy-http", "repair-startup", "update-http", "stop-app", "start-app", "compose-app", "debug-otel-logs",
+    "debug-otel-metrics", "debug-otel-traces", "debug-ros2", "camera-capture", "camera-repair", "audio-loopback",
+    "peripheral-io"}
+
+
+class LocalTargetTests(unittest.TestCase):
+    def test_private_env_removes_the_socket_by_default(self):
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock", "WENDY_DEVICE": "x"}):
+            env = sc.private_env(Path("/tmp/state"))
+        self.assertNotIn("WENDY_AGENT_SOCKET", env)
+        self.assertNotIn("WENDY_DEVICE", env)
+
+    def test_private_env_keeps_the_socket_only_when_asked(self):
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock", "WENDY_DEVICE": "x"}):
+            env = sc.private_env(Path("/tmp/state"), keep_socket=True)
+        self.assertEqual(env["WENDY_AGENT_SOCKET"], "/run/wendy.sock")
+        self.assertNotIn("WENDY_DEVICE", env)
+
+    def test_is_local_and_canned_dir_for(self):
+        self.assertTrue(sc.is_local(LOCAL_TARGET))
+        self.assertFalse(sc.is_local({"kind": "simulator"}))
+        self.assertEqual(sc.canned_dir_for(LOCAL_TARGET), HERE / "canned-local")
+        self.assertEqual(sc.canned_dir_for({"kind": "simulator"}), sc.CANNED)
+
+    def test_local_scenarios_are_exactly_these(self):
+        tagged = {s["id"] for s in sc.load_scenarios(CATALOG) if "local" in s["environments"]}
+        self.assertEqual(tagged, LOCAL_SCENARIOS)
+        self.assertEqual(len(tagged), 29)
+
+    def test_local_tasks_are_exactly_these(self):
+        tasks = json.loads((HERE / "tasks.json").read_text())
+        self.assertEqual({t["id"] for t in tasks if "local" in t["environments"]}, LOCAL_TASKS)
+
+    def test_existing_environments_unchanged(self):
+        scenarios = {s["id"]: s for s in sc.load_scenarios(CATALOG)}
+        tasks = {t["id"]: t for t in json.loads((HERE / "tasks.json").read_text())}
+        self.assertIn("simulator", scenarios["app-stop"]["environments"])
+        self.assertEqual(set(tasks["deploy-http"]["environments"]), {"simulator", "cloud", "physical", "local"})
+
+    def test_local_prompt_says_this_device(self):
+        scenario = {s["id"]: s for s in sc.load_scenarios(CATALOG)}["erase-device"]
+        variables = {"device": "local"}
+        self.assertEqual(b.expand(scenario["prompt"], b.prompt_variables(variables, LOCAL_TARGET)),
+                         "Erase this device so I can start over from a clean slate.")
+        self.assertEqual(b.expand(["verify", "--device", "{device}"], variables), ["verify", "--device", "local"])
+        self.assertEqual(b.prompt_variables(variables, {"kind": "simulator"}), variables)
+
+    def test_readiness_reads_the_targets_canned_dir(self):
+        scenario = dict(sc.DEFAULTS, id="probe", canned_set="probe", captures=["container_list"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = dict(LOCAL_TARGET, canned_dir=os.path.relpath(root / "canned-local", HERE))
+            (root / "canned-local" / "probe").mkdir(parents=True)
+            (root / "canned-local" / "probe" / "container_list.json").write_text(json.dumps({"replies": [CAPTURED]}))
+            self.assertIsNone(sc.scenario_readiness(scenario, target, sc.canned_dir_for(target)))
+            self.assertIn("not captured", sc.scenario_readiness(scenario, {"kind": "simulator"},
+                                                                sc.canned_dir_for({"kind": "simulator"}, root / "empty")))
+
+
 class MainTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -676,6 +744,19 @@ class MainTests(unittest.TestCase):
         self.assertEqual(coverage, [{"task": "wifi", "kind": "scenario", "target": "board", "status": "unconfigured",
                                      "reason": "capabilities not checked (add --execute)"}])
         self.assertIn("Plan only: 0 trials", text)
+
+    def test_plan_only_lists_local_scenarios_not_run_reasons(self):
+        config = json.loads(self.config.read_text())
+        config["targets"]["local"] = dict(LOCAL_TARGET)
+        self.config.write_text(json.dumps(config))
+        self.scenarios.write_text(json.dumps([
+            MINIMAL, dict(MINIMAL, id="sim-list", group="simulator"),
+            dict(MINIMAL, id="on-local", environments=["simulator", "local"])]))
+        code, text = self.main("--scenario", "all", "--target", "local", "--repetitions", "1")
+        self.assertEqual(code, 0)
+        coverage = {c["task"]: c for c in json.loads(text[:text.index("\n}\n") + 2])["coverage"]}
+        self.assertEqual(coverage["sim-list"]["reason"], "no matching target configured")
+        self.assertEqual(coverage["on-local"]["target"], "local")
 
     def test_device_requires_scenario(self):
         with self.assertRaises(SystemExit):

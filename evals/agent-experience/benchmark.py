@@ -34,6 +34,13 @@ def dump(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def prompt_variables(variables, target):
+    """The variables a prompt expands with: a target may name its device differently to the model."""
+    if target.get("prompt_device"):
+        return {**variables, "device": target["prompt_device"]}
+    return variables
+
+
 def expand(value, variables):
     if isinstance(value, str):
         for name, replacement in variables.items():
@@ -628,9 +635,10 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                       "target_config": directory / "target.json"})
     dump(directory / "target.json", target)
     resolved = expand(task, variables)
+    resolved["prompt"] = expand(task["prompt"], prompt_variables(variables, target))
     resolved["prompt"] += f"\nThe Wendy executable for this environment is {wendy}. Use that absolute path for Wendy CLI commands."
     if config.get("environment_context"):
-        resolved["prompt"] += "\n" + expand(config["environment_context"], variables)
+        resolved["prompt"] += "\n" + expand(config["environment_context"], prompt_variables(variables, target))
     if state_dir is not None:
         resolved["prompt"] += (f"\nWendy device/cloud configuration and its VM store are isolated at {state_dir} "
                                "through WENDY_CONFIG_DIR. Preserve that environment setting. Do not change the host's ~/.wendy configuration or identity pins.")
@@ -886,7 +894,7 @@ def main():
         return 0
     # A board's capabilities (null, as for --device) are read only under --execute; until then its
     # hardware scenarios wait.
-    detect = [name for name in targets if config["targets"][name]["kind"] in ("physical", "cloud")
+    detect = [name for name in targets if config["targets"][name]["kind"] in ("physical", "cloud", "local")
               and "capabilities" in config["targets"][name] and config["targets"][name]["capabilities"] is None
               and any(config["targets"][name]["kind"] in s["environments"]
                       for s in scenarios if s["id"] in selected_scenarios)]
@@ -923,9 +931,9 @@ def main():
             parser.error(f'{name} must run chat through the shim: start its command with "{{wendy}}"')
     for name in {target for _, _, target, _ in plan} | set(detect):
         target = config["targets"][name]
-        if target["kind"] not in ("simulator", "cloud", "physical"):
+        if target["kind"] not in ("simulator", "cloud", "physical", "local"):
             parser.error(f"unknown environment for {name}")
-        expected = {"cloud": "cloud://", "simulator": "vm:", "physical": ""}[target["kind"]]
+        expected = {"cloud": "cloud://", "simulator": "vm:", "physical": "", "local": ""}[target["kind"]]
         if not target.get("device") or not target["device"].startswith(expected) or "SET_" in target["device"]:
             parser.error(f"{name} requires an explicit {expected} selector")
     reserve = config.get("scenario_reserve_usd", .5)
@@ -1069,7 +1077,7 @@ def main():
             elif kind == "scenario":
                 row = sc.scenario_trial(config, agent, target, task, output, wendy, shim,
                                         run_vms.get(task["vm_profile"]) if on_vm else None,
-                                        output / "tools.json", sc.CANNED, treatment_root)
+                                        output / "tools.json", sc.canned_dir_for(config["targets"][target]), treatment_root)
             else:
                 row = trial(config, agent, target, task, output, wendy, treatment_root)
             rows.append(row)

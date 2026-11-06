@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 CANNED = HERE / "canned"
 CLI_SAFE = HERE / "cli_safe.json"
 GROUPS = ("core", "setup", "simulator", "hardware", "robotics", "observability", "cloud")
-ENVIRONMENTS = ("simulator", "physical", "cloud")
+ENVIRONMENTS = ("simulator", "physical", "cloud", "local")
 VM_PROFILES = ("generic", "go2", "g1")
 REQUIRED = ("id", "group", "environments", "prompt", "expect")
 DEFAULTS = {"timeout_seconds": 180, "max_tool_calls": 20, "canned": [], "captures": [], "allow_real": [],
@@ -205,7 +205,7 @@ def scenario_coverage(scenarios, targets, selected, selected_targets, canned_dir
             coverage.append({"task": scenario["id"], "kind": "scenario", "target": None,
                              "status": "unconfigured", "reason": "no matching target configured"})
         for name in matching:
-            reason = scenario_readiness(scenario, targets[name], canned_dir, prerequisites)
+            reason = scenario_readiness(scenario, targets[name], canned_dir_for(targets[name], canned_dir), prerequisites)
             coverage.append({"task": scenario["id"], "kind": "scenario", "target": name,
                              "status": "unconfigured" if reason else "ready", "reason": reason})
     return coverage
@@ -287,11 +287,23 @@ def _is_camera(cap):
             and not driver.startswith(NON_CAMERA_DRIVERS))
 
 
-def private_env(state):
+def is_local(target):
+    """True for the target where the agent runs on the device it manages, over WENDY_AGENT_SOCKET."""
+    return target.get("kind") == "local"
+
+
+def canned_dir_for(target, default=CANNED):
+    """The target's own canned replies (relative to this directory), else default."""
+    return HERE / target["canned_dir"] if target.get("canned_dir") else default
+
+
+def private_env(state, keep_socket=False):
     env = dict(os.environ, WENDY_ANALYTICS="false", WENDY_CONFIG_DIR=str(state), WENDY_SECRET_STORE="file")
-    # A read without --device must not fall back to the developer's device or an agent socket.
-    for name in ("WENDY_DEVICE", "WENDY_AGENT_SOCKET"):
-        env.pop(name, None)
+    # A read without --device must not fall back to the developer's device, nor to an agent socket
+    # unless the target is the device this process runs on.
+    env.pop("WENDY_DEVICE", None)
+    if not keep_socket:
+        env.pop("WENDY_AGENT_SOCKET", None)
     return env
 
 
@@ -300,7 +312,7 @@ def detect_board(wendy, target, timeout=120):
     state = b.isolated_device_state(target)
     evidence = {"device": target["device"]}
     try:
-        with StdioMCP([wendy, "mcp", "serve"], env=private_env(state), timeout=timeout) as mcp:
+        with StdioMCP([wendy, "mcp", "serve"], env=private_env(state, keep_socket=is_local(target)), timeout=timeout) as mcp:
             mcp.initialize()
             evidence["device_connect"] = mcp.call("device_connect", {"device": target["device"]})
             if evidence["device_connect"].get("isError"):
@@ -463,7 +475,7 @@ def _target_snapshot(wendy, device, target, run_vm):
         return vm_snapshot(wendy, device, private_env(run_vm["state"]))
     state = b.isolated_device_state(target)
     try:
-        return vm_snapshot(wendy, device, private_env(state))
+        return vm_snapshot(wendy, device, private_env(state, keep_socket=is_local(target)))
     finally:
         shutil.rmtree(state, ignore_errors=True)
 
@@ -533,10 +545,10 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
                      "evidence_dir": directory, "agent_events": directory / "agent.stdout",
                      "target_config": directory / "target.json"}
         b.dump(directory / "target.json", target)
-        prompt = b.expand(scenario["prompt"], variables)
+        prompt = b.expand(scenario["prompt"], b.prompt_variables(variables, target))
         prompt += f"\nThe Wendy executable for this environment is {shim}. Use that absolute path for Wendy CLI commands."
         if config.get("environment_context"):
-            prompt += "\n" + b.expand(config["environment_context"], variables)
+            prompt += "\n" + b.expand(config["environment_context"], b.prompt_variables(variables, target))
         prompt += (f"\nWendy device/cloud configuration and its VM store are isolated at {state} "
                    "through WENDY_CONFIG_DIR. Preserve that environment setting. Do not change the host's ~/.wendy configuration or identity pins.")
         variables["prompt"] = prompt
@@ -551,7 +563,7 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
             "context": {"device": device, "vm_name": run_vm["name"] if run_vm is not None else ""},
             "proxy_log": str(proxy_log), "cli_log": str(cli_log),
             "cli_safe": str(CLI_SAFE), "shim": shim})
-        env = private_env(state)
+        env = private_env(state, keep_socket=is_local(target))
         env["WENDY_EVAL_SCENARIO"] = str(scenario_config)
         env["PATH"] = str(Path(shim).parent) + os.pathsep + env.get("PATH", "")
         try:
