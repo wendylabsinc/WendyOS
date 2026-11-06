@@ -25,6 +25,8 @@ struct MobileRecordingEpisode: Identifiable, Equatable {
     let synced: Bool?
     let topics: [String]
     var detailsLoaded = false
+    var previewFile: String?
+    var previewCounts: [UInt64] = []
     static let detailBatchLimit = 64
 
     // Agents retain the actual event name in the trigger reason. Keep custom
@@ -100,8 +102,11 @@ extension GoClient {
     private static let recordingQueue = DispatchQueue(label: "dev.wendy.recording-library",
                                                         qos: .userInitiated, attributes: .concurrent)
 
+    // One automatic media read at a time, independent of catalog and playback.
+    private static let thumbnailQueue = DispatchQueue(label: "dev.wendy.recording-thumbnails", qos: .utility)
+
     private func readRecordings<T: Sendable>(
-        device: Device, _ operation: @escaping @Sendable (UInt64, UnsafeMutablePointer<CChar>, Int32) throws -> T
+        device: Device, queue: DispatchQueue = GoClient.recordingQueue, _ operation: @escaping @Sendable (UInt64, UnsafeMutablePointer<CChar>, Int32) throws -> T
     ) async throws -> T {
         guard !device.lite else { throw WendyError(message: "Wendy Lite does not store recordings.") }
         try Task.checkCancellation()
@@ -109,7 +114,7 @@ extension GoClient {
         guard request != 0 else { throw WendyError(message: "Recording access is paused. Refresh to try again.") }
         defer { WDEndRecordingRead(request) }
         return try await withTaskCancellationHandler {
-            try await BlockingWork.run(on: Self.recordingQueue) {
+            try await BlockingWork.run(on: queue) {
                 try Self.withCString(device.selector) { selector in
                     try operation(request, selector, device.requiresMTLS ? 1 : 0)
                 }
@@ -177,7 +182,25 @@ extension GoClient {
             bytes: index?.bytes ?? row.size_bytes, duration: row.duration_seconds < 0 ? nil : row.duration_seconds,
             trigger: MobileRecordingEpisode.triggerLabel(string(row.trigger)),
             kind: MobileRecordingKind(agentKind: string(row.kind)), synced: synced,
-            topics: string(row.topics).split(separator: "\n").map(String.init), detailsLoaded: row.details_loaded != 0)
+            topics: string(row.topics).split(separator: "\n").map(String.init), detailsLoaded: row.details_loaded != 0,
+            previewFile: row.preview_file.map { String(cString: $0) },
+            previewCounts: Array(UnsafeBufferPointer(start: row.preview_counts, count: row.preview_count)))
+    }
+
+    func recordingThumbnail(device: Device, episode: String, file: String) async throws -> (String, Data) {
+        try await readRecordings(device: device, queue: Self.thumbnailQueue) { request, selector, secure in
+            try Self.withCString(episode) { id in
+                try Self.withCString(file) { descriptor in
+                    guard let p = WDRecordingThumbnail(request, selector, secure, id, descriptor) else {
+                        throw WendyError(message: "Missing thumbnail.")
+                    }
+                    defer { WDRecordingThumbnailFree(p) }
+                    try Self.check(p.pointee.status)
+                    guard let bytes = p.pointee.bytes, p.pointee.count > 0 else { throw WendyError(message: "Empty thumbnail.") }
+                    return (Self.string(p.pointee.format), Data(bytes: bytes, count: p.pointee.count))
+                }
+            }
+        }
     }
 
     func visualEpisode(device: Device, episode: String) async throws -> DataVisualSnapshot {

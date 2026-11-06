@@ -226,11 +226,11 @@ func TestRecordingLibraryContinuesMissingDetailsWithoutRelisting(t *testing.T) {
 }
 
 func TestRecordingLibrarySnapshotCampaignIsImagesDespiteDerivedMovie(t *testing.T) {
-	m := &data.Manifest{Sources: []data.SourceStats{{Source: data.Source{Kind: "camera"}}}, Files: []data.File{{Path: "cameras/front/snapshot-000001.h264"}, {Path: "cameras/front/playable.mp4"}}}
+	m := &data.Manifest{Sources: []data.SourceStats{{Source: data.Source{Kind: "camera"}}}, Files: []data.File{{Path: "cameras/front/snapshot-000001.h264", Size: 100}, {Path: "cameras/front/playable.mp4"}}}
 	if kind, _ := recordingKind(m); kind != "images" {
 		t.Fatalf("snapshot-only campaign appeared as %s", kind)
 	}
-	m.Files = append(m.Files, data.File{Path: "cameras/rear/segment-000001.h264"})
+	m.Files = append(m.Files, data.File{Path: "cameras/rear/segment-000001.h264", Size: 100})
 	if kind, _ := recordingKind(m); kind != "video" {
 		t.Fatalf("mixed cameras appeared as %s", kind)
 	}

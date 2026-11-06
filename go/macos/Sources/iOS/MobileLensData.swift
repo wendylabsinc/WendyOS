@@ -259,6 +259,6 @@ struct MobileLensData: View {
             .presentationDetents([.height(640), .large]).presentationCornerRadius(38).presentationDragIndicator(.visible)
             .presentationBackground(MobileLensStyle.background)
         }
-        .environment(\.recordingPosters, posters)
+        .environment(\.recordingPosters, key.active ? posters : nil)
     }
 }

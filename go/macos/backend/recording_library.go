@@ -95,6 +95,8 @@ func (b *Backend) recordingConnection(id uint64, selector string, secure bool, l
 type RecordingEpisode struct {
 	ID, Title, Trigger, Kind, UploadState string
 	Topics                                []string
+	PreviewCounts                         []uint64
+	PreviewFile                           *data.File
 	Started, Bytes                        int64
 	Duration                              float64 // -1 when unavailable
 	DetailsLoaded                         bool
@@ -214,6 +216,7 @@ func summarizeRecording(e *pb.DataEpisode, m *data.Manifest) RecordingEpisode {
 		row.DetailsLoaded = true
 		row.Trigger, row.Duration, row.UploadState = m.Trigger.Reason, savedDuration(m), m.Upload.State
 		row.Kind, row.Topics = recordingKind(m)
+		row.PreviewCounts, row.PreviewFile = recordingPreview(m, row.Kind)
 	}
 	return row
 }
@@ -322,22 +325,36 @@ func savedDuration(m *data.Manifest) float64 {
 	return -1
 }
 func recordingKind(m *data.Manifest) (string, []string) {
-	var camera, video, audio, images, ros bool
+	var camera, video, movie, audio, images, snapshots, ros bool
 	var topics []string
 	// Snapshot-mode campaigns save individual keyframes under cameras/, even
 	// if they also produce a derived playable file for the viewer.
 	for _, file := range m.Files {
+		if file.Size <= 0 {
+			continue
+		}
+		switch RecordingPreviewFormat(file) {
+		case "image":
+			images = true
+		case "video":
+			movie = movie || strings.EqualFold(path.Ext(file.Path), ".mp4")
+		case "audio":
+			audio = true
+		}
 		if !strings.HasPrefix(file.Path, "cameras/") {
 			continue
 		}
 		switch name := path.Base(file.Path); {
 		case strings.HasPrefix(name, "snapshot-"):
-			images = true
+			snapshots = true
 		case strings.HasPrefix(name, "segment-"):
 			video = true
 		}
 	}
 	for _, s := range m.Sources {
+		if s.Count == 0 {
+			continue
+		}
 		switch s.Source.Kind {
 		case "ros2":
 			ros = true
@@ -355,12 +372,12 @@ func recordingKind(m *data.Manifest) (string, []string) {
 		}
 	}
 	switch {
-	case video || (camera && !images):
+	case video || ((camera || movie) && !snapshots):
 		return "video", nil
+	case images || snapshots:
+		return "images", nil
 	case ros:
 		return "rosbag", topics
-	case images:
-		return "images", nil
 	case audio:
 		return "audio", nil
 	default:

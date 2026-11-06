@@ -158,18 +158,30 @@ func visualWAVPeaks(filename string, row visualAudioIndex) ([]float64, error) {
 		return nil, err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return readWAVPeaks(f, info.Size(), &row)
+}
+
+func readWAVPeaks(f io.Reader, size int64, row *visualAudioIndex) ([]float64, error) {
 	var h [44]byte
-	if _, err = io.ReadFull(f, h[:]); err != nil {
+	if _, err := io.ReadFull(f, h[:]); err != nil {
 		return nil, err
 	}
 	rate := binary.LittleEndian.Uint32(h[24:])
 	channels := binary.LittleEndian.Uint16(h[22:])
 	n := binary.LittleEndian.Uint32(h[40:])
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
+	if string(h[:4]) != "RIFF" || string(h[8:16]) != "WAVEfmt " || string(h[36:40]) != "data" ||
+		binary.LittleEndian.Uint32(h[16:]) != 16 || binary.LittleEndian.Uint16(h[20:]) != 1 || binary.LittleEndian.Uint16(h[34:]) != 16 ||
+		rate == 0 || rate > 384000 || rate%20 != 0 || channels == 0 || channels > 8 ||
+		binary.LittleEndian.Uint32(h[28:]) != rate*uint32(channels)*2 || binary.LittleEndian.Uint16(h[32:]) != channels*2 ||
+		size != int64(n)+44 || uint64(binary.LittleEndian.Uint32(h[4:])) != uint64(n)+36 || n%uint32(channels*2) != 0 {
+		return nil, errors.New("unsupported PCM audio header or length")
 	}
-	if string(h[:4]) != "RIFF" || string(h[8:16]) != "WAVEfmt " || binary.LittleEndian.Uint32(h[16:]) != 16 || binary.LittleEndian.Uint16(h[20:]) != 1 || binary.LittleEndian.Uint16(h[34:]) != 16 || string(h[36:40]) != "data" || binary.LittleEndian.Uint32(h[4:]) != n+36 || binary.LittleEndian.Uint32(h[28:]) != rate*uint32(channels)*2 || binary.LittleEndian.Uint16(h[32:]) != channels*2 || rate == 0 || rate > 384000 || rate%20 != 0 || channels == 0 || channels > 8 || rate != row.Rate || uint32(channels) != row.Channels || int64(n) != row.Bytes || info.Size() != int64(n)+44 || n%uint32(channels*2) != 0 || int64(n)*1e9/int64(rate)/int64(channels*2) != row.Duration {
+	if row != nil && (rate != row.Rate || uint32(channels) != row.Channels || int64(n) != row.Bytes ||
+		int64(n)*1e9/int64(rate)/int64(channels*2) != row.Duration) {
 		return nil, errors.New("audio header or duration does not match its index")
 	}
 	block := make([]byte, int(rate/20)*int(channels)*2)

@@ -5,12 +5,14 @@ package main
 */
 import "C"
 import (
+	"encoding/json"
 	"errors"
-
-	"github.com/wendylabsinc/wendy/go/macos/backend"
 	"os"
 	"strings"
 	"unsafe"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/macos/backend"
 )
 
 //export WDBeginRecordingRead
@@ -43,6 +45,17 @@ func recordingLibraryResult(lib backend.RecordingLibrary, err error) *C.WDRecord
 	for i, r := range lib.Episodes {
 		row := &unsafe.Slice(p.items, len(lib.Episodes))[i]
 		*row = C.WDRecordingEpisode{id: C.CString(r.ID), title: C.CString(r.Title), trigger: C.CString(r.Trigger), kind: C.CString(r.Kind), upload_state: C.CString(r.UploadState), topics: C.CString(strings.Join(r.Topics, "\n")), started_ns: C.int64_t(r.Started), size_bytes: C.int64_t(r.Bytes), duration_seconds: C.double(r.Duration)}
+		if r.PreviewFile != nil {
+			descriptor, _ := json.Marshal(r.PreviewFile)
+			row.preview_file = C.CString(string(descriptor))
+		}
+		if len(r.PreviewCounts) > 0 {
+			row.preview_counts = alloc[C.uint64_t](len(r.PreviewCounts))
+			row.preview_count = C.size_t(len(r.PreviewCounts))
+			for j, count := range r.PreviewCounts {
+				unsafe.Slice(row.preview_counts, len(r.PreviewCounts))[j] = C.uint64_t(count)
+			}
+		}
 		if r.DetailsLoaded {
 			row.details_loaded = 1
 		}
@@ -62,11 +75,42 @@ func WDRecordingLibraryFree(p *C.WDRecordingLibraryResult) {
 		free(r.kind)
 		free(r.upload_state)
 		free(r.topics)
+		free(r.preview_counts)
+		free(r.preview_file)
 	}
 	free(p.warning)
 	free(p.model)
 	free(p.items)
 	free(p.status.message)
+	free(p)
+}
+
+//export WDRecordingThumbnail
+func WDRecordingThumbnail(request C.uint64_t, selector *C.char, secure C.int32_t, episode, descriptor *C.char) *C.WDRecordingThumbnailResult {
+	p := alloc[C.WDRecordingThumbnailResult](1)
+	var file data.File
+	if err := json.Unmarshal([]byte(C.GoString(descriptor)), &file); err != nil {
+		p.status = status(err)
+		return p
+	}
+	payload, err := desktop.RecordingThumbnail(uint64(request), C.GoString(selector), secure != 0, C.GoString(episode), file)
+	p.status = status(err)
+	if err == nil {
+		p.format = C.CString(backend.RecordingPreviewFormat(file))
+		p.bytes = (*C.uint8_t)(C.CBytes(payload))
+		p.count = C.size_t(len(payload))
+	}
+	return p
+}
+
+//export WDRecordingThumbnailFree
+func WDRecordingThumbnailFree(p *C.WDRecordingThumbnailResult) {
+	if p == nil {
+		return
+	}
+	free(p.status.message)
+	free(p.format)
+	free(p.bytes)
 	free(p)
 }
 

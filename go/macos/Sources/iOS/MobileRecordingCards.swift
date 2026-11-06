@@ -137,67 +137,109 @@ struct RecordingThumbnail: View {
     let device: Device
     let episode: MobileRecordingEpisode
     @Environment(\.recordingPosters) private var posters
-    var body: some View {
-        ZStack {
-            if let poster = posters?.image(device: device, episode: episode.id) {
-                GeometryReader { proxy in
-                    Image(uiImage: poster).resizable().scaledToFill().frame(width: proxy.size.width, height: proxy.size.height)
-                }
-            } else { artwork }
-        }.clipped().accessibilityHidden(true)
+    @State private var visible = false
+
+    private struct Request: Equatable {
+        let device, episode, file: String
+    }
+    private var request: Request? {
+        guard visible, posters != nil, let file = episode.previewFile else { return nil }
+        return Request(device: device.selector, episode: episode.id, file: file)
     }
 
-    @ViewBuilder private var artwork: some View {
+    var body: some View {
+        let poster = posters?.poster(device: device, episode: episode.id)
         ZStack {
-            switch episode.kind {
-            case .video:
-                Color(red: 36/255, green: 43/255, blue: 53/255)
-                Canvas { context, size in
-                    for x in stride(from: -size.height, to: size.width, by: 16) {
-                        var line = Path(); line.move(to: CGPoint(x: x, y: size.height)); line.addLine(to: CGPoint(x: x + size.height, y: 0))
-                        context.stroke(line, with: .color(.white.opacity(0.045)), lineWidth: 7)
-                    }
+            if case .image(let image) = poster {
+                GeometryReader { proxy in
+                    Image(uiImage: image).resizable().scaledToFill().frame(width: proxy.size.width, height: proxy.size.height)
                 }
-            case .audio:
-                Color(red: 0.92, green: 0.90, blue: 0.99)
-                Canvas { context, size in
-                    let bars = [0.22, 0.47, 0.31, 0.73, 0.91, 0.55, 0.69, 0.36, 0.20]
-                    let step = (size.width - 12) / CGFloat(bars.count)
-                    for (i, level) in bars.enumerated() {
-                        let h = level * size.height * 0.80
-                        let bar = CGRect(x: 6 + CGFloat(i) * step, y: (size.height - h) / 2, width: max(1, step - 2), height: h)
-                        context.fill(Path(roundedRect: bar, cornerRadius: 2), with: .color(.purple))
-                    }
-                }
-            case .rosbag:
-                Color(red: 0.12, green: 0.16, blue: 0.20)
-                Canvas { context, size in
-                    let colors: [Color] = [.mint, .cyan, .orange]
-                    for (index, color) in colors.enumerated() {
-                        let y = (CGFloat(index) + 1) * size.height / 4
-                        for n in 0..<4 {
-                            let w = (size.width - 14) / 4, x = 7 + CGFloat(n) * w
-                            let bar = CGRect(x: x, y: y - 2, width: max(1, w - 2), height: 4)
-                            context.fill(Path(roundedRect: bar, cornerRadius: 2), with: .color(color.opacity(n == index ? 0.4 : 0.8)))
+            } else {
+                switch episode.kind {
+                case .video:
+                    Color(red: 36/255, green: 43/255, blue: 53/255)
+                    Canvas { context, size in
+                        for x in stride(from: -size.height, to: size.width, by: 20) {
+                            var line = Path(); line.move(to: CGPoint(x: x, y: size.height)); line.addLine(to: CGPoint(x: x + size.height, y: 0))
+                            context.stroke(line, with: .color(.white.opacity(0.035)), lineWidth: 8)
                         }
                     }
-                }
-            case .images:
-                Color(red: 0.87, green: 0.85, blue: 0.80)
-                Image(systemName: "photo.stack.fill").font(.title).foregroundStyle(Color(white: 0.55))
-            case .dataset:
-                Color(red: 0.82, green: 0.90, blue: 0.85)
-                Canvas { context, size in
-                    let gap: CGFloat = 3, w = (size.width - 20 - 3 * gap) / 4, h = (size.height - 16 - 2 * gap) / 3
-                    for i in 0..<12 {
-                        let rect = CGRect(x: 10 + CGFloat(i % 4) * (w + gap), y: 8 + CGFloat(i / 4) * (h + gap), width: w, height: h)
-                        context.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(MobileLensStyle.green.opacity(0.24 + Double(i % 4) * 0.12)))
+                case .audio:
+                    Color(red: 232/255, green: 246/255, blue: 238/255)
+                    if case .waveform(let peaks) = poster { waveform(peaks) }
+                    else { Image(systemName: "speaker.wave.2").font(.title3).foregroundStyle(MobileLensStyle.green) }
+                case .rosbag:
+                    RecordingAppearance.ink
+                    topicBars
+                case .images:
+                    Color(red: 230/255, green: 226/255, blue: 216/255)
+                    GeometryReader { proxy in
+                        ZStack {
+                            photo(0xC9C4B8).rotationEffect(.degrees(6)).offset(x: 4, y: -3)
+                            photo(0xB8B2A5).rotationEffect(.degrees(-4)).offset(x: -3)
+                            photo(0x9A978F).offset(y: 3)
+                        }.frame(width: proxy.size.width * 0.46, height: proxy.size.height * 0.52)
+                            .position(x: proxy.size.width/2, y: proxy.size.height/2)
                     }
+                case .dataset:
+                    Color(white: 249/255)
+                    datasetGrid
+                case .unknown:
+                    Color.secondary.opacity(0.12)
+                    Image(systemName: "cylinder.split.1x2").font(.title3).foregroundStyle(.secondary)
                 }
-            case .unknown:
-                Color.secondary.opacity(0.12)
-                Image(systemName: "cylinder.split.1x2").font(.title3).foregroundStyle(.secondary)
+            }
+        }.clipped().accessibilityHidden(true)
+            .onScrollVisibilityChange(threshold: 0.05) { visible = $0 }
+            .task(id: request) {
+                if let request { await posters?.load(device: device, episode: request.episode, file: request.file) }
+            }
+    }
+
+    private var mint: Color { Color(red: 159/255, green: 226/255, blue: 191/255) }
+    private func waveform(_ peaks: [UInt8]) -> some View {
+        Canvas { context, size in
+            let step = (size.width - 12) / CGFloat(max(1, peaks.count))
+            for (i, peak) in peaks.enumerated() {
+                let h = max(2, CGFloat(peak)/255 * (size.height - 10))
+                let bar = CGRect(x: 6 + CGFloat(i) * step, y: (size.height-h)/2, width: max(1, step-1), height: h)
+                context.fill(Path(roundedRect: bar, cornerRadius: 2), with: .color(MobileLensStyle.green))
             }
         }
+    }
+    // One meter per recorded topic. Width encodes its message count relative
+    // to the busiest topic; the manifest does not promise a message timeline.
+    private var topicBars: some View {
+        Canvas { context, size in
+            let counts = episode.previewCounts.prefix(3)
+            let maxCount = Double(max(1, counts.max() ?? 1))
+            let colors = [MobileLensStyle.green, mint, Color(red: 1, green: 149/255, blue: 0)]
+            for (i, count) in counts.enumerated() {
+                let y = counts.count == 1 ? (size.height - 6)/2 : 8 + CGFloat(i) * (size.height - 22)/CGFloat(max(1, counts.count-1))
+                let track = CGRect(x: 6, y: y, width: size.width-12, height: 6)
+                context.fill(Path(roundedRect: track, cornerRadius: 2), with: .color(.white.opacity(0.10)))
+                let bar = CGRect(x: track.minX, y: y, width: max(3, track.width * Double(count)/maxCount), height: 6)
+                context.fill(Path(roundedRect: bar, cornerRadius: 2), with: .color(colors[i]))
+            }
+        }
+    }
+
+    private var datasetGrid: some View {
+        Canvas { context, size in
+            let counts = episode.previewCounts.prefix(12), peak = counts.max() ?? 0
+            let gap: CGFloat = 3, w = (size.width-16-5*gap)/6, h = (size.height-16-gap)/2
+            for i in 0..<12 {
+                let count = i < counts.count ? counts[i] : 0
+                let color = count == 0 ? Color(red: 230/255, green: 226/255, blue: 216/255) : count == peak ? MobileLensStyle.green : mint
+                let rect = CGRect(x: 8+CGFloat(i%6)*(w+gap), y: 8+CGFloat(i/6)*(h+gap), width: w, height: h)
+                context.fill(Path(roundedRect: rect, cornerRadius: 3), with: .color(color))
+            }
+        }
+    }
+
+    private func photo(_ rgb: Int) -> some View {
+        RoundedRectangle(cornerRadius: 5)
+            .fill(Color(red: Double(rgb >> 16)/255, green: Double((rgb >> 8) & 255)/255, blue: Double(rgb & 255)/255))
+            .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(.white, lineWidth: 2) }
     }
 }
