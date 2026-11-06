@@ -34,6 +34,16 @@ service DataService {
   rpc Episodes(DataEpisodesRequest) returns (DataEpisodesResponse);
   rpc Inspect(DataInspectRequest) returns (DataInspectResponse);
   rpc Download(DataDownloadRequest) returns (stream DataDownloadChunk);
+  // DeleteEpisode permanently removes one finalized episode from the device:
+  // its manifest and every file it recorded. It cannot be undone, and an
+  // episode that had not been uploaded is lost for good, so callers confirm
+  // with the operator first. It is what `wendy data delete` calls.
+  // FAILED_PRECONDITION while the episode is still recording, draining or
+  // sealing, or while a Download or the upload worker is reading it; NOT_FOUND
+  // if the device holds no finalized episode with that ID. The episode leaves
+  // the store atomically: a delete interrupted by a crash or power cut is
+  // finished when the agent next starts, never left half done.
+  rpc DeleteEpisode(DataDeleteEpisodeRequest) returns (DataDeleteEpisodeResponse);
   rpc CampaignDeploy(DataCampaignDeployRequest) returns (DataCampaign);
   rpc Campaigns(DataCampaignsRequest) returns (DataCampaignsResponse);
   rpc CampaignInspect(DataCampaignInspectRequest) returns (DataCampaign);
@@ -173,6 +183,15 @@ message DataEpisodesResponse {
   bool reports_in_progress = 3;
 }
 message DataInspectResponse { bytes manifest_json = 1; repeated string verification_errors = 2; }
+message DataDeleteEpisodeRequest { string episode = 1; }
+message DataDeleteEpisodeResponse {
+  // The episode as it was listed just before it was deleted.
+  DataEpisode episode = 1;
+  // Its upload state when it was deleted: "uploaded" means a copy exists at
+  // its upload destination; "local", "pending", "uploading" and "failed" mean
+  // the deleted bytes were the only copy.
+  string upload_state = 2;
+}
 // One chunk of one file of an episode.
 //
 // size and sha256 describe the WHOLE FILE, not this chunk, and both are

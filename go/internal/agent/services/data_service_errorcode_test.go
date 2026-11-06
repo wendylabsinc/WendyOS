@@ -31,6 +31,8 @@ func TestDataStatusErrorClassification(t *testing.T) {
 		{"absent episode", os.ErrNotExist, codes.NotFound},
 		{"no active episode", data.ErrNoActiveEpisode, codes.FailedPrecondition},
 		{"entry not regular", data.ErrEpisodeEntryNotRegular, codes.FailedPrecondition},
+		{"delete while in progress", data.ErrEpisodeInProgress, codes.FailedPrecondition},
+		{"delete while being read", data.ErrEpisodeBeingRead, codes.FailedPrecondition},
 		{"io failure", errors.New("disk exploded"), codes.Internal},
 	}
 	for _, tc := range cases {
@@ -78,6 +80,61 @@ func TestInspectErrorCodes(t *testing.T) {
 	}
 	if _, err := service.Inspect(context.Background(), &agentpbv2.DataInspectRequest{Episode: id, Verify: true}); err != nil {
 		t.Fatalf("present episode should inspect cleanly: %v", err)
+	}
+}
+
+func TestDeleteEpisodeCodesAndResponse(t *testing.T) {
+	service, id := sealedEpisode(t)
+	ctx := context.Background()
+
+	if _, err := service.DeleteEpisode(ctx, &agentpbv2.DataDeleteEpisodeRequest{Episode: "bad/id"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("invalid episode id: code = %s, want InvalidArgument (%v)", status.Code(err), err)
+	}
+	if _, err := service.DeleteEpisode(ctx, &agentpbv2.DataDeleteEpisodeRequest{Episode: ".recordings"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("store bookkeeping: code = %s, want InvalidArgument (%v)", status.Code(err), err)
+	}
+	if _, err := service.DeleteEpisode(ctx, &agentpbv2.DataDeleteEpisodeRequest{Episode: "does-not-exist"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("absent episode: code = %s, want NotFound (%v)", status.Code(err), err)
+	}
+
+	service.manager.BeginDownload(id)
+	if _, err := service.DeleteEpisode(ctx, &agentpbv2.DataDeleteEpisodeRequest{Episode: id}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("episode being read: code = %s, want FailedPrecondition (%v)", status.Code(err), err)
+	}
+	service.manager.EndDownload(id)
+
+	recording, err := service.manager.Start(data.StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.DeleteEpisode(ctx, &agentpbv2.DataDeleteEpisodeRequest{Episode: recording.ID}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("episode recording: code = %s, want FailedPrecondition (%v)", status.Code(err), err)
+	}
+	if _, err := service.manager.Stop(data.AdHocEpisodeKey); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := service.DeleteEpisode(ctx, &agentpbv2.DataDeleteEpisodeRequest{Episode: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetEpisode().GetId() != id || response.GetEpisode().GetState() != "complete" || response.GetEpisode().GetSizeBytes() <= 0 {
+		t.Fatalf("response does not describe the deleted episode: %+v", response.GetEpisode())
+	}
+	if response.GetUploadState() != "local" {
+		t.Fatalf("upload_state = %q, want the ad-hoc episode's %q", response.GetUploadState(), "local")
+	}
+	listed, err := service.Episodes(ctx, &agentpbv2.DataEpisodesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range listed.GetEpisodes() {
+		if e.GetId() == id {
+			t.Fatalf("deleted episode %s is still listed", id)
+		}
+	}
+	if len(listed.GetEpisodes()) != 1 || listed.GetEpisodes()[0].GetId() != recording.ID {
+		t.Fatalf("the other episode should be the only one left: %+v", listed.GetEpisodes())
 	}
 }
 
