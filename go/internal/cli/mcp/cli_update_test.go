@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -92,7 +94,9 @@ func TestWendyStatusCLIUpdateReloadsCache(t *testing.T) {
 		if out.Connected != connected || !out.Update.Available || out.Update.LatestVersion != cfg.AvailableCLIUpdate || out.Update.LastCheckedAt != cfg.LastCLIUpdateCheck || !out.Update.RestartRequired {
 			t.Fatalf("status: %+v", out)
 		}
-		if out.Update.UpdateCommand != "wendy update" || !strings.Contains(out.Update.Message, "restart the Wendy MCP server") || strings.Contains(out.Update.Message, "brew trust") {
+		// The status field repeats on every call, so it informs without asking
+		// the assistant to raise the update again.
+		if out.Update.UpdateCommand != "wendy update" || !strings.Contains(out.Update.Message, "restart the Wendy MCP server") || strings.Contains(out.Update.Message, "brew trust") || strings.Contains(out.Update.Message, "Tell the user") {
 			t.Fatalf("update guidance: %+v", out.Update)
 		}
 		// A later successful check clears a stale release without restarting.
@@ -133,6 +137,32 @@ func TestCLIUpdateStatusPrefersLatestReleaseOverLegacyPendingValue(t *testing.T)
 	s := New(&config.Config{LatestCLIRelease: version.Version, AvailableCLIUpdate: "2026.10.05-134249"}, nil)
 	if info := s.cliUpdateStatus(); info.Available || info.RestartRequired {
 		t.Fatalf("stale legacy pending version overrode the latest release cache: %+v", info)
+	}
+}
+
+// A CLI the Wendy plugin's launcher installed gets the plugin advice and the
+// CLI installer as its command in wendy_status and in the daily tool-result
+// notice, matching the terminal notice. wendy update recognizes no updater for
+// that copy, so any other install keeps "Update with: wendy update".
+func TestCLIUpdatePluginManagedAdvice(t *testing.T) {
+	releasedCLI(t)
+	for _, managed := range []bool{true, false} {
+		old := pluginManagedCLI
+		pluginManagedCLI = func() bool { return managed }
+		info := New(&config.Config{AvailableCLIUpdate: "2026.09.30-120000"}, nil).cliUpdateStatus()
+		pluginManagedCLI = old
+
+		command, advice := "wendy update", "Update with: wendy update"
+		if managed {
+			command, advice = cliupdate.InstallCommand(runtime.GOOS), cliupdate.PluginAdvice(runtime.GOOS)
+		}
+		if !info.Available || info.UpdateCommand != command ||
+			!strings.Contains(info.Message, advice) || !strings.Contains(info.Message, "restart the Wendy MCP server") {
+			t.Errorf("managed=%v: update guidance %+v, want command %q and message with %q", managed, info, command, advice)
+		}
+		if notice := cliUpdateNotice(info); !strings.Contains(notice, advice) || (managed && strings.Contains(notice, "Update with:")) {
+			t.Errorf("managed=%v: tool-result notice %q, want it to give %q", managed, notice, advice)
+		}
 	}
 }
 
@@ -329,5 +359,50 @@ func TestCLIUpdateChecksRepeatAndStop(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("checks=%d", calls.Load())
+	}
+}
+
+// A monotonic reading would make Sub ignore time the computer spent asleep.
+func TestCLIUpdateNoticeClockIsWallTime(t *testing.T) {
+	if now := wallClock(); now.String() != now.Round(0).String() {
+		t.Fatalf("reminder clock keeps a monotonic reading: %s", now)
+	}
+}
+
+func TestCLIUpdateNoticeRepeatsDailyInLongLivedSession(t *testing.T) {
+	releasedCLI(t)
+	s := New(&config.Config{LatestCLIRelease: "2026.10.05-134249"}, nil)
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	start := now
+	original := okResult(map[string]any{"value": "unchanged"})
+	next := s.cliUpdateMiddlewareWithClock(func() time.Time { return now })(func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return original, nil
+	})
+	for _, tc := range []struct {
+		after      time.Duration
+		wantNotice bool
+	}{
+		{0, true},
+		{23*time.Hour + 59*time.Minute, false},
+		{24 * time.Hour, true},
+		{24*time.Hour + time.Minute, false},
+		{48 * time.Hour, true},
+	} {
+		now = start.Add(tc.after)
+		result, err := next(context.Background(), mcpgo.CallToolRequest{})
+		if err != nil || (len(result.Content) == 2) != tc.wantNotice {
+			t.Fatalf("after %s: content=%+v err=%v", tc.after, result.Content, err)
+		}
+		if toolResultText(t, result) != toolResultText(t, original) || len(original.Content) != 1 {
+			t.Fatal("reminder changed the original result")
+		}
+		if tc.wantNotice {
+			message := result.Content[1].(mcpgo.TextContent).Text
+			for _, want := range []string{"**WENDY CLI UPDATE AVAILABLE**", "Tell the user", "wendy update", "restart the Wendy MCP server", "tomorrow"} {
+				if !strings.Contains(message, want) {
+					t.Fatalf("notice missing %q: %s", want, message)
+				}
+			}
+		}
 	}
 }

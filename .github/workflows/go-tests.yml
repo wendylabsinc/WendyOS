@@ -5,10 +5,13 @@ on:
   push:
     branches: [main]
     paths:
+      - '.gitattributes'
       - 'go/**'
-      - 'web-client/mcp-app/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
+      - 'web-client/package-lock.json'
+      - 'web-client/tests/credential-store.test.mjs'
+      - 'web-client/tests/wendy-web-bridge.test.mjs'
       - 'web-client/scripts/build-wasm.mjs'
       - 'go/simulator/go2/go2_sim/**'
       - 'Proto/**'
@@ -23,12 +26,16 @@ on:
       - 'scripts/sync-agent-skills.py'
       - 'scripts/package-chatgpt-plugin.py'
       - 'scripts/test-package-chatgpt-plugin.py'
+      - 'packaging/linux/fpm/**'
   pull_request:
     paths:
+      - '.gitattributes'
       - 'go/**'
-      - 'web-client/mcp-app/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
+      - 'web-client/package-lock.json'
+      - 'web-client/tests/credential-store.test.mjs'
+      - 'web-client/tests/wendy-web-bridge.test.mjs'
       - 'web-client/scripts/build-wasm.mjs'
       - 'go/simulator/go2/go2_sim/**'
       - 'Proto/**'
@@ -43,6 +50,7 @@ on:
       - 'scripts/sync-agent-skills.py'
       - 'scripts/package-chatgpt-plugin.py'
       - 'scripts/test-package-chatgpt-plugin.py'
+      - 'packaging/linux/fpm/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -52,6 +60,59 @@ permissions:
   contents: read
 
 jobs:
+  shared-grpc-api-contracts:
+    name: Shared gRPC API contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          version: '1.75.0'
+          setup_only: true
+          pr_comment: false
+      - uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0
+        with:
+          version: '34.0'
+          repo-token: ${{ github.token }}
+      - name: Install pinned Go generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+      - name: Check shared gRPC API contracts
+        run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
+
+  babel:
+    name: Babel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: go/babel
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Use the repository's maintained compiler; Babel's module keeps its
+          # own minimum language version for library consumers.
+          go-version-file: go.mod
+          cache: false
+
+      # Babel is a nested module, so the parent module's ./... skips it.
+      - name: Run Babel race tests
+        run: go test -race -count=1 -timeout 300s ./...
+
+      - name: Vet Babel
+        run: go vet ./...
+
   unit-tests:
     name: Race tests
     runs-on: runs-on,runner=2cpu-linux-x64
@@ -64,7 +125,7 @@ jobs:
           cache-name: race
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev iproute2 dnsmasq-base busybox
 
       - name: Run tests
         working-directory: go
@@ -74,6 +135,22 @@ jobs:
         # -timeout is per package: internal/cli/commands alone took 115s of
         # the former 120s under -race on main (2026-10-06).
         run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
+
+      - name: Check camera DHCP lifecycle and migration
+        # Privileged kernel fixtures run only for repository-owned branches.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        working-directory: go
+        run: |
+          go test -c -o "$RUNNER_TEMP/ipcam.test" ./internal/agent/ipcam
+          sudo unshare --mount --net --propagation private sh -eu -c '
+            # Carrier reads must see the interfaces in this network namespace.
+            mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
+            # Packet fixtures put both veth ends in this disposable namespace.
+            sysctl -qw net.ipv4.conf.all.accept_local=1 \
+              net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0
+            export WENDY_TEST_NETNS=1
+            exec "$1" -test.run "^TestDHCPLinux" -test.v -test.timeout 120s
+          ' sh "$RUNNER_TEMP/ipcam.test"
 
       - name: Check runtime skill packaging
         run: python3 scripts/sync-agent-skills.py --check
@@ -122,8 +199,23 @@ jobs:
         with:
           cache-name: wasm
 
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+
       - name: Build browser WASM assets
         run: npm --prefix web-client run build:wasm
+
+      # The worker and credential store as a page loads them. Lifecycle
+      # scripts are skipped: only fake-indexeddb is needed, not Electron.
+      - name: Run browser bridge tests
+        run: |
+          npm --prefix web-client ci --ignore-scripts --no-audit --no-fund
+          node web-client/tests/credential-store.test.mjs
+          node web-client/tests/wendy-web-bridge.test.mjs
 
       - name: Run WASM tests in Node
         env:
@@ -147,26 +239,18 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22'
-
-      - name: Generate embedded MCP app
-        shell: pwsh
-        run: |
-          npm --prefix web-client/mcp-app ci --no-audit --no-fund
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm --prefix web-client/mcp-app run build
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      # Native execution covers Windows identity files and process shutdown.
+      # Native execution covers Windows identity files and process shutdown,
+      # including CLI/MCP identity sharing across WENDY_CONFIG_DIR overrides.
       # Delivery tests redirect requests to local HTTP receivers.
       - name: Test analytics
         working-directory: go
         run: go test ./internal/cli/analytics -count=1 -timeout 120s
 
-      - name: Test CLI telemetry delivery
+      - name: Test analytics preferences with shared identity
+        working-directory: go
+        run: go test ./internal/cli/commands -run '^TestAnalytics' -count=1 -timeout 120s
+
+      - name: Test CLI and MCP telemetry delivery and shared identity
         working-directory: go
         run: go test ./cmd/wendy -run '^(TestInvocationAnalytics|TestEnablingAnalyticsReportsTheCurrentInvocation|TestHelpDoesNotCountAsProductUse)' -v -count=1 -timeout 120s
 
@@ -179,28 +263,60 @@ jobs:
           go test ./internal/cli/commands -run '^(TestEnsureQEMUOnWindows|TestSimulatorWithoutDetachedSupport|TestDiscoverKeepsScanningWhenSimulatorNeedsForegroundStart|TestDiscoverSimulatorGuidanceFitsPopulatedTerminal|TestVMStorage|TestVMImageSpace|TestVMCreate)' -v -count=1 -timeout 120s
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  # The agent embeds this Python worker and runs it on devices for campaign
+  # inference. Its unit tests need no GPU: TensorRT and CUDA are faked.
+  inference-worker:
+    name: Inference worker tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: go/internal/agent/inference
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          # The uv the agent installs on devices (uvVersion in runtime.go).
+          version: "0.10.9"
+          enable-cache: true
+          cache-dependency-glob: go/internal/agent/inference/uv.lock
+
+      # The same locked environment the agent builds on a device.
+      - name: Run worker unit tests
+        run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
+
   # Preserve the existing required "Test" check after splitting its work.
   test:
     name: Test
     if: ${{ always() }}
-    needs: [unit-tests, windows, windows-telemetry, wasm, vet, agent-startup]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
         env:
+          SHARED_GRPC_API_CONTRACTS_RESULT: ${{ needs.shared-grpc-api-contracts.result }}
+          BABEL_RESULT: ${{ needs.babel.result }}
           RACE_RESULT: ${{ needs.unit-tests.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           WINDOWS_TELEMETRY_RESULT: ${{ needs.windows-telemetry.result }}
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
+          INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
+          test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
+          test "$BABEL_RESULT" = success
           test "$RACE_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$WINDOWS_TELEMETRY_RESULT" = success
           test "$WASM_RESULT" = success
           test "$VET_RESULT" = success
           test "$STARTUP_RESULT" = success
+          test "$INFERENCE_WORKER_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
@@ -266,10 +382,18 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: shellcheck install scripts
         run: shellcheck go/internal/cli/assets/docs/agent.sh go/internal/cli/assets/docs/cli.sh
+      - name: shellcheck agent package scripts
+        run: shellcheck packaging/linux/fpm/wendy-agent-*.sh .github/scripts/agent-package-scripts_test.sh
       - name: resolver + deferral tests
         run: bash .github/scripts/install-scripts_test.sh
+      - name: agent access choice tests
+        run: bash .github/scripts/agent-network-access_test.sh
+      - name: Test package discovery identity
+        run: bash .github/scripts/agent-mdns_test.sh
       - name: manifest merge tests
         run: bash .github/scripts/install-manifest-merge_test.sh
+      - name: agent package script tests
+        run: bash .github/scripts/agent-package-scripts_test.sh
       - name: integration device selection tests
         run: python3 .github/scripts/integration-discover_test.py
       - name: host sensor loopback CI tests

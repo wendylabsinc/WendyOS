@@ -546,7 +546,7 @@ func TestReloginDispatchesOnStoredSession(t *testing.T) {
 }
 
 func TestAuthLoginServiceAccountRejectsOtherModes(t *testing.T) {
-	for _, extra := range [][]string{{"--legacy"}, {"--email", "a@b.c"}, {"--issuer", "https://x/realms/y"}, {"--api-key", "k"}} {
+	for _, extra := range [][]string{{"--legacy"}, {"--email", "a@b.c"}, {"--issuer", "https://x/realms/y"}} {
 		cmd := newAuthLoginCmd()
 		cmd.SetArgs(append([]string{"--service-account", "/nonexistent"}, extra...))
 		cmd.SilenceUsage, cmd.SilenceErrors = true, true

@@ -115,7 +115,8 @@ func listCloudOrganizationsV2Impl(ctx context.Context, auth *config.AuthConfig) 
 
 // pickCloudOrgV2 shows the v2 organization picker. 'd' sets the default for
 // every flow. When management is true ('wendy auth list-orgs'), the picker also
-// offers 'x' (clear the default), 'r' (remove stored credentials) and Enter
+// lets 'd' clear the default it is pressed on, and offers 'r' (remove stored
+// credentials) and Enter
 // (copy the org ID) — the affordances the legacy v1 picker had, ported onto the
 // v2 identity (WDY-3101). Selection flows pass management=false so Enter selects
 // and the picker closes; wiring copy-on-Enter there would dead-end the wizard

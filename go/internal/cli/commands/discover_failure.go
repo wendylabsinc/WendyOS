@@ -28,6 +28,9 @@ func classifyLANProbeFailure(err error) *models.ProbeFailure {
 	switch {
 	case isLANIdentityFailure(err):
 		return lanIdentityFailure(err)
+	case expiredLoginFrom(err) != nil:
+		login := expiredLoginFrom(err)
+		return probeFailure("login_expired", login.message(), login.loginStep)
 	case errors.As(err, &org):
 		return probeFailure("device_org_mismatch", "The device's certificate belongs to an organization for which this CLI has no credentials.", "Run 'wendy auth login' with an account that can access that organization.")
 	case probeErrorMatches(err, isExplicitTLSRejection):
@@ -127,7 +130,8 @@ func lanIdentityFailure(err error) *models.ProbeFailure {
 		key = pin.Key
 		details = fmt.Sprintf("Saved certificate key: %s. Presented certificate key: %s.", pin.Want, pin.Got)
 	case errors.As(err, &identity):
-		details = fmt.Sprintf("Saved: asset %s in organization %s. Now: asset %s in organization %s.", identity.WantAsset, orgLabel("", identity.WantOrg), identity.GotAsset, orgLabel("", identity.GotOrg))
+		saved, now := identityMismatchSides(identity)
+		details = fmt.Sprintf("Saved: %s. Now: %s.", saved, now)
 	}
 	// Render only known diagnostic fields, with terminal controls removed.
 	if key != "" {

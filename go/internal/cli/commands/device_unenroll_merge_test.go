@@ -35,6 +35,7 @@ func TestUnenrollRejectsDirectV2FlagsBeforeCloudOrLiteCleanup(t *testing.T) {
 		for _, flag := range []struct{ name, value string }{
 			{name: "check", value: "true"},
 			{name: "asset-id", value: liteTestAssetID},
+			{name: "force", value: "true"},
 		} {
 			t.Run(route.name+"/"+flag.name, func(t *testing.T) {
 				preserveCloudUnenrollmentHooks(t)
@@ -77,7 +78,7 @@ func TestUnenrollRejectsDirectV2FlagsBeforeCloudOrLiteCleanup(t *testing.T) {
 					}
 				}
 				err := cmd.RunE(cmd, nil)
-				if err == nil || !strings.Contains(err.Error(), "--asset-id and --check require a directly connected WendyOS device with v2 UUID enrollment") {
+				if err == nil || !strings.Contains(err.Error(), "--asset-id, --check and --force require a directly connected WendyOS device with v2 UUID enrollment") {
 					t.Fatalf("direct-device flag was not rejected: %v", err)
 				}
 				if resolved != (route.target != nil) {

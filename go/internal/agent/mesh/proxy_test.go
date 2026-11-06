@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -35,7 +37,7 @@ func (h *halfClosablePipe) CloseWrite() error {
 // fakeDialer records the dial and hands back one end of a pipe whose other
 // end echoes with a prefix.
 type fakeDialer struct {
-	gotDevice int32
+	gotDevice meshid.Device
 	gotPort   uint16
 	err       error
 
@@ -57,8 +59,8 @@ type fakeDialer struct {
 	mode string
 }
 
-func (f *fakeDialer) DialDevice(_ context.Context, deviceID int32, port uint16) (net.Conn, string, error) {
-	f.gotDevice, f.gotPort = deviceID, port
+func (f *fakeDialer) DialDevice(_ context.Context, device meshid.Device, port uint16) (net.Conn, string, error) {
+	f.gotDevice, f.gotPort = device, port
 	if f.err != nil {
 		return nil, "", f.err
 	}
@@ -100,33 +102,38 @@ func (f *fakeDialer) DialDevice(_ context.Context, deviceID int32, port uint16) 
 	return hcp, mode, nil
 }
 
+// dialed reports whether the fake dialer was invoked at all.
+func (f *fakeDialer) dialed() bool { return f.gotDevice.UUID() != uuid.Nil }
+
 // fakeConnMetrics records RecordBytes calls for assertions, without needing
 // the real services.MeshMetrics (which this package cannot import — see the
 // ConnMetrics doc comment in proxy.go).
 type fakeConnMetrics struct {
 	mu    sync.Mutex
-	bytes map[string]int64 // key: "<peer>:<dir>"
+	bytes map[string]int64 // key: "<device uuid>:<dir>"
 }
 
 func newFakeConnMetrics() *fakeConnMetrics {
 	return &fakeConnMetrics{bytes: make(map[string]int64)}
 }
 
-func (f *fakeConnMetrics) RecordBytes(peer int32, dir string, n int64) {
+func (f *fakeConnMetrics) RecordBytes(device meshid.Device, dir string, n int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.bytes[fmt.Sprintf("%d:%s", peer, dir)] += n
+	f.bytes[fmt.Sprintf("%s:%s", device.UUID(), dir)] += n
 }
 
-func (f *fakeConnMetrics) get(peer int32, dir string) int64 {
+func (f *fakeConnMetrics) get(device meshid.Device, dir string) int64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.bytes[fmt.Sprintf("%d:%s", peer, dir)]
+	return f.bytes[fmt.Sprintf("%s:%s", device.UUID(), dir)]
 }
 
-func startTestProxy(t *testing.T, d PeerDialer, m ConnMetrics, dst netip.AddrPort) net.Addr {
+// startTestProxyWith starts a Proxy whose every accepted conn appears to have
+// been REDIRECTed to dst, resolving destinations through table.
+func startTestProxyWith(t *testing.T, d PeerDialer, m ConnMetrics, table *VIPTable, dst netip.AddrPort) net.Addr {
 	t.Helper()
-	p := NewProxy(zap.NewNop(), d, m)
+	p := NewProxy(zap.NewNop(), d, m, table)
 	p.origDst = func(*net.TCPConn) (netip.AddrPort, error) { return dst, nil }
 	if err := p.Start("127.0.0.1:0"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -135,10 +142,22 @@ func startTestProxy(t *testing.T, d PeerDialer, m ConnMetrics, dst netip.AddrPor
 	return p.Addr()
 }
 
+// startTestProxy starts a Proxy over a fresh VIP table holding one pinned
+// device, and returns the listener address, that device, and its VIP: the
+// destination the proxy must resolve back to the same principal.
+func startTestProxy(t *testing.T, d PeerDialer, m ConnMetrics, port uint16) (net.Addr, meshid.Device, netip.Addr) {
+	t.Helper()
+	table, _ := newVIPTable(t)
+	device := deviceForIndex(t, mustTenant(t, tenantA), 1)
+	vip := mustAllocate(t, table, device)
+	addr := startTestProxyWith(t, d, m, table, netip.AddrPortFrom(vip, port))
+	return addr, device, vip
+}
+
 func TestProxyRelaysToDialedPeer(t *testing.T) {
 	d := &fakeDialer{}
 	fm := newFakeConnMetrics()
-	addr := startTestProxy(t, d, fm, netip.MustParseAddrPort("10.99.0.215:8080"))
+	addr, device, _ := startTestProxy(t, d, fm, 8080)
 
 	conn, err := net.Dial("tcp", addr.String())
 	if err != nil {
@@ -156,8 +175,11 @@ func TestProxyRelaysToDialedPeer(t *testing.T) {
 	if string(got) != "peer:hello" {
 		t.Fatalf("relayed %q, want %q", got, "peer:hello")
 	}
-	if d.gotDevice != 215 || d.gotPort != 8080 {
-		t.Fatalf("dialed device %d port %d, want 215/8080", d.gotDevice, d.gotPort)
+	if d.gotDevice.UUID() != device.UUID() || d.gotDevice.Tenant().UUID() != device.Tenant().UUID() {
+		t.Fatalf("dialed %s, want %s", d.gotDevice.Principal(), device.Principal())
+	}
+	if d.gotPort != 8080 {
+		t.Fatalf("dialed port %d, want 8080", d.gotPort)
 	}
 
 	// handleConn records byte metrics after relayBytes returns, which can
@@ -166,7 +188,7 @@ func TestProxyRelaysToDialedPeer(t *testing.T) {
 	wantTx, wantRx := int64(len("hello")), int64(len("peer:hello"))
 	deadline := time.After(2 * time.Second)
 	for {
-		tx, rx := fm.get(215, "tx"), fm.get(215, "rx")
+		tx, rx := fm.get(device, "tx"), fm.get(device, "rx")
 		if tx == wantTx && rx == wantRx {
 			break
 		}
@@ -186,7 +208,7 @@ func TestProxyRelaysToDialedPeer(t *testing.T) {
 // exit.
 func TestProxyFullClosesNonCloseWritePeer(t *testing.T) {
 	d := &fakeDialer{plainPipe: true, closed: make(chan error, 1)}
-	addr := startTestProxy(t, d, nil, netip.MustParseAddrPort("10.99.0.215:8080"))
+	addr, _, _ := startTestProxy(t, d, nil, 8080)
 
 	conn, err := net.Dial("tcp", addr.String())
 	if err != nil {
@@ -210,7 +232,37 @@ func TestProxyFullClosesNonCloseWritePeer(t *testing.T) {
 
 func TestProxyClosesOnNonMeshVIP(t *testing.T) {
 	d := &fakeDialer{}
-	addr := startTestProxy(t, d, nil, netip.MustParseAddrPort("192.168.1.1:80"))
+	addr := startTestProxyWith(t, d, nil, mustTable(t), netip.MustParseAddrPort("192.168.1.1:80"))
+	assertRefused(t, addr, d)
+}
+
+// TestProxyClosesOnUnallocatedVIP proves the proxy no longer treats any
+// address inside the service CIDR as a device: only a VIP the host actually
+// pinned has a principal to dial.
+func TestProxyClosesOnUnallocatedVIP(t *testing.T) {
+	d := &fakeDialer{}
+	addr := startTestProxyWith(t, d, nil, mustTable(t), netip.MustParseAddrPort("10.99.7.7:8080"))
+	assertRefused(t, addr, d)
+}
+
+// TestProxyClosesWithoutVIPTable proves a proxy built without the table it
+// resolves through refuses connections instead of dialing an empty principal.
+func TestProxyClosesWithoutVIPTable(t *testing.T) {
+	d := &fakeDialer{}
+	addr := startTestProxyWith(t, d, nil, nil, netip.MustParseAddrPort("10.99.0.1:8080"))
+	assertRefused(t, addr, d)
+}
+
+// mustTable opens an empty (nothing allocated) VIP table.
+func mustTable(t *testing.T) *VIPTable {
+	t.Helper()
+	table, _ := newVIPTable(t)
+	return table
+}
+
+// assertRefused dials the proxy and requires an immediate close with no dial.
+func assertRefused(t *testing.T, addr net.Addr, d *fakeDialer) {
+	t.Helper()
 	conn, err := net.Dial("tcp", addr.String())
 	if err != nil {
 		t.Fatal(err)
@@ -219,10 +271,10 @@ func TestProxyClosesOnNonMeshVIP(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 1)
 	if _, err := conn.Read(buf); err != io.EOF {
-		t.Fatalf("expected EOF for non-mesh destination, got %v", err)
+		t.Fatalf("expected EOF for an unresolvable destination, got %v", err)
 	}
-	if d.gotDevice != 0 {
-		t.Fatal("dialer must not be called for a non-mesh destination")
+	if d.dialed() {
+		t.Fatalf("dialer must not be called for an unresolvable destination, dialed %s", d.gotDevice.Principal())
 	}
 }
 
@@ -302,15 +354,18 @@ func TestRelayBytesReturnsByteCountsPerDirection(t *testing.T) {
 // TestProxyLogsStructuredFieldsOnSuccess proves the per-connection close log
 // carries the exact field keys the dashboard's Mesh tab filters/reads:
 // mesh.peer, mesh.mode, mesh.result, mesh.bytes_tx, mesh.bytes_rx,
-// mesh.duration_ms.
+// mesh.duration_ms — with mesh.peer being the device UUID, not an asset ID.
 func TestProxyLogsStructuredFieldsOnSuccess(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	logger := zap.New(core)
 	d := &fakeDialer{mode: "relay"}
 	fm := newFakeConnMetrics()
-	p := NewProxy(logger, d, fm)
+	table, _ := newVIPTable(t)
+	device := deviceForIndex(t, mustTenant(t, tenantA), 1)
+	vip := mustAllocate(t, table, device)
+	p := NewProxy(logger, d, fm, table)
 	p.origDst = func(*net.TCPConn) (netip.AddrPort, error) {
-		return netip.MustParseAddrPort("10.99.0.215:8080"), nil
+		return netip.AddrPortFrom(vip, 8080), nil
 	}
 	if err := p.Start("127.0.0.1:0"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -330,10 +385,10 @@ func TestProxyLogsStructuredFieldsOnSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entry := waitForLogEntry(t, logs, "mesh connection")
+	entry := waitForLogEntry(t, logs, "wendy net connection")
 	ctxMap := entry.ContextMap()
-	if ctxMap["mesh.peer"] != "215" {
-		t.Fatalf("mesh.peer = %v, want 215", ctxMap["mesh.peer"])
+	if ctxMap["mesh.peer"] != device.UUID().String() {
+		t.Fatalf("mesh.peer = %v, want the device UUID %s", ctxMap["mesh.peer"], device.UUID())
 	}
 	if ctxMap["mesh.mode"] != "relay" {
 		t.Fatalf("mesh.mode = %v, want relay", ctxMap["mesh.mode"])
@@ -350,16 +405,19 @@ func TestProxyLogsStructuredFieldsOnSuccess(t *testing.T) {
 
 // TestProxyLogsStructuredFieldsOnDialFailure proves a failed dial gets its
 // own structured warning (mesh.peer/mesh.mode/mesh.port + the error) rather
-// than the success-shaped "mesh connection" log with mesh.result=error —
+// than the success-shaped "wendy net connection" log with mesh.result=error —
 // the dialer already recorded the mesh.connections error metric, so this log
 // is the only per-attempt signal for the dashboard.
 func TestProxyLogsStructuredFieldsOnDialFailure(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 	logger := zap.New(core)
 	d := &fakeDialer{err: fmt.Errorf("boom")}
-	p := NewProxy(logger, d, nil)
+	table, _ := newVIPTable(t)
+	device := deviceForIndex(t, mustTenant(t, tenantA), 1)
+	vip := mustAllocate(t, table, device)
+	p := NewProxy(logger, d, nil, table)
 	p.origDst = func(*net.TCPConn) (netip.AddrPort, error) {
-		return netip.MustParseAddrPort("10.99.0.215:8080"), nil
+		return netip.AddrPortFrom(vip, 8080), nil
 	}
 	if err := p.Start("127.0.0.1:0"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -372,10 +430,10 @@ func TestProxyLogsStructuredFieldsOnDialFailure(t *testing.T) {
 	}
 	defer conn.Close()
 
-	entry := waitForLogEntry(t, logs, "mesh connection failed")
+	entry := waitForLogEntry(t, logs, "wendy net connection failed")
 	ctxMap := entry.ContextMap()
-	if ctxMap["mesh.peer"] != "215" {
-		t.Fatalf("mesh.peer = %v, want 215", ctxMap["mesh.peer"])
+	if ctxMap["mesh.peer"] != device.UUID().String() {
+		t.Fatalf("mesh.peer = %v, want the device UUID %s", ctxMap["mesh.peer"], device.UUID())
 	}
 	if ctxMap["mesh.mode"] != "" {
 		t.Fatalf("mesh.mode = %v, want empty on dial error", ctxMap["mesh.mode"])

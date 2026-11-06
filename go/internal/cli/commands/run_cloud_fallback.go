@@ -18,4 +18,4 @@ func cloudFallbackDisabled(cloudName string) bool {
 
 // cloudFallbackConnectFn is the tunnel resolveWithCloudFallback falls back
 // to; a variable so tests can observe whether the fallback was attempted.
-var cloudFallbackConnectFn = connectToCloudAgentExpecting
+var cloudFallbackConnectFn = connectToPinnedCloudName

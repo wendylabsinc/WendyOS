@@ -27,7 +27,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // MeshRosterService serves the minimal name directory the WendyOS mesh needs
-// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
+// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a device UUID. It is
 // deliberately narrower than AssetService: only {name, asset_id} pairs plus the
 // caller's own org slug, scoped by the caller's asset-certificate identity.
 //
@@ -61,7 +61,7 @@ func (c *meshRosterServiceClient) GetMeshRoster(ctx context.Context, in *GetMesh
 // for forward compatibility.
 //
 // MeshRosterService serves the minimal name directory the WendyOS mesh needs
-// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
+// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a device UUID. It is
 // deliberately narrower than AssetService: only {name, asset_id} pairs plus the
 // caller's own org slug, scoped by the caller's asset-certificate identity.
 //

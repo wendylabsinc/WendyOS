@@ -86,7 +86,7 @@ The camera image in this example must implement both its USB driver and the
 HTTP simulator backend selected by `R2_SIMULATOR_URL`. Wendy does not translate
 hardware SDK calls or emulate USB/serial firmware.
 
-`profile` must be `rosmaster-r2`, `go2` or `g1`. `entitlements` is required and
+`profile` must be `rosmaster-r2`, `go2`, `g1` or `so101`. `entitlements` is required and
 must contain at least one grant. On the matching managed VM, it replaces the
 service's normal entitlements; `env` overlays the service environment per key.
 CLI `--env` values retain precedence. A different managed robot profile is an
@@ -207,6 +207,7 @@ All standard `wendy run` flags apply. The following are particularly relevant fo
 |------|-------------|
 | `--service <name>` | Build and run only the named service and its transitive `dependsOn` dependencies. |
 | `--build-host <device>` | Build the selected services on another device, which delivers each image to the target. See [Remote build host](#remote-build-host). |
+| `--build-arg KEY=VALUE` | Repeatable. Override device defaults for every built service targeting a WendyOS device, including remote build-host builds; the last occurrence wins. Incompatible with `--stagefile-backend=llb`. See [Image build-args](../clients/wendy-cli/commands/run.md#image-build-args). |
 | `--deploy` | Build and create all containers but do not start them. |
 | `--detach` | Start all containers but do not stream logs. See [Attached vs. detached](#attached-vs-detached). |
 | `--keep-going` | Deploy services that build successfully instead of aborting the whole group on the first build/push failure. |

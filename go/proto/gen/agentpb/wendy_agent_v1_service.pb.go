@@ -276,17 +276,17 @@ type isRunContainerRequest_RequestType interface {
 }
 
 type RunContainerRequest_Header_ struct {
-	/// The first message in the stream MUST be the header.
+	// / The first message in the stream MUST be the header.
 	Header *RunContainerRequest_Header `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
 }
 
 type RunContainerRequest_Chunk_ struct {
-	/// A chunk of the container tarball.
+	// / A chunk of the container tarball.
 	Chunk *RunContainerRequest_Chunk `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
 }
 
 type RunContainerRequest_Control struct {
-	/// After uploading the container, control messages can be sent to the agent.
+	// / After uploading the container, control messages can be sent to the agent.
 	Control *ControlCommand `protobuf:"bytes,3,opt,name=control,proto3,oneof"`
 }
 
@@ -695,7 +695,8 @@ type GetAgentVersionResponse struct {
 	JetpackVersion *string `protobuf:"bytes,10,opt,name=jetpack_version,json=jetpackVersion,proto3,oneof" json:"jetpack_version,omitempty"`
 	// CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
 	CudaVersion *string `protobuf:"bytes,11,opt,name=cuda_version,json=cudaVersion,proto3,oneof" json:"cuda_version,omitempty"`
-	// STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+	// Medium of the disk backing / ("nvme", "emmc", "sd", "ufs", "usb"); when not recognised, the
+	// STORAGE value from /etc/wendyos/device-type (e.g. "disk"). Only present on WendyOS.
 	StorageMedium *string `protobuf:"bytes,12,opt,name=storage_medium,json=storageMedium,proto3,oneof" json:"storage_medium,omitempty"`
 	// Root filesystem bytes currently used by the device. Only present when the agent can inspect disk usage.
 	DiskUsedBytes *int64 `protobuf:"varint,13,opt,name=disk_used_bytes,json=diskUsedBytes,proto3,oneof" json:"disk_used_bytes,omitempty"`
@@ -758,9 +759,14 @@ type GetAgentVersionResponse struct {
 	NpuBackends []string `protobuf:"bytes,27,rep,name=npu_backends,json=npuBackends,proto3" json:"npu_backends,omitempty"`
 	// Current Jetson power mode (nvpmodel). Absent on devices that are not a
 	// Jetson, when the mode cannot be read, and on agents predating this field.
-	PowerMode     *PowerMode `protobuf:"bytes,28,opt,name=power_mode,json=powerMode,proto3,oneof" json:"power_mode,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PowerMode *PowerMode `protobuf:"bytes,28,opt,name=power_mode,json=powerMode,proto3,oneof" json:"power_mode,omitempty"`
+	// Entitlement types (wendy.json "entitlements[].type") this agent
+	// understands. An agent ignores a type it does not know and starts the app
+	// without that access, so a CLI can refuse such a project before building
+	// it. Empty on agents predating this field, which are not checked.
+	EntitlementTypes []string `protobuf:"bytes,29,rep,name=entitlement_types,json=entitlementTypes,proto3" json:"entitlement_types,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetAgentVersionResponse) Reset() {
@@ -985,6 +991,13 @@ func (x *GetAgentVersionResponse) GetNpuBackends() []string {
 func (x *GetAgentVersionResponse) GetPowerMode() *PowerMode {
 	if x != nil {
 		return x.PowerMode
+	}
+	return nil
+}
+
+func (x *GetAgentVersionResponse) GetEntitlementTypes() []string {
+	if x != nil {
+		return x.EntitlementTypes
 	}
 	return nil
 }
@@ -4755,7 +4768,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\xf1\v\n" +
+	"\x16GetAgentVersionRequest\"\x9e\f\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -4796,7 +4809,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\x10gpu_capabilities\x18\x1a \x03(\v2(.wendy.agent.services.v1.GpuCapabilitiesR\x0fgpuCapabilities\x12!\n" +
 	"\fnpu_backends\x18\x1b \x03(\tR\vnpuBackends\x12F\n" +
 	"\n" +
-	"power_mode\x18\x1c \x01(\v2\".wendy.agent.services.v1.PowerModeH\x0fR\tpowerMode\x88\x01\x01B\r\n" +
+	"power_mode\x18\x1c \x01(\v2\".wendy.agent.services.v1.PowerModeH\x0fR\tpowerMode\x88\x01\x01\x12+\n" +
+	"\x11entitlement_types\x18\x1d \x03(\tR\x10entitlementTypesB\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +

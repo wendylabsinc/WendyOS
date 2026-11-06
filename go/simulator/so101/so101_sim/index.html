@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SO-101 · Wendy simulator</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#141416;color:#e4e4e7}*{box-sizing:border-box}body{margin:0}main{max-width:1100px;margin:28px auto;padding:0 24px}header,.toolbar{display:flex;gap:12px;align-items:center;justify-content:space-between}h1{font-size:24px}small,p{color:#a1a1aa}.layout{display:grid;grid-template-columns:1fr 290px;gap:20px}.viewport{position:relative;aspect-ratio:4/3;border:1px solid #34343a;border-radius:8px;overflow:hidden}canvas{width:100%;height:100%;touch-action:none}#view-status{position:absolute;top:12px;left:12px;background:#141416da;padding:6px;font-size:12px}button{background:#242428;color:inherit;border:1px solid #414147;border-radius:5px;padding:8px 12px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}label{display:grid;grid-template-columns:1fr auto;gap:6px;margin:12px 0}input{grid-column:1/-1;width:100%;accent-color:#ccc}output{font-variant-numeric:tabular-nums}#error{color:#fca5a5}button:focus-visible,input:focus-visible{outline:2px solid #ddd;outline-offset:3px}@media(max-width:750px){.layout{grid-template-columns:1fr}main{padding:0 14px}}
+</style>
+<main><header><div><small>Wendy simulator</small><h1>LeRobot SO-101 follower</h1></div><span id="mode" role="status">Starting</span></header>
+<div class="layout"><section><div class="viewport"><canvas id="view" aria-label="Virtual SO-101 arm. Drag to orbit, scroll to zoom."></canvas><span id="view-status" role="status">Loading 3D scene…</span></div><p>Drag to orbit · Shift-drag to pan · Scroll to zoom</p><button id="reset-view">Reset camera</button></section>
+<aside aria-label="Virtual joint controls"><h2>Joint targets</h2><p>Virtual arm only · degrees</p><div id="joints"></div><div class="toolbar"><button id="pause">Pause</button><button id="reset">Reset</button><button id="wave">Wave</button></div><p id="error" role="alert"></p></aside></div></main>
+<script type="module">
+import { SandboxViewer } from './viewer.js';
+const error=document.querySelector('#error'), joints=document.querySelector('#joints');
+async function request(path,body){const response=await fetch(path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});if(!response.ok)throw Error(`Request failed: ${response.status}`);return response.json()}
+let paused=false,busy=false;
+async function act(path,body={}){if(busy)return;busy=true;document.querySelectorAll('button,input').forEach(el=>el.disabled=true);try{await request(path,body);await poll()}catch(e){error.textContent=e.message}finally{busy=false;document.querySelectorAll('button,input').forEach(el=>el.disabled=false)}}
+const view=new SandboxViewer(document.querySelector('#view'),document.querySelector('#view-status'),{request,lidar:false,viewOffset:[.5,-.65,.4]});
+document.querySelector('#reset-view').onclick=()=>view.resetView();
+document.querySelector('#reset').onclick=()=>act('/api/reset');
+document.querySelector('#wave').onclick=()=>act('/api/demo');
+document.querySelector('#pause').onclick=()=>act('/api/pause',{paused:!paused});
+async function poll(){try{const state=await request('/api/status');paused=state.paused;document.querySelector('#mode').textContent=state.healthy?state.mode:'Unavailable';document.querySelector('#pause').textContent=paused?'Resume':'Pause';error.textContent=state.error||'';if(!joints.children.length){for(const j of state.joints){const label=document.createElement('label'),name=document.createElement('span'),out=document.createElement('output'),input=document.createElement('input');name.textContent=j.name.replaceAll('_',' ');input.type='range';input.min=j.min_deg;input.max=j.max_deg;input.step=.1;input.setAttribute('aria-label',`${j.name} target degrees`);input.dataset.joint=j.name;input.value=j.target_deg;out.textContent=`${j.position_deg.toFixed(1)}°`;input.onchange=()=>act('/api/pose',{joints_deg:{[j.name]:Number(input.value)}});label.append(name,out,input);joints.append(label)}}else for(const j of state.joints){const input=joints.querySelector(`[data-joint="${j.name}"]`);if(document.activeElement!==input)input.value=j.target_deg;input.parentElement.querySelector('output').textContent=`${j.position_deg.toFixed(1)}°`}}catch(e){error.textContent=e.message}}
+let timer;async function tick(){await poll();timer=setTimeout(tick,500)}tick();
+document.addEventListener('visibilitychange',()=>view.setActive(!document.hidden));window.addEventListener('pagehide',()=>{clearTimeout(timer);view.dispose()});
+</script></html>

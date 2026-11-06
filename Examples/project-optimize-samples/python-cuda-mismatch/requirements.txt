@@ -1,4 +1,4 @@
 # CPU-only torch wheel, but wendy.json declares the gpu entitlement.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.9.1+cpu
+torch==2.14.1+cpu
 numpy>=1.26

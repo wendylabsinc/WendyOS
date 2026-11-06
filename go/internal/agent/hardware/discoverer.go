@@ -14,6 +14,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/audio"
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
+	"github.com/wendylabsinc/wendy/go/internal/agent/robotarm"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -43,6 +44,7 @@ func (d *SystemHardwareDiscoverer) Discover(ctx context.Context, categoryFilter 
 	discoverers := []discoverer{
 		{"gpu", func() []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability { return d.discoverGPU(ctx) }},
 		{"usb", d.discoverUSB},
+		{"serial", func() []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability { return d.discoverUSBSerial(ctx) }},
 		{"i2c", d.discoverI2C},
 		{"spi", d.discoverSPI},
 		{"gpio", d.discoverGPIO},
@@ -411,4 +413,21 @@ func readSysfsFile(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// discoverUSBSerial shares the metadata-only USB arm inventory; it does not
+// label unknown USB serial devices as robot arms.
+func (d *SystemHardwareDiscoverer) discoverUSBSerial(ctx context.Context) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+	devices, err := robotarm.Discover(ctx)
+	if err != nil {
+		d.logger.Debug("USB serial inventory unavailable", zap.Error(err))
+		return nil
+	}
+	caps := make([]*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability, 0, len(devices))
+	for _, device := range devices {
+		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{Category: "serial", DevicePath: device.DevicePath, Description: device.Product, Properties: map[string]string{
+			"usb_identity": device.Id, "identity_kind": device.IdentityKind, "vendor_id": device.VendorId, "product_id": device.ProductId, "serial_number": device.SerialNumber, "manufacturer": device.Manufacturer, "usb_location": device.UsbLocation, "usb_interface": device.UsbInterface,
+		}})
+	}
+	return caps
 }

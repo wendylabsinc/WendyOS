@@ -105,6 +105,11 @@ type watchDeployState struct {
 	logDone    chan struct{}
 	logGen     uint64
 	hookWG     sync.WaitGroup
+	// tunnels holds the session's cloud app tunnels (see resolveHookRoute).
+	// They are tied to the session context, so a deploy that retries an
+	// abandoned host lifecycle reuses the tunnel and its URL rather than
+	// opening another.
+	tunnels appTunnelSet
 }
 
 type watchSessionContextKey struct{}
@@ -208,6 +213,15 @@ func (s *watchDeployState) waitHookCommands() {
 	if s != nil {
 		s.hookWG.Wait()
 	}
+}
+
+// appTunnels is the session's cloud app tunnel set, or nil outside a watch
+// session.
+func (s *watchDeployState) appTunnels() *appTunnelSet {
+	if s == nil {
+		return nil
+	}
+	return &s.tunnels
 }
 
 // ensureLogStream owns one telemetry subscription for the current app identity.
@@ -434,11 +448,13 @@ func watchCommand(ctx context.Context, opts runOptions, debounce time.Duration) 
 	opts.watchTarget = target
 	opts.watchState.setSessionContext(ctx)
 	defer func() {
-		// Cancel session-owned telemetry and hook commands, then wait until their
-		// goroutines have released resources before the target connection closes.
+		// Cancel session-owned telemetry, hook commands and cloud app tunnels,
+		// then wait until their goroutines have released resources before the
+		// target connection closes.
 		cancel()
 		opts.watchState.stopLogStream()
 		opts.watchState.waitHookCommands()
+		opts.watchState.appTunnels().closeAll()
 	}()
 
 	deployer := &debouncedDeployer{opts: opts, stopWatch: stopWatch}

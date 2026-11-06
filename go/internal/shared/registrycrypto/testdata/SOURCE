@@ -1,0 +1,3 @@
+service-protos master cfa7f45d (merge of wendylabsinc/service-protos#145)
+conformance/registry/registry-vectors-v1.json
+conformance/reqsig/device-signed-request-vectors-v1.json

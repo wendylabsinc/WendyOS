@@ -118,11 +118,14 @@ type Asset struct {
 	ConnectionCountry   *string  `protobuf:"bytes,32,opt,name=connection_country,json=connectionCountry,proto3,oneof" json:"connection_country,omitempty"`
 	ConnectionLatitude  *float64 `protobuf:"fixed64,33,opt,name=connection_latitude,json=connectionLatitude,proto3,oneof" json:"connection_latitude,omitempty"`
 	ConnectionLongitude *float64 `protobuf:"fixed64,34,opt,name=connection_longitude,json=connectionLongitude,proto3,oneof" json:"connection_longitude,omitempty"`
-	// Device binding: the name pki-core stamped into the device's
-	// /device/<name> SPIFFE identity at enrollment. Operator-set, never learned
-	// from a presented certificate — cloud resolves an mTLS device identity by
-	// looking this up, so a device that could set it could claim another's row
-	// (WDY-2902).
+	// Device binding: the UUID pki-core stamped into the device's
+	// /device/<uuid> SPIFFE identity at enrollment. Since WDY-3919 a device has
+	// ONE id: this equals `id` for every compute device, and cloud resolves an
+	// mTLS device identity by `id`. Deprecated: equals the asset id; removed
+	// after the cloud release that ships WDY-3919 (expand -> migrate ->
+	// contract). New readers use `id`.
+	//
+	// Deprecated: Marked as deprecated in wendycloud/v2/assets.proto.
 	PkiDeviceName *string `protobuf:"bytes,35,opt,name=pki_device_name,json=pkiDeviceName,proto3,oneof" json:"pki_device_name,omitempty"`
 	// Hardware facts the device reports about itself (WDY-3544), beside the
 	// older columns above (device_type = board model, architecture, cpu_cores,
@@ -143,7 +146,10 @@ type Asset struct {
 	// 41-44 are claimed by open PRs #101/#102.
 	Site *string `protobuf:"bytes,45,opt,name=site,proto3,oneof" json:"site,omitempty"`
 	// ID of that site (SiteService, WDY-3590); absent only from an older cloud.
-	SiteId        *string                `protobuf:"bytes,46,opt,name=site_id,json=siteId,proto3,oneof" json:"site_id,omitempty"`
+	SiteId *string `protobuf:"bytes,46,opt,name=site_id,json=siteId,proto3,oneof" json:"site_id,omitempty"`
+	// Optional cosmetic label (WDY-3919): any characters, not unique, shown in
+	// lists. `name` stays the tenant-unique DNS label that selects the device.
+	DisplayName   *string                `protobuf:"bytes,47,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,21,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,22,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -404,6 +410,7 @@ func (x *Asset) GetConnectionLongitude() float64 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in wendycloud/v2/assets.proto.
 func (x *Asset) GetPkiDeviceName() string {
 	if x != nil && x.PkiDeviceName != nil {
 		return *x.PkiDeviceName
@@ -460,6 +467,13 @@ func (x *Asset) GetSiteId() string {
 	return ""
 }
 
+func (x *Asset) GetDisplayName() string {
+	if x != nil && x.DisplayName != nil {
+		return *x.DisplayName
+	}
+	return ""
+}
+
 func (x *Asset) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
@@ -500,8 +514,11 @@ type CreateAssetRequest struct {
 	Longitude       *float64               `protobuf:"fixed64,22,opt,name=longitude,proto3,oneof" json:"longitude,omitempty"`
 	Altitude        *float64               `protobuf:"fixed64,23,opt,name=altitude,proto3,oneof" json:"altitude,omitempty"`
 	Heading         *float64               `protobuf:"fixed64,24,opt,name=heading,proto3,oneof" json:"heading,omitempty"`
-	// See Asset.pki_device_name.
+	// See Asset.pki_device_name. When set it becomes the asset `id` (a canonical
+	// lowercase UUID); a UUID already in use is ALREADY_EXISTS.
 	PkiDeviceName *string `protobuf:"bytes,25,opt,name=pki_device_name,json=pkiDeviceName,proto3,oneof" json:"pki_device_name,omitempty"`
+	// See Asset.display_name.
+	DisplayName   *string `protobuf:"bytes,26,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -711,6 +728,13 @@ func (x *CreateAssetRequest) GetPkiDeviceName() string {
 	return ""
 }
 
+func (x *CreateAssetRequest) GetDisplayName() string {
+	if x != nil && x.DisplayName != nil {
+		return *x.DisplayName
+	}
+	return ""
+}
+
 type GetAssetRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -798,7 +822,9 @@ type UpdateAssetRequest struct {
 	Altitude        *float64               `protobuf:"fixed64,20,opt,name=altitude,proto3,oneof" json:"altitude,omitempty"`
 	AssetType       *string                `protobuf:"bytes,21,opt,name=asset_type,json=assetType,proto3,oneof" json:"asset_type,omitempty"`
 	Heading         *float64               `protobuf:"fixed64,22,opt,name=heading,proto3,oneof" json:"heading,omitempty"`
-	// See Asset.pki_device_name.
+	// See Asset.pki_device_name. The device UUID is the asset id and never
+	// changes: only the asset's own id is accepted, anything else (including
+	// empty) is FAILED_PRECONDITION. Unenroll by deleting the asset.
 	PkiDeviceName *string `protobuf:"bytes,23,opt,name=pki_device_name,json=pkiDeviceName,proto3,oneof" json:"pki_device_name,omitempty"`
 	// Site NAME, see Asset.site. Absent leaves it unchanged; empty string moves
 	// the device to the organization's oldest site (a device always has one);
@@ -809,7 +835,9 @@ type UpdateAssetRequest struct {
 	// False keeps the older rule: a non-empty tags replaces them, an empty one
 	// leaves them unchanged. Same convention as
 	// SetOrgPublicRoutingRequest.update_port_denylist (WDY-3581).
-	UpdateTags    bool `protobuf:"varint,25,opt,name=update_tags,json=updateTags,proto3" json:"update_tags,omitempty"`
+	UpdateTags bool `protobuf:"varint,25,opt,name=update_tags,json=updateTags,proto3" json:"update_tags,omitempty"`
+	// See Asset.display_name. Absent leaves it unchanged; empty clears it.
+	DisplayName   *string `protobuf:"bytes,26,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1017,6 +1045,13 @@ func (x *UpdateAssetRequest) GetUpdateTags() bool {
 		return x.UpdateTags
 	}
 	return false
+}
+
+func (x *UpdateAssetRequest) GetDisplayName() string {
+	if x != nil && x.DisplayName != nil {
+		return *x.DisplayName
+	}
+	return ""
 }
 
 type DeleteAssetRequest struct {
@@ -1849,7 +1884,7 @@ var File_wendycloud_v2_assets_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\n" +
-	"\x1awendycloud/v2/assets.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xb8\x11\n" +
+	"\x1awendycloud/v2/assets.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xf5\x11\n" +
 	"\x05Asset\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12+\n" +
@@ -1890,8 +1925,8 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\x0fconnection_city\x18\x1f \x01(\tH\x14R\x0econnectionCity\x88\x01\x01\x122\n" +
 	"\x12connection_country\x18  \x01(\tH\x15R\x11connectionCountry\x88\x01\x01\x124\n" +
 	"\x13connection_latitude\x18! \x01(\x01H\x16R\x12connectionLatitude\x88\x01\x01\x126\n" +
-	"\x14connection_longitude\x18\" \x01(\x01H\x17R\x13connectionLongitude\x88\x01\x01\x12+\n" +
-	"\x0fpki_device_name\x18# \x01(\tH\x18R\rpkiDeviceName\x88\x01\x01\x12*\n" +
+	"\x14connection_longitude\x18\" \x01(\x01H\x17R\x13connectionLongitude\x88\x01\x01\x12/\n" +
+	"\x0fpki_device_name\x18# \x01(\tB\x02\x18\x01H\x18R\rpkiDeviceName\x88\x01\x01\x12*\n" +
 	"\x0esoc_compatible\x18$ \x01(\tH\x19R\rsocCompatible\x88\x01\x01\x12(\n" +
 	"\rserial_number\x18% \x01(\tH\x1aR\fserialNumber\x88\x01\x01\x12*\n" +
 	"\x0ekernel_version\x18& \x01(\tH\x1bR\rkernelVersion\x88\x01\x01\x12$\n" +
@@ -1899,7 +1934,8 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"l4tVersion\x88\x01\x01\x12\x1e\n" +
 	"\bgpu_arch\x18( \x01(\tH\x1dR\agpuArch\x88\x01\x01\x12\x17\n" +
 	"\x04site\x18- \x01(\tH\x1eR\x04site\x88\x01\x01\x12\x1c\n" +
-	"\asite_id\x18. \x01(\tH\x1fR\x06siteId\x88\x01\x01\x129\n" +
+	"\asite_id\x18. \x01(\tH\x1fR\x06siteId\x88\x01\x01\x12&\n" +
+	"\fdisplay_name\x18/ \x01(\tH R\vdisplayName\x88\x01\x01\x129\n" +
 	"\n" +
 	"created_at\x18\x15 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
@@ -1940,7 +1976,9 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\t_gpu_archB\a\n" +
 	"\x05_siteB\n" +
 	"\n" +
-	"\b_site_id\"\xe5\t\n" +
+	"\b_site_idB\x0f\n" +
+	"\r_display_name\"\x9e\n" +
+	"\n" +
 	"\x12CreateAssetRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12+\n" +
 	"\x0fparent_asset_id\x18\x02 \x01(\tH\x00R\rparentAssetId\x88\x01\x01\x12\x12\n" +
@@ -1974,7 +2012,8 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\tlongitude\x18\x16 \x01(\x01H\x0fR\tlongitude\x88\x01\x01\x12\x1f\n" +
 	"\baltitude\x18\x17 \x01(\x01H\x10R\baltitude\x88\x01\x01\x12\x1d\n" +
 	"\aheading\x18\x18 \x01(\x01H\x11R\aheading\x88\x01\x01\x12+\n" +
-	"\x0fpki_device_name\x18\x19 \x01(\tH\x12R\rpkiDeviceName\x88\x01\x01B\x12\n" +
+	"\x0fpki_device_name\x18\x19 \x01(\tH\x12R\rpkiDeviceName\x88\x01\x01\x12&\n" +
+	"\fdisplay_name\x18\x1a \x01(\tH\x13R\vdisplayName\x88\x01\x01B\x12\n" +
 	"\x10_parent_asset_idB\x13\n" +
 	"\x11_blob_storage_urlB\x14\n" +
 	"\x12_blob_content_typeB\x12\n" +
@@ -1997,14 +2036,16 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\t_altitudeB\n" +
 	"\n" +
 	"\b_headingB\x12\n" +
-	"\x10_pki_device_name\"\x93\x01\n" +
+	"\x10_pki_device_nameB\x0f\n" +
+	"\r_display_name\"\x93\x01\n" +
 	"\x0fGetAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12,\n" +
 	"\x0forganization_id\x18\x02 \x01(\tH\x00R\x0eorganizationId\x88\x01\x01\x12 \n" +
 	"\tdevice_id\x18\x03 \x01(\tH\x01R\bdeviceId\x88\x01\x01B\x12\n" +
 	"\x10_organization_idB\f\n" +
 	"\n" +
-	"_device_id\"\xd5\t\n" +
+	"_device_id\"\x8e\n" +
+	"\n" +
 	"\x12UpdateAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x1d\n" +
@@ -2039,7 +2080,8 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\x0fpki_device_name\x18\x17 \x01(\tH\x14R\rpkiDeviceName\x88\x01\x01\x12\x17\n" +
 	"\x04site\x18\x18 \x01(\tH\x15R\x04site\x88\x01\x01\x12\x1f\n" +
 	"\vupdate_tags\x18\x19 \x01(\bR\n" +
-	"updateTagsB\a\n" +
+	"updateTags\x12&\n" +
+	"\fdisplay_name\x18\x1a \x01(\tH\x16R\vdisplayName\x88\x01\x01B\a\n" +
 	"\x05_nameB\n" +
 	"\n" +
 	"\b_detailsB\x13\n" +
@@ -2066,7 +2108,8 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\n" +
 	"\b_headingB\x12\n" +
 	"\x10_pki_device_nameB\a\n" +
-	"\x05_site\"\xca\x01\n" +
+	"\x05_siteB\x0f\n" +
+	"\r_display_name\"\xca\x01\n" +
 	"\x12DeleteAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x121\n" +
 	"\x12expected_device_id\x18\x02 \x01(\tH\x00R\x10expectedDeviceId\x88\x01\x01\x12=\n" +

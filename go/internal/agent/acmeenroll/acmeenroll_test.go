@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -378,6 +379,30 @@ func TestEnroll(t *testing.T) {
 	}
 	if !stored.Equal(again) {
 		t.Error("account key changed between enrollments; the EAB cannot be reused to register a new one")
+	}
+}
+
+// New pki-core enrollments carry an ML-DSA-65 device key (T10): the CSR and
+// the accepted leaf are both ML-DSA-65.
+func TestEnrollMLDSA65DeviceKey(t *testing.T) {
+	f, dirURL := startFake(t, "ready")
+	deviceKey, err := certs.GenerateMLDSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, _, err := Enroll(context.Background(), testConfig(dirURL), filepath.Join(t.TempDir(), "acme-account-key.pem"), []byte(deviceKey))
+	if err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	if pub, ok := f.finalizeCSR.PublicKey.(*mldsa.PublicKey); !ok || pub.Parameters() != mldsa.MLDSA65() {
+		t.Fatalf("finalize CSR key = %T, want ML-DSA-65", f.finalizeCSR.PublicKey)
+	}
+	leaf, err := certs.ParseCertsFromPEM([]byte(certPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := leaf[0].PublicKey.(*mldsa.PublicKey); !ok {
+		t.Fatalf("enrolled leaf key = %T, want ML-DSA-65", leaf[0].PublicKey)
 	}
 }
 

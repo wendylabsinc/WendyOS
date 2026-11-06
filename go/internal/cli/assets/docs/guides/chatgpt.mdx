@@ -1,33 +1,41 @@
 ---
 title: Connect Wendy to ChatGPT
-description: Add Wendy to your personal marketplace, install its local MCP plugin, and use ChatGPT with your devices and simulators.
+description: Use the hosted Wendy plugin in ChatGPT with your devices through a Wendy CLI session on your computer.
 ---
 
-The Wendy plugin brings device inspection, local simulators, and app development
-into ChatGPT Desktop. It includes the local MCP gateway, the device workspace,
-and Wendy's bundled skills. Local devices and simulators do not require a Wendy
-Cloud account.
+The Wendy plugin for ChatGPT connects to the Wendy Cloud relay. The relay
+forwards ChatGPT's tool calls to a signed-in Wendy CLI running on your
+computer, so the same plugin works in ChatGPT on the web, desktop, and mobile.
 
-## Use ChatGPT on the web or mobile
+## Start the CLI session
 
-The public Wendy plugin uses a Cloud relay to a CLI running on your computer.
-Sign in to Wendy Cloud and start the relay in an interactive terminal:
+Install the [Wendy CLI](/docs/#1-install-the-wendy-cli), sign in to Wendy Cloud,
+and start the relay in an interactive terminal:
 
 ```sh
 wendy auth login
 wendy cloud mcp --allow-read --allow-tool device_connect
 ```
 
-Connect the plugin with the same Wendy account and organization, then ask
-ChatGPT to check Wendy's status. The first tool call starts pairing. Compare
-the code shown by ChatGPT with the terminal code, accept it, and retry the
-status check. Keep the computer awake and the command running. Calls stop when the
-CLI exits, including calls from your phone. Your organization must allow MCP
-and Hosted MCP, and the CLI must support the relay's current tool catalog.
+Keep the computer awake and the command running. Calls stop when the CLI exits,
+including calls from your phone. Your organization must allow MCP and Hosted
+MCP, and the CLI must support the relay's current tool catalog.
+
+## Connect the plugin
+
+1. **Add the Wendy plugin in ChatGPT** and sign in with the same Wendy account
+   and organization as the CLI.
+2. **Ask ChatGPT to check Wendy's status.** The first tool call starts pairing.
+3. **Compare the code** shown by ChatGPT with the code in the terminal, accept
+   it, and retry the status check.
+
+Start with: "Show my Wendy Cloud devices."
 
 For automatic pairing with ChatGPT's known OAuth client, add `--auto-accept`.
 It applies to session pairing only and does not change tool permissions or
 per-call confirmations. Other clients still use manual pairing.
+
+## Permissions
 
 Built-in read-only device and Cloud tools that do not access the host are
 available by default, with terminal confirmation before each call. The command
@@ -43,94 +51,6 @@ not qualify for `--allow-read`.
 confirmation, including device changes and host access. Pairing is still
 separate and uses the matching-code prompt unless `--auto-accept` applies.
 
-Start with: "Show my Wendy Cloud devices."
-
-## Add Wendy to your marketplace
-
-Install the [Wendy CLI](/docs/#1-install-the-wendy-cli) on the computer where you
-use ChatGPT Desktop, then run:
-
-```sh
-wendy mcp setup chatgpt
-```
-
-This adds Wendy to your personal marketplace. You can start before connecting
-hardware or creating a simulator. Setup preserves your existing marketplace
-entries and previously granted Wendy permissions.
-
-**Finish the installation in ChatGPT:**
-
-1. **Quit and reopen ChatGPT Desktop.** Closing a window is not enough.
-2. **Open Plugins and select Personal**, your personal marketplace.
-3. **Open Wendy and select the plus button to install it.**
-4. **Start a new conversation with Wendy enabled.** Ask:
-
-   > Help me get started with my first device or a simulator.
-
-ChatGPT launches the local MCP gateway when you use the plugin. The setup command
-makes the plugin available in your marketplace; the installation step enables it
-in ChatGPT. This local connection is for Desktop. ChatGPT on the web or mobile
-needs a separately registered hosted connection.
-
-## Connect a device or enable simulators
-
-Default setup enables the device workspace and preferences. Choose the access
-needed for your task, run setup again, then restart the Wendy connection and
-start a new conversation.
-
-For a physical device, find its selector with `wendy discover --json`, then pass
-the selector to setup. For example:
-
-```sh
-wendy mcp setup chatgpt --device workshop.local:50052
-```
-
-Repeat `--device` for multiple devices. Devices added this way allow inspection
-and installed-app listings. Physical-device camera access and app control require
-separate permissions in the gateway policy.
-
-For local simulators:
-
-```sh
-wendy mcp setup chatgpt --simulators
-```
-
-Open Wendy, choose **Simulators**, then select or create a simulator. Use
-**View simulation** to open a supported robot scene. Setup itself does not
-create or boot a simulator. Simulator access permits lifecycle management,
-simulator app control, and camera access; it does not extend those permissions
-to physical devices.
-
-To let ChatGPT read and edit a project and deploy it to permitted simulators:
-
-```sh
-wendy mcp setup chatgpt --simulators --workspace /path/to/project
-```
-
-Use an existing project directory. For deployment to a physical device, include
-its `--device` selector with `--workspace`. Re-run setup with the same workspace
-when adding deployment targets.
-
-## Optional development and installation tools
-
-Use `--host-operations` for local installation planning and jobs:
-
-```sh
-wendy mcp setup chatgpt --host-operations
-```
-
-Disk erases still require authorization for the exact target.
-
-The device workspace already uses the scoped local MCP gateway. Add
-`--developer-tools` only when you also want the broader developer MCP server:
-
-```sh
-wendy mcp setup chatgpt --developer-tools
-```
-
-That additional server has its own target and permissions. It does not inherit
-the workspace's restrictions. Disable it with `--developer-tools=false`.
-
 ## Work with Wendy Data
 
 Wendy's data skill covers [campaigns, recordings, and app-provided data](/docs/data).
@@ -139,30 +59,21 @@ For example, ask:
 > Help me record device health around a machine fault with a Wendy Data campaign.
 
 General campaign and episode management uses `wendy data` commands through a
-local terminal. The developer MCP server provides connection state and
-documentation but does not expose those operations as dedicated tools. Without
-terminal access, the assistant can prepare a campaign and operator commands.
-After deploying, inspect a completed episode to check which sources recorded.
+local terminal. Without terminal access, the assistant can prepare a campaign
+and operator commands. After deploying, inspect a completed episode to check
+which sources recorded.
 
-The ChatGPT gateway also offers `deploy_yolo_detector`, `inspect_yolo_detector`,
-and `stop_yolo_detector` for persistent YOLO object detection without a local
-terminal. Inspect the detector after deployment to verify model and camera
-readiness. Subscribe to `wendy.data.notification` for ChatGPT delivery; creating
-a detector and subscribing to its notifications are separate operations.
+## If Wendy does not respond
 
-## If Wendy does not appear
+- Check that `wendy cloud mcp` is still running and signed in to the same
+  account and organization as the plugin.
+- Update the Wendy CLI if the relay reports an incompatible tool catalog.
+- After updating Wendy, refresh the plugin's tools and start a new conversation
+  so ChatGPT loads the current tool catalog.
 
-- Check `wendy mcp setup chatgpt --help`. If the command is missing, update to a
-  Wendy CLI version that includes ChatGPT setup.
-- Run setup on the same computer and user account as ChatGPT Desktop.
-- Quit ChatGPT completely and reopen it, then check **Plugins → Personal**.
-- After updating Wendy, restart its MCP connection, refresh its tools, and start
-  a new conversation so ChatGPT loads the current tool catalog and view.
-
-For configuration troubleshooting, setup stores its local policy at
-`~/.wendy/chatgpt/gateway.json`, the plugin at
-`~/.codex/plugins/sources/wendy-robots`, and the personal marketplace entry in
-`~/.agents/plugins/marketplace.json`.
+The ChatGPT desktop local plugin (`wendy mcp setup chatgpt`, `wendy mcp gateway`)
+has been removed. Use the hosted plugin above. For Claude Code, Cursor, and other
+local MCP clients, `wendy mcp setup` still configures `wendy mcp serve`.
 
 See [OpenAI's plugin installation guide](https://learn.chatgpt.com/docs/plugins)
-for the Plugins Directory and marketplace interface.
+for the Plugins Directory interface.

@@ -1,0 +1,244 @@
+package localmesh
+
+import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net/url"
+	"testing"
+	"time"
+)
+
+type issuedCert struct {
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+	pem  string
+}
+
+func mintIssued(t *testing.T, name, principal string, parent *issuedCert) issuedCert {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: serial, Subject: pkix.Name{CommonName: name},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		BasicConstraintsValid: true, IsCA: principal == "", KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+	}
+	if template.IsCA {
+		template.KeyUsage |= x509.KeyUsageCertSign
+	} else {
+		u, err := url.Parse(principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template.URIs = []*url.URL{u}
+	}
+	issuer, signer := template, key
+	if parent != nil {
+		issuer, signer = parent.cert, parent.key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, issuer, &key.PublicKey, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuedCert{cert, key, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
+}
+
+func issuedCredentials(t *testing.T, leaf issuedCert, certPEM, chainPEM string) *Credentials {
+	t.Helper()
+	der, err := x509.MarshalECPrivateKey(leaf.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := newTestCredentials(certPEM, chainPEM, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credentials
+}
+
+func TestIssuerPrefixesNameAvailableCertificates(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	top := mintIssued(t, "top", "", &root)
+	issuing := mintIssued(t, "issuing", "", &top)
+	other := mintIssued(t, "other-issuing", "", &top)
+	chain := issuing.pem + top.pem + root.pem
+	a := mintIssued(t, "a", testPrincipal(testTenantUUID, testDeviceAID), &issuing)
+	b := mintIssued(t, "b", testPrincipal(testTenantUUID, testDeviceBID), &issuing)
+	c := mintIssued(t, "c", testPrincipal(testTenantUUID, testDeviceCID), &other)
+
+	sameA := issuedCredentials(t, a, a.pem, chain)
+	sameB := issuedCredentials(t, b, b.pem, chain)
+	if len(sameA.Certificate.Certificate) != 3 {
+		t.Fatalf("presented %d certificates, want leaf and two issuers", len(sameA.Certificate.Certificate))
+	}
+	if sameA.ClientProtocols(LinkALPN)[0] == LinkALPN || sameA.ClientProtocols(LinkALPN)[0] != sameB.ClientProtocols(LinkALPN)[0] {
+		t.Fatalf("devices with one enrolled chain disagree: %q %q", sameA.ClientProtocols(LinkALPN)[0], sameB.ClientProtocols(LinkALPN)[0])
+	}
+	leaf := sameA.LeafCertificate()
+	if len(leaf.Certificate) != 1 || string(leaf.Certificate[0]) != string(a.cert.Raw) || leaf.PrivateKey != sameA.Certificate.PrivateKey {
+		t.Fatal("leaf identity changed")
+	}
+	if len(sameA.Certificate.Certificate) != 3 {
+		t.Fatal("LeafCertificate modified the full identity")
+	}
+	if branch := issuedCredentials(t, c, c.pem, other.pem+top.pem+root.pem); branch.ClientProtocols(LinkALPN)[0] == "" || branch.ClientProtocols(LinkALPN)[0] == sameA.ClientProtocols(LinkALPN)[0] {
+		t.Fatalf("another issuing CA has digest %q", branch.ClientProtocols(LinkALPN)[0])
+	}
+	// An independently verified intermediate is usable even when it is
+	// carried with the identity rather than listed as a trust anchor.
+	if embedded := issuedCredentials(t, a, a.pem+issuing.pem, top.pem+root.pem); embedded.ClientProtocols(LinkALPN)[0] != sameA.ClientProtocols(LinkALPN)[0] {
+		t.Fatal("available verified intermediate was excluded from the hint")
+	}
+	// A root-only path advertises the root while presenting only the leaf.
+	direct := mintIssued(t, "direct", testPrincipal(testTenantUUID, testDeviceAID), &root)
+	if rootOnly := issuedCredentials(t, direct, direct.pem, root.pem); len(rootOnly.Certificate.Certificate) != 1 || rootOnly.ClientProtocols(LinkALPN)[0] == LinkALPN {
+		t.Fatal("root-only availability or leaf presentation changed")
+	}
+	if len((*Credentials)(nil).ClientProtocols(LinkALPN)) != 1 || len((&Credentials{}).ClientProtocols(LinkALPN)) != 1 {
+		t.Fatal("empty credentials named issuers")
+	}
+}
+
+// A peer that omits its issuers is verified against the receiver's own trust
+// anchors only. Omission cannot add trust: a receiver without the issuer
+// rejects the bare leaf and still accepts the full chain through its root.
+func TestLeafOnlyIdentityNeedsLocalIssuer(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	top := mintIssued(t, "top", "", &root)
+	issuing := mintIssued(t, "issuing", "", &top)
+	other := mintIssued(t, "other-issuing", "", &top)
+	a := mintIssued(t, "a", testPrincipal(testTenantUUID, testDeviceAID), &issuing)
+	b := mintIssued(t, "b", testPrincipal(testTenantUUID, testDeviceBID), &issuing)
+	c := mintIssued(t, "c", testPrincipal(testTenantUUID, testDeviceCID), &other)
+	sender := issuedCredentials(t, a, a.pem, issuing.pem+top.pem+root.pem)
+	sameIssuers := issuedCredentials(t, b, b.pem, issuing.pem+top.pem+root.pem)
+	otherIssuers := issuedCredentials(t, c, c.pem, other.pem+top.pem+root.pem)
+	leaf := sender.LeafCertificate().Certificate
+
+	if identity, err := sameIssuers.VerifyTLS(leaf, time.Now()); err != nil || identity.Device != sender.Device {
+		t.Fatalf("receiver with the sender's issuers: %v %v", identity.Device, err)
+	}
+	if identity, err := otherIssuers.VerifyTLS(leaf, time.Now()); err == nil {
+		t.Fatalf("receiver without the sender's issuer accepted the bare leaf as %v", identity.Device)
+	}
+	if identity, err := otherIssuers.Verify(sender.Certificate.Certificate, time.Now()); err != nil || identity.Device != sender.Device {
+		t.Fatalf("receiver without the sender's issuer, full chain: %v %v", identity.Device, err)
+	}
+	if sender.ClientProtocols(LinkALPN)[0] == otherIssuers.ClientProtocols(LinkALPN)[0] {
+		t.Fatal("receivers that need the issuers share the sender's digest")
+	}
+}
+
+// Normal enrollment: issuers travel with our own identity, while only the root
+// is an anchor. Both peers already possess the same intermediate DER material.
+func TestSharedIntermediatesWithRootOnlyTrust(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	top := mintIssued(t, "top", "", &root)
+	issuing := mintIssued(t, "issuing", "", &top)
+	a := mintIssued(t, "a", testPrincipal(testTenantUUID, testDeviceAID), &issuing)
+	b := mintIssued(t, "b", testPrincipal(testTenantUUID, testDeviceBID), &issuing)
+	ca := issuedCredentials(t, a, a.pem+issuing.pem+top.pem, root.pem)
+	cb := issuedCredentials(t, b, b.pem+issuing.pem+top.pem, root.pem)
+	if ca.ClientProtocols(LinkALPN)[0] == LinkALPN || ca.ClientProtocols(LinkALPN)[0] != cb.ClientProtocols(LinkALPN)[0] {
+		t.Fatalf("shared known intermediates did not produce the same hint: %q %q", ca.ClientProtocols(LinkALPN)[0], cb.ClientProtocols(LinkALPN)[0])
+	}
+	for _, pair := range [][2]*Credentials{{ca, cb}, {cb, ca}} {
+		leaf := pair[0].LeafCertificate()
+		identity, err := pair[1].VerifyTLS(leaf.Certificate, time.Now())
+		if err != nil || identity.Device != pair[0].Device {
+			t.Fatalf("known intermediates were not used as path candidates: %v %v", identity, err)
+		}
+	}
+}
+
+// Reissuing one CA key leaves multiple valid DER versions in the bounded cache.
+// A complete, valid presentation must not grow past the identity bundle limit.
+func TestTLSIssuerRenewalsDoNotPadCompletePresentation(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	issuer := mintIssued(t, "issuer", "", &root)
+	ownIssuer := mintIssued(t, "own issuer", "", &root)
+	own := mintIssued(t, "own", testPrincipal(testTenantUUID, testDeviceAID), &ownIssuer)
+	peer := mintIssued(t, "peer", testPrincipal(testTenantUUID, testDeviceBID), &issuer)
+	receiver := issuedCredentials(t, own, own.pem+ownIssuer.pem, root.pem)
+	for i := int64(1); i <= 20; i++ {
+		template := *issuer.cert
+		template.SerialNumber = big.NewInt(i + 100)
+		raw, err := x509.CreateCertificate(rand.Reader, &template, root.cert, &issuer.key.PublicKey, root.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := receiver.Verify([][]byte{peer.cert.Raw, raw}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, chain := range map[string][][]byte{
+		"complete": {peer.cert.Raw, issuer.cert.Raw},
+		"omitted":  {peer.cert.Raw},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := receiver.VerifyTLS(chain, time.Now()); err != nil {
+				t.Fatalf("valid chain rejected after issuer renewals: %v", err)
+			}
+		})
+	}
+}
+
+// Cached issuer reissues must leave room for their omitted ancestors.
+func TestTLSIssuerRenewalsPreserveMissingGrandparent(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	top := mintIssued(t, "top", "", &root)
+	issuer := mintIssued(t, "issuer", "", &top)
+	ownIssuer := mintIssued(t, "own issuer", "", &root)
+	own := mintIssued(t, "own", testPrincipal(testTenantUUID, testDeviceAID), &ownIssuer)
+	peer := mintIssued(t, "peer", testPrincipal(testTenantUUID, testDeviceBID), &issuer)
+	receiver := issuedCredentials(t, own, own.pem+ownIssuer.pem, root.pem)
+	for i := int64(1); i <= 20; i++ {
+		template := *issuer.cert
+		template.SerialNumber = big.NewInt(i + 100)
+		raw, err := x509.CreateCertificate(rand.Reader, &template, top.cert, &issuer.key.PublicKey, top.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := receiver.Verify([][]byte{peer.cert.Raw, raw, top.cert.Raw}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, chain := range map[string][][]byte{
+		"complete":            {peer.cert.Raw, issuer.cert.Raw, top.cert.Raw},
+		"issuer-omitted":      {peer.cert.Raw, top.cert.Raw},
+		"grandparent-omitted": {peer.cert.Raw, issuer.cert.Raw},
+		"all-issuers-omitted": {peer.cert.Raw},
+	} {
+		t.Run(name, func(t *testing.T) {
+			complete := receiver.knownIssuerCandidates(chain, time.Now())
+			if len(complete) > 16 {
+				t.Fatalf("completion produced %d certificates", len(complete))
+			}
+			for i, raw := range chain {
+				if !bytes.Equal(raw, complete[i]) {
+					t.Fatal("completion changed a supplied certificate")
+				}
+			}
+			if _, err := receiver.VerifyTLS(chain, time.Now()); err != nil {
+				t.Fatalf("valid cached chain rejected after renewals: %v", err)
+			}
+		})
+	}
+}

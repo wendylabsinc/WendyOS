@@ -148,3 +148,16 @@ On a host with Avahi or mDNS, find devices with:
 ```sh
 dns-sd -B _wendyos._udp local.
 ```
+
+## Check regulatory restrictions
+
+Use `wendy device wifi regulatory` to inspect the country and permitted channels.
+Use `wendy device wifi regulatory set-country <COUNTRY>` to request the device's
+actual two-letter country code. Requests are temporary hints; driver and firmware
+restrictions still apply. See the
+[Wi-Fi command guide](../../clients/wendy-cli/commands/device/wifi.md#check-wi-fi-country-and-available-channels)
+for examples and detailed output.
+
+The Linux agent requires `iw`. It reads the kernel-wide country and each radio's
+restrictions within a ten-second operation limit. The service uses the same
+access controls as other Wi-Fi settings.

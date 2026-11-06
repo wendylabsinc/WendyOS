@@ -39,6 +39,13 @@ func newCloudDiscoverCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if authCertExpired(auth) {
+				if jsonOutput || !isInteractiveTerminal() {
+					return fmt.Errorf("%w; sign in again to get a new one: wendy auth login", errCertExpired)
+				}
+				// pickAuthEntry printed the warning and remedy; the view would hide them.
+				return &ReportedExitError{}
+			}
 			if jsonOutput || !isInteractiveTerminal() {
 				return cloudDiscoverJSON(ctx, auth, all)
 			}
@@ -96,6 +103,17 @@ type cloudDiscoverModel struct {
 	err            error
 	hasResults     bool
 	defaultDevice  string
+	certExpired    bool
+}
+
+// authCertExpired reports whether the session's certificate is past NotAfter.
+// An unparseable certificate counts as unexpired so the connection still runs.
+func authCertExpired(auth *config.AuthConfig) bool {
+	if auth == nil || len(auth.Certificates) == 0 {
+		return false
+	}
+	notAfter, err := leafNotAfterFn(auth.Certificates[0].PemCertificate)
+	return err == nil && timeNowFn().After(notAfter)
 }
 
 func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerURL string, all, pickerMode bool, initialAssets []*cloudpb.Asset) cloudDiscoverModel {
@@ -109,6 +127,7 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 		versions:       make(map[string]*agentpb.GetAgentVersionResponse),
 		versionPending: make(map[string]bool),
 		versionSem:     make(chan struct{}, 5),
+		certExpired:    authCertExpired(auth),
 	}
 	if initialAssets != nil {
 		m.devices = legacyDiscoveryDevices(initialAssets)
@@ -200,6 +219,18 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			key, err := cloudDiscoveryDeviceDefault(m.auth, m.devices[cursor])
+			if err == nil && key == m.defaultDevice {
+				// A toggle, as on the other tabs: 'd' on the default clears it.
+				message, err := unsetPickerDefault()
+				m.flashIsError = err != nil
+				if err != nil {
+					m.flashMessage = err.Error()
+				} else {
+					m.defaultDevice, m.flashMessage = "", message
+					m.refreshTable()
+				}
+				return m, clearFlashAfter(3 * time.Second)
+			}
 			if err == nil {
 				err = saveDefaultDevice(key)
 			}
@@ -209,16 +240,6 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.defaultDevice = key
 				m.flashMessage = fmt.Sprintf("Default device set to %s.", m.devices[cursor].GetName())
-				m.refreshTable()
-			}
-			return m, clearFlashAfter(3 * time.Second)
-		case "x":
-			message, err := unsetPickerDefault()
-			m.flashIsError = err != nil
-			if err != nil {
-				m.flashMessage = err.Error()
-			} else {
-				m.defaultDevice, m.flashMessage = "", message
 				m.refreshTable()
 			}
 			return m, clearFlashAfter(3 * time.Second)
@@ -310,9 +331,9 @@ func (m cloudDiscoverModel) View() string {
 	if m.pickerMode {
 		sb.WriteString(m.purpose.header(m.windowWidth))
 		sb.WriteString(m.viewLine(scanStyle.Render("⟳ Fetching cloud devices...")) + "\n")
-		hint := "  ↑/↓ navigate, enter select, d default, x clear default, u update, q quit"
+		hint := "  ↑/↓ navigate, enter select, d toggle default, u update, q quit"
 		if m.table.CanScroll() {
-			hint = "  ↑/↓ navigate, ←/→ scroll, enter select, d default, x clear default, u update, q quit"
+			hint = "  ↑/↓ navigate, ←/→ scroll, enter select, d toggle default, u update, q quit"
 		}
 		sb.WriteString(m.viewLine(dimStyle.Render(hint)) + "\n")
 	} else {
@@ -320,9 +341,9 @@ func (m cloudDiscoverModel) View() string {
 		if m.updatingName != "" {
 			sb.WriteString(m.viewLine(dimStyle.Render("  working on "+m.updatingName+"... (q quit)")) + "\n")
 		} else {
-			hint := "  ↑/↓ navigate, enter copy, a copy all, d default, x clear default, u update, q quit"
+			hint := "  ↑/↓ navigate, enter copy, a copy all, d toggle default, u update, q quit"
 			if m.table.CanScroll() {
-				hint = "  ↑/↓ navigate, ←/→ scroll, enter copy, a copy all, d default, x clear default, u update, q quit"
+				hint = "  ↑/↓ navigate, ←/→ scroll, enter copy, a copy all, d toggle default, u update, q quit"
 			}
 			sb.WriteString(m.viewLine(dimStyle.Render(hint)) + "\n")
 		}
@@ -330,6 +351,12 @@ func (m cloudDiscoverModel) View() string {
 
 	sb.WriteString("\n")
 
+	// The view owns the terminal, so the expiry warning has to live in it.
+	if m.certExpired {
+		for _, line := range strings.Split(staleCertificateWarning(errCertExpired), "\n") {
+			sb.WriteString(m.viewLine(line) + "\n")
+		}
+	}
 	if m.err != nil {
 		sb.WriteString(m.viewLine(fmt.Sprintf("Error: %v", m.err)) + "\n")
 	}
@@ -344,7 +371,7 @@ func (m cloudDiscoverModel) View() string {
 		if legend := tui.DeviceWarningLegend(cloudDiscoveryLegendItems(m.devices, m.versions)); legend != "" {
 			sb.WriteString(m.viewLine(dimStyle.Render("  "+legend)) + "\n")
 		}
-	} else if m.err == nil {
+	} else if m.err == nil && !m.certExpired {
 		if m.hasResults {
 			if m.all {
 				sb.WriteString(m.viewLine(dimStyle.Render("No enrolled devices found.")) + "\n")
@@ -409,7 +436,6 @@ func cloudDiscoveryTableRows(assets []cloudDiscoveryDevice, versions map[string]
 		ver := "—"
 		if a.isLite() {
 			// No agent to probe, and the firmware's version is not the CLI's.
-			devType = liteDeviceType(devType)
 			if v := a.v2.GetOsVersion(); v != "" {
 				ver = v
 			}
@@ -580,7 +606,26 @@ func cloudDiscoverJSON(ctx context.Context, auth *config.AuthConfig, all bool) e
 	}
 	infos := make([]any, 0, len(devices))
 	for _, d := range devices {
-		infos = append(infos, d.info(nil))
+		// Consumers must retain the discovery session's endpoint and tenant,
+		// rather than resolve an asset ID against whichever login is current.
+		selector, err := cloudDiscoveryDeviceDefault(auth, d)
+		if err != nil {
+			return fmt.Errorf("creating Cloud device selector: %w", err)
+		}
+		switch info := d.info(nil).(type) {
+		case discoverDeviceInfo:
+			infos = append(infos, struct {
+				discoverDeviceInfo
+				Selector string `json:"selector"`
+			}{info, selector})
+		case cloudDiscoverV2Info:
+			infos = append(infos, struct {
+				cloudDiscoverV2Info
+				Selector string `json:"selector"`
+			}{info, selector})
+		default:
+			return fmt.Errorf("unsupported Cloud device inventory type %T", info)
+		}
 	}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")

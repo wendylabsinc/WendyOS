@@ -60,7 +60,9 @@ func TestLiteCloudBrokerDPoPMatchesTLSAuthority(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AddCert(certificate)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// localhost can resolve to both loopback families. Serve both so a failed
+	// IPv6 connection cannot hide the TLS rejection from the IPv4 connection.
+	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatal(err)
 	}

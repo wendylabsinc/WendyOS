@@ -15,16 +15,17 @@ import (
 )
 
 type cameraPairTestClient struct {
-	devices    []*agentpb.VideoDevice
-	scans      int
-	saved      *agentpb.SetCameraCredentialsRequest
-	forgot     uint32
-	err        error
-	refreshErr error
-	lists      int
+	devices      []*agentpb.VideoDevice
+	scans        int
+	saved        *agentpb.SetCameraCredentialsRequest
+	forgot       uint32
+	err          error
+	refreshErr   error
+	lists        int
+	listUnpaired bool
 }
 
-func (c *cameraPairTestClient) RefreshCameras(context.Context, *agentpb.RefreshCamerasRequest, ...grpc.CallOption) (*agentpb.RefreshCamerasResponse, error) {
+func (c *cameraPairTestClient) RefreshCameras(_ context.Context, _ *agentpb.RefreshCamerasRequest, _ ...grpc.CallOption) (*agentpb.RefreshCamerasResponse, error) {
 	c.scans++
 	if c.refreshErr != nil {
 		return nil, c.refreshErr
@@ -32,8 +33,9 @@ func (c *cameraPairTestClient) RefreshCameras(context.Context, *agentpb.RefreshC
 	return &agentpb.RefreshCamerasResponse{Devices: c.devices}, c.err
 }
 
-func (c *cameraPairTestClient) ListVideoDevices(context.Context, *agentpb.ListVideoDevicesRequest, ...grpc.CallOption) (*agentpb.ListVideoDevicesResponse, error) {
+func (c *cameraPairTestClient) ListVideoDevices(_ context.Context, req *agentpb.ListVideoDevicesRequest, _ ...grpc.CallOption) (*agentpb.ListVideoDevicesResponse, error) {
 	c.lists++
+	c.listUnpaired = req.GetIncludeUnpaired()
 	return &agentpb.ListVideoDevicesResponse{Devices: c.devices}, c.err
 }
 
@@ -43,6 +45,23 @@ func TestCameraPairDiscoveryFallsBackForOlderAgents(t *testing.T) {
 	msg := h.scan()().(cameraPairScanMsg)
 	if msg.err != nil || len(msg.devices) != 1 || c.scans != 1 || c.lists != 1 {
 		t.Fatalf("discovery fallback failed: %+v", msg)
+	}
+	if !c.listUnpaired {
+		t.Fatal("pairing fallback did not ask ListVideoDevices for unpaired cameras")
+	}
+}
+
+// Pairing is where a camera without a login gets one, so the scan must list the
+// cameras the agent otherwise hides. RefreshCameras always includes them, so the
+// scan must use it and not ListVideoDevices' default listing.
+func TestCameraPairScanListsUnpairedCameras(t *testing.T) {
+	c := &cameraPairTestClient{devices: []*agentpb.VideoDevice{{Id: 201, Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP}}}
+	h := &cameraPairHandler{ctx: context.Background(), client: c}
+	if msg := h.scan()().(cameraPairScanMsg); msg.err != nil || len(msg.devices) != 1 {
+		t.Fatalf("scan = %+v", msg)
+	}
+	if c.scans != 1 || c.lists != 0 {
+		t.Fatalf("pairing scan made %d RefreshCameras and %d ListVideoDevices calls, want 1 and 0", c.scans, c.lists)
 	}
 }
 
@@ -107,7 +126,8 @@ func TestDevicePairCameraTabCredentialFormAndBackgroundResults(t *testing.T) {
 		{Id: 42, Name: "Door camera", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP, Online: true},
 	}}
 	m := newDevicePairModel(&pairTestBluetooth{}, pairTestHandler(&pairTestClient{}), &cameraPairHandler{ctx: context.Background(), client: c})
-	// Shift+Tab passes Unitree before reaching IP Cameras.
+	// Shift+Tab wraps through Unitree and USB Arms before reaching IP Cameras.
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, scan := pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if m.active != pairCameraTab || scan == nil || c.scans != 0 {
@@ -133,14 +153,16 @@ func TestDevicePairCameraTabCredentialFormAndBackgroundResults(t *testing.T) {
 	}
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.active != pairBluetoothTab {
-		t.Fatal("Tab did not wrap through Unitree to Bluetooth")
+		t.Fatal("Tab did not wrap through USB Arms and Unitree to Bluetooth")
 	}
 	m, _ = pairUpdate(m, save())
 	if c.saved == nil || c.saved.DeviceId != 42 || c.saved.Username != "admin" || c.saved.Password != secret || !m.camera.devices[0].HasCredentials || m.active != pairBluetoothTab {
 		t.Fatal("camera save result was not routed to its background tab")
 	}
 	// Revisit, edit and cancel without exiting the surrounding picker.
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, rescan := pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, _ = pairUpdate(m, rescan())

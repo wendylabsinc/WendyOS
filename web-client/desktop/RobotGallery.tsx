@@ -46,7 +46,7 @@ function RobotPreview({
         wheelZoom: false,
         lidar: false,
         frameInterval: 100,
-        viewOffset: robot.kind === "g1" ? [2.4, -2.7, 1.5] : [1.35, -1.6, 0.95],
+        viewOffset: robot.kind === "g1" ? [2.4, -2.7, 1.5] : robot.kind === "so101" ? [.5, -.65, .4] : [1.35, -1.6, 0.95],
       });
       const observer = new IntersectionObserver(([entry]) =>
         viewer.setActive(entry.isIntersecting),
@@ -73,7 +73,7 @@ function RobotPreview({
           Connecting to live view…
         </span>
         <span className="desktop-robot-preview-kind">
-          {robot.kind === "g1" ? "Unitree G1" : "Unitree Go2"}
+          {robot.kind === "g1" ? "Unitree G1" : robot.kind === "so101" ? "LeRobot SO-101" : "Unitree Go2"}
         </span>
       </span>
       <span className="desktop-robot-preview-caption">

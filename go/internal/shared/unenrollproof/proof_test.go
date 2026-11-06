@@ -11,6 +11,7 @@ import (
 	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -73,7 +74,7 @@ func fixture(t *testing.T, pq bool) (*x509.Certificate, *x509.Certificate, crypt
 func answer(t *testing.T, leaf, issuer *x509.Certificate, key crypto.Signer, status int) []byte {
 	t.Helper()
 	now := time.Now().Truncate(time.Second)
-	template := ocsp.Response{Status: status, SerialNumber: leaf.SerialNumber, ThisUpdate: now.Add(-time.Minute), NextUpdate: now.Add(time.Hour), RevokedAt: now.Add(-time.Minute)}
+	template := ocsp.Response{IssuerHash: crypto.SHA256, Status: status, SerialNumber: leaf.SerialNumber, ThisUpdate: now.Add(-time.Minute), NextUpdate: now.Add(time.Hour), RevokedAt: now.Add(-time.Minute)}
 	signer := key
 	_, pq := key.Public().(*mldsa.PublicKey)
 	if pq {
@@ -135,6 +136,39 @@ func TestFetchRefreshesEvidenceWithoutSavedWorkflowState(t *testing.T) {
 	proof, err := fetchRevocation(context.Background(), leaf, issuer, server.Client())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := VerifyRevocation(proof, leaf, issuer, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFetchUsesSHA256CertificateID(t *testing.T) {
+	leaf, issuer, _, signer := fixture(t, true)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		request, err := ocsp.ParseRequest(body)
+		if err != nil || request.HashAlgorithm != crypto.SHA256 {
+			// The production responder holds only pre-signed SHA-256 CertIDs.
+			_, _ = w.Write([]byte{0x30, 0x03, 0x0a, 0x01, 0x06})
+			return
+		}
+		requests.Add(1)
+		_, _ = w.Write(answer(t, leaf, issuer, signer, ocsp.Revoked))
+	}))
+	defer server.Close()
+	leaf.OCSPServer = []string{server.URL}
+	proof, err := fetchRevocation(context.Background(), leaf, issuer, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 {
+		t.Fatal("responder did not accept the requested CertID")
 	}
 	if err := VerifyRevocation(proof, leaf, issuer, time.Now()); err != nil {
 		t.Fatal(err)

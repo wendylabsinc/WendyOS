@@ -24,10 +24,6 @@ unverified.
 2026-10-18: 0.5.5 returns `auth.client` to `{"mode": "cimd"}`; the portal
 rejected the 0.5.4 explicit provided client and the omitted-client candidate.
 
-Do not use the standalone gateway's `wendy-chatgpt` client or its
-`robots:read`, `cameras:capture`, `apps:control`, and `preferences:write` scopes
-for this relay. Its separate configuration examples are not in the public ZIP.
-
 Read-only checks on 2026-10-15 confirmed the relay metadata and that the
 authorization endpoint accepts ChatGPT's client metadata URL before sign-in.
 Those checks did not establish a successful OAuth grant or device operation.
@@ -356,8 +352,7 @@ call. With `--auto-accept`, the initial status request may return
 Keep that computer awake and the CLI process running. The relay serves its
 reviewed CLI catalog, including `wendy_status`, `cloud_discover`,
 `device_connect`, `device_info`, `container_list`, `telemetry_logs`,
-`camera_list`, `camera_snapshot`, and `container_stop`. It does not serve the
-standalone gateway's `list_robots` or `inspect_robot` tools.
+`camera_list`, `camera_snapshot`, and `container_stop`.
 
 The default policy permits built-in read-only device and Cloud tools that do
 not access the host, and asks for confirmation before each call. `--allow-read`
@@ -729,13 +724,13 @@ cases, Developer Tools category, and hosted OAuth configuration.
 The full developer skills remain in the local CLI and local plugin packages.
 The sync script now keeps the public skill separate, and the packager rejects
 unexpected public skill files. The relay source now selects the public catalog
-for both skill import and resource reads. Local and standalone gateway catalogs
-retain the developer bundle. A rebuilt CLI relay is required for that runtime
+for both skill import and resource reads. Local and standalone gateway (since
+removed) catalogs retain the developer bundle. A rebuilt CLI relay is required for that runtime
 change; a ZIP upload alone does not update an already running CLI. The running
 relay has not been replaced or restarted as part of this correction.
 
 Validation passed for all 21 package tests, the 13-skill synchronization check,
-and focused Go tests for hosted skill import, local/gateway import, transport
+and focused Go tests for hosted skill import, local/gateway (since removed) import, transport
 shutdown, personal ChatGPT package export, and local skill installation. The
 hosted transport test verifies matching public bytes and digests and rejects
 reads of the former installer reference. This is local test evidence, not a

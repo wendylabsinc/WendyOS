@@ -78,6 +78,34 @@ func TestPlainRendererNoHeartbeatWhenDisabled(t *testing.T) {
 	}
 }
 
+// A reopened step (a lazily pulled base image) prints nothing while it runs
+// again, a second done line with the later duration when it finishes, and is
+// one step in the tally. CI logs get no ticking timer, only the heartbeat.
+func TestPlainRendererReopenedStepCountsOnce(t *testing.T) {
+	var sb strings.Builder
+	emit, tally, stop := newBuildPlainRenderer(&sb, 0)
+	defer stop()
+	from := BuildStepEvent{ID: "#5", Kind: BuildVertexStep, Display: "[1/5] FROM pytorch", Status: BuildStepRunning}
+	emit(from)
+	from.Status, from.Dur = BuildStepDone, 2*time.Second
+	emit(from)
+	before := sb.String()
+	emit(BuildStepEvent{ID: "#5", Kind: BuildVertexStep, Display: "[1/5] FROM pytorch", Status: BuildStepRunning,
+		Detail: "unpacking layer 1", Bytes: ByteProgress{Current: 3_100_000_000, Total: 7_800_000_000}})
+	if sb.String() != before {
+		t.Fatalf("a running event printed output:\n%s", sb.String())
+	}
+	from.Dur = 533700 * time.Millisecond
+	emit(from)
+
+	if out := sb.String(); !strings.Contains(out, "2.0s") || !strings.Contains(out, "533.7s") {
+		t.Errorf("want both done lines:\n%s", out)
+	}
+	if got := tally(); got.Cached != 0 || got.Rebuilt != 1 {
+		t.Errorf("tally = %+v, want the step counted once", got)
+	}
+}
+
 // safeBuilder is a strings.Builder guarded for the heartbeat goroutine.
 type safeBuilder struct {
 	mu sync.Mutex

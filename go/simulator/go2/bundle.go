@@ -109,6 +109,12 @@ func materialize(cacheRoot string, tree fs.FS, digest string) (string, error) {
 	if err := makeReadOnly(temporary); err != nil {
 		return "", fmt.Errorf("protecting Go2 source cache: %w", err)
 	}
+	// macOS requires write permission on a directory to rename it. Keep only
+	// this invocation's root writable until publication; its payload remains
+	// read-only, and the cache lock excludes other cooperating readers.
+	if err := os.Chmod(temporary, 0o700); err != nil {
+		return "", fmt.Errorf("preparing Go2 source cache publication: %w", err)
+	}
 	// Check again rather than replacing a directory created by a non-cooperating
 	// cache writer while the payload was being prepared.
 	if _, err := os.Lstat(target); err == nil {
@@ -121,6 +127,11 @@ func materialize(cacheRoot string, tree fs.FS, digest string) (string, error) {
 	}
 	if err := os.Rename(temporary, target); err != nil {
 		return "", fmt.Errorf("publishing Go2 source cache: %w", err)
+	}
+	// Retain cleanup ownership until the published root is protected too.
+	temporary = target
+	if err := os.Chmod(target, 0o555); err != nil {
+		return "", fmt.Errorf("protecting published Go2 source cache: %w", err)
 	}
 	temporary = "" // Ownership moved to the published cache; never clean it up.
 	return target, nil

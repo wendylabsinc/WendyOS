@@ -23,6 +23,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -97,34 +98,54 @@ const (
 
 // targetDialer opens a gRPC connection to a target device's agent. A field on
 // the service rather than a method so tests can point delivery at an
-// in-process fake; production dials the mesh peer, pinned to its asset id.
+// in-process fake; production resolves the PushTarget's asset UUID against
+// this tenant's roster, dials the mesh peer, and pins TLS to its principal.
 type targetDialer func(ctx context.Context, target *agentpbv2.PushTarget) (*grpc.ClientConn, error)
 
 // meshTargetDialer reaches a target's agent the way the registry push reached
-// its registry: a byte stream from the peer dialer, LAN-direct or relayed,
-// with mTLS on top pinned to the asset the image was built for. The pin is
+// its registry: a byte stream from the peer dialer, over LAN or Babel,
+// with mTLS on top pinned to the device the image was built for. The pin is
 // not optional — see BuildServiceOptions.PushTLS — and it holds for this hop
 // exactly as for the registry one, since the image content is the same.
-func meshTargetDialer(peers PeerDialer, pushTLS func(int32) (*tls.Config, error), defaultPort uint16) targetDialer {
+func meshTargetDialer(peers PeerDialer, resolve func(string) (DeliveryTarget, error), pushTLS func(meshid.Device) (*tls.Config, error), defaultPort uint16) targetDialer {
 	return func(ctx context.Context, target *agentpbv2.PushTarget) (*grpc.ClientConn, error) {
 		if peers == nil || pushTLS == nil {
-			return nil, errors.New("this build host has no mesh dialer or client certificate")
+			return nil, errors.New("this build host has no wendy net dialer or client certificate")
 		}
 		port, err := deliveryTargetAgentPort(target, defaultPort)
 		if err != nil {
 			return nil, err
 		}
-		tlsCfg, err := pushTLS(target.GetAssetId())
+		resolved, err := resolve(target.GetAssetUuid())
+		if err != nil {
+			return nil, fmt.Errorf("resolving delivery target device %s: %w", target.GetAssetUuid(), err)
+		}
+		tlsCfg, err := pushTLS(resolved.Device)
 		if err != nil {
 			return nil, fmt.Errorf("loading delivery credentials: %w", err)
 		}
-		assetID := target.GetAssetId()
+		if tlsCfg == nil {
+			return nil, errors.New("missing delivery TLS credentials")
+		}
+		transportCredentials := credentials.NewTLS(tlsCfg)
 		return grpc.NewClient("passthrough:///build-target",
-			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-				conn, _, err := peers.DialDevice(ctx, assetID, port)
-				return conn, err
+			grpc.WithContextDialer(func(ctx context.Context, authority string) (net.Conn, error) {
+				raw, mode, err := peers.DialTarget(ctx, resolved, port)
+				if err != nil {
+					return nil, err
+				}
+				var info credentials.AuthInfo
+				secure, err := authenticateDelivery(ctx, peers, resolved, port, raw, mode, func(ctx context.Context, raw net.Conn) (net.Conn, error) {
+					conn, authenticated, err := transportCredentials.ClientHandshake(ctx, authority, raw)
+					info = authenticated
+					return conn, err
+				})
+				if err != nil {
+					return nil, err
+				}
+				return &deliveryAuthenticatedConn{Conn: secure, authInfo: info}, nil
 			}),
-			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+			grpc.WithTransportCredentials(&deliveryCredentials{TransportCredentials: transportCredentials}),
 			// The device unpacks the image after the last chunk lands, which can
 			// take minutes with nothing on the wire. Pings keep a relayed path
 			// from being torn down as idle meanwhile; the agent's server policy
@@ -143,7 +164,7 @@ func deliveryTargetAgentPort(target *agentpbv2.PushTarget, fallback uint16) (uin
 		return fallback, nil
 	}
 	if port > 65535 {
-		return 0, fmt.Errorf("target device %d has invalid agent port %d", target.GetAssetId(), port)
+		return 0, fmt.Errorf("target device %s has invalid agent port %d", target.GetAssetUuid(), port)
 	}
 	return uint16(port), nil
 }
@@ -195,13 +216,13 @@ type deliveryReporter struct {
 	last  time.Time
 }
 
-func newDeliveryReporter(prog *buildProgress, index int, assetID int32) *deliveryReporter {
+func newDeliveryReporter(prog *buildProgress, index int, assetUUID string) *deliveryReporter {
 	r := &deliveryReporter{
 		prog:    prog,
 		vertex:  fmt.Sprintf("#%d", deliveryVertexBase+index),
 		started: time.Now(),
 	}
-	r.prog.logf("%s pushing layers to device %d by chunks", r.vertex, assetID)
+	r.prog.logf("%s pushing layers to device %s by chunks", r.vertex, assetUUID)
 	return r
 }
 
@@ -374,7 +395,7 @@ func decompressAndChunkLayer(img *exportedImage, l ociLayer, dir string) (*deliv
 // decompression. Deliveries share it sequentially; it is not safe for
 // concurrent callers.
 func (s *BuildService) deliverByChunks(ctx context.Context, prog *buildProgress, index int, img *exportedImage, target *agentpbv2.PushTarget, resolved map[string]*deliveryLayer) error {
-	rep := newDeliveryReporter(prog, index, target.GetAssetId())
+	rep := newDeliveryReporter(prog, index, target.GetAssetUuid())
 
 	for attempt := 1; ; attempt++ {
 		err := s.deliverByChunksOnce(ctx, rep, img, target, resolved)
@@ -404,10 +425,10 @@ var deliveryBackoff = func(attempt int) time.Duration {
 // send the rest, and have it assemble the image. resolved caches decompressed
 // layers by diff ID across attempts and is owned by the caller.
 func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryReporter, img *exportedImage, target *agentpbv2.PushTarget, resolved map[string]*deliveryLayer) error {
-	assetID := target.GetAssetId()
+	assetUUID := target.GetAssetUuid()
 	cc, err := s.dialTarget(ctx, target)
 	if err != nil {
-		return &transientDeliveryError{fmt.Errorf("reaching device %d over the mesh: %w", assetID, err)}
+		return &transientDeliveryError{fmt.Errorf("reaching device %s over the wendy net: %w", assetUUID, err)}
 	}
 	defer cc.Close()
 	cs := agentpb.NewWendyContainerServiceClient(cc)
@@ -419,11 +440,11 @@ func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryRep
 		if code, _ := grpcStatusCode(err); code == codes.Unimplemented {
 			return errChunkDeliveryUnsupported
 		}
-		return fmt.Errorf("querying device %d's chunk store: %w", assetID, err)
+		return fmt.Errorf("querying device %s's chunk store: %w", assetUUID, err)
 	}
 	present, err := presentLayersOn(ctx, cs, img)
 	if err != nil {
-		rep.detail("could not ask device %d which layers it already holds (%v); chunking every layer", assetID, err)
+		rep.detail("could not ask device %s which layers it already holds (%v); chunking every layer", assetUUID, err)
 	}
 
 	// Classify every layer before resolving any, so the cache of decompressed
@@ -475,10 +496,10 @@ func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryRep
 			}
 		}
 		if waitErr != nil {
-			return fmt.Errorf("preparing layers for device %d: %w", assetID, waitErr)
+			return fmt.Errorf("preparing layers for device %s: %w", assetUUID, waitErr)
 		}
 	}
-	rep.detail("%d layer(s): device %d already has %d, diffing %d", len(img.layers), assetID, reused, len(toPush))
+	rep.detail("%d layer(s): device %s already has %d, diffing %d", len(img.layers), assetUUID, reused, len(toPush))
 
 	// PrepareImage runs concurrently with the upload. On the device it waits for
 	// each layer's chunks, then assembles and unpacks from the base up while
@@ -494,7 +515,7 @@ func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryRep
 	// Sized before anything is sent: the device would reject an oversized
 	// PrepareImage or QueryChunks only after layers were in flight, wasting the
 	// transfer and blaming the device for what is this image's size (WDY-3121).
-	if err := checkChunkInventoryFits(assetID, prepareReq, toPush); err != nil {
+	if err := checkChunkInventoryFits(assetUUID, prepareReq, toPush); err != nil {
 		return err
 	}
 	prepareCtx, cancelPrepare := context.WithCancel(ctx)
@@ -519,16 +540,16 @@ func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryRep
 			g.Go(func() error { return uploadLayerChunks(gctx, cs, dl, rep) })
 		}
 		if uploadErr := g.Wait(); uploadErr != nil {
-			return settleUploadFailure(assetID, uploadErr, prepareDone, cancelPrepare)
+			return settleUploadFailure(assetUUID, uploadErr, prepareDone, cancelPrepare)
 		}
 	}
 
 	select {
 	case prepareErr := <-prepareDone:
-		return classifyPrepareError(assetID, prepareErr)
+		return classifyPrepareError(assetUUID, prepareErr)
 	default:
-		rep.detail("waiting for device %d to assemble and unpack the image", assetID)
-		return classifyPrepareError(assetID, <-prepareDone)
+		rep.detail("waiting for device %s to assemble and unpack the image", assetUUID)
+		return classifyPrepareError(assetUUID, <-prepareDone)
 	}
 }
 
@@ -541,11 +562,11 @@ func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryRep
 // registers the image at once, and the upload's own QueryChunks or
 // CloseAndRecv can still lose the link afterwards. The goroutine reports
 // exactly once, so a second wait in that case would hang the RPC for good.
-func settleUploadFailure(assetID int32, uploadErr error, prepareDone <-chan error, cancelPrepare context.CancelFunc) error {
+func settleUploadFailure(assetUUID string, uploadErr error, prepareDone <-chan error, cancelPrepare context.CancelFunc) error {
 	select {
 	case prepareErr := <-prepareDone:
 		if prepareErr != nil {
-			return classifyPrepareError(assetID, prepareErr)
+			return classifyPrepareError(assetUUID, prepareErr)
 		}
 		return uploadErr
 	default:
@@ -604,15 +625,15 @@ func uploadLayerChunks(ctx context.Context, cs agentpb.WendyContainerServiceClie
 // exceed maxChunkMessageBytes, before any of them is sent. The wrap names the
 // oversized message; errors.Is(err, errChunkInventoryTooLarge) is the
 // fallback decision's key.
-func checkChunkInventoryFits(assetID int32, prepare *agentpb.RunContainerLayersRequest, toPush []*deliveryLayer) error {
+func checkChunkInventoryFits(assetUUID string, prepare *agentpb.RunContainerLayersRequest, toPush []*deliveryLayer) error {
 	if n := proto.Size(prepare); n > maxChunkMessageBytes {
-		return fmt.Errorf("device %d would refuse the %s inventory of this image's %d layers: %w",
-			assetID, formatBuildBytes(int64(n)), len(prepare.GetLayers()), errChunkInventoryTooLarge)
+		return fmt.Errorf("device %s would refuse the %s inventory of this image's %d layers: %w",
+			assetUUID, formatBuildBytes(int64(n)), len(prepare.GetLayers()), errChunkInventoryTooLarge)
 	}
 	for _, dl := range toPush {
 		if n := proto.Size(&agentpb.QueryChunksRequest{ChunkHashes: dl.header.GetChunkHashes()}); n > maxChunkMessageBytes {
-			return fmt.Errorf("device %d would refuse layer %s's %s chunk list: %w",
-				assetID, dl.header.GetDiffId(), formatBuildBytes(int64(n)), errChunkInventoryTooLarge)
+			return fmt.Errorf("device %s would refuse layer %s's %s chunk list: %w",
+				assetUUID, dl.header.GetDiffId(), formatBuildBytes(int64(n)), errChunkInventoryTooLarge)
 		}
 	}
 	return nil
@@ -622,14 +643,14 @@ func checkChunkInventoryFits(assetID int32, prepare *agentpb.RunContainerLayersR
 // means the agent cannot register an image by name from chunks, which is the
 // fallback case; anything else is that device's failure, and its gRPC code is
 // preserved through the wrap so the resume decision can read it.
-func classifyPrepareError(assetID int32, err error) error {
+func classifyPrepareError(assetUUID string, err error) error {
 	if err == nil {
 		return nil
 	}
 	if code, _ := grpcStatusCode(err); code == codes.Unimplemented {
 		return errChunkDeliveryUnsupported
 	}
-	return fmt.Errorf("device %d could not assemble the image from chunks: %w", assetID, err)
+	return fmt.Errorf("device %s could not assemble the image from chunks: %w", assetUUID, err)
 }
 
 // transientDeliveryError marks a failure that happened before any bytes moved

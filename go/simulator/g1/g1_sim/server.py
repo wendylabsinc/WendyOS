@@ -1,5 +1,6 @@
 """Small local sandbox endpoint; the physics runtime outlives browser clients."""
 
+import faulthandler
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,8 @@ class Handler(BaseHTTPRequestHandler):
             if path in {"/api/status", "/api/health"}:
                 status = self.runtime.status()
                 self.send(200 if path == "/api/status" or status["ready"] else 503, status)
+            elif path == "/api/project":
+                self.send(200, self.runtime.project_status.copy())
             elif path == "/api/profile":
                 profile = Path(__file__).resolve().parents[1] / "compatibility.json"
                 self.send(200, json.loads(profile.read_text()))
@@ -71,6 +74,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/frame.jpg":
                 self.send(410, {"error": "observer images were replaced by /api/scene and /api/scene/state"})
             elif path == "/camera.jpg":
+                self.runtime.camera_demand = time.monotonic()
                 jpeg = self.runtime.camera_jpeg
                 if jpeg is None:
                     self.send(503, {"error": "waiting for first frame"})
@@ -92,6 +96,25 @@ class Handler(BaseHTTPRequestHandler):
             # The client disconnected; there is no response left to send.
             pass
 
+    def project_update(self):
+        from .project import MAX_REQUEST, apply_project
+        if not self.runtime.project_lock.acquire(blocking=False):
+            self.close_connection = True
+            self.send(503, {"error": "project update busy; retry"})
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if size <= 0 or size > MAX_REQUEST:
+                self.close_connection = True
+                self.send(413, {"error": "project request exceeds 12 MiB"})
+                return
+            body = json.loads(self.rfile.read(size))
+            if not isinstance(body, dict):
+                raise ValueError("project request must be an object")
+            self.send(200, apply_project(self.runtime, body, "g1"))
+        finally:
+            self.runtime.project_lock.release()
+
     def do_POST(self):
         try:
             origin = self.headers.get("Origin")
@@ -102,6 +125,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Transfer-Encoding"):
                 self.close_connection = True
                 self.send(400, {"error": "use Content-Length for control requests"})
+                return
+            if urlsplit(self.path).path == "/api/project":
+                self.project_update()
                 return
             size = int(self.headers.get("Content-Length", "0"))
             if size < 0 or size > 4096:
@@ -174,6 +200,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    faulthandler.enable()
     runtime = Runtime(render=os.environ.get("G1_RENDER", "1") != "0",
                       ros=os.environ.get("G1_ROS", "0") == "1")
     server = ThreadingHTTPServer((os.environ.get("G1_HOST", "127.0.0.1"),

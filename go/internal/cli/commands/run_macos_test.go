@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
@@ -28,6 +30,12 @@ type fakeMacRunState struct {
 	// sendStarted makes StartContainer acknowledge the start, as a real
 	// agent does, instead of closing the stream silently.
 	sendStarted bool
+	// validates makes the fake an agent with ValidateContainer, which refuses
+	// any container whose name ends in refuseSuffix. Without it the fake is an
+	// older agent that answers Unimplemented.
+	validates    bool
+	refuseSuffix string
+	validateReqs []*agentpb.CreateContainerRequest
 }
 
 type fakeMacAgentServer struct {
@@ -60,6 +68,17 @@ func (s *fakeMacProvisioningServer) IsProvisioned(context.Context, *agentpb.IsPr
 func (s *fakeMacContainerServer) CreateContainer(_ context.Context, req *agentpb.CreateContainerRequest) (*agentpb.CreateContainerResponse, error) {
 	s.state.createReqs = append(s.state.createReqs, proto.Clone(req).(*agentpb.CreateContainerRequest))
 	return &agentpb.CreateContainerResponse{}, nil
+}
+
+func (s *fakeMacContainerServer) ValidateContainer(ctx context.Context, req *agentpb.CreateContainerRequest) (*agentpb.ValidateContainerResponse, error) {
+	if !s.state.validates {
+		return s.UnimplementedWendyContainerServiceServer.ValidateContainer(ctx, req)
+	}
+	s.state.validateReqs = append(s.state.validateReqs, proto.Clone(req).(*agentpb.CreateContainerRequest))
+	if s.state.refuseSuffix != "" && strings.HasSuffix(req.GetAppName(), s.state.refuseSuffix) {
+		return nil, status.Error(codes.FailedPrecondition, "container would fail to create: image cannot be pulled")
+	}
+	return &agentpb.ValidateContainerResponse{}, nil
 }
 
 func (s *fakeMacContainerServer) ListContainers(_ *agentpb.ListContainersRequest, stream grpc.ServerStreamingServer[agentpb.ListContainersResponse]) error {
@@ -603,6 +622,55 @@ func TestRunComposeWithAgent_AllowsMacAgentWithPrebuiltImage(t *testing.T) {
 	}
 	if len(state.createReqs) != 1 {
 		t.Fatalf("CreateContainer calls = %d, want 1", len(state.createReqs))
+	}
+}
+
+// WDY-3850: compose creates its services one by one, so a service the agent
+// would refuse is caught before any service is replaced.
+func TestRunComposeWithAgent_ValidatesEveryServiceBeforeReplacingAny(t *testing.T) {
+	dir := t.TempDir()
+	compose := []byte("services:\n  web:\n    image: docker.io/library/nginx:latest\n  worker:\n    image: docker.io/library/busybox:latest\n")
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), compose, 0o644); err != nil {
+		t.Fatalf("WriteFile compose.yaml: %v", err)
+	}
+
+	state := &fakeMacRunState{validates: true, refuseSuffix: "worker"}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+
+	err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true})
+	if err == nil || !strings.Contains(err.Error(), "worker") || !strings.Contains(err.Error(), "none of the 2 services was replaced") {
+		t.Fatalf("runComposeWithAgent error = %v, want the worker refusal before any replace", err)
+	}
+	if len(state.validateReqs) != 2 {
+		t.Fatalf("ValidateContainer calls = %d, want 2", len(state.validateReqs))
+	}
+	if len(state.createReqs) != 0 {
+		t.Fatalf("CreateContainer calls = %d, want 0", len(state.createReqs))
+	}
+}
+
+func TestRunComposeWithAgent_CreatesServicesTheAgentAccepts(t *testing.T) {
+	dir := t.TempDir()
+	compose := []byte("services:\n  web:\n    image: docker.io/library/nginx:latest\n  worker:\n    image: docker.io/library/busybox:latest\n")
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), compose, 0o644); err != nil {
+		t.Fatalf("WriteFile compose.yaml: %v", err)
+	}
+
+	state := &fakeMacRunState{validates: true}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+
+	if err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true}); err != nil {
+		t.Fatalf("runComposeWithAgent: %v", err)
+	}
+	if len(state.validateReqs) != 2 || len(state.createReqs) != 2 {
+		t.Fatalf("ValidateContainer calls = %d, CreateContainer calls = %d; want 2 each", len(state.validateReqs), len(state.createReqs))
+	}
+	for i, req := range state.validateReqs {
+		if !proto.Equal(req, state.createReqs[i]) {
+			t.Fatalf("service %d validated %v but created %v", i, req, state.createReqs[i])
+		}
 	}
 }
 

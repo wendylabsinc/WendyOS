@@ -52,7 +52,7 @@ func TestCampaignCloudNotificationUsesCampaignIdentity(t *testing.T) {
 		t.Fatalf("sent %d Cloud requests", len(cloud.requests))
 	}
 	request := cloud.requests[0]
-	if request.GetAppId() != "campaign:"+notification.Campaign || request.GetNotificationId() != notification.ID || request.OrganizationId != nil {
+	if request.GetAppId() != "sh.wendy.campaign."+notification.Campaign || request.GetNotificationId() != notification.ID || request.OrganizationId != nil {
 		t.Fatalf("incorrect source attribution: %v", request)
 	}
 	if request.GetDeepLink() != "wendy://live" || request.GetSeverity() != cloudpb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO {
@@ -105,7 +105,7 @@ type deniedCampaignCloud struct{ calls atomic.Int32 }
 
 func (s *deniedCampaignCloud) CreateNotificationV2(context.Context, *cloudpb.CreateNotificationV2Request) (*cloudpb.CreateNotificationV2Response, error) {
 	s.calls.Add(1)
-	return nil, status.Error(codes.PermissionDenied, "campaign grant is disabled")
+	return nil, status.Error(codes.PermissionDenied, "device notification delivery is refused")
 }
 
 func TestCampaignCloudAuthorizationFailureIsTerminal(t *testing.T) {
@@ -139,7 +139,7 @@ func TestCampaignCloudAuthorizationFailureIsTerminal(t *testing.T) {
 	}
 	cancel()
 	<-done
-	if reported == "" || !strings.Contains(reported, "campaign grant is disabled") {
+	if reported == "" || !strings.Contains(reported, "device notification delivery is refused") {
 		t.Fatalf("missing immediate authorization error: %q", reported)
 	}
 	if cloud.calls.Load() != 1 {

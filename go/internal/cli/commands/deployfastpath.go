@@ -30,11 +30,11 @@ import (
 // single-container path also uses it to ensure the existing container
 // is running without recreating it.
 //
-// This is intentionally a local-only, best-effort optimization (WDY fast path):
-// the fingerprint is trusted as-is, and the device is only consulted to confirm
-// the app still exists and learn whether it is running. Any mismatch, missing
-// fingerprint, or RPC hiccup falls back to the normal deploy, so a stale cache
-// can never deploy the wrong code — at worst it triggers an unnecessary build.
+// This is a best-effort optimization: a local fingerprint identifies a candidate
+// deployment, and device queries verify its layers, container, and running state.
+// A missing or mismatched fingerprint or failed verification falls back to the
+// normal deploy. Once verified, lifecycle errors are returned to the caller
+// without rebuilding or redeploying.
 type deployFingerprint struct {
 	// InputHash is computed by computeBuildInputHash over everything that can
 	// affect a single built image, or by a service desired-state hash that also
@@ -677,12 +677,14 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		RestartPolicy: resolveRestartPolicy(opts),
 	})
 	if err != nil {
-		// Could not start the existing container; fall back to a full deploy.
-		return false, nil
+		return true, fmt.Errorf("starting existing container: %w", err)
 	}
+	// Creating the stream does not acknowledge task.Start. Keep the RPC alive
+	// through Started, including any preceding output, before closing the CLI.
 	if err := awaitStarted(stream); err != nil {
-		return true, fmt.Errorf("waiting for container start: %w", err)
+		return true, fmt.Errorf("waiting for existing container start: %w", err)
 	}
+	opts.reportDeployStarted()
 	cliLogln("No changes detected; started existing %s.", containerDisplayName(appCfg))
 	if opts.waitReady {
 		drainDetachedStartOutput(stream)

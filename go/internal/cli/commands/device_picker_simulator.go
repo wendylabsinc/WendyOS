@@ -43,10 +43,12 @@ type simulatorPickerModel struct {
 	err    error
 	loaded bool
 
-	// create is set by the OnCreateItem closure, and vms is the store contents
-	// the new VM's name is chosen against. Pointers because Bubble Tea passes
-	// models by value, so a closure cannot write to a plain field.
+	// create is set by the OnCreateItem closure, start by OnStartItem (the
+	// name of the VM to boot), and vms is the store contents the new VM's name
+	// is chosen against. Pointers because Bubble Tea passes models by value,
+	// so a closure cannot write to a plain field.
 	create *bool
+	start  *string
 	vms    *[]vm.Status
 }
 
@@ -63,14 +65,24 @@ func newSimulatorPickerModel(ctx context.Context) simulatorPickerModel {
 	}
 	m.picker.OnStopItem = func(item tui.PickerItem) (string, bool) { return stopSimulatorRow(ctx, item) }
 	m.picker.OnRemoveItem = removeSimulatorRow
-	// Quits the picker: creating downloads an image behind its own progress
-	// program, and two Bubble Tea programs cannot share a terminal. The caller
-	// creates the VM and comes back.
-	m.create, m.vms = new(bool), new([]vm.Status)
-	create, vms := m.create, m.vms
+	m.picker.RemoveConfirmation = removeSimulatorQuestion
+	// Both quit the picker: creating downloads an image and starting boots the
+	// VM and builds its robot, each behind its own progress program, and two
+	// Bubble Tea programs cannot share a terminal. The caller does the work
+	// and comes back.
+	m.create, m.start, m.vms = new(bool), new(string), new([]vm.Status)
+	create, start, vms := m.create, m.start, m.vms
 	m.picker.OnCreateItem = func() (string, bool) {
 		*create = true
 		return fmt.Sprintf("Creating %s...", nextSimulatorName(*vms)), true
+	}
+	m.picker.OnStartItem = func(item tui.PickerItem) (string, bool, bool) {
+		flash, isErr, name := startSimulatorRow(item)
+		if name == "" {
+			return flash, isErr, false
+		}
+		*start = name
+		return flash, false, true
 	}
 	return m
 }
@@ -86,9 +98,34 @@ var vmStatusFn = func(name string) (vm.Status, error) {
 	return store.Status(name)
 }
 
-// stopSimulatorRow powers 's'. Stop only: a mis-press on the wrong row can then
-// never boot something, and starting already has a home (enter, or
-// `wendy vm start`).
+// startSimulatorRow powers 's'. It only decides whether there is anything to
+// start and names the VM: the boot itself runs after the picker has quit. A
+// running VM is left alone rather than re-provisioned behind the user's back.
+func startSimulatorRow(item tui.PickerItem) (flash string, isErr bool, name string) {
+	choice, _ := item.Value.(*simulatorChoice)
+	switch {
+	case choice == nil:
+		return "", false, ""
+	case choice.Create:
+		return "No simulator yet — press c to create one.", false, ""
+	}
+	st, err := vmStatusFn(choice.Name)
+	if err != nil {
+		return err.Error(), true, ""
+	}
+	if st.Running {
+		return fmt.Sprintf("%s is already running.", choice.Name), false, ""
+	}
+	if !vmDetachSupportedFn() {
+		// Only a foreground start works here, and it needs a terminal of its
+		// own: say how, as 'c' does, rather than leave the view to fail.
+		return simulatorForegroundHint(choice.Name, false), false, ""
+	}
+	return fmt.Sprintf("Starting %s...", choice.Name), false, choice.Name
+}
+
+// stopSimulatorRow powers 'x', the key `wendy device apps` stops with. Stop
+// only: a mis-press on the wrong row can then never boot something.
 func stopSimulatorRow(ctx context.Context, item tui.PickerItem) (string, bool) {
 	choice, _ := item.Value.(*simulatorChoice)
 	if choice == nil || choice.Create {
@@ -101,26 +138,38 @@ func stopSimulatorRow(ctx context.Context, item tui.PickerItem) (string, bool) {
 	if !st.Running {
 		return fmt.Sprintf("%s is not running", choice.Name), false
 	}
-	store, err := vm.NewStore()
-	if err != nil {
-		return err.Error(), true
-	}
-	if err := store.StopContext(ctx, choice.Name, false, vmStopGrace); err != nil {
+	// The same wait as `wendy vm stop`: long enough for an ordinary guest
+	// shutdown, so one is never shown as a failure.
+	if err := stopVMFn(ctx, choice.Name, false, vmStopGrace); err != nil {
 		return err.Error(), true
 	}
 	return fmt.Sprintf("Stopped %s.", choice.Name), false
 }
 
-// removeSimulatorRow powers 'r'. Store.Remove takes the run lock, so a running
-// VM is refused rather than deleted out from under its emulator -- say which
-// key fixes that rather than making the user guess.
+// removeSimulatorQuestion is what 'r' asks before deleting a VM: its disk goes
+// with it, and nothing brings that back. A row whose removal would be refused
+// or would destroy nothing skips the question, so the refusal shows at once.
+func removeSimulatorQuestion(item tui.PickerItem) string {
+	choice, _ := item.Value.(*simulatorChoice)
+	if choice == nil || choice.Create {
+		return ""
+	}
+	if st, err := vmStatusFn(choice.Name); err == nil && st.Running {
+		return ""
+	}
+	return fmt.Sprintf("Remove %s and its disk? [y/N]", choice.Name)
+}
+
+// removeSimulatorRow powers 'r' once confirmed. Store.Remove takes the run
+// lock, so a running VM is refused rather than deleted out from under its
+// emulator -- say which key fixes that rather than making the user guess.
 func removeSimulatorRow(item tui.PickerItem) (string, bool, *tui.PickerItem) {
 	choice, _ := item.Value.(*simulatorChoice)
 	if choice == nil || choice.Create {
 		return "", false, &item
 	}
 	if st, err := vmStatusFn(choice.Name); err == nil && st.Running {
-		return fmt.Sprintf("%s is running; press s to stop it first", choice.Name), true, &item
+		return fmt.Sprintf("%s is running; press x to stop it first", choice.Name), true, &item
 	}
 	store, err := vm.NewStore()
 	if err != nil {
@@ -281,11 +330,25 @@ func (m simulatorPickerModel) createRequested() bool {
 	return m.create != nil && *m.create
 }
 
+// startRequested names the VM 's' asked to boot, or "" when it was not
+// pressed. Like a create, it quits the picker so the boot can own the terminal.
+func (m simulatorPickerModel) startRequested() string {
+	if m.start == nil {
+		return ""
+	}
+	return *m.start
+}
+
 func (m simulatorPickerModel) selected() *simulatorChoice {
 	// A create reads as selecting a VM that does not exist yet, so every
 	// caller's existing Create handling applies without a second code path.
 	if m.createRequested() {
 		return &simulatorChoice{Name: nextSimulatorName(*m.vms), Create: true}
+	}
+	// So does a start: selecting a stopped VM already boots it, so in the run
+	// picker 's' boots the VM and deploys to it, exactly as enter would.
+	if name := m.startRequested(); name != "" {
+		return &simulatorChoice{Name: name}
 	}
 	item := m.picker.Selected()
 	if item == nil {

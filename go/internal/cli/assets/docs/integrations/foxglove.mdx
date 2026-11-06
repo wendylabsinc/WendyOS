@@ -40,14 +40,10 @@ desktop app.
    network interface), and a host-network entitlement. This lets the bridge join
    the device's whole ROS 2 graph, including a robot's native host ROS 2 (for
    example a Unitree Go2's onboard stack).
-2. **Deploys it.** The app ships through the normal single-container `wendy run`
-   pipeline: built locally, transferred through the chunk-diff-capable deploy
-   path, and started detached under the app ID `sh.wendy.foxglovebridge`.
-   Re-running the command replaces a current bridge through that normal deploy
-   path, so it is not removed before the replacement build succeeds. A one-time
-   upgrade from an older CLI must stop its legacy named-service container first
-   because both versions bind the same device port; the CLI prints a notice when
-   it performs that migration.
+2. **Deploys it.** Wendy builds and starts the bridge on your device under the
+   app ID `sh.wendy.foxglovebridge`. Running the command again replaces it after
+   the new build succeeds. An upgrade from an older bridge may require a brief
+   interruption; the CLI prints a notice when that migration is needed.
 3. **Forwards the port.** The bridge's WebSocket port (8765 inside the app) is
    forwarded over the same Wendy agent connection used for deployment. This
    works over LAN and cloud. The CLI checks the WebSocket handshake before

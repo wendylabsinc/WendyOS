@@ -73,7 +73,7 @@ func InvocationAnalyticsExcluded(cmd *cobra.Command) bool {
 
 func excludeInvocationAnalytics(cmd *cobra.Command, args []string) bool {
 	switch cmd.Name() {
-	case "__ble-check", "__session-broker", "__usb-setup", "__t234-write", "__bmap-write", "__usb-driver", "open-browser":
+	case "__ble-check", "__session-broker", "__usb-setup", "__t234-write", "__bmap-write", "__gpt-relocate", "__usb-driver", "open-browser":
 		return true
 	}
 	switch cmd.CommandPath() {

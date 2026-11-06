@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +62,9 @@ type mockContainerdClient struct {
 	declaredVolumesErr    error
 	assembleImageCalls    int
 	createReqs            []*agentpb.CreateContainerRequest
+	validateErr           error
+	validateReqs          []*agentpb.CreateContainerRequest
+	validateCfgs          []*appconfig.AppConfig
 }
 
 type stoppedByUserCall struct {
@@ -113,6 +117,11 @@ func (m *mockContainerdClient) AssembleImage(_ context.Context, _ string, _ []*a
 func (m *mockContainerdClient) CreateContainer(_ context.Context, req *agentpb.CreateContainerRequest, _ *appconfig.AppConfig) error {
 	m.createReqs = append(m.createReqs, req)
 	return m.createErr
+}
+func (m *mockContainerdClient) ValidateContainer(_ context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	m.validateReqs = append(m.validateReqs, req)
+	m.validateCfgs = append(m.validateCfgs, appCfg)
+	return m.validateErr
 }
 func (m *mockContainerdClient) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error {
 	if onProgress != nil {
@@ -545,6 +554,66 @@ type drainlessMockContainerdClient struct {
 func (m *drainlessMockContainerdClient) WriteLayer(_ context.Context, digest string, _ io.Reader, _ int64) error {
 	m.writtenDigest = digest
 	return nil
+}
+
+// WDY-3850: ValidateContainer hands the request and its parsed config to
+// containerd's validation, and never creates the container.
+func TestValidateContainerValidatesWithoutCreating(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	_, err := client.ValidateContainer(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app_api",
+		AppConfig: []byte(`{"appId":"test-app","serviceName":"api"}`),
+	})
+	if err != nil {
+		t.Fatalf("ValidateContainer: %v", err)
+	}
+	if len(mock.validateReqs) != 1 || mock.validateReqs[0].GetAppName() != "test-app_api" {
+		t.Fatalf("validated requests = %v, want the one sent", mock.validateReqs)
+	}
+	if cfg := mock.validateCfgs[0]; cfg.AppID != "test-app" || cfg.ServiceName != "api" {
+		t.Fatalf("validated config = %+v, want appId test-app, service api", cfg)
+	}
+	if len(mock.createReqs) != 0 {
+		t.Fatalf("ValidateContainer created %d containers, want none", len(mock.createReqs))
+	}
+}
+
+// A request the create would refuse is FailedPrecondition, so the CLI can
+// tell it from an agent without the RPC (Unimplemented).
+func TestValidateContainerReportsRefusal(t *testing.T) {
+	mock := &mockContainerdClient{validateErr: errors.New(`env key "LD_PRELOAD" is reserved`)}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	_, err := client.ValidateContainer(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app",
+	})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "LD_PRELOAD") {
+		t.Fatalf("ValidateContainer error = %v, want FailedPrecondition naming the cause", err)
+	}
+}
+
+func TestValidateContainerRejectsInvalidAppConfig(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServer(t, mock)
+	defer cleanup()
+
+	_, err := client.ValidateContainer(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "test-app",
+		AppConfig: []byte(`{`),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ValidateContainer error = %v, want InvalidArgument", err)
+	}
+	if len(mock.validateReqs) != 0 {
+		t.Fatal("an unparseable app config reached containerd")
+	}
 }
 
 func TestCreateContainerWithProgress(t *testing.T) {

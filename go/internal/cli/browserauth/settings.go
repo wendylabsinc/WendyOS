@@ -46,7 +46,7 @@ func (c Settings) Validate() error {
 func (s *Session) validIssuer(raw string) bool {
 	u, err := url.Parse(raw)
 	base, _ := url.Parse(s.settings().AuthBase)
-	if err != nil || base == nil || u.Scheme != "https" || u.Host != base.Host || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+	if err != nil || base == nil || u.Scheme != "https" || u.Host != base.Host || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" {
 		return false
 	}
 	parts := strings.Split(u.Path, "/")
@@ -59,4 +59,11 @@ func (s *Session) validIssuer(raw string) bool {
 		}
 	}
 	return true
+}
+
+// orgIssuer is a valid issuer other than the system realm, which is never a
+// login target. Realm names are compared without case, so /realms/SYSTEM is
+// still the system realm.
+func (s *Session) orgIssuer(raw string) bool {
+	return s.validIssuer(raw) && !strings.EqualFold(raw, s.settings().AuthBase+"/realms/system")
 }

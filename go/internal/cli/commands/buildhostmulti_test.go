@@ -31,7 +31,7 @@ func TestServiceBuildSpecRepositoryMatchesDeployedImage(t *testing.T) {
 		service = "Inference"
 		regPort = 5000
 	)
-	base := &agentpbv2.PushTarget{AssetId: 41, RegistryPort: regPort, AgentPort: 50052}
+	base := &agentpbv2.PushTarget{AssetUuid: "00000000-0000-4000-8000-000000000041", RegistryPort: regPort, AgentPort: 50052}
 
 	spec := serviceBuildSpec(base, serviceImageRepo(appID, service), "linux/arm64", "Dockerfile.generated", nil, chunkingAuto, nil)
 
@@ -47,12 +47,12 @@ func TestServiceBuildSpecRepositoryMatchesDeployedImage(t *testing.T) {
 // re-derived: a wrong asset id delivers someone else's device, and a zero agent
 // port makes the build host fall back to its own configured default.
 func TestServiceBuildSpecCarriesTargetIdentity(t *testing.T) {
-	base := &agentpbv2.PushTarget{AssetId: 7, RegistryPort: 5000, AgentPort: 50052}
+	base := &agentpbv2.PushTarget{AssetUuid: "00000000-0000-4000-8000-000000000007", RegistryPort: 5000, AgentPort: 50052}
 
 	spec := serviceBuildSpec(base, "app-web", "linux/arm64", "Dockerfile", nil, chunkingAuto, nil)
 
 	got := spec.GetPushTarget()
-	if got.GetAssetId() != base.GetAssetId() || got.GetAgentPort() != base.GetAgentPort() || got.GetRegistryPort() != base.GetRegistryPort() {
+	if got.GetAssetUuid() != base.GetAssetUuid() || got.GetAgentPort() != base.GetAgentPort() || got.GetRegistryPort() != base.GetRegistryPort() {
 		t.Fatalf("push target = %+v, want the resolved target's identity %+v", got, base)
 	}
 	// One service, one target: push_targets is the fleet field and an agent that
@@ -67,7 +67,7 @@ func TestServiceBuildSpecCarriesTargetIdentity(t *testing.T) {
 // under a lock, so a group sharing one id would serialise its services and
 // re-transfer every context on every build.
 func TestServiceBuildSpecScopesContextPerService(t *testing.T) {
-	base := &agentpbv2.PushTarget{AssetId: 1}
+	base := &agentpbv2.PushTarget{AssetUuid: "00000000-0000-4000-8000-000000000001"}
 
 	web := serviceBuildSpec(base, "app-web", "linux/arm64", "Dockerfile", nil, chunkingAuto, nil)
 	worker := serviceBuildSpec(base, "app-worker", "linux/arm64", "Dockerfile", nil, chunkingAuto, nil)
@@ -83,7 +83,7 @@ func TestServiceBuildSpecScopesContextPerService(t *testing.T) {
 // --chunking must mean the same thing for a service of a group as it does for a
 // single-service app: the flag is carried to the build host, not reinterpreted.
 func TestServiceBuildSpecCarriesChunkingMode(t *testing.T) {
-	base := &agentpbv2.PushTarget{AssetId: 1}
+	base := &agentpbv2.PushTarget{AssetUuid: "00000000-0000-4000-8000-000000000001"}
 	for _, mode := range []string{chunkingAuto, chunkingForce, chunkingOff, ""} {
 		spec := serviceBuildSpec(base, "app-web", "linux/arm64", "Dockerfile", nil, mode, nil)
 		if got, want := spec.GetChunking(), buildChunkingMode(mode); got != want {

@@ -17,12 +17,13 @@
 // next episode has no reason to average the same.
 //
 // Where the real timing comes from. It was recorded all along.
-// cameras/<source>/index.jsonl holds one line per kept frame carrying
-// canonical_episode_nanos, the frame's position on the episode's canonical
+// cameras/<source>/index.jsonl holds one line per kept transport chunk carrying
+// canonical_episode_nanos, the chunk's position on the episode's canonical
 // CLOCK_BOOTTIME timeline, along with the segment file, byte offset and byte
 // size of its payload. This package remuxes those same payload bytes into an
-// MP4 whose sample table gives every frame the presentation time the index
-// recorded for it. Nothing here computes, averages, or assumes a rate.
+// MP4 whose sample table gives every frame the timestamp of its first chunk.
+// Nothing here computes, averages, or assumes a rate. Pictures that begin in
+// the same chunk share its timestamp; the index has no finer timing for them.
 //
 // It is a remux, not a transcode: the coded pictures are copied verbatim and
 // only re-framed, so the output is bit-for-bit the same video.
@@ -97,14 +98,18 @@ type ClipResult struct {
 	Source string
 	// Output is the playable file written, empty when nothing was playable.
 	Output string
-	// IndexLines counts non-empty lines in index.jsonl, the number of frames
-	// the episode claims to have kept.
+	// IndexLines counts non-empty lines in index.jsonl. Native capture may
+	// index transport chunks rather than complete pictures.
 	IndexLines int
 	// Frames counts samples actually written to the output.
 	Frames int
-	// Skipped counts frames the index named but which could not be muxed
+	// Skipped counts indexed records which could not be muxed
 	// because their bytes were missing, truncated, or held no coded picture.
 	Skipped int
+	// Fragments counts transport chunks contributing bytes to an access unit
+	// begun in an earlier chunk. A chunk can also begin a new picture, so this
+	// count is not necessarily IndexLines minus Frames minus Skipped.
+	Fragments int
 	// SkippedReason quotes the first failure behind Skipped, so a clip that
 	// lost frames for one systemic reason (a segment file that is not there,
 	// an index whose offsets run past the end of a truncated segment) names
@@ -236,6 +241,7 @@ func convertSource(episodeDir, sourceDir, indexPath, out string) (ClipResult, er
 	stats, writeErr := muxAnnexBToMP4(f, episodeDir, frames)
 	closeErr := f.Close()
 	result.Frames, result.Skipped, result.Segments = stats.frames, stats.skipped, stats.segments
+	result.Fragments = stats.fragments
 	result.SkippedReason = stats.skipReason
 	result.BFrames = stats.bFrames
 	result.UndecodedSliceHeaders = stats.undecodedSliceHeaders
@@ -319,6 +325,7 @@ type sample struct {
 
 type muxStats struct {
 	frames, skipped, segments int
+	fragments                 int
 	min, max, mean            time.Duration
 	bFrames                   bool
 	// skipReason is the first error behind skipped, kept so a clip that lost
@@ -406,20 +413,14 @@ func muxAnnexBToMP4(w *os.File, episodeDir string, frames []cameraIndexLine) (mu
 		cursor   = mdatStart + mdatHeader
 	)
 	base := frames[0].CanonicalEpisodeNanos
-	for _, frame := range frames {
-		payload, err := segments.read(frame)
-		if err != nil {
-			// A frame the index names but whose bytes are missing or short is
-			// dropped and counted. Writing the bytes that do exist would put a
-			// truncated access unit in the file and make it undecodable from
-			// that point on. The first cause is kept: a bare count cannot tell
-			// a missing segment file from an index that outran a truncated one.
-			stats.skipped++
-			if stats.skipReason == "" {
-				stats.skipReason = err.Error()
-			}
-			continue
+	assembler := h264Assembler{}
+	assembler.skip = func(frame cameraIndexLine) {
+		stats.skipped++
+		if stats.skipReason == "" {
+			stats.skipReason = fmt.Sprintf("no H.264 start code at %s offset %d", frame.Segment, frame.ByteOffset)
 		}
+	}
+	assembler.emit = func(payload []byte, timestamp int64) error {
 		var (
 			body []byte
 			sync bool
@@ -461,23 +462,56 @@ func muxAnnexBToMP4(w *os.File, episodeDir string, frames []cameraIndexLine) (mu
 		}
 		if len(body) == 0 {
 			stats.skipped++
-			continue
+			return nil
 		}
 		if _, err := w.Write(body); err != nil {
-			return stats, err
+			return err
 		}
 		if sync {
 			stats.syncSamples++
 		}
 		samples = append(samples, sample{
 			// Rounded from the recorded nanoseconds. Never derived from a rate.
-			timestamp: (frame.CanonicalEpisodeNanos - base + 500) / 1000,
+			timestamp: (timestamp - base + 500) / 1000,
 			offset:    cursor,
 			size:      int64(len(body)),
 			sync:      sync,
 		})
 		cursor += int64(len(body))
+		return nil
 	}
+	var previous *cameraIndexLine
+	for i, frame := range frames {
+		payload, err := segments.read(frame)
+		if err != nil {
+			if flushErr := assembler.flush(); flushErr != nil {
+				return stats, flushErr
+			}
+			stats.skipped++
+			if stats.skipReason == "" {
+				stats.skipReason = fmt.Sprintf("%s offset %d: %v", frame.Segment, frame.ByteOffset, err)
+			}
+			previous = nil
+			continue
+		}
+		// Successful reads have bounds-checked these sums against the segment
+		// size. Missing index ranges and segment changes break the join, but
+		// do not prevent the remaining pictures from being exported.
+		if previous != nil && (previous.Segment != frame.Segment ||
+			previous.ByteOffset+int64(previous.ByteSize) != frame.ByteOffset) {
+			if err := assembler.flush(); err != nil {
+				return stats, err
+			}
+		}
+		if err := assembler.add(frame, i+1, payload); err != nil {
+			return stats, err
+		}
+		previous = &frames[i]
+	}
+	if err := assembler.flush(); err != nil {
+		return stats, err
+	}
+	stats.fragments = assembler.fragments
 	stats.frames, stats.segments = len(samples), len(segments.seen)
 	if len(samples) == 0 {
 		if stats.skipReason != "" {

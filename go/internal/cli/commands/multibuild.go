@@ -405,6 +405,9 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	printRunDiskUsageWarning(versionResp)
+	if err := checkAgentEntitlements(versionResp, networkConfigs...); err != nil {
+		return err
+	}
 	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
 	if architecture == "" {
@@ -432,6 +435,10 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		buildArgs["WENDY_DEBUG"] = "true"
 	}
 	applyDeviceBuildArgHints(buildArgs, versionResp)
+	buildArgs, err = mergeBuildArgFlags(buildArgs, opts.buildArgs)
+	if err != nil {
+		return err
+	}
 
 	// Ensure the Apple Container system is up once, before the parallel builds,
 	// so an explicit --builder apple-container prompts/starts a single time
@@ -505,6 +512,15 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		}
 	}
 
+	// Images that will be sent need room on the device, whichever machine
+	// builds them.
+	if len(skip) < len(services) {
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
+		ctx = withDeviceStorage(ctx, versionResp)
+	}
+
 	// Build all service images in parallel, then create and start containers.
 	// With --build-host the builds happen on that device instead and it
 	// delivers each image here; everything from this point on is identical,
@@ -522,6 +538,9 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		invalidateRemoteServiceDeployFingerprints(appCfg.AppID, deviceKey, services, skip)
 	} else {
 		if len(skip) < len(services) {
+			if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
+				return err
+			}
 			noteEmulatedBuild(platform, true)
 		}
 		failed, preparedContent, buildErr = buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
@@ -590,22 +609,28 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		appLevelCfg = nil
 	}
 
-	createService := func(name string) error {
+	serviceCreateRequest := func(name string) (*agentpb.CreateContainerRequest, error) {
 		deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, serviceImageRepo(appCfg.AppID, name))
 
 		serviceCfg := svcCfgs[name]
 		appConfigData, err := json.Marshal(serviceCfg)
 		if err != nil {
-			return fmt.Errorf("marshaling config for service %s: %w", name, err)
+			return nil, fmt.Errorf("marshaling config for service %s: %w", name, err)
 		}
 
-		restartPolicy := resolveRestartPolicy(opts)
-		createReq := &agentpb.CreateContainerRequest{
+		return &agentpb.CreateContainerRequest{
 			ImageName:     deviceImage,
 			AppName:       serviceCfg.ContainerName(),
 			AppConfig:     appConfigData,
-			RestartPolicy: restartPolicy,
+			RestartPolicy: resolveRestartPolicy(opts),
 			Env:           serviceEnvs[name],
+		}, nil
+	}
+
+	createService := func(name string) error {
+		createReq, err := serviceCreateRequest(name)
+		if err != nil {
+			return err
 		}
 
 		cliLogln("Creating container for service %s...", name)
@@ -614,6 +639,10 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		}
 		cliLogln("Service %s container created.", name)
 		return nil
+	}
+
+	if err := validateServicesBeforeReplace(ctx, conn.ContainerService, ordered, serviceCreateRequest); err != nil {
+		return err
 	}
 
 	if opts.deploy {
@@ -778,6 +807,9 @@ func buildServicesParallelCore(
 	if !quietBuild && isInteractiveTerminal() && !detachedJSONRun(ctx) {
 		title := fmt.Sprintf("Building %d service(s)...", len(names))
 		m := tui.NewMultiSpinner(title, names)
+		if progressHintsOff(ctx) {
+			m = m.WithoutHints()
+		}
 		prog = tui.NewProgressProgram(m)
 	}
 
@@ -1113,7 +1145,7 @@ var serviceLogStyle = lipgloss.NewStyle().Foreground(tui.ColorInfo)
 // forwards the active step as a MultiSpinner detail line and accumulates the
 // cached/rebuilt tally for the service's done row.
 func newServiceProgressEmitter(prog *tea.Program, name string) (func(tui.BuildStepEvent), func() tui.BuildTally) {
-	var t tui.BuildTally
+	var t tui.BuildTallyCounter
 	emit := func(e tui.BuildStepEvent) {
 		switch e.Status {
 		case tui.BuildStepRunning:
@@ -1125,17 +1157,11 @@ func newServiceProgressEmitter(prog *tea.Program, name string) (func(tui.BuildSt
 				detail = e.Display + " · " + p
 			}
 			prog.Send(tui.MultiSpinnerDetailMsg{Name: name, Detail: detail})
-		case tui.BuildStepCached:
-			if e.Kind == tui.BuildVertexStep {
-				t.Cached++
-			}
-		case tui.BuildStepDone:
-			if e.Kind == tui.BuildVertexStep {
-				t.Rebuilt++
-			}
+		case tui.BuildStepCached, tui.BuildStepDone:
+			t.Observe(e)
 		}
 	}
-	return emit, func() tui.BuildTally { return t }
+	return emit, func() tui.BuildTally { return t.Tally() }
 }
 
 // multiServiceCreateConfig builds the per-service AppConfig transmitted to

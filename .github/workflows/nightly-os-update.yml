@@ -78,15 +78,17 @@ jobs:
         with:
           devices: ${{ needs.release-priority.outputs.devices }}
 
+      - uses: ./.github/actions/check-runner-disk
+        if: steps.priority.outputs.allowed == 'true'
+
+      # The runner keeps ~/go/pkg/mod and the Go build cache on disk, so
+      # restoring setup-go's archive over them every job only rewrites ~1.5 GB.
       - name: Set up Go
         if: steps.priority.outputs.allowed == 'true'
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - name: Build embedded MCP app
-        uses: ./.github/actions/build-mcp-app
+          cache: false
 
       - name: Build CLI
         if: steps.priority.outputs.allowed == 'true'
@@ -145,6 +147,9 @@ jobs:
       actions: write  # Cancel the remaining device jobs after a deferral.
     env:
       DEVICE_HOSTNAME: ${{ matrix.hostname }}
+      # Keep the CLI's build caches well below its 100 GiB default; the runner
+      # also holds Docker Desktop and a Tart VM (WDY-3837).
+      WENDY_BUILD_CACHE_MAX_BYTES: '32212254720' # 30 GiB
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/release-priority
@@ -161,15 +166,17 @@ jobs:
           script: |
             await github.rest.actions.cancelWorkflowRun({ ...context.repo, run_id: context.runId });
 
+      - uses: ./.github/actions/check-runner-disk
+        if: steps.priority.outputs.allowed == 'true'
+
+      # The runner keeps ~/go/pkg/mod and the Go build cache on disk, so
+      # restoring setup-go's archive over them every job only rewrites ~1.5 GB.
       - name: Set up Go
         if: steps.priority.outputs.allowed == 'true'
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - name: Build embedded MCP app
-        uses: ./.github/actions/build-mcp-app
+          cache: false
 
       - name: Build CLI
         if: steps.priority.outputs.allowed == 'true'
@@ -182,7 +189,9 @@ jobs:
         run: |
           SSH="ssh -o StrictHostKeyChecking=no localhost"
           WORKDIR="$(pwd)"
-          SSH_ENV="export PATH='$PATH'"
+          SSH_ENV="export PATH='$PATH' WENDY_BUILD_CACHE_MAX_BYTES='$WENDY_BUILD_CACHE_MAX_BYTES'"
+          # The remote shell parses this string, so the cache cap must be a plain number.
+          [[ "$WENDY_BUILD_CACHE_MAX_BYTES" =~ ^[0-9]+$ ]] || { echo "::error::WENDY_BUILD_CACHE_MAX_BYTES must be a whole number of bytes."; exit 1; }
 
           INFO=$($SSH "$SSH_ENV && cd '$WORKDIR' && ./go/bin/wendy device info --json --device '$DEVICE_HOSTNAME'" || true)
           echo "$INFO" | jq '{osVersion, agentVersion: .version, deviceType}' || true
@@ -197,7 +206,9 @@ jobs:
         run: |
           SSH="ssh -o StrictHostKeyChecking=no localhost"
           WORKDIR="$(pwd)"
-          SSH_ENV="export PATH='$PATH'"
+          SSH_ENV="export PATH='$PATH' WENDY_BUILD_CACHE_MAX_BYTES='$WENDY_BUILD_CACHE_MAX_BYTES'"
+          # The remote shell parses this string, so the cache cap must be a plain number.
+          [[ "$WENDY_BUILD_CACHE_MAX_BYTES" =~ ^[0-9]+$ ]] || { echo "::error::WENDY_BUILD_CACHE_MAX_BYTES must be a whole number of bytes."; exit 1; }
 
           # wendy os update blocks until the device reboots and comes back
           # online, with a 5-minute internal timeout.

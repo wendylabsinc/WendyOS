@@ -44,6 +44,7 @@ const legacyRedirects: Record<string, string> = {
   'get-started/hardware': '/',
   'get-started/mac': '/installation/wendy-agent-macos/',
   'installation/developer-machine-setup': '/',
+  'advanced/wendyos/mender-update': '/advanced/wendyos/ota-update/',
 };
 
 function getLegacyRedirect(slug?: string[]) {

@@ -3,6 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -89,3 +90,10 @@ func combineFlashFailure(primary, fallback error) error {
 const flashDeviceFailureHint = "The target device rejected or lost the write, so retrying the full image would fail the same way. " +
 	"Check the SD card's write-protect lock, the card's health, and the reader, cable, and USB port, " +
 	"then re-list drives (`diskutil list` on macOS, `lsblk` on Linux) to confirm the device still appears."
+
+// announceFastWriteFallback says why the fast write failed before the full
+// write starts; once the fallback succeeds nothing else would report it.
+func announceFastWriteFallback(w io.Writer, primary error) {
+	fmt.Fprintln(w, tui.WarningMessage("Fast write failed; falling back to a full-image write, which takes longer:"))
+	fmt.Fprintln(w, strings.TrimSpace(primary.Error()))
+}

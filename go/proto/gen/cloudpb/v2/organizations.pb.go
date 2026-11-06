@@ -22,8 +22,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Deprecated: assign roles by role_id (RoleService). Kept until WDY-3351
-// drops the enum.
+// Deprecated: use role_ids for notification audiences and role_id for assignments.
+// Retained as the wire-compatible type of NotificationAudience.roles.
+// Kept for wire compatibility; never remove or renumber its values.
 //
 // Deprecated: Marked as deprecated in wendycloud/v2/organizations.proto.
 type OrganizationRole int32
@@ -85,17 +86,28 @@ func (OrganizationRole) EnumDescriptor() ([]byte, []int) {
 }
 
 type Organization struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Details       string                 `protobuf:"bytes,3,opt,name=details,proto3" json:"details,omitempty"`
-	Domain        *string                `protobuf:"bytes,4,opt,name=domain,proto3,oneof" json:"domain,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	UserId        *string                `protobuf:"bytes,7,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
-	Slug          *string                `protobuf:"bytes,8,opt,name=slug,proto3,oneof" json:"slug,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Details   string                 `protobuf:"bytes,3,opt,name=details,proto3" json:"details,omitempty"`
+	Domain    *string                `protobuf:"bytes,4,opt,name=domain,proto3,oneof" json:"domain,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	UserId    *string                `protobuf:"bytes,7,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
+	Slug      *string                `protobuf:"bytes,8,opt,name=slug,proto3,oneof" json:"slug,omitempty"`
+	// The role a new member receives when none is named (WDY-3877). Empty means "No role": the
+	// member has only what group mappings give them. Filled by GetOrganization.
+	DefaultRoleId string `protobuf:"bytes,9,opt,name=default_role_id,json=defaultRoleId,proto3" json:"default_role_id,omitempty"`
+	// When true, a member whose realm groups match a group mapping of this organization at join
+	// gets no role of their own (role_source "none"); the mapping decides. Filled by
+	// GetOrganization.
+	SkipDefaultWhenGroupMapped bool `protobuf:"varint,10,opt,name=skip_default_when_group_mapped,json=skipDefaultWhenGroupMapped,proto3" json:"skip_default_when_group_mapped,omitempty"`
+	// The device role every new member receives at organization scope next to default_role_id
+	// (WDY-4052). Empty means none: the member reaches no device until someone binds a device
+	// role. New organizations start at Device manager. Filled by GetOrganization.
+	DefaultDeviceRoleId string `protobuf:"bytes,11,opt,name=default_device_role_id,json=defaultDeviceRoleId,proto3" json:"default_device_role_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Organization) Reset() {
@@ -184,6 +196,27 @@ func (x *Organization) GetSlug() string {
 	return ""
 }
 
+func (x *Organization) GetDefaultRoleId() string {
+	if x != nil {
+		return x.DefaultRoleId
+	}
+	return ""
+}
+
+func (x *Organization) GetSkipDefaultWhenGroupMapped() bool {
+	if x != nil {
+		return x.SkipDefaultWhenGroupMapped
+	}
+	return false
+}
+
+func (x *Organization) GetDefaultDeviceRoleId() string {
+	if x != nil {
+		return x.DefaultDeviceRoleId
+	}
+	return ""
+}
+
 type OrganizationMember struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -195,14 +228,24 @@ type OrganizationMember struct {
 	Role      OrganizationRole       `protobuf:"varint,4,opt,name=role,proto3,enum=wendycloud.v2.OrganizationRole" json:"role,omitempty"`
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// Always set by the server.
+	// The member's own role. Empty exactly when role_source is "none".
 	RoleId string `protobuf:"bytes,7,opt,name=role_id,json=roleId,proto3" json:"role_id,omitempty"`
 	// The member's wendy-auth subject (`sub`) under this organization's realm issuer: the
 	// operator name in the member's SPIFFE ID, which a RevokeAllCredentials request names
 	// (WDY-3442). Empty when the member has no identity, or more than one, under that realm.
-	Subject       string `protobuf:"bytes,8,opt,name=subject,proto3" json:"subject,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Subject string `protobuf:"bytes,8,opt,name=subject,proto3" json:"subject,omitempty"`
+	// Where the member's own role came from (WDY-3877): "explicit" (named by an admin, an invite,
+	// or ownership), "default" (the organization default at join; group-mapped roles add to it),
+	// or "none" (no role of its own; group mappings alone decide).
+	RoleSource string `protobuf:"bytes,9,opt,name=role_source,json=roleSource,proto3" json:"role_source,omitempty"`
+	// ListMembers only (WDY-3895): distinct compute devices covered by this member's device-access
+	// rules, including group grants and deny precedence. Roles still govern allowed actions.
+	// Present zero means no devices; absent means unavailable, including older servers,
+	// unresolved realm membership, or a viewer without device-access:list or full fleet access.
+	// Uses the caller's token groups for self; current auth directory groups for other members.
+	DeviceAccessCount *int32 `protobuf:"varint,10,opt,name=device_access_count,json=deviceAccessCount,proto3,oneof" json:"device_access_count,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *OrganizationMember) Reset() {
@@ -290,6 +333,20 @@ func (x *OrganizationMember) GetSubject() string {
 		return x.Subject
 	}
 	return ""
+}
+
+func (x *OrganizationMember) GetRoleSource() string {
+	if x != nil {
+		return x.RoleSource
+	}
+	return ""
+}
+
+func (x *OrganizationMember) GetDeviceAccessCount() int32 {
+	if x != nil && x.DeviceAccessCount != nil {
+		return *x.DeviceAccessCount
+	}
+	return 0
 }
 
 type CreateOrganizationRequest struct {
@@ -680,6 +737,8 @@ type AddMemberRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// UNSPECIFIED with no role_id assigns the organization's default role (WDY-3877).
+	//
 	// Deprecated: Marked as deprecated in wendycloud/v2/organizations.proto.
 	Role OrganizationRole `protobuf:"varint,3,opt,name=role,proto3,enum=wendycloud.v2.OrganizationRole" json:"role,omitempty"`
 	// Wins over role when set.
@@ -1093,6 +1152,8 @@ func (x *ListMembersResponse) GetMembers() []*OrganizationMember {
 type EmailWithRole struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Email string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
+	// UNSPECIFIED with no role_id assigns the organization's default role (WDY-3877).
+	//
 	// Deprecated: Marked as deprecated in wendycloud/v2/organizations.proto.
 	Role OrganizationRole `protobuf:"varint,2,opt,name=role,proto3,enum=wendycloud.v2.OrganizationRole" json:"role,omitempty"`
 	// Wins over role when set.
@@ -1317,6 +1378,98 @@ func (x *AddMembersByEmailsResponse) GetResults() []*AddMemberResult {
 	return nil
 }
 
+type SetMemberDefaultsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	// The new default role: a built-in role or one of this organization's own, never owner, never
+	// a role carrying member, invite, role, permission, group or group-mapping management, within
+	// the built-in admin role, and held in full by the caller. Ignored when clear_default is true.
+	DefaultRoleId *string `protobuf:"bytes,2,opt,name=default_role_id,json=defaultRoleId,proto3,oneof" json:"default_role_id,omitempty"`
+	// Sets the default to "No role".
+	ClearDefault               bool `protobuf:"varint,3,opt,name=clear_default,json=clearDefault,proto3" json:"clear_default,omitempty"`
+	SkipDefaultWhenGroupMapped bool `protobuf:"varint,4,opt,name=skip_default_when_group_mapped,json=skipDefaultWhenGroupMapped,proto3" json:"skip_default_when_group_mapped,omitempty"`
+	// The new default device role: a device-kind role, built-in or one of this organization's own,
+	// held in full by the caller. Absent with clear_device_default false leaves the device default
+	// unchanged (older consoles send neither). Ignored when clear_device_default is true.
+	DefaultDeviceRoleId *string `protobuf:"bytes,5,opt,name=default_device_role_id,json=defaultDeviceRoleId,proto3,oneof" json:"default_device_role_id,omitempty"`
+	// Sets the default device role to none.
+	ClearDeviceDefault bool `protobuf:"varint,6,opt,name=clear_device_default,json=clearDeviceDefault,proto3" json:"clear_device_default,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SetMemberDefaultsRequest) Reset() {
+	*x = SetMemberDefaultsRequest{}
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMemberDefaultsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMemberDefaultsRequest) ProtoMessage() {}
+
+func (x *SetMemberDefaultsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMemberDefaultsRequest.ProtoReflect.Descriptor instead.
+func (*SetMemberDefaultsRequest) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *SetMemberDefaultsRequest) GetOrganizationId() string {
+	if x != nil {
+		return x.OrganizationId
+	}
+	return ""
+}
+
+func (x *SetMemberDefaultsRequest) GetDefaultRoleId() string {
+	if x != nil && x.DefaultRoleId != nil {
+		return *x.DefaultRoleId
+	}
+	return ""
+}
+
+func (x *SetMemberDefaultsRequest) GetClearDefault() bool {
+	if x != nil {
+		return x.ClearDefault
+	}
+	return false
+}
+
+func (x *SetMemberDefaultsRequest) GetSkipDefaultWhenGroupMapped() bool {
+	if x != nil {
+		return x.SkipDefaultWhenGroupMapped
+	}
+	return false
+}
+
+func (x *SetMemberDefaultsRequest) GetDefaultDeviceRoleId() string {
+	if x != nil && x.DefaultDeviceRoleId != nil {
+		return *x.DefaultDeviceRoleId
+	}
+	return ""
+}
+
+func (x *SetMemberDefaultsRequest) GetClearDeviceDefault() bool {
+	if x != nil {
+		return x.ClearDeviceDefault
+	}
+	return false
+}
+
 type TransferOwnershipRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
@@ -1327,7 +1480,7 @@ type TransferOwnershipRequest struct {
 
 func (x *TransferOwnershipRequest) Reset() {
 	*x = TransferOwnershipRequest{}
-	mi := &file_wendycloud_v2_organizations_proto_msgTypes[21]
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1339,7 +1492,7 @@ func (x *TransferOwnershipRequest) String() string {
 func (*TransferOwnershipRequest) ProtoMessage() {}
 
 func (x *TransferOwnershipRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_organizations_proto_msgTypes[21]
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1352,7 +1505,7 @@ func (x *TransferOwnershipRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferOwnershipRequest.ProtoReflect.Descriptor instead.
 func (*TransferOwnershipRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{21}
+	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *TransferOwnershipRequest) GetOrganizationId() string {
@@ -1379,7 +1532,7 @@ type TransferOwnershipResponse struct {
 
 func (x *TransferOwnershipResponse) Reset() {
 	*x = TransferOwnershipResponse{}
-	mi := &file_wendycloud_v2_organizations_proto_msgTypes[22]
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1391,7 +1544,7 @@ func (x *TransferOwnershipResponse) String() string {
 func (*TransferOwnershipResponse) ProtoMessage() {}
 
 func (x *TransferOwnershipResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_organizations_proto_msgTypes[22]
+	mi := &file_wendycloud_v2_organizations_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1404,7 +1557,7 @@ func (x *TransferOwnershipResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferOwnershipResponse.ProtoReflect.Descriptor instead.
 func (*TransferOwnershipResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{22}
+	return file_wendycloud_v2_organizations_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TransferOwnershipResponse) GetNewOwner() *OrganizationMember {
@@ -1425,7 +1578,7 @@ var File_wendycloud_v2_organizations_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\n" +
-	"!wendycloud/v2/organizations.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xb6\x02\n" +
+	"!wendycloud/v2/organizations.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xd7\x03\n" +
 	"\fOrganization\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1436,11 +1589,15 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1c\n" +
 	"\auser_id\x18\a \x01(\tH\x01R\x06userId\x88\x01\x01\x12\x17\n" +
-	"\x04slug\x18\b \x01(\tH\x02R\x04slug\x88\x01\x01B\t\n" +
+	"\x04slug\x18\b \x01(\tH\x02R\x04slug\x88\x01\x01\x12&\n" +
+	"\x0fdefault_role_id\x18\t \x01(\tR\rdefaultRoleId\x12B\n" +
+	"\x1eskip_default_when_group_mapped\x18\n" +
+	" \x01(\bR\x1askipDefaultWhenGroupMapped\x123\n" +
+	"\x16default_device_role_id\x18\v \x01(\tR\x13defaultDeviceRoleIdB\t\n" +
 	"\a_domainB\n" +
 	"\n" +
 	"\b_user_idB\a\n" +
-	"\x05_slug\"\xc8\x02\n" +
+	"\x05_slug\"\xb6\x03\n" +
 	"\x12OrganizationMember\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x17\n" +
@@ -1451,7 +1608,12 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x17\n" +
 	"\arole_id\x18\a \x01(\tR\x06roleId\x12\x18\n" +
-	"\asubject\x18\b \x01(\tR\asubject\"q\n" +
+	"\asubject\x18\b \x01(\tR\asubject\x12\x1f\n" +
+	"\vrole_source\x18\t \x01(\tR\n" +
+	"roleSource\x123\n" +
+	"\x13device_access_count\x18\n" +
+	" \x01(\x05H\x00R\x11deviceAccessCount\x88\x01\x01B\x16\n" +
+	"\x14_device_access_count\"q\n" +
 	"\x19CreateOrganizationRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x12\x1b\n" +
@@ -1526,7 +1688,16 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x129\n" +
 	"\x06member\x18\x04 \x01(\v2!.wendycloud.v2.OrganizationMemberR\x06member\"V\n" +
 	"\x1aAddMembersByEmailsResponse\x128\n" +
-	"\aresults\x18\x01 \x03(\v2\x1e.wendycloud.v2.AddMemberResultR\aresults\"n\n" +
+	"\aresults\x18\x01 \x03(\v2\x1e.wendycloud.v2.AddMemberResultR\aresults\"\xf4\x02\n" +
+	"\x18SetMemberDefaultsRequest\x12'\n" +
+	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12+\n" +
+	"\x0fdefault_role_id\x18\x02 \x01(\tH\x00R\rdefaultRoleId\x88\x01\x01\x12#\n" +
+	"\rclear_default\x18\x03 \x01(\bR\fclearDefault\x12B\n" +
+	"\x1eskip_default_when_group_mapped\x18\x04 \x01(\bR\x1askipDefaultWhenGroupMapped\x128\n" +
+	"\x16default_device_role_id\x18\x05 \x01(\tH\x01R\x13defaultDeviceRoleId\x88\x01\x01\x120\n" +
+	"\x14clear_device_default\x18\x06 \x01(\bR\x12clearDeviceDefaultB\x12\n" +
+	"\x10_default_role_idB\x19\n" +
+	"\x17_default_device_role_id\"n\n" +
 	"\x18TransferOwnershipRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12)\n" +
 	"\x11new_owner_user_id\x18\x02 \x01(\tR\x0enewOwnerUserId\"\xa5\x01\n" +
@@ -1539,7 +1710,7 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\x17ORGANIZATION_ROLE_ADMIN\x10\x02\x12%\n" +
 	"!ORGANIZATION_ROLE_BILLING_MANAGER\x10\x03\x12\x1c\n" +
 	"\x18ORGANIZATION_ROLE_MEMBER\x10\x04\x12\x1c\n" +
-	"\x18ORGANIZATION_ROLE_VIEWER\x10\x05\x1a\x02\x18\x012\x84\t\n" +
+	"\x18ORGANIZATION_ROLE_VIEWER\x10\x05\x1a\x02\x18\x012\xda\t\n" +
 	"\x13OrganizationService\x12[\n" +
 	"\x12CreateOrganization\x12(.wendycloud.v2.CreateOrganizationRequest\x1a\x1b.wendycloud.v2.Organization\x12U\n" +
 	"\x0fGetOrganization\x12%.wendycloud.v2.GetOrganizationRequest\x1a\x1b.wendycloud.v2.Organization\x12U\n" +
@@ -1552,7 +1723,8 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\fRemoveMember\x12\x1c.wendycloud.v2.SignedRequest\x1a#.wendycloud.v2.RemoveMemberResponse\"\x04\x88\xb5\x18\x01\x12g\n" +
 	"\x14RevokeAllCredentials\x12\x1c.wendycloud.v2.SignedRequest\x1a+.wendycloud.v2.RevokeAllCredentialsResponse\"\x04\x88\xb5\x18\x01\x12T\n" +
 	"\vListMembers\x12!.wendycloud.v2.ListMembersRequest\x1a\".wendycloud.v2.ListMembersResponse\x12a\n" +
-	"\x11TransferOwnership\x12\x1c.wendycloud.v2.SignedRequest\x1a(.wendycloud.v2.TransferOwnershipResponse\"\x04\x88\xb5\x18\x01b\x06proto3"
+	"\x11TransferOwnership\x12\x1c.wendycloud.v2.SignedRequest\x1a(.wendycloud.v2.TransferOwnershipResponse\"\x04\x88\xb5\x18\x01\x12T\n" +
+	"\x11SetMemberDefaults\x12\x1c.wendycloud.v2.SignedRequest\x1a\x1b.wendycloud.v2.Organization\"\x04\x88\xb5\x18\x01b\x06proto3"
 
 var (
 	file_wendycloud_v2_organizations_proto_rawDescOnce sync.Once
@@ -1567,7 +1739,7 @@ func file_wendycloud_v2_organizations_proto_rawDescGZIP() []byte {
 }
 
 var file_wendycloud_v2_organizations_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wendycloud_v2_organizations_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_wendycloud_v2_organizations_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_wendycloud_v2_organizations_proto_goTypes = []any{
 	(OrganizationRole)(0),                // 0: wendycloud.v2.OrganizationRole
 	(*Organization)(nil),                 // 1: wendycloud.v2.Organization
@@ -1591,17 +1763,18 @@ var file_wendycloud_v2_organizations_proto_goTypes = []any{
 	(*AddMembersByEmailsRequest)(nil),    // 19: wendycloud.v2.AddMembersByEmailsRequest
 	(*AddMemberResult)(nil),              // 20: wendycloud.v2.AddMemberResult
 	(*AddMembersByEmailsResponse)(nil),   // 21: wendycloud.v2.AddMembersByEmailsResponse
-	(*TransferOwnershipRequest)(nil),     // 22: wendycloud.v2.TransferOwnershipRequest
-	(*TransferOwnershipResponse)(nil),    // 23: wendycloud.v2.TransferOwnershipResponse
-	(*timestamppb.Timestamp)(nil),        // 24: google.protobuf.Timestamp
-	(*SignedRequest)(nil),                // 25: wendycloud.v2.SignedRequest
+	(*SetMemberDefaultsRequest)(nil),     // 22: wendycloud.v2.SetMemberDefaultsRequest
+	(*TransferOwnershipRequest)(nil),     // 23: wendycloud.v2.TransferOwnershipRequest
+	(*TransferOwnershipResponse)(nil),    // 24: wendycloud.v2.TransferOwnershipResponse
+	(*timestamppb.Timestamp)(nil),        // 25: google.protobuf.Timestamp
+	(*SignedRequest)(nil),                // 26: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_organizations_proto_depIdxs = []int32{
-	24, // 0: wendycloud.v2.Organization.created_at:type_name -> google.protobuf.Timestamp
-	24, // 1: wendycloud.v2.Organization.updated_at:type_name -> google.protobuf.Timestamp
+	25, // 0: wendycloud.v2.Organization.created_at:type_name -> google.protobuf.Timestamp
+	25, // 1: wendycloud.v2.Organization.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: wendycloud.v2.OrganizationMember.role:type_name -> wendycloud.v2.OrganizationRole
-	24, // 3: wendycloud.v2.OrganizationMember.created_at:type_name -> google.protobuf.Timestamp
-	24, // 4: wendycloud.v2.OrganizationMember.updated_at:type_name -> google.protobuf.Timestamp
+	25, // 3: wendycloud.v2.OrganizationMember.created_at:type_name -> google.protobuf.Timestamp
+	25, // 4: wendycloud.v2.OrganizationMember.updated_at:type_name -> google.protobuf.Timestamp
 	1,  // 5: wendycloud.v2.ListOrganizationsResponse.organization:type_name -> wendycloud.v2.Organization
 	0,  // 6: wendycloud.v2.AddMemberRequest.role:type_name -> wendycloud.v2.OrganizationRole
 	0,  // 7: wendycloud.v2.UpdateMemberRoleRequest.role:type_name -> wendycloud.v2.OrganizationRole
@@ -1614,30 +1787,32 @@ var file_wendycloud_v2_organizations_proto_depIdxs = []int32{
 	2,  // 14: wendycloud.v2.TransferOwnershipResponse.previous_owner:type_name -> wendycloud.v2.OrganizationMember
 	3,  // 15: wendycloud.v2.OrganizationService.CreateOrganization:input_type -> wendycloud.v2.CreateOrganizationRequest
 	4,  // 16: wendycloud.v2.OrganizationService.GetOrganization:input_type -> wendycloud.v2.GetOrganizationRequest
-	25, // 17: wendycloud.v2.OrganizationService.UpdateOrganization:input_type -> wendycloud.v2.SignedRequest
+	26, // 17: wendycloud.v2.OrganizationService.UpdateOrganization:input_type -> wendycloud.v2.SignedRequest
 	6,  // 18: wendycloud.v2.OrganizationService.DeleteOrganization:input_type -> wendycloud.v2.DeleteOrganizationRequest
 	8,  // 19: wendycloud.v2.OrganizationService.ListOrganizations:input_type -> wendycloud.v2.ListOrganizationsRequest
-	25, // 20: wendycloud.v2.OrganizationService.AddMember:input_type -> wendycloud.v2.SignedRequest
-	25, // 21: wendycloud.v2.OrganizationService.AddMembersByEmails:input_type -> wendycloud.v2.SignedRequest
-	25, // 22: wendycloud.v2.OrganizationService.UpdateMemberRole:input_type -> wendycloud.v2.SignedRequest
-	25, // 23: wendycloud.v2.OrganizationService.RemoveMember:input_type -> wendycloud.v2.SignedRequest
-	25, // 24: wendycloud.v2.OrganizationService.RevokeAllCredentials:input_type -> wendycloud.v2.SignedRequest
+	26, // 20: wendycloud.v2.OrganizationService.AddMember:input_type -> wendycloud.v2.SignedRequest
+	26, // 21: wendycloud.v2.OrganizationService.AddMembersByEmails:input_type -> wendycloud.v2.SignedRequest
+	26, // 22: wendycloud.v2.OrganizationService.UpdateMemberRole:input_type -> wendycloud.v2.SignedRequest
+	26, // 23: wendycloud.v2.OrganizationService.RemoveMember:input_type -> wendycloud.v2.SignedRequest
+	26, // 24: wendycloud.v2.OrganizationService.RevokeAllCredentials:input_type -> wendycloud.v2.SignedRequest
 	16, // 25: wendycloud.v2.OrganizationService.ListMembers:input_type -> wendycloud.v2.ListMembersRequest
-	25, // 26: wendycloud.v2.OrganizationService.TransferOwnership:input_type -> wendycloud.v2.SignedRequest
-	1,  // 27: wendycloud.v2.OrganizationService.CreateOrganization:output_type -> wendycloud.v2.Organization
-	1,  // 28: wendycloud.v2.OrganizationService.GetOrganization:output_type -> wendycloud.v2.Organization
-	1,  // 29: wendycloud.v2.OrganizationService.UpdateOrganization:output_type -> wendycloud.v2.Organization
-	7,  // 30: wendycloud.v2.OrganizationService.DeleteOrganization:output_type -> wendycloud.v2.DeleteOrganizationResponse
-	9,  // 31: wendycloud.v2.OrganizationService.ListOrganizations:output_type -> wendycloud.v2.ListOrganizationsResponse
-	2,  // 32: wendycloud.v2.OrganizationService.AddMember:output_type -> wendycloud.v2.OrganizationMember
-	21, // 33: wendycloud.v2.OrganizationService.AddMembersByEmails:output_type -> wendycloud.v2.AddMembersByEmailsResponse
-	2,  // 34: wendycloud.v2.OrganizationService.UpdateMemberRole:output_type -> wendycloud.v2.OrganizationMember
-	13, // 35: wendycloud.v2.OrganizationService.RemoveMember:output_type -> wendycloud.v2.RemoveMemberResponse
-	15, // 36: wendycloud.v2.OrganizationService.RevokeAllCredentials:output_type -> wendycloud.v2.RevokeAllCredentialsResponse
-	17, // 37: wendycloud.v2.OrganizationService.ListMembers:output_type -> wendycloud.v2.ListMembersResponse
-	23, // 38: wendycloud.v2.OrganizationService.TransferOwnership:output_type -> wendycloud.v2.TransferOwnershipResponse
-	27, // [27:39] is the sub-list for method output_type
-	15, // [15:27] is the sub-list for method input_type
+	26, // 26: wendycloud.v2.OrganizationService.TransferOwnership:input_type -> wendycloud.v2.SignedRequest
+	26, // 27: wendycloud.v2.OrganizationService.SetMemberDefaults:input_type -> wendycloud.v2.SignedRequest
+	1,  // 28: wendycloud.v2.OrganizationService.CreateOrganization:output_type -> wendycloud.v2.Organization
+	1,  // 29: wendycloud.v2.OrganizationService.GetOrganization:output_type -> wendycloud.v2.Organization
+	1,  // 30: wendycloud.v2.OrganizationService.UpdateOrganization:output_type -> wendycloud.v2.Organization
+	7,  // 31: wendycloud.v2.OrganizationService.DeleteOrganization:output_type -> wendycloud.v2.DeleteOrganizationResponse
+	9,  // 32: wendycloud.v2.OrganizationService.ListOrganizations:output_type -> wendycloud.v2.ListOrganizationsResponse
+	2,  // 33: wendycloud.v2.OrganizationService.AddMember:output_type -> wendycloud.v2.OrganizationMember
+	21, // 34: wendycloud.v2.OrganizationService.AddMembersByEmails:output_type -> wendycloud.v2.AddMembersByEmailsResponse
+	2,  // 35: wendycloud.v2.OrganizationService.UpdateMemberRole:output_type -> wendycloud.v2.OrganizationMember
+	13, // 36: wendycloud.v2.OrganizationService.RemoveMember:output_type -> wendycloud.v2.RemoveMemberResponse
+	15, // 37: wendycloud.v2.OrganizationService.RevokeAllCredentials:output_type -> wendycloud.v2.RevokeAllCredentialsResponse
+	17, // 38: wendycloud.v2.OrganizationService.ListMembers:output_type -> wendycloud.v2.ListMembersResponse
+	24, // 39: wendycloud.v2.OrganizationService.TransferOwnership:output_type -> wendycloud.v2.TransferOwnershipResponse
+	1,  // 40: wendycloud.v2.OrganizationService.SetMemberDefaults:output_type -> wendycloud.v2.Organization
+	28, // [28:41] is the sub-list for method output_type
+	15, // [15:28] is the sub-list for method input_type
 	15, // [15:15] is the sub-list for extension type_name
 	15, // [15:15] is the sub-list for extension extendee
 	0,  // [0:15] is the sub-list for field type_name
@@ -1651,19 +1826,21 @@ func file_wendycloud_v2_organizations_proto_init() {
 	file_wendy_options_proto_init()
 	file_wendycloud_v2_signed_request_proto_init()
 	file_wendycloud_v2_organizations_proto_msgTypes[0].OneofWrappers = []any{}
+	file_wendycloud_v2_organizations_proto_msgTypes[1].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[2].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[4].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[7].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[9].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[10].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[17].OneofWrappers = []any{}
+	file_wendycloud_v2_organizations_proto_msgTypes[21].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_organizations_proto_rawDesc), len(file_wendycloud_v2_organizations_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   23,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

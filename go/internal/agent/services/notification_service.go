@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +31,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	systempb "github.com/wendylabsinc/wendy/go/proto/gen/systempb"
 )
 
@@ -604,7 +607,26 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 		}
 	}()
 
-	proofCtx, err := notificationRequestContext(ctx, request, s.provisioningSvc.ProvisioningPrincipal(), orgID, assetID, certPEM, keyData)
+	if principal := s.provisioningSvc.ProvisioningPrincipal(); principal != "" {
+		if err := validateNotificationDevicePrincipal(principal); err != nil {
+			return nil, err
+		}
+		return s.createNotificationV2WithACME(ctx, cloudHost, certPEM, chainPEM, keyData, request)
+	}
+
+	if orgID <= 0 || assetID <= 0 {
+		return nil, status.Error(codes.FailedPrecondition, "device proof requires positive organization and asset IDs")
+	}
+	proofCtx, err := notificationDeviceProofContext(
+		ctx,
+		request,
+		deviceProofFullMethod,
+		certs.AssetURN(orgID, assetID),
+		time.Now().Unix(),
+		certPEM,
+		keyData,
+		rand.Reader,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -617,17 +639,114 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 		s.logger.Warn("app-originated notification delivery failed",
 			zap.String("app_id", request.GetAppId()),
 			zap.String("notification_id", request.GetNotificationId()),
-			zap.Error(err))
+			zap.String("status_code", status.Code(err).String()))
 		return nil, err
 	}
 	return response, nil
+}
+
+func validateNotificationDevicePrincipal(principal string) error {
+	identity, err := certs.ParsePrincipal(principal)
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, "device has an invalid ACME provisioning identity")
+	}
+	if identity.EntityType != certs.EntityAsset {
+		return status.Error(codes.FailedPrecondition, "ACME provisioning identity is not a device")
+	}
+	return nil
+}
+
+func (s *CloudNotificationSender) createNotificationV2WithACME(
+	ctx context.Context,
+	cloudHost, certPEM, chainPEM string,
+	keyData []byte,
+	request *cloudpb.CreateNotificationV2Request,
+) (*cloudpb.CreateNotificationV2Response, error) {
+	v2Request, err := cloudNotificationRequestV2(request)
+	if err != nil {
+		return nil, err
+	}
+	// SECURITY: This override belongs to the Agent service environment, which app
+	// containers cannot modify. It is needed for local/dev device ingress;
+	// DeviceEndpoint restricts it to a TLS endpoint and DialCloud verifies the
+	// server certificate before presenting the device's mTLS certificate.
+	endpoint, err := cloudrelay.DeviceEndpoint(cloudHost, os.Getenv("WENDY_DEVICE_CLOUD_URL"))
+	if err != nil {
+		return nil, fmt.Errorf("resolve Wendy Cloud device endpoint: %w", err)
+	}
+	connection, err := s.connectionForACME(endpoint, certPEM, chainPEM, keyData)
+	if err != nil {
+		return nil, err
+	}
+	response, err := cloudpbv2.NewNotificationServiceClient(connection).CreateNotificationV2(ctx, v2Request)
+	if err != nil {
+		s.logger.Warn("app-originated Cloud v2 notification delivery failed",
+			zap.String("app_id", request.GetAppId()),
+			zap.String("notification_id", request.GetNotificationId()),
+			zap.String("status_code", status.Code(err).String()))
+		return nil, err
+	}
+	return &cloudpb.CreateNotificationV2Response{NotificationId: response.GetNotificationId()}, nil
+}
+
+func cloudNotificationRequestV2(request *cloudpb.CreateNotificationV2Request) (*cloudpbv2.CreateNotificationV2Request, error) {
+	if len(request.GetAudience().GetTeamIds()) != 0 {
+		return nil, status.Error(codes.FailedPrecondition, "Cloud v2 Notifications support user and role selectors. Choose recipients by user or role.")
+	}
+	return &cloudpbv2.CreateNotificationV2Request{
+		Audience: &cloudpbv2.NotificationAudience{
+			UserIds: request.GetAudience().GetUserIds(),
+			Roles:   notificationRolesV2(request.GetAudience().GetRoles()),
+		},
+		Title:          request.GetTitle(),
+		Body:           request.GetBody(),
+		Severity:       cloudpbv2.NotificationSeverity(request.GetSeverity()),
+		DeepLink:       request.GetDeepLink(),
+		NotificationId: request.GetNotificationId(),
+		Metadata:       request.GetMetadata(),
+		AppId:          request.AppId,
+	}, nil
+}
+
+func notificationRolesV2(roles []cloudpb.OrganizationRole) []cloudpbv2.OrganizationRole {
+	mapped := make([]cloudpbv2.OrganizationRole, len(roles))
+	for index, role := range roles {
+		mapped[index] = cloudpbv2.OrganizationRole(role)
+	}
+	return mapped
+}
+
+func (s *CloudNotificationSender) connectionForACME(
+	endpoint, certPEM, chainPEM string,
+	keyData []byte,
+) (*grpc.ClientConn, error) {
+	hasher := sha256.New()
+	_, _ = io.WriteString(hasher, "v2\x00"+endpoint+"\x00"+certPEM+"\x00"+chainPEM+"\x00")
+	_, _ = hasher.Write(keyData)
+	var key [sha256.Size]byte
+	copy(key[:], hasher.Sum(nil))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.connection != nil && s.connectionKey == key {
+		return s.connection, nil
+	}
+	connection, err := cloudrelay.DialCloud(endpoint, certPEM, chainPEM, keyData)
+	if err != nil {
+		return nil, fmt.Errorf("connect to Wendy Cloud device endpoint: %w", err)
+	}
+	if s.connection != nil {
+		_ = s.connection.Close()
+	}
+	s.connectionKey = key
+	s.connection = connection
+	return connection, nil
 }
 
 func (s *CloudNotificationSender) connectionFor(
 	cloudHost, certPEM, chainPEM string,
 	keyData []byte,
 ) (*grpc.ClientConn, error) {
-	key := sha256.Sum256([]byte(cloudHost + "\x00" + certPEM))
+	key := sha256.Sum256([]byte("v1\x00" + cloudHost + "\x00" + certPEM))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.connection != nil && s.connectionKey == key {

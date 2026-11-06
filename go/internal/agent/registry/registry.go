@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"cuelabs.dev/go/oci/ociregistry"
-	"cuelabs.dev/go/oci/ociregistry/ociserver"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -53,24 +52,32 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return err
 }
 
+// imagePrefixFor derives the host:port prefix from the listen address so that
+// images are registered in containerd with the same name clients use to pull
+// them (e.g. "localhost:5000/myapp:latest"). Local network access binds the
+// registry to loopback, which clients still pull as localhost.
+func imagePrefixFor(listenAddr string) (string, error) {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "", fmt.Errorf("parsing registry listen address %q: %w", listenAddr, err)
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && (ip.IsUnspecified() || ip.IsLoopback())) {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, port) + "/", nil
+}
+
 func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config) (*Server, error) {
 	client, err := containerd.New(containerdAddr, containerd.WithDefaultNamespace("default"))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to containerd for registry: %w", err)
 	}
 
-	// Derive the host:port prefix from the listen address so that images are
-	// registered in containerd with the same name clients use to pull them
-	// (e.g. "localhost:5000/myapp:latest").
-	host, port, err := net.SplitHostPort(listenAddr)
+	imagePrefix, err := imagePrefixFor(listenAddr)
 	if err != nil {
 		client.Close()
-		return nil, fmt.Errorf("parsing registry listen address %q: %w", listenAddr, err)
+		return nil, err
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "localhost"
-	}
-	imagePrefix := net.JoinHostPort(host, port) + "/"
 
 	reg := &containerdRegistry{
 		client:              client,
@@ -83,7 +90,7 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		Interface: reg,
 	}
 
-	ociHandler := ociserver.New(backend, nil)
+	ociHandler := newOCIHandler(backend)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", readyzHandler(client, logger))
@@ -173,6 +180,10 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// Registry contents are data, including publisher-selected media types.
+		// Isolate a browser that opens an HTML response without changing the
+		// image bytes or their digest.
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		next.ServeHTTP(w, r)
 	})
 }

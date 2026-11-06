@@ -316,6 +316,7 @@ func createContainerWithProgressPlain(stream agentpb.WendyContainerService_Creat
 				cliLogln("Creating container...")
 			}
 		case *agentpb.CreateContainerProgressResponse_Completed:
+			noteImageDigest(stream.Context(), r.Completed.GetImageDigest())
 			completed = true
 		}
 
@@ -340,9 +341,11 @@ func isUnimplementedRPCError(err error) bool {
 }
 
 func createContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
-	if _, err := svc.CreateContainer(ctx, req); err != nil {
+	resp, err := svc.CreateContainer(ctx, req)
+	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
 	}
+	noteImageDigest(ctx, resp.GetImageDigest())
 	return nil
 }
 
@@ -356,8 +359,12 @@ func progressModelUserCancelled(model tea.Model) bool {
 	return ok && pm.Err() == context.Canceled
 }
 
-func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
-	prog := tui.NewProgressProgram(tui.NewProgress("Pulling image on device...").WithoutErrorView())
+func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient, hints bool) error {
+	bar := tui.NewProgress("Pulling image on device...").WithoutErrorView()
+	if !hints {
+		bar = bar.WithoutHints()
+	}
+	prog := tui.NewProgressProgram(bar)
 
 	var (
 		createErr error
@@ -414,6 +421,7 @@ func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.We
 					}
 				}
 			case *agentpb.CreateContainerProgressResponse_Completed:
+				noteImageDigest(stream.Context(), r.Completed.GetImageDigest())
 				completed = true
 				if !progressDone {
 					progressDone = true
@@ -481,7 +489,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		}
 		return fmt.Errorf("creating container: %w", err)
 	}
-	if err := createContainerWithProgressTUI(cancel, stream); err != nil {
+	if err := createContainerWithProgressTUI(cancel, stream, !progressHintsOff(ctx)); err != nil {
 		if isUnimplementedRPCError(err) {
 			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
 		}
@@ -513,6 +521,7 @@ type runOptions struct {
 	managedRobot     bool
 	buildType        string
 	dockerfile       string
+	buildArgs        []string
 	builder          string
 	stagefileBackend string
 	// buildHost names a WendyOS device that builds the image instead of this
@@ -525,7 +534,11 @@ type runOptions struct {
 	debug                 bool
 	deploy                bool
 	skipCloudRegistration bool
-	detach                bool
+	// recordRelease is the tag of the release this deploy is recorded as
+	// (--record-release); empty records nothing. release records it.
+	recordRelease string
+	release       *deployRelease
+	detach        bool
 	// detachedOutput enables the ordinary CLI run result. Fleet and internal
 	// provisioning callers own their output and leave this false.
 	detachedOutput       bool
@@ -635,6 +648,9 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReportingWaitReadyFailure(cmd.Context(), opts, func(ctx context.Context) error {
 				return runWithInterruptContext(ctx, func(runCtx context.Context) error {
+					if _, err := mergeBuildArgFlags(nil, opts.buildArgs); err != nil {
+						return err
+					}
 					if err := validateEnvFlag(opts.env); err != nil {
 						return err
 					}
@@ -676,6 +692,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().Lookup("hil").NoOptDefVal = optionalDevicePickerValue
 	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Build file to build from: a Dockerfile, Containerfile, or Stagefile (e.g. Dockerfile.prod, Containerfile, prod.stagefile.yaml); shows a selection menu when multiple build files exist")
 	cmd.Flags().StringVar(&opts.builder, "builder", "", "Image builder to force for Dockerfile/Containerfile builds: docker, apple-container, or buildkit")
+	cmd.Flags().StringArrayVar(&opts.buildArgs, "build-arg", nil, "Build argument KEY=VALUE for container builds on WendyOS devices (repeatable; overrides defaults and Compose args)")
 	cmd.Flags().StringVar(&opts.stagefileBackend, "stagefile-backend", "", "Stagefile compiler backend: dockerfile (default) or llb")
 	cmd.Flags().StringVar(&opts.gpuArch, "gpu-arch", "", fmt.Sprintf("GPU architecture a Stagefile cuda: stage targets (%s); read from the device when one is selected", strings.Join(gpu.KnownArches(), ", ")))
 	cmd.Flags().StringVar(&opts.buildHost, "build-host", "", "Build on another WendyOS device; omit the device to open a picker, or use --build-host=DEVICE")
@@ -683,6 +700,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering apps in Cloud (offline use)")
+	cmd.Flags().StringVar(&opts.recordRelease, "record-release", "", "Record this deploy in Cloud as a release with this tag (off by default)")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container and return without streaming logs or opening the app URL; waits for readiness only with --wait-ready")
 	addReadinessFlags(cmd, &opts)
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Automatically accept all interactive prompts")
@@ -810,9 +828,9 @@ func cloudFallbackDeviceName(explicit, flagValue, configDefault string) string {
 	return configDefault
 }
 
-// A LAN hostname often differs from the Cloud display name. When the default
-// has a saved asset identity, look up that exact asset through Cloud; the
-// identity check still verifies the selected org and asset before connecting.
+// A LAN hostname often differs from the Cloud display name. When the name has
+// a saved asset identity, look up that exact asset through Cloud; the identity
+// check still verifies the selected org and asset before connecting.
 func cloudDefaultSelector(defaultName string, expected *certs.WendyIdentity) string {
 	if expected != nil && expected.EntityType == certs.EntityAsset && expected.EntityID != "" {
 		return expected.EntityID
@@ -849,8 +867,7 @@ func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...res
 			if len(cfg.Auth) == 0 {
 				return nil, fmt.Errorf("no Wendy Cloud session available")
 			}
-			expected := expectedIdentityFor(pinKeyForAddr(defaultName))
-			conn, err := connectToCloudAgentExpecting(ctx, "", cloudDefaultSelector(defaultName, expected), "", expected)
+			conn, err := connectToPinnedCloudName(ctx, cfg, defaultName)
 			if err != nil {
 				return nil, err
 			}
@@ -867,8 +884,10 @@ func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...res
 	if cloudCheckedBeforePicker {
 		return nil, err
 	}
-	// An MCP-spawned run deploys to the MCP session's device or fails.
-	if errors.Is(err, ErrUserCancelled) || cloudFallbackDisabled(cloudName) {
+	// An MCP-spawned run deploys to the MCP session's device or fails. An
+	// explicit name already checked in Cloud must keep that session's result.
+	var cloudNameErr *cloudNameResolutionError
+	if stopConnectionRecovery(err) || errors.As(err, &cloudNameErr) || cloudFallbackDisabled(cloudName) {
 		return nil, err
 	}
 	var stopped *defaultDeviceRecoveryStoppedError
@@ -891,11 +910,9 @@ func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...res
 		return nil, err
 	}
 
-	var expected *certs.WendyIdentity
-	if cloudName == "" && deviceFlag == "" && deviceName == cfg.DefaultDevice {
-		expected = expectedIdentityFor(pinKeyForAddr(deviceName))
-	}
-	cloudConn, cloudErr := cloudFallbackConnectFn(ctx, "", cloudDefaultSelector(deviceName, expected), "", expected)
+	// An explicit --device or build host whose dial failed without a DNS miss
+	// is pinned here just as the default is.
+	cloudConn, cloudErr := cloudFallbackConnectFn(ctx, cfg, deviceName)
 	if cloudErr != nil {
 		if errors.Is(cloudErr, errDeviceIdentityRefused) {
 			return nil, cloudErr
@@ -982,6 +999,9 @@ func debugRequiresDebugpy(cwd string, appCfg *appconfig.AppConfig) error {
 }
 
 func runCommand(ctx context.Context, opts runOptions) (retErr error) {
+	if _, err := mergeBuildArgFlags(nil, opts.buildArgs); err != nil {
+		return err
+	}
 	if !opts.managedRobot {
 		var finish func(error)
 		ctx, finish = startActivationOperation(ctx, "run", "wendy run")
@@ -1002,6 +1022,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	useLLB, err := stagefileBackendLLB(opts.stagefileBackend, normalizedBuilder)
 	if err != nil {
 		return classifyCommandError(errConfigInvalid, err)
+	}
+	if useLLB && len(opts.buildArgs) > 0 {
+		return usageErrorf("--build-arg requires --stagefile-backend=dockerfile")
 	}
 	ctx = withStagefileBackend(ctx, opts.stagefileBackend)
 	if opts.maxConcurrency < 0 {
@@ -1038,6 +1061,10 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 		}
 		if err := validateFleetRun(extras, opts.buildHost, opts.detach); err != nil {
 			return err
+		}
+		// Every device would carry the release created for the first one.
+		if opts.recordRelease != "" {
+			return errRecordReleaseUnsupported("a deploy to several devices")
 		}
 		deviceFlag = primary
 		opts.fleetDevices = extras
@@ -1080,6 +1107,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 		}
 		if opts.waitReady {
 			return errWaitReadyUnsupported("Compose projects")
+		}
+		if opts.recordRelease != "" {
+			return errRecordReleaseUnsupported("a Compose project")
 		}
 		return runComposeCommand(ctx, cwd, opts)
 	}
@@ -1548,6 +1578,15 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	regPort := registryPort(agentOS)
 
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
+	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
+		return err
+	}
 	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 		return classifyCommandError(errBuilderUnavailable, err)
 	}
@@ -1648,6 +1687,12 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
+	}
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
 	}
 
 	product, err := swifttoolchain.FindSwiftProductWithActiveSwiftOptions(cwd, opts.product, !opts.yes && isInteractiveTerminal())
@@ -1839,8 +1884,14 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, entitlements []appconfig.Entitlement, opts runOptions) error {
+	if len(opts.buildArgs) > 0 {
+		return usageErrorf("--build-arg currently requires a WendyOS device target")
+	}
 	if opts.waitReady || opts.readinessTimeout != 0 {
 		return commandErrorf(errConfigInvalid, "--wait-ready and --readiness-timeout require a WendyOS device target")
+	}
+	if opts.recordRelease != "" {
+		return errRecordReleaseUnsupported("a deploy to a provider target")
 	}
 	if opts.builder != "" {
 		return commandErrorf(errConfigInvalid, "--builder is only used when --device selects a WendyOS device; use --device docker or --device apple-container for local provider runs")
@@ -2000,7 +2051,7 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 	if !errors.As(err, &missingCore) {
 		return app, err
 	}
-	if err := setupLiteProject(ctx, projectPath, opts.yes); err != nil {
+	if err := setupLiteProject(ctx, projectPath, missingCore.Toolchain, opts.yes); err != nil {
 		return nil, err
 	}
 	return p.Build(ctx, device, projectPath, projectType, product, opts.debug)
@@ -2183,13 +2234,40 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return err
 	}
 	opts = opts.withConfiguredRestartPolicy(appCfg.RestartPolicy)
+	if opts.recordRelease != "" {
+		// ponytail: one container per recorded deploy; multi-service apps and
+		// watch loops need a release per service or per cycle first.
+		switch {
+		case len(appCfg.Services) > 0:
+			return errRecordReleaseUnsupported("a multi-service app")
+		case opts.isWatch():
+			return errRecordReleaseUnsupported("a --watch loop")
+		case opts.skipCloudRegistration:
+			return errRecordReleaseUnsupported("an offline deploy (--skip-cloud-registration)")
+		}
+		var err error
+		if opts.release, err = newDeployRelease(appCfg.AppID, opts.recordRelease); err != nil {
+			return err
+		}
+	}
 	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
+	}
+	if opts.release != nil {
+		if err := opts.release.prepare(ctx, deploymentProvisioningService{conn}, config.Load); err != nil {
+			return err
+		}
+		ctx = withDeployRelease(ctx, opts.release)
 	}
 	metrics := newDeployMetrics(opts)
 	metrics.ctx = ctx
 	err := runWithAgentRecorded(ctx, conn, cwd, appCfg, opts, metrics)
 	metrics.emit(err)
+	if opts.release != nil {
+		if recErr := opts.release.outcome(err); recErr != nil {
+			err = errors.Join(err, recErr)
+		}
+	}
 	return err
 }
 
@@ -2241,6 +2319,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	printRunDiskUsageWarning(versionResp)
+	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
+		return err
+	}
 	mark("agent version metadata (in runWithAgent)")
 	activationStep(ctx, "build", map[string]string{"device_reachable": "true"})
 	metrics.deviceType = versionResp.GetDeviceType()
@@ -2263,6 +2344,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	}
 
 	if appCfg.Run != nil && appCfg.Run.Command != "" {
+		if len(opts.buildArgs) > 0 {
+			return usageErrorf("--build-arg requires a container build; it cannot be used with run.command")
+		}
 		if !strings.EqualFold(agentOS, "darwin") || platformOS(platform) != "darwin" {
 			return commandErrorf(errProjectTargetMismatch, "run.command requires a native Darwin agent target")
 		}
@@ -2272,6 +2356,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 
 	// Xcode projects: always use the local-build + file-sync path (darwin only).
 	if projectType == "xcode" {
+		if len(opts.buildArgs) > 0 {
+			return usageErrorf("--build-arg requires a container build; it cannot be used with Xcode projects")
+		}
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "Xcode projects"); err != nil {
 			return err
 		}
@@ -2304,6 +2391,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		needsHostSwift := explicitSwift || !hasContainerBuildFile(cwd)
 
 		if needsHostSwift {
+			if len(opts.buildArgs) > 0 {
+				return usageErrorf("--build-arg requires a container build; provide a Dockerfile or Containerfile for this Swift project")
+			}
 			if err := rejectUnsupportedBuildHostProject(opts.buildHost, "native Swift projects"); err != nil {
 				return err
 			}
@@ -2359,6 +2449,10 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// Dockerfiles can apply their own defaults on older agents; device-reported
 	// values that fail build-arg validation are skipped rather than fatal.
 	applyDeviceBuildArgHints(buildArgs, versionResp)
+	buildArgs, err = mergeBuildArgFlags(buildArgs, opts.buildArgs)
+	if err != nil {
+		return err
+	}
 
 	// wendy.json env plus --env and fleet-injected env, appended last so they win
 	// on key clash. Feeds the remote-build path below, the fingerprint, and
@@ -2370,6 +2464,11 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// ahead of every local path because those exist to optimise a local build
 	// that is not going to happen.
 	if opts.buildHost != "" {
+		// The build host delivers the image to this device, so the device
+		// still needs room for it.
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
 		metrics.transport = "buildhost"
 		if len(opts.fleetDevices) > 0 {
 			// A fleet build starts one container per device: the first device's
@@ -2390,9 +2489,10 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 
 	// Fast path: when nothing that affects the image has changed since
 	// the last successful deploy to this device, skip the build entirely and
-	// just ensure the existing container is running. Best-effort — a missing or
-	// mismatched fingerprint, a missing app, or any RPC error falls through to
-	// the normal deploy below, so it can never deploy stale code.
+	// just ensure the existing container is running. A missing or mismatched
+	// fingerprint or failed device verification falls through to the normal
+	// deploy below. Once verified, lifecycle errors (including start failures)
+	// are returned directly without rebuilding or redeploying.
 	//
 	// The fingerprint feeds only this fast path and the one recorded when the
 	// chunk-diff deploy below starts. Both are off for darwin agents and
@@ -2400,22 +2500,34 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// hashed only when they can use it: an unpinned FROM python:3.12-slim
 	// never reads it (WDY-3216).
 	deviceKey := deviceFingerprintKey(versionResp)
-	fingerprintUsed := !isDarwinAgent && !opts.deploy
+	// A recorded deploy always creates its container, so it carries the release.
+	fingerprintUsed := !isDarwinAgent && !opts.deploy && opts.release == nil
 	desiredHash, hashErr := "", errBasesNotPinned
 	if fingerprintUsed {
 		desiredHash, hashErr = singleServiceDesiredHash(cwd, opts.dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, deployEnv, appCfg, opts)
 	}
 	mark("build-input fingerprint")
 	if fingerprintUsed && hashErr == nil {
+		// Started emits its progress event inside the fast path, before it returns.
+		metrics.transport = "fastpath"
 		if done, err := tryDeployFastPath(ctx, conn, appCfg, deviceKey, desiredHash, opts); done {
 			mark("fast-path (skipped build)")
-			metrics.transport = "fastpath"
 			return err
 		}
+		metrics.transport = ""
 	}
 
-	// A build will run below (the no-build fast path returned above), so make
-	// sure the Apple Container system is up when --builder apple-container is
+	// A build will run below (the no-build fast path returned above). Refuse it
+	// now if this computer's disk, or the device's, is too full to hold it.
+	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
+	ctx = withDeviceStorage(ctx, versionResp)
+
+	// Make sure the Apple Container system is up when --builder apple-container is
 	// explicit. This covers both the chunk-diff and the registry-push build.
 	// The emulation notice goes out now, before the build UI owns the terminal.
 	noteEmulatedBuild(platform, true)
@@ -2487,6 +2599,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// same Dockerfile, so it would fail identically — and can even mask the
 			// real error behind an unrelated builder-setup failure. Surface the
 			// actionable build error directly instead of falling back. (#1166)
+			return err
+		} else if chunkFailureRepeatsOnRegistryPush(err, opts.builder) {
+			// A registry push would stop at the same missing space or plugin.
 			return err
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no
@@ -2765,10 +2880,14 @@ func resolveServiceEnv(appCfg *appconfig.AppConfig) []string {
 // optionally starts it, streams output, and manages readiness + postStart hooks.
 func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
 	activationStep(ctx, "deploy", nil)
+	releaseID, err := opts.release.begin(ctx)
+	if err != nil {
+		return err
+	}
+	createReq.ReleaseId = releaseID
 	if opts.deploy {
-		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
-		if err != nil {
-			return fmt.Errorf("creating container: %w", err)
+		if err := createContainerWithoutProgress(ctx, conn.ContainerService, createReq); err != nil {
+			return err
 		}
 		cliLogln("Container %s created (not started).", containerDisplayName(appCfg))
 		return nil
@@ -2956,11 +3075,28 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 // HTTP-over-mesh probes complete a request instead of leaving an empty relayed TCP connection in
 // front of the browser request that follows.
 func makeReadinessProbe(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
+	return makeReadinessProbeWithDial(hostname, port, useHTTP, deviceLinkDialFn)
+}
+
+func makeAgentReadinessProbe(conn *grpcclient.AgentConnection, hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
+	if conn != nil && conn.OperatorMeshTarget.IsValid() && conn.AppDialer != nil {
+		dial := func(ctx context.Context, _ string) (net.Conn, error) {
+			if port < 1 || port > 65535 {
+				return nil, fmt.Errorf("readiness port is outside the TCP range")
+			}
+			return conn.AppDialer(ctx, uint16(port))
+		}
+		return makeReadinessProbeWithDial(hostname, port, useHTTP, dial)
+	}
+	return makeReadinessProbe(hostname, port, useHTTP)
+}
+
+func makeReadinessProbeWithDial(hostname string, port int, useHTTP bool, dialStream func(context.Context, string) (net.Conn, error)) (string, func(context.Context) error, func()) {
 	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", port))
 	dial := func(ctx context.Context, _, target string) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		return deviceLinkDialFn(ctx, target)
+		return dialStream(ctx, target)
 	}
 	if !useHTTP {
 		return addr, func(ctx context.Context) error {
@@ -3012,12 +3148,32 @@ func readinessProbeTimeout(cfg *appconfig.ReadinessConfig, override time.Duratio
 }
 
 // waitForReadinessWithin is waitForReadiness with an explicit deadline.
-func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration) error {
+func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration, connections ...*grpcclient.AgentConnection) error {
+	if len(connections) > 0 {
+		return waitForReadinessProbe(ctx, cfg, hostname, httpPort, timeout, agentReadinessProbeFactory(connections[0]))
+	}
+	return waitForReadinessProbe(ctx, cfg, hostname, httpPort, timeout, makeReadinessProbe)
+}
+
+func agentReadinessProbeFactory(conn *grpcclient.AgentConnection) readinessProbeFactory {
+	return func(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
+		return makeAgentReadinessProbe(conn, hostname, port, useHTTP)
+	}
+}
+
+// readinessProbeFactory builds one readiness probe: the address it reports, a
+// single attempt, and cleanup. makeReadinessProbe dials the app directly;
+// tunnelReadinessProbe goes through a cloud app tunnel.
+type readinessProbeFactory func(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func())
+
+// waitForReadinessProbe is waitForReadinessWithin with the probe built by
+// newProbe.
+func waitForReadinessProbe(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration, newProbe readinessProbeFactory) error {
 	if cfg == nil || cfg.TCPSocket == nil {
 		return nil
 	}
 
-	addr, probe, closeProbe := makeReadinessProbe(
+	addr, probe, closeProbe := newProbe(
 		hostname,
 		cfg.TCPSocket.Port,
 		httpPort != 0 && httpPort == cfg.TCPSocket.Port,
@@ -3054,14 +3210,21 @@ func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig,
 	}
 }
 
-// cloudHTTPReadinessPort selects a request-level readiness probe only for an
-// HTTP entitlement reached through the cloud mesh, i.e. when host is the
-// cloud connection's mesh hostname (see hostSideAppAddress). Direct TCP
-// readiness — including a cloud device probed on its reachable LAN address —
-// keeps its documented connect-only semantics, while mesh HTTP avoids leaving
-// an empty relayed connection in front of the real browser request.
+// cloudHTTPReadinessPort selects request-level readiness for an HTTP app
+// reached through the Cloud VPN hostname or an operator's authenticated app
+// stream. A normal direct LAN TCP probe keeps its connect-only semantics.
 func cloudHTTPReadinessPort(conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, readiness *appconfig.ReadinessConfig, host string) int {
-	if conn == nil || conn.Reconnect == nil || readiness == nil || readiness.TCPSocket == nil {
+	if conn == nil || readiness == nil || readiness.TCPSocket == nil {
+		return 0
+	}
+	if conn.OperatorMeshTarget.IsValid() && conn.AppDialer != nil {
+		port, ok := httpEntitlementPort(appCfg.Entitlements)
+		if ok && port == readiness.TCPSocket.Port {
+			return port
+		}
+		return 0
+	}
+	if conn.Reconnect == nil {
 		return 0
 	}
 	if host == "" || host != conn.MeshHost {
@@ -3219,14 +3382,11 @@ func activeMeshHost(ctx context.Context, conn *grpcclient.AgentConnection) strin
 	return ""
 }
 
-// isCloudConnection reports whether conn reaches the device through the Wendy
-// Cloud tunnel. conn.Reconnect != nil is the cloud marker: it is the sole
-// assignment (cloud_tunnel.go, on the connection cloud_tunnel.go builds) for a
-// transport where the connection identity can't be re-derived from Host alone.
-// conn.Addr can't be used instead — it is empty for NewFromConn conns, cloud
-// tunnels included.
+// isCloudConnection distinguishes Cloud's retained tunnel from an operator
+// mesh context. Both supply reconnect callbacks; only the latter carries its
+// separately selected typed mesh device.
 func isCloudConnection(conn *grpcclient.AgentConnection) bool {
-	return conn != nil && conn.Reconnect != nil
+	return conn != nil && conn.Reconnect != nil && !conn.OperatorMeshTarget.IsValid()
 }
 
 // cloudLANProbeTimeout bounds the one reachability check a cloud-tunnel run
@@ -3273,9 +3433,16 @@ var lanAddressReachable = func(ctx context.Context, ip string) bool {
 // address (lanAddressReachable): if it can, the address is used as on a LAN
 // connection (WDY-2440). Otherwise — or when the agent reports no IP —
 // ok=false: probing that address, printing it as "App reachable at", or
-// opening it would mislead, so callers skip host-side probes and hooks with
+// opening it would mislead. The attached hook paths then forward the app's
+// port through Wendy Cloud instead (resolveHookRoute); other callers skip
+// host-side probes, and resolveHookRoute too when it cannot forward, with
 // cloudHostSkipNotice (readiness is not checked from this machine).
 func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host, url string, ok bool) {
+	if conn != nil && conn.OperatorMeshTarget.IsValid() && conn.AppDialer != nil {
+		// A userspace address is not a host-browser route; the attached hook
+		// obtains its own loopback viewer instead of printing a false URL.
+		return conn.OperatorMeshTarget.MeshAddress().String(), "", true
+	}
 	if meshHost := activeMeshHost(ctx, conn); meshHost != "" {
 		return meshHost, reachableAppURLForHost(appCfg, meshHost), true
 	}
@@ -3294,8 +3461,9 @@ func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, a
 
 // resolveHookHost returns the host the developer-side readiness probe and
 // postStart hook should target, announcing the app URL on the way (see
-// hostSideAppAddress). ok=false means host-side lifecycle work must be skipped
-// with cloudHostSkipNotice.
+// hostSideAppAddress). ok=false means this machine has no route to the
+// device: resolveHookRoute then forwards through Wendy Cloud or skips the
+// host-side lifecycle with cloudHostSkipNotice.
 func resolveHookHost(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host string, ok bool) {
 	host, url, ok := hostSideAppAddress(ctx, conn, appCfg)
 	if url != "" {
@@ -3378,25 +3546,29 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 		return nil
 	}
 
-	// Resolve the host BEFORE probing readiness: the probe and the hook must
+	// Resolve the route BEFORE probing readiness: the probe and the hook must
 	// target the same address, and a cloud connection may have none this
-	// machine can reach. The "App reachable at ..." line (printed inside
-	// resolveHookHost) therefore prints before readiness is confirmed rather
-	// than after — acceptable since it is the same URL the user watches for
-	// regardless of when the probe finishes.
-	hookHost, hostOK := resolveHookHost(ctx, conn, appCfg)
+	// machine can reach, in which case resolveHookRoute forwards the app's
+	// port through Wendy Cloud. The "App reachable at ..." line (printed
+	// inside resolveHookRoute) therefore prints before readiness is confirmed
+	// rather than after — acceptable since it is the same URL the user
+	// watches for regardless of when the probe finishes. In watch mode the
+	// tunnel belongs to the session (hookCtx), so later deploys reuse it.
+	route, hostOK := resolveHookRoute(ctx, hookCtx, conn, appCfg, opts.watchState.appTunnels(), opts.isWatch())
 	if !hostOK {
-		if ctx.Err() == nil {
-			cliNotice("%s", cloudHostSkipNotice(appCfg))
-		}
 		return nil
 	}
 
 	if readiness != nil && readiness.TCPSocket != nil {
 		activationStep(ctx, "readiness", nil)
 	}
-	err := waitForAttachedReadiness(ctx, conn, appCfg, hookHost, opts.readinessTimeout)
+	err := route.waitForReadiness(ctx, conn, appCfg, opts.readinessTimeout)
 	rp("  ↳ runcontainer: readiness wait")
+	if errors.Is(err, errCloudRelayRefused) {
+		// Not a readiness failure: Wendy Cloud would not forward the port,
+		// and waitForReadiness has said what is skipped.
+		return nil
+	}
 	if err != nil {
 		if readiness != nil && readiness.TCPSocket != nil && !opts.managedRobot {
 			class, outcome := ExecutionErrorClass(err), "failed"
@@ -3429,9 +3601,17 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 	if ctx.Err() != nil {
 		return nil
 	}
+	browserURL, err := prepareOperatorBrowserURL(hookCtx, conn, effectiveCfg, route.host)
+	if err != nil {
+		if hookCtx.Err() == nil {
+			cliNotice("Unable to open the mesh app locally: %v", err)
+		}
+		return nil
+	}
+	route.browserURL = browserURL
 	opts.completeHostLifecycle(containerName)
 	completed = true
-	cmd := startPostStartHook(hookCtx, effectiveCfg, hookHost, appCfg.ServiceName)
+	cmd := startRoutedPostStartHook(hookCtx, effectiveCfg, route, appCfg.ServiceName)
 	rp("  ↳ runcontainer: announce + postStart hook")
 	return cmd
 }
@@ -3449,6 +3629,16 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 // wait on or kill. Returns nil when no cli command is configured (regardless
 // of whether openURL was fired).
 func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostname, serviceName string) *exec.Cmd {
+	return startRoutedPostStartHook(ctx, appCfg, hookRoute{host: hostname}, serviceName)
+}
+
+// startRoutedPostStartHook is startPostStartHook on a hookRoute. On a cloud
+// app tunnel the openURL is pointed at the tunnel's local port
+// (cloudAppTunnel.localURL). A cli hook that uses WENDY_HOSTNAME runs with
+// it expanded to localhost when the tunnel kept the device's port number;
+// when it did not, the hook is skipped and the local URL printed instead,
+// since rewriting a port inside a shell command would be guesswork.
+func startRoutedPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, route hookRoute, serviceName string) *exec.Cmd {
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -3456,11 +3646,18 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 		return nil
 	}
 	hook := appCfg.Hooks.PostStart
+	hostname := route.host
 
 	if hook.OpenURL != "" {
 		// openURL is a URL by definition, so an IPv6 hostname must be
 		// bracketed; the CLI hook below stays raw for shell contexts.
 		url := expandHookEnv(hook.OpenURL, urlSafeHost(hostname), appCfg.AppID, serviceName)
+		if route.tunnel != nil {
+			url, _ = route.tunnel.localURL(url)
+		}
+		if route.browserURL != "" {
+			url = route.browserURL
+		}
 		if !postStartBrowserAllowed() {
 			cliLogln("Hook postStart: not opening a browser without an interactive terminal; open %s", tui.Path(url))
 		} else if err := browserOpen(url); err != nil {
@@ -3474,6 +3671,10 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 		return nil
 	}
 	if ctx.Err() != nil {
+		return nil
+	}
+	if t := route.tunnel; t != nil && t.LocalPort != t.RemotePort && strings.Contains(hook.CLI, "WENDY_HOSTNAME") {
+		cliNotice("Skipping the postStart cli hook for %s: it addresses the device as WENDY_HOSTNAME, but port %d is forwarded to localhost:%d on this machine. Open %s instead.", containerDisplayName(appCfg), t.RemotePort, t.LocalPort, tui.Value(route.appURL(appCfg)))
 		return nil
 	}
 
@@ -3606,6 +3807,8 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 				}
 			}
 			rc("  ↳ runcontainer: device create+start")
+			// Storing the digest is a Cloud call, not the device's create+start.
+			noteImageDigest(ctx, resp.GetStarted().GetImageDigest())
 			if opts.deploy {
 				cliLogln("Container %s created (not started).", containerDisplayName(appCfg))
 				return nil
@@ -4093,6 +4296,10 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		logSub = startRunLogSubscription(ctx, pushConn, appCfg.AppID, os.Stdout, runLogStreamWarning)
 		defer logSub.stop()
 	}
+	releaseID, err := opts.release.begin(ctx)
+	if err != nil {
+		return nil, hint, err
+	}
 	runStarted := time.Now()
 	stream, err := pushConn.ContainerService.RunContainer(runCtx, &agentpb.RunContainerLayersRequest{
 		ImageName:      imageName,
@@ -4104,6 +4311,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		UserArgs:       opts.userArgs,
 		ImageSignature: imageSignature,
 		Env:            deployEnv,
+		ReleaseId:      releaseID,
 	})
 	if err != nil {
 		return nil, hint, err

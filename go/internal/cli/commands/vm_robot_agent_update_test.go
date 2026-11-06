@@ -29,7 +29,7 @@ func robotAgentUpdateTestConnection(t *testing.T, kind string) (*vm.Store, *grpc
 }
 
 func TestRobotAgentUpdatePromptAcceptanceReconnectsAndContinues(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			store, conn := robotAgentUpdateTestConnection(t, kind)
 			before := robotUpdatePromptProfileBytes(t, store)

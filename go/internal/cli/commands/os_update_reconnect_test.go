@@ -105,7 +105,7 @@ func TestOSUpdateReconnectCancellation(t *testing.T) {
 	if err := pollDeviceOnline(ctx, prior); !errors.Is(err, context.Canceled) {
 		t.Fatalf("poll cancellation = %v", err)
 	}
-	if err := reportOSUpdateOutcome(ctx, prior, "WendyOS-0.19.5", true); !errors.Is(err, context.Canceled) {
+	if err := reportOSUpdateOutcome(ctx, prior, "WendyOS-0.19.5", osUpdateBaseline{preVersion: "WendyOS-0.19.5", recordCleared: true}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("status cancellation = %v", err)
 	}
 }
@@ -143,7 +143,7 @@ func TestOSUpdateOutcomeUsesPinnedCloudConnection(t *testing.T) {
 			}
 			var err error
 			out := captureStdout(t, func() {
-				err = reportOSUpdateOutcome(context.Background(), prior, "WendyOS-0.19.5", true)
+				err = reportOSUpdateOutcome(context.Background(), prior, "WendyOS-0.19.5", osUpdateBaseline{preVersion: "WendyOS-0.19.5", recordCleared: true})
 			})
 			if (err != nil) != tc.wantErr || !strings.Contains(out, tc.message) {
 				t.Fatalf("outcome err=%v, output=%q", err, out)

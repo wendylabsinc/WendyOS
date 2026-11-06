@@ -2,6 +2,7 @@
   "title": "Tutorials",
   "description": "Build Wendy applications in Python, Swift, C++, Rust, TypeScript, and Mojo",
   "pages": [
+    "index",
     "python",
     "swift",
     "cpp",

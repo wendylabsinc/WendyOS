@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SandboxViewer } from "../../go/simulator/go2/go2_sim/viewer.js";
+import ArmSimulatorView from "./ArmSimulatorView";
 import type { DesktopAPI, Simulator } from "./types";
 
 type Source = {
@@ -36,7 +37,7 @@ type Status = {
   ros_commands?: { owner: string | null; sources: Source[] };
 };
 
-export default function SimulatorView({
+function LocomotionSimulatorView({
   api,
   simulator,
 }: {
@@ -587,4 +588,8 @@ export default function SimulatorView({
       </div>
     </div>
   );
+}
+
+export default function SimulatorView(props: { api: DesktopAPI; simulator: Simulator }) {
+  return props.simulator.kind === "so101" ? <ArmSimulatorView {...props} /> : <LocomotionSimulatorView {...props} />;
 }

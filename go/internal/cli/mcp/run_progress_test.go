@@ -59,7 +59,7 @@ func TestRunAttachesProgressSinkOnlyForProgressRequests(t *testing.T) {
 		var sink *runProgress
 		s.runCommandFn = func(ctx context.Context, _ []string, _ commandTarget, _ int) (string, bool, error) {
 			sink = runProgressFrom(ctx)
-			return "ok", false, nil
+			return encodeRunReceipt([]byte(`{"status":"ready","app":"test","readiness":"passed"}`), "ok"), false, nil
 		}
 		req := callToolReq("run", map[string]any{"project_path": project, "device": "vm:test"})
 		if withToken {

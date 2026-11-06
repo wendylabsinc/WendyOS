@@ -264,8 +264,8 @@ func TrackMilestoneOnceInDir(dir, name string) {
 }
 
 // TrackMilestoneOnce emits the named milestone event exactly once per
-// installation. It is a no-op when analytics is disabled. Milestone state lives
-// alongside analytics_id in the config dir.
+// config directory. It is a no-op when analytics is disabled. Milestone state
+// stays in the config dir even when the identity is shared across configs.
 func TrackMilestoneOnce(name string) {
 	if !trackingEnabled() {
 		return
@@ -345,9 +345,15 @@ func parseBool(s string) bool {
 }
 
 func loadOrCreateID() (string, error) {
-	dir, err := config.ConfigDir()
+	// Identity belongs to the OS user, not a device configuration. MCP launchers
+	// can override WENDY_CONFIG_DIR without becoming a different anonymous user.
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("determining analytics home directory: %w", err)
+	}
+	dir := filepath.Join(home, ".wendy")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("creating analytics directory: %w", err)
 	}
 
 	idPath := filepath.Join(dir, "analytics_id")
@@ -367,7 +373,20 @@ func loadOrCreateID() (string, error) {
 		return id, err
 	}
 
-	id := uuid.NewString()
+	// Keep an existing shared identity authoritative. On the first launch after
+	// upgrading, preserve the active config's old identity if the home has none.
+	// Hold the shared lock through migration so different configs cannot race to
+	// replace the shared ID. Leave the old file for older CLI versions.
+	var id string
+	if legacyDir := os.Getenv("WENDY_CONFIG_DIR"); filepath.IsAbs(legacyDir) && filepath.Clean(legacyDir) != dir {
+		id, err = readAnalyticsID(filepath.Join(legacyDir, "analytics_id"))
+		if err != nil {
+			return "", err
+		}
+	}
+	if id == "" {
+		id = uuid.NewString()
+	}
 	if err := atomicfile.WritePreservingOwner(idPath, []byte(id), 0o600); err != nil {
 		return "", fmt.Errorf("writing analytics ID: %w", err)
 	}

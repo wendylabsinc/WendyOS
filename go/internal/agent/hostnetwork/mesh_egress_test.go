@@ -231,6 +231,20 @@ func TestSetMeshRouteIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestSetMeshMDNSRouteIsScopedAndIdempotent(t *testing.T) {
+	netnsPath := testNetns(t, "wendymdns1", "10.88.0.7/24")
+	for i := 0; i < 2; i++ {
+		if err := SetMeshMDNSRoute(netnsPath, "dummy0"); err != nil {
+			t.Fatalf("SetMeshMDNSRoute attempt %d: %v", i+1, err)
+		}
+	}
+	routes := netnsRoutes(t, netnsPath)
+	if !strings.Contains(routes, "224.0.0.251 dev dummy0 scope link") ||
+		strings.Contains(routes, "224.0.0.0/4") || strings.Contains(routes, "default") {
+		t.Fatalf("mDNS route escaped app link scope: %s", routes)
+	}
+}
+
 func TestSetMeshRouteRejectsInvalidCIDR(t *testing.T) {
 	if err := SetMeshRoute("/var/run/netns/does-not-matter", "not-a-cidr", "10.88.0.1"); err == nil {
 		t.Fatal("expected error for invalid serviceCIDR, got nil")

@@ -82,7 +82,7 @@ func TestBrokerTLSConfig_EmptyCertKeyPresentsNoClientCert(t *testing.T) {
 
 func TestBrokerDialOptsAddsFreshCertificateProof(t *testing.T) {
 	certPEM, keyPEM := ecdsaCertKeyPEM(t)
-	_, requestMetadata, err := brokerDialOpts(zap.NewNop(), 7, 42, certPEM, keyPEM, "")
+	_, requestMetadata, err := brokerIdentityDialOpts(zap.NewNop(), "urn:wendy:org:7:asset:42", certPEM, keyPEM, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestBrokerDialOpts_DowngradesAreAudited(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			core, logs := observer.New(zap.WarnLevel)
-			_, requestMetadata, err := brokerDialOpts(zap.New(core), 7, 42, tc.certPEM, tc.keyPEM, "")
+			_, requestMetadata, err := brokerIdentityDialOpts(zap.New(core), "urn:wendy:org:7:asset:42", tc.certPEM, tc.keyPEM, "")
 			if err != nil {
 				t.Fatal(err)
 			}

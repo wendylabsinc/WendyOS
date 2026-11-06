@@ -11,9 +11,8 @@ before." The skill can guide setup without a connected tool. A local terminal
 is needed to execute setup on the user's machine; in a web-only chat it gives
 the user the appropriate commands.
 
-For desktop use, install the CLI and run `wendy mcp setup chatgpt`. For a hosted
-connection, use the existing registered Wendy plugin and its account connection
-flow. Hosted use does not require the CLI. Neither installing this plugin nor
+In ChatGPT, use the hosted Wendy plugin; it reaches devices through a
+`wendy cloud mcp` session on the user's computer. Neither installing this plugin nor
 opening a setup conversation erases storage or creates a simulator.
 
 The shared workflows are generated from `plugins/wendy-agentic-coding/skills`.

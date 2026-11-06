@@ -100,6 +100,12 @@ func NewMultiSpinner(title string, names []string) MultiSpinnerModel {
 	}
 }
 
+// WithoutHints drops the rotating "Tip:" line; see ProgressModel.WithoutHints.
+func (m MultiSpinnerModel) WithoutHints() MultiSpinnerModel {
+	m.hints = hintRotator{}
+	return m
+}
+
 // Init implements tea.Model.
 func (m MultiSpinnerModel) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.hints.tick())

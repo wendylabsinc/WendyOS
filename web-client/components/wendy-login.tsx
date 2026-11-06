@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Loader2,
@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { WendyClient } from "@/lib/client";
 import DeviceDashboard from "@/components/device-dashboard";
+import MeshNetwork, { type MeshDataSource } from "@/components/mesh-network";
+import type { MeshDevice, MeshResult } from "@/lib/mesh-topology";
 import { AUTH_CALLBACK_TYPE, type AuthSession } from "@/lib/auth";
 type CloudDevice = {
   id: string;
@@ -36,12 +38,22 @@ export default function WendyLogin({
 }) {
   const [selected, setSelected] = useState<CloudDevice | null>(null);
   useEffect(() => {
-    onActive(selected);
-  }, [selected, onActive]);
+    onActive(requestedView === "Networks" ? null : selected);
+  }, [selected, onActive, requestedView]);
   useEffect(() => {
     if (!session) setSelected(null);
   }, [session]);
   const client = useRef<WendyClient | null>(null);
+  const meshSource = useMemo<MeshDataSource>(() => ({
+    discover: async () => {
+      if (!client.current) throw new Error("Sign in to read your local networks.");
+      return { devices: await client.current.call<MeshDevice[]>("mesh-discover"), warnings: [] };
+    },
+    read: async (id) => {
+      if (!client.current) throw new Error("The authenticated session is closed.");
+      return client.current.call<MeshResult>("mesh-topology", { id });
+    },
+  }), []);
   const cancel = useRef<(() => void) | null>(null);
   const [devices, setDevices] = useState<CloudDevice[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
@@ -288,7 +300,8 @@ export default function WendyLogin({
           </form>
         </section>
       )}
-      {session && selected && client.current && (
+      {session && requestedView === "Networks" && <MeshNetwork key={`${session.issuer}/${session.subject}/${session.tenant}`} source={meshSource} organization={session.organization} />}
+      {session && selected && requestedView !== "Networks" && client.current && (
         <DeviceDashboard
           key={selected.id}
           device={selected}
@@ -297,7 +310,7 @@ export default function WendyLogin({
           onBack={() => setSelected(null)}
         />
       )}
-      {session && !selected && (
+      {session && !selected && requestedView !== "Networks" && (
         <section className="panel cloud-inventory">
           <div className="panel-heading">
             <div>

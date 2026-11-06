@@ -1,8 +1,8 @@
 # Claude-on-device runs the Claude Code CLI inside an admin-entitled container
 # so the device can operate and debug itself over the local agent socket.
 #
-# node:22-bookworm-slim is multi-arch; built for arm64 (the Jetson) via buildx.
-FROM node:22-bookworm-slim
+# node:22.23.4-bookworm-slim is multi-arch; built for arm64 (the Jetson) via buildx.
+FROM node:22.23.4-bookworm-slim
 
 # git + ripgrep are used by Claude Code; ca-certificates for the Anthropic API;
 # curl is used below to download the BuildKit release tarball.

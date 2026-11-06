@@ -82,6 +82,10 @@ You now have a working setup and a project you can edit. Change something in
 `blink-rgb-led/main/main.c`, run `wendy run` again, and watch it land on the device.
 
 When you want to write your own application, see
-[Native Apps for Wendy Lite](native-apps.md) — it covers how a Wendy
+[Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) — it covers how a Wendy
 Lite project is put together, how to integrate the `wendy_core` component, and
 which parts of the hardware the system owns.
+
+To manage the board remotely, follow
+[enroll Wendy Lite in Wendy Cloud](/docs/advanced/cli/lite-enrollment).
+USB is required for enrollment; afterward, the board uses Wi-Fi for Cloud access.

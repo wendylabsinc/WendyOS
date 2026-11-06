@@ -65,6 +65,16 @@ type Node struct {
 	// Description is node.description, meant for humans.
 	Description string
 	IsSink      bool
+	// StableName names the endpoint in a way that survives a reboot or a
+	// replug, which ID does not: PipeWire hands out object ids from a free list
+	// that reuses the most recently released slot, and the ALSA fallback's ID
+	// encodes a card index the kernel assigns in probe order. It is node.name on
+	// PipeWire (WirePlumber derives that from the USB vendor, product and
+	// serial number, or the board's device path, plus the active profile),
+	// "alsa:<card id>:<device>" on the ALSA fallback, and
+	// "sensor-link:<pairing>:<sensor>" for a paired microphone. Empty where no
+	// stable identity is known.
+	StableName string
 }
 
 // Defaults names the nodes PipeWire currently routes to by default.
@@ -308,6 +318,7 @@ func parseDump(data []byte) ([]Node, Defaults, error) {
 			Name:        name,
 			Description: description,
 			IsSink:      class == "Audio/Sink",
+			StableName:  name,
 		})
 	}
 	// pw-dump emits graph order, which shifts as devices come and go.

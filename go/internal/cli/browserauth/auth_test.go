@@ -38,6 +38,13 @@ const testIssuer = AuthBase + "/realms/acme"
 
 func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 	t.Helper()
+	return setupLogin(t, alter, func(s *Session) (string, error) {
+		return s.Begin(context.Background(), "", "", "http://localhost:5173/auth/callback")
+	})
+}
+
+func setupLogin(t *testing.T, alter func(map[string]any), begin func(*Session) (string, error)) (*Session, *int) {
+	t.Helper()
 	authority, e := mldsa.GenerateKey(mldsa.MLDSA65())
 	if e != nil {
 		t.Fatal(e)
@@ -47,6 +54,7 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 	nonceSent := false
 	lastRefresh := ""
 	var state, challenge string
+	var operatorPublic []byte
 	s := &Session{}
 	s.Client = doerFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
@@ -79,6 +87,12 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 			}
 			_ = json.Unmarshal(hdr, &h)
 			pub, _ := decode(h.JWK["pub"])
+			if operatorPublic == nil {
+				operatorPublic = pub
+			}
+			if !bytes.Equal(pub, operatorPublic) {
+				t.Fatal("operator key changed between token proofs")
+			}
 			key, e := mldsa.NewPublicKey(mldsa.MLDSA65(), pub)
 			if e != nil {
 				t.Fatal(e)
@@ -139,6 +153,25 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 			if e = csr.CheckSignature(); e != nil {
 				t.Fatal(e)
 			}
+			pub, ok := csr.PublicKey.(*mldsa.PublicKey)
+			if !ok || !bytes.Equal(pub.Bytes(), operatorPublic) {
+				t.Fatal("CSR key differs from token-bound key")
+			}
+			pieces := strings.Split(r.Header.Get("DPoP"), ".")
+			if len(pieces) != 3 {
+				t.Fatal("missing PKI proof")
+			}
+			payload, _ := base64.RawURLEncoding.DecodeString(pieces[1])
+			signature, _ := base64.RawURLEncoding.DecodeString(pieces[2])
+			if err := mldsa.Verify(pub, []byte(pieces[0]+"."+pieces[1]), signature, nil); err != nil {
+				t.Fatal("PKI proof differs from CSR key", err)
+			}
+			var proof map[string]any
+			_ = json.Unmarshal(payload, &proof)
+			hash := sha256.Sum256([]byte(strings.TrimPrefix(r.Header.Get("Authorization"), "DPoP ")))
+			if proof["htu"] != IdentityEndpoint || proof["htm"] != "POST" || proof["ath"] != base64.RawURLEncoding.EncodeToString(hash[:]) {
+				t.Fatal("PKI proof not bound to token and endpoint")
+			}
 			uri, _ := url.Parse("spiffe://wendy.sh/tenant/12345678-1234-1234-1234-123456789abc/operator/operator-test")
 			leaf := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "operator-test"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), URIs: []*url.URL{uri}, KeyUsage: x509.KeyUsageDigitalSignature}
 			der, e := x509.CreateCertificate(rand.Reader, leaf, leaf, csr.PublicKey, authority)
@@ -150,7 +183,7 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 		t.Fatalf("unexpected outbound endpoint %s", r.URL)
 		return nil, nil
 	})
-	auth, e := s.Begin(context.Background(), "", "http://localhost:5173/auth/callback")
+	auth, e := begin(s)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -255,20 +288,31 @@ func TestRealmLoginURL(t *testing.T) {
 func TestBeginRealmDiscovery(t *testing.T) {
 	universal := AuthBase + "/authorize?"
 	for _, tc := range []struct {
-		name, email string
-		lookup      map[string]string
-		want, hint  string
+		name, email, issuer string
+		lookup              map[string]string
+		want, hint          string
 	}{
 		{name: "no email", want: universal},
 		{name: "unknown", email: "user@example.test", lookup: map[string]string{"state": "unknown"}, want: universal, hint: "user@example.test"},
 		{name: "system realm", email: "user@example.test", lookup: map[string]string{"loginURL": "/realms/system/account/login"}, want: universal, hint: "user@example.test"},
 		{name: "pinned realm", email: "user@example.test", lookup: map[string]string{"realm": "acme", "loginURL": "/realms/acme/account/login"}, want: testIssuer + "/authorize?"},
+		{name: "caller realm", issuer: testIssuer, want: testIssuer + "/authorize?"},
+		{name: "upper-case system realm", email: "user@example.test", lookup: map[string]string{"realm": "SYSTEM"}, want: universal, hint: "user@example.test"},
+		{name: "caller realm skips lookup", email: "user@example.test", issuer: testIssuer, want: testIssuer + "/authorize?", hint: "user@example.test"},
+		{name: "caller system realm", issuer: AuthBase + "/realms/system"},
+		{name: "caller upper-case system realm", issuer: AuthBase + "/realms/SYSTEM"},
+		{name: "caller escaped system realm", issuer: AuthBase + "/realms/%73ystem"},
+		{name: "caller foreign issuer", issuer: "https://auth.example.test/realms/acme"},
+		{name: "caller issuer path", issuer: testIssuer + "/protocol"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := setup(t, nil)
 			existing := s.Client
 			s.Client = doerFunc(func(r *http.Request) (*http.Response, error) {
 				if r.URL.String() == AuthBase+"/api/login/realm" {
+					if tc.issuer != "" {
+						t.Fatal("a pinned realm still looked up the email")
+					}
 					var body map[string]string
 					if r.Method != "POST" || json.NewDecoder(r.Body).Decode(&body) != nil || body["email"] != tc.email {
 						t.Fatal("incorrect email lookup")
@@ -277,9 +321,20 @@ func TestBeginRealmDiscovery(t *testing.T) {
 				}
 				return existing.Do(r)
 			})
-			authorize, err := s.Begin(context.Background(), tc.email, "http://localhost:5173/auth/callback")
+			authorize, err := s.Begin(context.Background(), tc.email, tc.issuer, "http://localhost:5173/auth/callback")
+			if tc.want == "" {
+				if err == nil || authorize != "" {
+					t.Fatalf("pinned an invalid realm: %s", authorize)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.issuer != "" {
+				if _, err := s.Complete(context.Background(), "valid-code", s.state, AuthBase+"/realms/other"); err == nil || !strings.Contains(err.Error(), "issuer changed") {
+					t.Fatalf("pinned realm accepted another realm's callback: %v", err)
+				}
 			}
 			u, _ := url.Parse(authorize)
 			if !strings.HasPrefix(authorize, tc.want) || u.Query().Get("login_hint") != tc.hint {

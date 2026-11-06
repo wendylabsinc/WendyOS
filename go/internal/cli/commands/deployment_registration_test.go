@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -26,6 +27,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type deploymentProvisioningV2Stub struct {
+	agentpbv2.WendyProvisioningServiceClient
+	response *agentpbv2.IsProvisionedResponse
+	err      error
+}
+
+func (s deploymentProvisioningV2Stub) IsProvisioned(context.Context, *agentpbv2.IsProvisionedRequest, ...grpc.CallOption) (*agentpbv2.IsProvisionedResponse, error) {
+	return s.response, s.err
+}
+
 func registrationDevice() *agentpbv2.ProvisionedResponse {
 	return &agentpbv2.ProvisionedResponse{CloudHost: "cloud.example:443", OrganizationId: 42, AssetId: 9}
 }
@@ -38,8 +49,8 @@ func registrationTenantDevice() *agentpbv2.ProvisionedResponse {
 	}
 }
 
-func registrationProvisioned(device *agentpbv2.ProvisionedResponse) *agentpbv2.IsProvisionedResponse {
-	return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{Provisioned: device}}
+func registrationProvisioned(device *agentpbv2.ProvisionedResponse) deploymentProvisioningV2Stub {
+	return deploymentProvisioningV2Stub{response: &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{Provisioned: device}}}
 }
 
 func registrationConfig() *config.Config {
@@ -76,7 +87,7 @@ func TestRegistrationSkipsUnenrolledDevicesWithoutLoadingCredentials(t *testing.
 	unenrolled := &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_NotProvisioned{
 		NotProvisioned: &agentpbv2.NotProvisionedResponse{},
 	}}
-	err := registerDeviceApps(context.Background(), unenrolled, []string{"app"}, func() (*config.Config, error) {
+	err := registerDeviceApps(context.Background(), deploymentProvisioningV2Stub{response: unenrolled}, []string{"app"}, func() (*config.Config, error) {
 		t.Fatal("local deployment loaded Cloud credentials")
 		return nil, nil
 	}, func(context.Context, *config.AuthConfig, *agentpbv2.ProvisionedResponse, []string) error {
@@ -92,11 +103,11 @@ func TestRegistrationDeduplicatesAppsAndPropagatesCloudFailure(t *testing.T) {
 	device := registrationDevice()
 	denied := status.Error(codes.PermissionDenied, "viewer cannot register deployments")
 	called := false
-	err := registerDeviceApps(context.Background(), registrationProvisioned(device), []string{"app", "app", "campaign:people"}, func() (*config.Config, error) {
+	err := registerDeviceApps(context.Background(), registrationProvisioned(device), []string{"app", "app", "sh.wendy.campaign.people"}, func() (*config.Config, error) {
 		return registrationConfig(), nil
 	}, func(_ context.Context, auth *config.AuthConfig, got *agentpbv2.ProvisionedResponse, apps []string) error {
 		called = true
-		if got != device || auth.Certificates[0].OrganizationID != 42 || !reflect.DeepEqual(apps, []string{"app", "campaign:people"}) {
+		if got != device || auth.Certificates[0].OrganizationID != 42 || !reflect.DeepEqual(apps, []string{"app", "sh.wendy.campaign.people"}) {
 			t.Fatalf("wrong registration: %v %v", got, apps)
 		}
 		return denied
@@ -187,7 +198,7 @@ func TestCloudRegistrationUsesExistingCatalogRPCs(t *testing.T) {
 	auth.Certificates = auth.Certificates[1:]
 	device := registrationDevice()
 	device.CloudHost = auth.CloudGRPC
-	for _, id := range []string{"app", "campaign:people", "app", "campaign:people"} {
+	for _, id := range []string{"app", "sh.wendy.campaign.people", "app", "sh.wendy.campaign.people"} {
 		if err := registerAppsWithCloud(context.Background(), &auth, device, []string{id}); err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +208,7 @@ func TestCloudRegistrationUsesExistingCatalogRPCs(t *testing.T) {
 		t.Fatalf("upsert calls = %d; existing apps should be preserved", len(implementation.requests))
 	}
 	for i, req := range implementation.requests {
-		if req.GetOrganizationId() != 42 || req.GetId() != []string{"app", "campaign:people"}[i] || req.GetName() != []string{"app", "people"}[i] {
+		if req.GetOrganizationId() != 42 || req.GetId() != []string{"app", "sh.wendy.campaign.people"}[i] || req.GetName() != []string{"app", "people"}[i] {
 			t.Fatalf("wrong Cloud catalog registration: %v", req)
 		}
 	}
@@ -246,6 +257,22 @@ func TestDeploymentAuthMatchesTenantDeviceToOperatorSession(t *testing.T) {
 	moved.CloudHost = "attacker.example:443"
 	if _, err := deploymentAuth(cfg, moved); err == nil {
 		t.Fatal("device chose the Cloud host for an operator session")
+	}
+}
+
+func TestDeploymentAuthRejectsExpiredTenantOperator(t *testing.T) {
+	device := registrationTenantDevice()
+	principal := "spiffe://wendy.sh/tenant/" + testOperatorTenant + "/operator/" + testOperatorSubject
+	key := testKey(t)
+	leaf := liteLeafPEM(t, key, principal, time.Now().Add(-time.Hour), false)
+	cfg := &config.Config{Auth: []config.AuthConfig{{
+		CloudGRPC: device.CloudHost,
+		Certificates: []config.CertificateInfo{{
+			PrincipalURI: principal, PemCertificate: leaf,
+		}},
+	}}}
+	if _, err := deploymentAuth(cfg, device); err == nil {
+		t.Fatal("expired operator certificate selected for Cloud registration")
 	}
 }
 
@@ -323,7 +350,7 @@ func TestTenantDeviceRegistersWithCloudV2(t *testing.T) {
 	device.CloudHost = listener.Addr().String()
 	cfg := &config.Config{Auth: []config.AuthConfig{tenantOperatorSession(t, device.CloudHost)}}
 	for range 2 {
-		if err := registerDeviceApps(context.Background(), registrationProvisioned(device), []string{"campaign:people"},
+		if err := registerDeviceApps(context.Background(), registrationProvisioned(device), []string{"sh.wendy.campaign.people"},
 			func() (*config.Config, error) { return cfg, nil }, registerAppsWithCloud); err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +360,7 @@ func TestTenantDeviceRegistersWithCloudV2(t *testing.T) {
 	if len(cloud.upserts) != 1 || len(cloud.gets) != 2 {
 		t.Fatalf("upserts = %d, gets = %d; an existing app must be kept", len(cloud.upserts), len(cloud.gets))
 	}
-	if req := cloud.upserts[0]; req.GetOrganizationId() != testOperatorTenant || req.GetId() != "campaign:people" || req.GetName() != "people" {
+	if req := cloud.upserts[0]; req.GetOrganizationId() != testOperatorTenant || req.GetId() != "sh.wendy.campaign.people" || req.GetName() != "people" {
 		t.Fatalf("wrong Cloud catalog registration: %v", req)
 	}
 	if cloud.gets[1].GetOrganizationId() != testOperatorTenant {

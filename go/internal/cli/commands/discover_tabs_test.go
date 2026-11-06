@@ -2,13 +2,17 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -147,8 +151,14 @@ func TestDiscoverTabsShowsTheSimulatorTab(t *testing.T) {
 		t.Errorf("discover header = %q, want a Simulator tab", view)
 	}
 	m, _ = discoverTabTo(t, m, devicePickerSimulatorTab)
-	if view := m.View(); !strings.Contains(view, "enter copy address") {
+	view := m.View()
+	if !strings.Contains(view, "enter copies a running simulator's address") {
 		t.Errorf("simulator tab view = %q, want the copy hint", view)
+	}
+	// The footer used to send people to 'wendy vm start', which fails on a
+	// host that already holds the default port. s is the way in now.
+	if strings.Contains(view, "vm start") || !strings.Contains(view, "press s to start") {
+		t.Errorf("simulator tab view = %q, want it to name the s key", view)
 	}
 }
 
@@ -157,10 +167,112 @@ func TestCopySimulatorAddressExplainsWhatItCannotCopy(t *testing.T) {
 	if got := copySimulatorAddress(&simulatorChoice{Name: "sim", Create: true}); !strings.Contains(got, "press c") {
 		t.Errorf("create row = %q, want it to point at the c key", got)
 	}
-	if got := copySimulatorAddress(&simulatorChoice{Name: "sim"}); !strings.Contains(got, "vm start sim") {
-		t.Errorf("stopped VM = %q, want it to name 'wendy vm start sim'", got)
+	// Likewise s starts it right here.
+	if got := copySimulatorAddress(&simulatorChoice{Name: "sim"}); !strings.Contains(got, "press s") {
+		t.Errorf("stopped VM = %q, want it to point at the s key", got)
 	}
 }
+
+func TestDiscoverSimulatorStartLeavesTheViewToBootTheVM(t *testing.T) {
+	// The boot and the first robot build draw their own progress, so s must
+	// quit the TUI and hand the VM's name to the discover loop, as c does.
+	saved := vmStatusFn
+	vmStatusFn = func(name string) (vm.Status, error) { return stoppedVM(name, ""), nil }
+	t.Cleanup(func() { vmStatusFn = saved })
+
+	m := newTestDiscoverTabsModel(0, 0)
+	m, _ = discoverTabTo(t, m, devicePickerSimulatorTab)
+	updated, _ := m.Update(discoverTabsSimulatorMsg{msg: simulatorVMsMsg{vms: []vm.Status{stoppedVM("sim", "")}}})
+	m = updated.(discoverTabsModel)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(discoverTabsModel)
+	if cmd == nil || m.action != devicePickerStartVM || m.startVMName != "sim" {
+		t.Fatalf("s on a stopped VM: cmd=%v action=%v name=%q, want a quit to start sim", cmd != nil, m.action, m.startVMName)
+	}
+	if m.cancelled {
+		t.Fatal("starting a VM was reported as cancelling discover")
+	}
+}
+
+func TestDiscoverSimulatorStartIgnoresARunningVM(t *testing.T) {
+	saved := vmStatusFn
+	vmStatusFn = func(name string) (vm.Status, error) { return runningVM(name, vm.NetUser, 50053), nil }
+	t.Cleanup(func() { vmStatusFn = saved })
+
+	m := newTestDiscoverTabsModel(0, 0)
+	m, _ = discoverTabTo(t, m, devicePickerSimulatorTab)
+	updated, _ := m.Update(discoverTabsSimulatorMsg{msg: simulatorVMsMsg{vms: []vm.Status{runningVM("sim", vm.NetUser, 50053)}}})
+	m = updated.(discoverTabsModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(discoverTabsModel)
+	if m.action != devicePickerNoAction || !strings.Contains(m.View(), "sim is already running") {
+		t.Fatalf("s on a running VM: action=%v view=%q", m.action, m.View())
+	}
+}
+
+func TestDiscoverReopensOnTheSimulatorTabWithTheStartOutcome(t *testing.T) {
+	ctx := context.Background()
+	m := newDiscoverTabsModel(ctx, newDiscoverModel(ctx, defaultOpts(), true), nil, 0, devicePickerSimulatorTab).
+		withSimulatorFlash(simulatorStartOutcome("sim", errors.New("port forward failed\nlast console output:\n  boom")))
+	updated, _ := m.Update(discoverTabsSimulatorMsg{msg: simulatorVMsMsg{vms: []vm.Status{stoppedVM("sim", "")}}})
+	view := updated.(discoverTabsModel).View()
+	if !strings.Contains(view, "Could not start sim: port forward failed") {
+		t.Fatalf("reopened tab does not show the failure: %q", view)
+	}
+	if strings.Contains(view, "boom") {
+		t.Fatalf("the one-line status carried the multi-line console tail: %q", view)
+	}
+}
+
+func TestSimulatorStartOutcome(t *testing.T) {
+	if got := simulatorStartOutcome("sim", nil); got.isErr || got.msg != "Started sim." {
+		t.Errorf("success = %+v", got)
+	}
+	for _, err := range []error{ErrUserCancelled, tui.ErrCancelled, fmt.Errorf("waiting: %w", context.Canceled)} {
+		if got := simulatorStartOutcome("sim", err); got.isErr || !strings.Contains(got.msg, "cancelled") {
+			t.Errorf("cancel %v = %+v, want a plain cancelled note", err, got)
+		}
+	}
+	got := simulatorStartOutcome("sim", errors.New("no free port\nmore detail"))
+	if !got.isErr || !strings.HasPrefix(got.msg, "Could not start sim: no free port") || !strings.Contains(got.msg, "printed when you quit") {
+		t.Errorf("failure = %+v", got)
+	}
+}
+
+func TestStartSimulatorConnectsLikeTheDeviceFlagAndLetsGo(t *testing.T) {
+	// s does what --device vm:<name> does (boot, agent wait, first robot build)
+	// and then drops the connection: discover lists devices, it holds none.
+	saved := connectSimulatorChoiceFn
+	t.Cleanup(func() { connectSimulatorChoiceFn = saved })
+	var got *simulatorChoice
+	var suppressed bool
+	closed := &closeRecorder{}
+	connectSimulatorChoiceFn = func(_ context.Context, choice *simulatorChoice, suppressUpdateCheck bool) (*SelectedDevice, error) {
+		got, suppressed = choice, suppressUpdateCheck
+		return &SelectedDevice{Agent: &grpcclient.AgentConnection{ExtraClosers: []io.Closer{closed}}}, nil
+	}
+	if err := startSimulatorFn(context.Background(), "sim"); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Name != "sim" || got.Create || suppressed {
+		t.Fatalf("connected with %+v (suppress=%t), want the --device vm:sim path", got, suppressed)
+	}
+	if !closed.closed {
+		t.Fatal("the agent connection was left open")
+	}
+
+	connectSimulatorChoiceFn = func(context.Context, *simulatorChoice, bool) (*SelectedDevice, error) {
+		return nil, errors.New("boot failed")
+	}
+	if err := startSimulatorFn(context.Background(), "sim"); err == nil || err.Error() != "boot failed" {
+		t.Fatalf("err = %v, want the boot failure passed through", err)
+	}
+}
+
+type closeRecorder struct{ closed bool }
+
+func (c *closeRecorder) Close() error { c.closed = true; return nil }
 
 func TestDiscoverOpensOnTheRequestedTab(t *testing.T) {
 	t.Run("cloud", func(t *testing.T) {

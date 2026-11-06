@@ -28,7 +28,7 @@ func TestMCPSimulatorLocalCreationProfilesAndLifecycle(t *testing.T) {
 		t.Fatal("local image triggered network resolver")
 		return "", "", nil, nil
 	})
-	for _, profile := range []string{"generic", "go2", "g1"} {
+	for _, profile := range []string{"generic", "go2", "g1", "so101", "rosmaster-r2"} {
 		info, err := backend.Create(context.Background(), wendymcp.SimulatorCreateOptions{Name: profile, Profile: profile, Image: image, DiskGiB: 1})
 		if err != nil {
 			t.Fatal(err)
@@ -41,7 +41,7 @@ func TestMCPSimulatorLocalCreationProfilesAndLifecycle(t *testing.T) {
 		}
 	}
 	items, err := backend.List(context.Background())
-	if err != nil || len(items) != 3 {
+	if err != nil || len(items) != 5 {
 		t.Fatalf("list: %v %v", items, err)
 	}
 	if _, err := backend.Stop(context.Background(), "go2", false, time.Second); err != nil {

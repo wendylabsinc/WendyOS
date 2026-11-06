@@ -1,0 +1,13 @@
+{
+  "appId": "sh.wendy.examples.so101-reader",
+  "version": "0.1.0",
+  "platform": "darwin",
+  "run": { "command": "./run.sh" },
+  "files": [
+    { "path": "reader.py" },
+    { "path": "protocol.py" },
+    { "path": "transport.py" },
+    { "path": "identity.py" }
+  ],
+  "env": { "SO101_MODE": "physical", "SO101_HTTP_PORT": "8876" }
+}

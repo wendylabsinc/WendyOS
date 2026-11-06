@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -94,7 +95,8 @@ const bufSize = 1024 * 1024
 func startAgentServer(t *testing.T, nm NetworkManager, hd HardwareDiscoverer, bm BluetoothManager, opts ...func(*AgentService)) (agentpb.WendyAgentServiceClient, func()) {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
-	srv := grpc.NewServer()
+	// Stop must join deferred RPC cleanup before callers restore shared hooks.
+	srv := grpc.NewServer(grpc.WaitForHandlers(true))
 	logger := zap.NewNop()
 	svc := NewAgentService(logger, nm, hd, bm, &AgentInstaller{})
 	for _, opt := range opts {
@@ -146,6 +148,10 @@ func TestGetAgentVersion(t *testing.T) {
 	}
 	if resp.CpuArchitecture != runtime.GOARCH {
 		t.Errorf("arch = %q; want %q", resp.CpuArchitecture, runtime.GOARCH)
+	}
+	metadata := MeshAgentMetadata()
+	if metadata.Version != resp.GetVersion() || metadata.OS != resp.GetOs() || metadata.OSVersion != resp.GetOsVersion() || metadata.DeviceType != resp.GetDeviceType() || metadata.CPUArchitecture != resp.GetCpuArchitecture() {
+		t.Fatalf("signed discovery metadata differs from the agent RPC: %+v", metadata)
 	}
 	// RAM size and CPU core count come from /proc, so they are only
 	// guaranteed on Linux hosts (WDY-1809). Zero means "unknown".
@@ -1177,5 +1183,26 @@ func TestGetAgentVersionBinarySHA256EmptyWhenUnreadable(t *testing.T) {
 	}
 	if resp.GetBinarySha256() != "" {
 		t.Errorf("binarySha256 = %q; want empty when the executable cannot be hashed", resp.GetBinarySha256())
+	}
+}
+
+// The CLI refuses a project whose entitlement types the agent does not list,
+// so the agent must list every type it applies.
+func TestGetAgentVersionReportsEntitlementTypes(t *testing.T) {
+	client, cleanup := startAgentServer(t,
+		&mockNetworkManager{},
+		&mockHardwareDiscoverer{},
+		&mockBluetoothManager{},
+	)
+	defer cleanup()
+
+	resp, err := client.GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		t.Fatalf("GetAgentVersion: %v", err)
+	}
+	for _, want := range []string{"network", "camera", "gpu", "episode-write", "http"} {
+		if !slices.Contains(resp.GetEntitlementTypes(), want) {
+			t.Errorf("entitlement types %v lack %q", resp.GetEntitlementTypes(), want)
+		}
 	}
 }

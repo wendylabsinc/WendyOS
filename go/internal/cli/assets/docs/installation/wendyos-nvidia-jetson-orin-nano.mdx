@@ -96,6 +96,10 @@ key for subsequent identity checks. Add `--require-enrollment` if cloud enrollme
 was requested. See [agent-assisted setup](/docs/installation/agent-assisted-setup)
 for the equivalent MCP tools and a complete verification flow.
 
+For a board on USB-C, `wendy discover` lists a link-local address such as
+`fe80::…%en31`; pass it to `--address` as printed. `--expected-os-version`
+accepts either `0.19.5` or `WendyOS-0.19.5`.
+
 Continue with [step 3 of the quickstart](/docs/#3-create-an-app) to create and run
 your first app, then inspect its container and logs and test its output. Flash completion, first boot
 and application readiness are separate checks.

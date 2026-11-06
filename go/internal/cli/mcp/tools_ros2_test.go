@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"strings"
@@ -262,6 +263,9 @@ func TestROS2StreamDeadlineAndCallerCancellation(t *testing.T) {
 				}
 				<-stream.Context().Done()
 				close(cancelled)
+				if stream.Context().Err() == context.DeadlineExceeded {
+					return status.FromContextError(stream.Context().Err()).Err()
+				}
 				return nil
 			}})
 			result := ros2Call(t, s, ctx, "ros2_topic_hz", map[string]any{"topic": "/lidar", "duration_seconds": 1})
@@ -277,6 +281,39 @@ func TestROS2StreamDeadlineAndCallerCancellation(t *testing.T) {
 			case <-cancelled:
 			case <-time.After(time.Second):
 				t.Fatal("device subscription was not cancelled")
+			}
+		})
+	}
+}
+
+// A deadline is visible before its timer callback necessarily gets CPU time.
+// Model that interval directly, without depending on a scheduler race.
+type ros2PendingDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c ros2PendingDeadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestROS2StreamEOFAtDeadlineBeforeLocalTimer(t *testing.T) {
+	past := ros2PendingDeadlineContext{Context: context.Background(), deadline: time.Now().Add(-time.Hour)}
+	future := ros2PendingDeadlineContext{Context: context.Background(), deadline: time.Now().Add(time.Hour)}
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{"EOF after deadline", past, io.EOF, true},
+		{"early EOF", future, io.EOF, false},
+		{"EOF without deadline", context.Background(), io.EOF, false},
+		{"peer deadline before local timer", future, status.Error(codes.DeadlineExceeded, "observation ended"), true},
+		{"peer cancellation", future, status.Error(codes.Canceled, "peer stopped"), false},
+		{"peer failure after deadline", past, status.Error(codes.Internal, "decode failed"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ros2StreamReachedTimeLimit(tc.ctx, tc.err); got != tc.want {
+				t.Fatalf("time limit = %v, want %v", got, tc.want)
 			}
 		})
 	}

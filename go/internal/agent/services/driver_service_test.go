@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -32,15 +34,19 @@ func newTestDriverService(t *testing.T, payload []byte) *DriverService {
 	t.Helper()
 	tmp := t.TempDir()
 	return &DriverService{
-		logger:          zap.NewNop(),
-		verifier:        sigverify.DefaultVerifier,
-		enabledDir:      filepath.Join(tmp, "enabled"),
-		modulesDir:      filepath.Join(tmp, "modules-load.d"),
-		bakedModulesDir: filepath.Join(tmp, "baked-modules-load.d"),
-		applyScript:     testExecutable(t, "true"),
-		unameR:          func() string { return "6.6.0-test" },
+		logger:            zap.NewNop(),
+		verifier:          sigverify.DefaultVerifier,
+		enabledDir:        filepath.Join(tmp, "enabled"),
+		modulesDir:        filepath.Join(tmp, "modules-load.d"),
+		bakedModulesDir:   filepath.Join(tmp, "baked-modules-load.d"),
+		privatePayloadDir: filepath.Join(tmp, "private-payloads"),
+		activeStateDir:    filepath.Join(tmp, "active-state"),
+		applyScript:       testExecutable(t, "true"),
+		unameR:            func() string { return "6.6.0-test" },
 		// Nothing resident by default, so a test never inherits the host's modules.
 		loadedModules: func() []string { return nil },
+		// Nor the host's merged extensions.
+		mergedExtensions: func(context.Context) ([]string, error) { return nil, nil },
 		httpGet: func(_ context.Context, _ string) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(payload)), nil
 		},
@@ -439,7 +445,16 @@ func TestRemoveDriver_ApplyFailureRestoresInstall(t *testing.T) {
 		t.Fatalf("seeding the install: %v", err)
 	}
 
-	svc.applyScript = testExecutable(t, "false")
+	// Fail while the package is absent, then verify rollback reapplies the
+	// restored set without asking for an individual activation subject.
+	reapplied := filepath.Join(t.TempDir(), "reapplied")
+	script := filepath.Join(t.TempDir(), "apply.sh")
+	body := fmt.Sprintf("#!/bin/sh\nset -eu\ntest \"$#\" -eq 0\ntest -f %q\ntest -f %q\ntouch %q\n",
+		svc.rawPath(testKernel, "wendyos-hello"), svc.confPath(testKernel, "wendyos-hello"), reapplied)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc.applyScript = script
 	stream := &fakeRemoveStream{}
 	if err := svc.RemoveDriver(&agentpbv2.RemoveDriverRequest{Name: "wendyos-hello"}, stream); err != nil {
 		t.Fatalf("RemoveDriver returned a transport error: %v", err)
@@ -457,6 +472,9 @@ func TestRemoveDriver_ApplyFailureRestoresInstall(t *testing.T) {
 	}
 	if _, err := os.Stat(svc.confPath(testKernel, "wendyos-hello")); err != nil {
 		t.Errorf("modules-load conf was not restored: %v", err)
+	}
+	if _, err := os.Stat(reapplied); err != nil {
+		t.Errorf("restored driver set was not reapplied: %v", err)
 	}
 }
 
@@ -550,6 +568,7 @@ type fakeRemoveStream struct {
 	failed         bool
 	completed      bool
 	rebootRequired bool
+	ctx            context.Context // nil means a live client
 }
 
 func (f *fakeRemoveStream) Send(resp *agentpbv2.DriverApplyResponse) error {
@@ -563,7 +582,12 @@ func (f *fakeRemoveStream) Send(resp *agentpbv2.DriverApplyResponse) error {
 	return nil
 }
 
-func (f *fakeRemoveStream) Context() context.Context { return context.Background() }
+func (f *fakeRemoveStream) Context() context.Context {
+	if f.ctx != nil {
+		return f.ctx
+	}
+	return context.Background()
+}
 
 // The config-partition seed is unauthenticated storage, so it must refuse to
 // install while no signing key is embedded, even though the mTLS RPC may not.
@@ -805,6 +829,58 @@ func TestRemoveDriver_NoRebootWhenNothingIsLoaded(t *testing.T) {
 	}
 	if stream.rebootRequired {
 		t.Error("rebootRequired = true, want false: the module was never loaded")
+	}
+}
+
+// A removed package cannot be an activation subject: the runtime rejects names
+// absent from the enabled set. Read private metadata before the unmerge removes
+// it, so a still-resident module produces an honest reboot recommendation.
+func TestRemoveDriver_PrivatePayloadRefresh(t *testing.T) {
+	for _, resident := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resident=%v", resident), func(t *testing.T) {
+			svc := newTestDriverService(t, nil)
+			name := "wendyos-hello"
+			write := func(path string, data []byte) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			payload := privateDriverFixture(t)
+			write(svc.rawPath(testKernel, name), payload)
+			write(svc.rawPath("old-kernel", name), payload)
+			other := svc.rawPath(testKernel, "other-driver")
+			write(other, payload)
+			metadata := filepath.Join(svc.privatePayloadDir, name, "modules-load.conf")
+			write(metadata, []byte("wendyos_hello\n"))
+			if resident {
+				svc.loadedModules = func() []string { return []string{"wendyos_hello"} }
+			}
+			script := filepath.Join(t.TempDir(), "apply.sh")
+			body := fmt.Sprintf("#!/bin/sh\nset -eu\ntest \"$#\" -eq 0\ntest ! -e %q\ntest ! -e %q\ntest -f %q\nrm %q\n",
+				svc.rawPath(testKernel, name), svc.rawPath("old-kernel", name), other, metadata)
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			svc.applyScript = script
+			stream := &fakeRemoveStream{}
+			if err := svc.RemoveDriver(&agentpbv2.RemoveDriverRequest{Name: name}, stream); err != nil {
+				t.Fatal(err)
+			}
+			if !stream.completed || stream.failed || stream.rebootRequired != resident {
+				t.Fatalf("completed=%v failed=%v reboot=%v; want success with reboot=%v",
+					stream.completed, stream.failed, stream.rebootRequired, resident)
+			}
+			if installed, err := svc.anyCopyInstalled(name); err != nil || installed {
+				t.Fatalf("removed package still installed=%v err=%v", installed, err)
+			}
+			if got, err := os.ReadFile(other); err != nil || !bytes.Equal(got, payload) {
+				t.Fatalf("unrelated package changed: %v", err)
+			}
+		})
 	}
 }
 
@@ -1181,5 +1257,227 @@ func TestFinalize_StageOnlyFromURLStillNeedsAKernel(t *testing.T) {
 	}, staged, digest)
 	if err == nil || !strings.Contains(err.Error(), "without a kernel version") {
 		t.Fatalf("finalize = %v, want a refusal for the missing kernel", err)
+	}
+}
+
+func TestPrivatePayloadStatusAndOverrides(t *testing.T) {
+	svc := newTestDriverService(t, nil)
+	svc.loadedModules = func() []string { return []string{"wendyos_hello", "override_mod"} }
+	name := "wendyos-hello"
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw := privateDriverFixture(t)
+	write(svc.rawPath(testKernel, name), string(raw))
+	write(filepath.Join(svc.privatePayloadDir, name, "modules-load.conf"), "wendyos_hello\n")
+	check := func(wantLoaded bool, wantModule string) {
+		t.Helper()
+		resp, err := svc.ListDrivers(context.Background(), &agentpbv2.ListDriversRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Installed) != 1 {
+			t.Fatalf("installed = %v", resp.Installed)
+		}
+		d := resp.Installed[0]
+		if d.Loaded != wantLoaded || strings.Join(d.ModulesLoad, ",") != wantModule {
+			t.Fatalf("driver = %+v", d)
+		}
+	}
+	check(false, "wendyos_hello") // An inert/colliding package cannot borrow another driver's modules.
+	write(filepath.Join(svc.activeStateDir, name, "files"), "/usr/lib/modules/test/updates/wendyos/wendyos-hello/wendyos_hello.ko\n")
+	check(true, "wendyos_hello")
+	svc.loadedModules = func() []string { return []string{"override_mod"} }
+	check(false, "wendyos_hello") // Exposure alone does not mean the module loaded.
+	svc.loadedModules = func() []string { return []string{"wendyos_hello", "override_mod"} }
+	write(svc.confPath(testKernel, name), "override_mod\n")
+	check(true, "override_mod")
+	write(svc.confPath(testKernel, name), "")
+	check(false, "") // An explicit empty override disables autoload, as in the runtime.
+}
+
+func TestFinalizeReplacementReceipt(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(fmt.Sprint("fresh=", fresh), func(t *testing.T) {
+			payload := privateDriverFixture(t)
+			svc := newTestDriverService(t, payload)
+			svc.loadedModules = func() []string { return []string{"wendyos_hello"} }
+			state := filepath.Join(svc.activeStateDir, "wendyos-hello")
+			if err := os.MkdirAll(state, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(state, "generation"), []byte("old\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(state, "replaced-modules"), []byte("wendyos-hello\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if fresh {
+				script := filepath.Join(t.TempDir(), "apply.sh")
+				if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'new\\n' > '"+filepath.Join(state, "generation")+"'\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				svc.applyScript = script
+			}
+			digest, staged := stageDriverRaw(t, svc, payload)
+			reboot, err := svc.finalize(context.Background(), DriverInstallSpec{Name: "wendyos-hello"}, staged, digest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reboot == fresh {
+				t.Fatalf("reboot=%v with fresh receipt=%v", reboot, fresh)
+			}
+		})
+	}
+}
+
+func TestParseMergedSysextNames(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{`[{"hierarchy":"/opt","extensions":"none"},{"hierarchy":"/usr","extensions":["intel-be202","another"]}]`, "intel-be202,another"},
+		{`[{"hierarchy":"/usr","extensions":"none"}]`, ""},
+		{`[{"hierarchy":"/usr","extensions":null}]`, ""},
+	} {
+		names, err := parseMergedSysextNames([]byte(tc.input))
+		if got := strings.Join(names, ","); err != nil || got != tc.want {
+			t.Errorf("parse %q = %q, %v; want %q", tc.input, got, err, tc.want)
+		}
+	}
+	// Unparseable output is unknown, not "nothing merged": removal relies on that.
+	if _, err := parseMergedSysextNames([]byte("not JSON")); err == nil {
+		t.Error("parse of non-JSON output returned no error")
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A removal refreshes the whole remaining set, so its exit status covers every
+// add-on. Once the removed one is out of the running system, another add-on's
+// failure must not put it back; anything short of that evidence still does.
+func TestRemoveDriver_ScopesApplyFailureToTheRemovedAddOn(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		merged      []string
+		mergedErr   error
+		exposed     bool
+		disconnect  bool
+		wantRemoved bool
+	}{
+		{"another add-on failed", []string{"other-driver"}, nil, false, false, true},
+		// The verdict must not depend on whether the CLI is still connected.
+		{"client disconnected", []string{"other-driver"}, nil, false, true, true},
+		{"still merged", []string{"other-driver", "wendyos-hello"}, nil, false, false, false},
+		{"exposure restored", []string{"other-driver"}, nil, true, false, false},
+		{"refresh merged nothing", nil, nil, false, false, false},
+		{"merge state unknown", nil, errors.New("systemd-sysext not found"), false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := driverImage(t, "a")
+			svc := newTestDriverService(t, payload)
+			if err := svc.InstallFromURL(context.Background(), DriverInstallSpec{
+				Name:          "wendyos-hello",
+				KernelVersion: "6.6.0-test",
+				SHA256:        sha256Hex(payload),
+				ArtifactURL:   "https://example/x.raw",
+				ModulesLoad:   []string{"wendyos_hello"},
+			}); err != nil {
+				t.Fatalf("seeding the install: %v", err)
+			}
+			svc.applyScript = testExecutable(t, "false")
+			svc.mergedExtensions = func(ctx context.Context) ([]string, error) {
+				if err := ctx.Err(); err != nil {
+					return nil, err // exec.CommandContext refuses to start
+				}
+				return tc.merged, tc.mergedErr
+			}
+			if tc.exposed {
+				writeTestFile(t, filepath.Join(svc.activeStateDir, "wendyos-hello", "files"), "")
+			}
+
+			stream := &fakeRemoveStream{}
+			if tc.disconnect {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				stream.ctx = ctx
+			}
+			if err := svc.RemoveDriver(&agentpbv2.RemoveDriverRequest{Name: "wendyos-hello"}, stream); err != nil {
+				t.Fatalf("RemoveDriver returned a transport error: %v", err)
+			}
+			installed, err := svc.anyCopyInstalled("wendyos-hello")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantRemoved {
+				if !stream.completed || stream.failed || installed {
+					t.Errorf("completed=%v failed=%v installed=%v; want the removal kept",
+						stream.completed, stream.failed, installed)
+				}
+				return
+			}
+			if !stream.failed || !installed {
+				t.Errorf("failed=%v installed=%v; want the add-on restored", stream.failed, installed)
+			}
+		})
+	}
+}
+
+// A current image that systemd-sysext refused to merge has no private payload
+// under /usr, which is also how a legacy image looks. The image itself tells them
+// apart, so the refused one cannot borrow a same-named resident module.
+func TestListDrivers_UnmergedPrivatePayloadIsNotLoaded(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		image      []byte
+		wantLoaded bool
+	}{
+		{"private payload", privateDriverFixture(t), false},
+		{"legacy", driverImage(t, "a"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newTestDriverService(t, nil)
+			svc.loadedModules = func() []string { return []string{"wendyos_hello"} }
+			writeTestFile(t, svc.rawPath(testKernel, "wendyos-hello"), string(tc.image))
+			writeTestFile(t, svc.confPath(testKernel, "wendyos-hello"), "wendyos_hello\n")
+
+			resp, err := svc.ListDrivers(context.Background(), &agentpbv2.ListDriversRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(resp.Installed) != 1 || resp.Installed[0].Loaded != tc.wantLoaded {
+				t.Fatalf("installed = %v, want loaded=%v", resp.Installed, tc.wantLoaded)
+			}
+		})
+	}
+}
+
+// An empty /data override stops the runtime autoloading the add-on, but the
+// module it ships can still be resident, so removal must still ask for a reboot.
+func TestRemoveDriver_EmptyOverrideDoesNotHideResidentModules(t *testing.T) {
+	svc := newTestDriverService(t, nil)
+	svc.loadedModules = func() []string { return []string{"wendyos_hello"} }
+	writeTestFile(t, svc.rawPath(testKernel, "wendyos-hello"), string(privateDriverFixture(t)))
+	writeTestFile(t, svc.confPath(testKernel, "wendyos-hello"), "# autoload disabled\n")
+	writeTestFile(t, filepath.Join(svc.privatePayloadDir, "wendyos-hello", "modules-load.conf"), "wendyos_hello\n")
+
+	stream := &fakeRemoveStream{}
+	if err := svc.RemoveDriver(&agentpbv2.RemoveDriverRequest{Name: "wendyos-hello"}, stream); err != nil {
+		t.Fatal(err)
+	}
+	if !stream.completed || !stream.rebootRequired {
+		t.Fatalf("completed=%v reboot=%v; want a reboot for the resident module",
+			stream.completed, stream.rebootRequired)
 	}
 }

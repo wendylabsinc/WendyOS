@@ -174,8 +174,8 @@ func IsDPoPBound(auth *config.AuthConfig) bool {
 }
 
 // DPoPTokenProvider returns the current access token and its bound signing key
-// for a per-RPC proof. The CLI's provider refreshes an expired token; the MCP
-// provider returns the stored token as-is (it does not auto-refresh).
+// for a per-RPC proof. The CLI's provider refreshes an expired token, and the
+// MCP server uses it too (mcp.SetDPoPTokenProvider).
 type DPoPTokenProvider func(ctx context.Context) (token string, key crypto.Signer, err error)
 
 // DPoPDialOptions installs per-RPC DPoP proof injection (unary + streaming) for

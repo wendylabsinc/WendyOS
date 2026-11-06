@@ -184,10 +184,31 @@ type NotificationAudience struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// At least one selector is required and must resolve to at least one recipient.
 	// Cloud resolves the selectors as a deduplicated union, with at most 100 raw
-	// selectors across all three lists and at most 10,000 resolved users.
-	UserIds       []string           `protobuf:"bytes,1,rep,name=user_ids,json=userIds,proto3" json:"user_ids,omitempty"`
-	TeamIds       []string           `protobuf:"bytes,2,rep,name=team_ids,json=teamIds,proto3" json:"team_ids,omitempty"`
-	Roles         []OrganizationRole `protobuf:"varint,3,rep,packed,name=roles,proto3,enum=wendycloud.v2.OrganizationRole" json:"roles,omitempty"`
+	// selectors across user_ids, team_ids, roles, and role_ids (duplicates count)
+	// and at most 10,000 resolved users. Existing source-specific limits still apply.
+	// Role selectors select users assigned organization-role allow bindings,
+	// directly or through Cloud or identity-provider groups in this organization.
+	// They select recipients only; they do not grant recipients any permission.
+	UserIds []string `protobuf:"bytes,1,rep,name=user_ids,json=userIds,proto3" json:"user_ids,omitempty"`
+	TeamIds []string `protobuf:"bytes,2,rep,name=team_ids,json=teamIds,proto3" json:"team_ids,omitempty"`
+	// Legacy built-in organization-role identities: OWNER -> owner (the single
+	// current Owner), ADMIN -> admin, BILLING_MANAGER -> billing, MEMBER -> member,
+	// VIEWER -> viewer, including organization roles migrated from these built-ins.
+	// These never match tenant-defined roles by name (e.g. a custom "admin").
+	// Deprecated: use role_ids for new clients, including Developer and custom roles.
+	// Kept for wire compatibility; never remove or renumber this field or enum values.
+	// If roles and role_ids are both set, recipients are their deduplicated union.
+	//
+	// Deprecated: Marked as deprecated in wendycloud/v2/notifications.proto.
+	Roles []OrganizationRole `protobuf:"varint,3,rep,packed,name=roles,proto3,enum=wendycloud.v2.OrganizationRole" json:"roles,omitempty"`
+	// UUIDs of organization-kind roles available in the target organization:
+	// built-in roles (including Developer) or this tenant's custom roles.
+	// Reject malformed UUIDs, device-kind roles, foreign-tenant roles, and absent
+	// roles; failures must not disclose whether a role exists in another tenant.
+	// Requires a server that supports role_ids. Older protobuf servers ignore this
+	// field, so even mixed old/new selectors can silently omit intended recipients.
+	// Deploy supporting Cloud behavior before clients send role_ids.
+	RoleIds       []string `protobuf:"bytes,4,rep,name=role_ids,json=roleIds,proto3" json:"role_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -236,9 +257,17 @@ func (x *NotificationAudience) GetTeamIds() []string {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in wendycloud/v2/notifications.proto.
 func (x *NotificationAudience) GetRoles() []OrganizationRole {
 	if x != nil {
 		return x.Roles
+	}
+	return nil
+}
+
+func (x *NotificationAudience) GetRoleIds() []string {
+	if x != nil {
+		return x.RoleIds
 	}
 	return nil
 }
@@ -2200,8 +2229,13 @@ func (x *DeleteNotificationsThroughRequest) GetThroughNotificationId() string {
 }
 
 type DeleteNotificationsThroughResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeletedCount  int32                  `protobuf:"varint,1,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// At most 1000 active recipient rows per call, newest-first by
+	// (created_at, notification_id). Previously deleted rows do not count.
+	DeletedCount int32 `protobuf:"varint,1,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	// More matching rows remain at or before the same anchor. Repeat the same
+	// request until false; the anchor remains valid after its recipient row is deleted.
+	MoreAvailable bool `protobuf:"varint,2,opt,name=more_available,json=moreAvailable,proto3" json:"more_available,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2241,6 +2275,13 @@ func (x *DeleteNotificationsThroughResponse) GetDeletedCount() int32 {
 		return x.DeletedCount
 	}
 	return 0
+}
+
+func (x *DeleteNotificationsThroughResponse) GetMoreAvailable() bool {
+	if x != nil {
+		return x.MoreAvailable
+	}
+	return false
 }
 
 type MarkAsReadRequest struct {
@@ -2518,8 +2559,13 @@ func (x *SetNotificationReadStatusThroughRequest) GetThroughNotificationId() str
 }
 
 type SetNotificationReadStatusThroughResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UpdatedCount  int32                  `protobuf:"varint,1,opt,name=updated_count,json=updatedCount,proto3" json:"updated_count,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// At most 1000 changed recipient rows per call, newest-first by
+	// (created_at, notification_id). Rows already in the requested state do not count.
+	UpdatedCount int32 `protobuf:"varint,1,opt,name=updated_count,json=updatedCount,proto3" json:"updated_count,omitempty"`
+	// More matching rows still need the requested read state at or before the same
+	// anchor. Repeat the same request until false.
+	MoreAvailable bool `protobuf:"varint,2,opt,name=more_available,json=moreAvailable,proto3" json:"more_available,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2559,6 +2605,13 @@ func (x *SetNotificationReadStatusThroughResponse) GetUpdatedCount() int32 {
 		return x.UpdatedCount
 	}
 	return 0
+}
+
+func (x *SetNotificationReadStatusThroughResponse) GetMoreAvailable() bool {
+	if x != nil {
+		return x.MoreAvailable
+	}
+	return false
 }
 
 type CountNotificationsRequest struct {
@@ -2766,11 +2819,12 @@ var File_wendycloud_v2_notifications_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\n" +
-	"!wendycloud/v2/notifications.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a!wendycloud/v2/organizations.proto\x1a\"wendycloud/v2/signed_request.proto\"\x83\x01\n" +
+	"!wendycloud/v2/notifications.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a!wendycloud/v2/organizations.proto\x1a\"wendycloud/v2/signed_request.proto\"\xa2\x01\n" +
 	"\x14NotificationAudience\x12\x19\n" +
 	"\buser_ids\x18\x01 \x03(\tR\auserIds\x12\x19\n" +
-	"\bteam_ids\x18\x02 \x03(\tR\ateamIds\x125\n" +
-	"\x05roles\x18\x03 \x03(\x0e2\x1f.wendycloud.v2.OrganizationRoleR\x05roles\"t\n" +
+	"\bteam_ids\x18\x02 \x03(\tR\ateamIds\x129\n" +
+	"\x05roles\x18\x03 \x03(\x0e2\x1f.wendycloud.v2.OrganizationRoleB\x02\x18\x01R\x05roles\x12\x19\n" +
+	"\brole_ids\x18\x04 \x03(\tR\aroleIds\"t\n" +
 	"\x13NotificationSection\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x19\n" +
 	"\x05title\x18\x02 \x01(\tH\x00R\x05title\x88\x01\x01\x12\x1b\n" +
@@ -2951,9 +3005,10 @@ const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12Q\n" +
 	"\x0fseverity_filter\x18\x02 \x01(\x0e2#.wendycloud.v2.NotificationSeverityH\x00R\x0eseverityFilter\x88\x01\x01\x126\n" +
 	"\x17through_notification_id\x18\x03 \x01(\tR\x15throughNotificationIdB\x12\n" +
-	"\x10_severity_filter\"I\n" +
+	"\x10_severity_filter\"p\n" +
 	"\"DeleteNotificationsThroughResponse\x12#\n" +
-	"\rdeleted_count\x18\x01 \x01(\x05R\fdeletedCount\"|\n" +
+	"\rdeleted_count\x18\x01 \x01(\x05R\fdeletedCount\x12%\n" +
+	"\x0emore_available\x18\x02 \x01(\bR\rmoreAvailable\"|\n" +
 	"\x11MarkAsReadRequest\x12)\n" +
 	"\x10notification_ids\x18\x01 \x03(\tR\x0fnotificationIds\x12<\n" +
 	"\x1acanonical_notification_ids\x18\x02 \x03(\tR\x18canonicalNotificationIds\"Q\n" +
@@ -2972,9 +3027,10 @@ const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\vread_status\x18\x03 \x01(\x0e2%.wendycloud.v2.NotificationReadStatusR\n" +
 	"readStatus\x126\n" +
 	"\x17through_notification_id\x18\x04 \x01(\tR\x15throughNotificationIdB\x12\n" +
-	"\x10_severity_filter\"O\n" +
+	"\x10_severity_filter\"v\n" +
 	"(SetNotificationReadStatusThroughResponse\x12#\n" +
-	"\rupdated_count\x18\x01 \x01(\x05R\fupdatedCount\"\x88\x02\n" +
+	"\rupdated_count\x18\x01 \x01(\x05R\fupdatedCount\x12%\n" +
+	"\x0emore_available\x18\x02 \x01(\bR\rmoreAvailable\"\x88\x02\n" +
 	"\x19CountNotificationsRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12Q\n" +
 	"\x0fseverity_filter\x18\x02 \x01(\x0e2#.wendycloud.v2.NotificationSeverityH\x00R\x0eseverityFilter\x88\x01\x01\x12K\n" +

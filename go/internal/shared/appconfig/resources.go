@@ -25,7 +25,8 @@ const maxPIDsLimit int64 = 4194304
 type ResourceLimits struct {
 	// Memory is the hard memory limit as a byte count, optionally with a unit
 	// suffix: binary (Ki, Mi, Gi, Ti) or decimal (K, M, G, T). A bare number is
-	// interpreted as bytes. The container is OOM-killed if it exceeds this.
+	// interpreted as bytes. Explicit memory budgets also cap combined RAM and
+	// swap at this value (no swap); exceeding the budget can OOM-kill the app.
 	Memory string `json:"memory,omitempty"`
 	// CPUs is the maximum number of CPU cores, as a decimal (e.g. "0.5", "1.5",
 	// "2"). It is enforced as a CFS quota over a fixed 100ms period.

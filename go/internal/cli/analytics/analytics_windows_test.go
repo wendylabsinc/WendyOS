@@ -15,8 +15,8 @@ import (
 )
 
 func TestLoadOrCreateIDRechecksSharingViolationAfterWriter(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("WENDY_CONFIG_DIR", dir)
+	dir := isolateIdentityHome(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	idPath := filepath.Join(dir, "analytics_id")
 	const want = "69eedfb8-a7d5-43c5-b61d-3083caa38f63"
 	if err := os.WriteFile(idPath, []byte(want), 0o600); err != nil {

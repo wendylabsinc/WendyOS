@@ -49,6 +49,20 @@ func TestSimulatorLiteCreateAndStart(t *testing.T) {
 	}
 }
 
+func TestSimulatorCreateAcceptsSO101(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	s.SetSimulatorBackend(SimulatorBackend{Create: func(_ context.Context, o SimulatorCreateOptions) (*SimulatorInfo, error) {
+		if o.Profile != "so101" {
+			t.Fatalf("profile: %q", o.Profile)
+		}
+		return &SimulatorInfo{Name: o.Name, Device: "vm:" + o.Name, Profile: o.Profile, State: "stopped"}, nil
+	}})
+	r, err := s.handleSimulatorCreate(context.Background(), callToolReq("simulator_create", map[string]any{"name": "arm", "profile": "so101"}))
+	if err != nil || r.IsError {
+		t.Fatalf("create: %v %v", r, err)
+	}
+}
+
 func TestSimulatorCreateRejectsInvalidInputsBeforeBackend(t *testing.T) {
 	s := New(&config.Config{}, nil)
 	s.SetSimulatorBackend(SimulatorBackend{Create: func(context.Context, SimulatorCreateOptions) (*SimulatorInfo, error) {

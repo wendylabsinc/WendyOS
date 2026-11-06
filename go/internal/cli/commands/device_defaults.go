@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -88,26 +90,41 @@ func parseCloudDeviceSelector(value string) (cloudDeviceSelector, bool, error) {
 	return cloudDeviceSelector{Endpoint: u.Host, OrgID: int32(org), AssetID: int32(asset)}, true, nil
 }
 
+// cloudAuthInOrganization reports whether auth belongs to a saved device's
+// organization. A tenant UUID identifies one organization on its own. A numeric
+// organization ID is unique only within its Cloud endpoint, and only a legacy
+// session carries one in that namespace. Saved defaults and device pins both
+// select sessions with it.
+func cloudAuthInOrganization(auth *config.AuthConfig, endpoint string, orgID int32, tenant string) bool {
+	if auth == nil || len(auth.Certificates) == 0 {
+		return false
+	}
+	authTenant := auth.Certificates[0].TenantUUID()
+	if tenant != "" {
+		return authTenant == tenant
+	}
+	return orgID > 0 && authTenant == "" && auth.CloudGRPC == endpoint && cloudAuthOrgID(auth) == orgID
+}
+
+// A selector also names its endpoint, which Cloud recorded when it was saved.
+func (s cloudDeviceSelector) matches(auth *config.AuthConfig) bool {
+	return auth != nil && auth.CloudGRPC == s.Endpoint && cloudAuthInOrganization(auth, s.Endpoint, s.OrgID, s.TenantUUID)
+}
+
 func (s cloudDeviceSelector) auth(cfg *config.Config) (*config.AuthConfig, error) {
 	for i := range cfg.Auth {
-		auth := &cfg.Auth[i]
-		if auth.CloudGRPC != s.Endpoint {
-			continue
-		}
-		if s.TenantUUID != "" {
-			if len(auth.Certificates) > 0 && auth.Certificates[0].TenantUUID() == s.TenantUUID {
-				return auth, nil
-			}
-			continue
-		}
-		if cloudAuthOrgID(auth) == s.OrgID {
-			return auth, nil
+		if s.matches(&cfg.Auth[i]) {
+			return &cfg.Auth[i], nil
 		}
 	}
+	return nil, s.missingAuth()
+}
+
+func (s cloudDeviceSelector) missingAuth() error {
 	if s.TenantUUID != "" {
-		return nil, fmt.Errorf("no login for cloud %s tenant %s; log in to that tenant or choose another default", s.Endpoint, config.OrganizationLabel(s.Endpoint, s.TenantUUID))
+		return fmt.Errorf("no login for cloud %s tenant %s; log in to that tenant or choose another default", s.Endpoint, config.OrganizationLabel(s.Endpoint, s.TenantUUID))
 	}
-	return nil, fmt.Errorf("no login for cloud %s organization %s; log in to that organization or choose another default", s.Endpoint, orgLabel(s.Endpoint, s.OrgID))
+	return fmt.Errorf("no login for cloud %s organization %s; log in to that organization or choose another default", s.Endpoint, orgLabel(s.Endpoint, s.OrgID))
 }
 
 var fetchDefaultCloudAssetsFn = fetchCloudAssets
@@ -179,6 +196,10 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 	}
 	if err := prepareDefaultCloudCertificate(ctx, auth); err != nil {
 		return nil, fmt.Errorf("preparing Cloud device certificate: %w", err)
+	}
+	// Certificate preparation reloads and can renew the selected session.
+	if !selector.matches(auth) {
+		return nil, selector.missingAuth()
 	}
 	if selector.TenantUUID != "" {
 		assets, err := fetchDefaultCloudAssetsV2Fn(ctx, auth, true)
@@ -259,7 +280,44 @@ func unsetPickerDefault() (string, error) {
 // or opening a cloud tunnel.
 var connectCloudDeviceSelectorFn = connectCloudDeviceSelector
 
+var resolveLiteBLESelector = providers.ResolveLiteBLESelector
+
+var connectOperatorMeshSelector = sessionbroker.ConnectOperator
+var describeOperatorMeshTarget = sessionbroker.DescribeOperatorTarget
+
 func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpdate bool) (*SelectedDevice, bool, error) {
+	if external, matched, err := resolveLiteBLESelector(ctx, device); matched {
+		if err != nil {
+			return nil, true, err
+		}
+		return &SelectedDevice{External: &external, Provider: providers.ProviderForKey("wendy-lite"), DefaultSelector: device, PinKey: device}, true, nil
+	}
+	if strings.HasPrefix(device, "mesh:") && !strings.HasPrefix(device, "mesh://") {
+		picked, err := connectMeshSelector(ctx, device)
+		return picked, true, err
+	}
+	if _, matched, err := sessionbroker.ParseMeshSelector(device); matched {
+		if err != nil {
+			return nil, true, err
+		}
+		info, err := describeOperatorMeshTarget(ctx, device)
+		if err != nil {
+			return nil, true, err
+		}
+		if info.Platform == "Lite" {
+			external, err := providers.MeshLiteDevice(info)
+			if err != nil {
+				return nil, true, err
+			}
+			provider := providers.ProviderForKey("wendy-lite")
+			return &SelectedDevice{External: &external, Provider: provider, DefaultSelector: device, PinKey: device}, true, nil
+		}
+		client, err := connectOperatorMeshSelector(ctx, device)
+		if err != nil {
+			return nil, true, err
+		}
+		return &SelectedDevice{Agent: client, DefaultSelector: device, PinKey: device}, true, nil
+	}
 	if selector, matched, err := parseCloudDeviceSelector(device); matched {
 		if err != nil {
 			return nil, true, err
@@ -274,7 +332,7 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 		picked, err := connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, suppressUpdate)
 		return picked, true, err
 	}
-	return nil, false, nil
+	return connectMeshName(ctx, device, suppressUpdate)
 }
 
 // Used by the MCP connection adapter, which receives the selected identity as

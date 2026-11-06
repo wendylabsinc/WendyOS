@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "plugins/wendy-agentic-coding/skills"
@@ -13,6 +14,9 @@ MCP_TARGETS = [
     ROOT / "plugins/wendyos/skills/wendy",
     ROOT / "go/internal/cli/assets/mcp-skills/wendy",
 ]
+# .gitattributes keeps SKILL.md LF on checkout, but an older autocrlf clone, an
+# editor or a copied file can still leave CRLF delimiters in the working tree.
+FRONTMATTER = re.compile(rb"\A---\r?\n.*?\r?\n---(\r?\n)", re.S)
 
 
 def mcp_bundle(skills):
@@ -26,9 +30,10 @@ def mcp_bundle(skills):
                 if name == "wendy" and relative != Path("SKILL.md"):
                     files[relative] = source.read_bytes()
     main = (SOURCE / "wendy/SKILL.md").read_bytes()
-    if not main.startswith(b"---\n") or b"\n---\n" not in main[4:]:
+    frontmatter = FRONTMATTER.match(main)
+    if not frontmatter:
         raise SystemExit("The Wendy entrypoint needs YAML frontmatter")
-    offset = main.index(b"\n---\n", 4) + len(b"\n---\n")
+    offset = frontmatter.end()
     index = """
 ## Bundled workflows
 
@@ -52,15 +57,15 @@ skips confirmation for those tools only. `device_connect` and local discovery
 through `device_list` require explicit `--allow-tool` permission and per-call
 terminal confirmation. `--allow-all` permits every supported relay tool and
 skips all per-call confirmations. `--auto-accept` controls ChatGPT pairing only.
-Local desktop gateways and separately configured standalone Cloud gateways use
-`list_robots` and `inspect_robot`.
 Use the connected server's tools and explicit target identifiers. Use CLI
 commands only when a terminal on the intended computer is available. A skill
 cannot grant access or add tools missing from the server.
 
 """
     index += "".join(f"- [{name}](references/skills/{name}/SKILL.md)\n" for name in skills)
-    files[Path("SKILL.md")] = main[:offset] + index.encode() + b"\n" + main[offset:]
+    # Match the entrypoint's line endings so --check agrees with a CRLF checkout.
+    index = (index + "\n").encode().replace(b"\n", frontmatter.group(1))
+    files[Path("SKILL.md")] = main[:offset] + index + main[offset:]
     return files
 
 
@@ -114,18 +119,10 @@ def main():
         sync_files(bundle, target, args.check, differences)
     plugin_source = ROOT / "plugins/wendy-chatgpt"
     # The public plugin owns a curated skill independently of the local
-    # developer bundle. Embed that exact source without regenerating it.
+    # developer bundle. Embed that exact source for the relay's skill catalog.
     public_skill = Path("skills/wendy/SKILL.md")
-    plugin_files = {
-        Path("plugin.json"): (plugin_source / "plugin.json").read_bytes(),
-        public_skill: (plugin_source / public_skill).read_bytes(),
-    }
-    plugin_files.update({
-        p.relative_to(plugin_source): p.read_bytes()
-        for p in (plugin_source / "assets").rglob("*") if p.is_file()
-    })
     sync_files(
-        plugin_files,
+        {public_skill: (plugin_source / public_skill).read_bytes()},
         ROOT / "go/internal/cli/assets/chatgpt-plugin", args.check, differences,
     )
     if args.check and differences:

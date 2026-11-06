@@ -184,6 +184,7 @@ func TestChipModelForEveryWendyLiteTarget(t *testing.T) {
 		{target: "esp32c61", chip: chipESP32C61, name: "ESP32-C61"},
 		{target: "esp32p4", chip: chipESP32P4, name: "ESP32-P4"},
 		{target: "esp32s3", chip: chipESP32S3, name: "ESP32-S3"},
+		{target: "esp32s31", chip: chipESP32S31, name: "ESP32-S31"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.target, func(t *testing.T) {

@@ -1,3 +1,4 @@
+import Foundation
 import GRPCCore
 import WendyAgentGRPC
 
@@ -21,6 +22,7 @@ struct ProvisioningServiceV2: Wendy_Agent_Services_V2_WendyProvisioningService.S
             provisioned.organizationID = info.orgID
             provisioned.assetID = info.assetID
             provisioned.principalUri = info.principalURI
+            provisioned.assetUuid = Self.deviceUUID(from: info.principalURI)
             // The Swift agent does not yet implement Cloud-authenticated reset
             // and durable device preparation. Both capability flags stay false.
             provisioned.cloudUnenrollmentSupported = false
@@ -35,6 +37,18 @@ struct ProvisioningServiceV2: Wendy_Agent_Services_V2_WendyProvisioningService.S
             response.notProvisioned = notProvisioned
         }
         return response
+    }
+
+    /// The Cloud adapter field and certificate principal name the same device.
+    /// Legacy or path-shaped device names do not acquire an invented UUID.
+    static func deviceUUID(from principal: String) -> String {
+        guard let identity = try? OrgIdentity.parsePrincipal(principal),
+            let tenant = identity.tenantUUID,
+            principal == "spiffe://wendy.sh/tenant/\(tenant)/device/\(identity.entityID)",
+            let id = UUID(uuidString: identity.entityID),
+            id.uuidString.lowercased() == identity.entityID
+        else { return "" }
+        return identity.entityID
     }
 
     func startProvisioning(

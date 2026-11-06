@@ -115,6 +115,33 @@ struct ProvisioningContractTests {
         #expect(csr.signatureAlgorithm == .ecdsaWithSHA256)
     }
 
+    @Test("the own UUID field uses the same canonical device principal as Go")
+    func ownDeviceUUID() {
+        let tenant = "11111111-1111-4111-8111-111111111111"
+        let device = "22222222-2222-4222-8222-222222222222"
+        #expect(
+            ProvisioningServiceV2.deviceUUID(
+                from: "spiffe://wendy.sh/tenant/\(tenant)/device/\(device)"
+            ) == device
+        )
+        let zero = "00000000-0000-0000-0000-000000000000"
+        #expect(
+            ProvisioningServiceV2.deviceUUID(
+                from: "spiffe://wendy.sh/tenant/\(zero)/device/\(zero)"
+            ) == zero
+        )
+        for principal in [
+            "", "urn:wendy:org:7:asset:42",
+            "spiffe://wendy.sh/tenant/\(tenant)/operator/\(device)",
+            "spiffe://wendy.sh/tenant/\(tenant)/service/asset-\(device)",
+            "spiffe://wendy.sh/tenant/\(tenant)/device/sim",
+            "spiffe://other.example/tenant/\(tenant)/device/\(device)",
+            "spiffe://wendy.sh/tenant/\(tenant)/device/22222222222242228222222222222222",
+        ] {
+            #expect(ProvisioningServiceV2.deviceUUID(from: principal).isEmpty)
+        }
+    }
+
     // Runs on every host, deliberately unconditional: on the macos-15 CI runner it
     // exercises the refusal, on macOS 26+ (and Linux) the supported branch.
     @Test("this host advertises direct PKI enrollment only from macOS 26, and says why otherwise")

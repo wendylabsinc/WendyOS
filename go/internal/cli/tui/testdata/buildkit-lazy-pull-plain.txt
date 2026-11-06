@@ -1,0 +1,37 @@
+#1 [base-nvidia-jetson 1/5] FROM docker.io/dustynv/pytorch:2.7-r36.4.0-cu128@sha256:b682dce0a43b3c0d7575cddb7dee25309e518b4c8260b243baaadabf0d1866ca
+#1 resolve docker.io/dustynv/pytorch:2.7-r36.4.0-cu128@sha256:b682dce0a43b3c0d7575cddb7dee25309e518b4c8260b243baaadabf0d1866ca
+#1 DONE 2.0s
+
+#1 [base-nvidia-jetson 1/5] FROM docker.io/dustynv/pytorch:2.7-r36.4.0-cu128@sha256:b682dce0a43b3c0d7575cddb7dee25309e518b4c8260b243baaadabf0d1866ca
+#1 resolve docker.io/dustynv/pytorch:2.7-r36.4.0-cu128@sha256:b682dce0a43b3c0d7575cddb7dee25309e518b4c8260b243baaadabf0d1866ca 2.0s done
+#1 sha256:b79606fb3afea5bd1609ed40b622142f1c98125abcfe89a76a661b0e8e343910 7.40kB / 7.40kB 0.0s done
+#1 sha256:922badbaf192e1a4a5af64df422de6d73e96e70d0ab52245bd3d692bcea9cfad 0B / 3.40GB 0.2s
+#1 sha256:6bdb18f83935f1d97220ee8035e6ccd7e764c32102587be4488f940f943ebda6 0B / 1.20GB 0.2s
+#1 sha256:da0002e0cd62c639edf0b88ba0216b00084f5abf275328f44d39784450a625f4 0B / 1.90GB 0.2s
+#1 ...
+
+#2 [base-nvidia-jetson 2/5] RUN pip3 install --no-cache-dir -r requirements.txt
+#2 ...
+
+#1 [base-nvidia-jetson 1/5] FROM docker.io/dustynv/pytorch:2.7-r36.4.0-cu128@sha256:b682dce0a43b3c0d7575cddb7dee25309e518b4c8260b243baaadabf0d1866ca
+#1 sha256:922badbaf192e1a4a5af64df422de6d73e96e70d0ab52245bd3d692bcea9cfad 900.00MB / 3.40GB 58.0s
+#1 sha256:6bdb18f83935f1d97220ee8035e6ccd7e764c32102587be4488f940f943ebda6 600.00MB / 1.20GB 58.0s
+#1 sha256:da0002e0cd62c639edf0b88ba0216b00084f5abf275328f44d39784450a625f4 400.00MB / 1.90GB 58.0s
+#1 sha256:6bdb18f83935f1d97220ee8035e6ccd7e764c32102587be4488f940f943ebda6 1.20GB / 1.20GB 116.0s done
+#1 sha256:922badbaf192e1a4a5af64df422de6d73e96e70d0ab52245bd3d692bcea9cfad 1.80GB / 3.40GB 118.0s
+#1 sha256:da0002e0cd62c639edf0b88ba0216b00084f5abf275328f44d39784450a625f4 900.00MB / 1.90GB 118.0s
+#1 sha256:922badbaf192e1a4a5af64df422de6d73e96e70d0ab52245bd3d692bcea9cfad 2.70GB / 3.40GB 178.0s
+#1 sha256:da0002e0cd62c639edf0b88ba0216b00084f5abf275328f44d39784450a625f4 1.50GB / 1.90GB 178.0s
+#1 sha256:da0002e0cd62c639edf0b88ba0216b00084f5abf275328f44d39784450a625f4 1.90GB / 1.90GB 228.0s done
+#1 sha256:922badbaf192e1a4a5af64df422de6d73e96e70d0ab52245bd3d692bcea9cfad 3.40GB / 3.40GB 234.0s done
+#1 extracting sha256:922badbaf192e1a4a5af64df422de6d73e96e70d0ab52245bd3d692bcea9cfad
+#1 extracting sha256:922badbaf192e1a4a5af64df422de6d73e96e70d0ab52245bd3d692bcea9cfad 163.9s done
+#1 extracting sha256:6bdb18f83935f1d97220ee8035e6ccd7e764c32102587be4488f940f943ebda6
+#1 extracting sha256:6bdb18f83935f1d97220ee8035e6ccd7e764c32102587be4488f940f943ebda6 49.9s done
+#1 extracting sha256:da0002e0cd62c639edf0b88ba0216b00084f5abf275328f44d39784450a625f4
+#1 extracting sha256:da0002e0cd62c639edf0b88ba0216b00084f5abf275328f44d39784450a625f4 83.6s done
+#1 DONE 533.6s
+
+#2 [base-nvidia-jetson 2/5] RUN pip3 install --no-cache-dir -r requirements.txt
+#2 532.5 Collecting numpy
+#2 DONE 558.0s

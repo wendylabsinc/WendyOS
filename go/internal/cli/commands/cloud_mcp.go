@@ -24,6 +24,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc/codes"
@@ -76,7 +77,7 @@ func newCloudMCPCmd() *cobra.Command {
 			term := newPromptTerminal(ctx, os.Stdin, cmd.ErrOrStderr())
 			stopWatchingTerminal := context.AfterFunc(term.ctx, stop)
 			defer stopWatchingTerminal()
-			err = serveCloudMCP(term.ctx, stream, opened, term, srv, wendymcp.BindingPolicy{AllowRead: allowRead, AllowAll: allowAll, Tools: allowTools, Session: auth}, autoAccept)
+			err = serveCloudMCP(ctx, stream, opened, term, srv, wendymcp.BindingPolicy{AllowRead: allowRead, AllowAll: allowAll, Tools: allowTools, Session: auth}, autoAccept)
 			return errors.Join(err, term.close())
 		},
 	}
@@ -140,8 +141,8 @@ func openRelaySession(ctx context.Context, auth *config.AuthConfig) (relayStream
 // their own gRPC host.
 func relayBrokerEndpoint(cloudGRPC string) string {
 	host, _, _ := net.SplitHostPort(cloudGRPC)
-	switch host {
-	case "api.dev.wendy.sh", "api.dev.wendy.dev":
+	switch cloudrelay.CanonicalAPIHost(host) {
+	case "api.dev.wendy.sh":
 		return "https://tunnel.dev.wendy.dev:443"
 	case "api.wendy.sh", "api.wendy.dev":
 		return "https://tunnel.wendy.dev:443"
@@ -160,14 +161,20 @@ func relayBrokerEndpoint(cloudGRPC string) string {
 // printable, so none can rewrite a question the user answers.
 // ponytail: one binding per session, later pairings are denied; serve several
 // when the desktop app needs it.
-func serveCloudMCP(ctx context.Context, stream relayStream, opened *cloudpbv2.OpenRelaySessionResponse, term *promptTerminal, srv *wendymcp.Server, policy wendymcp.BindingPolicy, autoAccept bool) (result error) {
-	ctx, cancel := context.WithCancel(ctx)
+func serveCloudMCP(parent context.Context, stream relayStream, opened *cloudpbv2.OpenRelaySessionResponse, term *promptTerminal, srv *wendymcp.Server, policy wendymcp.BindingPolicy, autoAccept bool) (result error) {
+	ctx, cancel := context.WithCancel(parent)
 	relay := &relayConn{stream: stream}
 	pairings := make(chan *cloudpbv2.PairingRequested)
 	received := make(chan error, 1)
 	go func() { received <- relay.receive(ctx, pairings) }()
 	var served chan error
 	defer func() {
+		// The RPC and this server are children of the same session context.
+		// Cancellation can reach the RPC first, so consult their parent before
+		// our own cleanup cancellation would hide an unrelated relay failure.
+		if parent.Err() != nil {
+			result = nil
+		}
 		// Every exit stops the server and waits for it to close what it
 		// opened (tunnels) before the stream and the process go.
 		cancel()

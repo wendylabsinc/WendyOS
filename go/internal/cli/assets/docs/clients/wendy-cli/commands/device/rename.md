@@ -18,6 +18,11 @@ The name must be a valid DNS label:
 - does not end with a hyphen
 - is at most 63 characters
 
+Device names are unique within a Wendy Cloud organization, compared without
+regard to case. Wendy Cloud is renamed first, so a name it refuses leaves the
+device's hostname unchanged. If Cloud accepts the name but the hostname cannot
+be set, run the same command again to finish.
+
 ## Related
 
 - `wendy device unpin <host>` — clear a device identity pin keyed by the old name

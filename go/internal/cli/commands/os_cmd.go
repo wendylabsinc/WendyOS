@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -359,7 +360,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 					}
 					fmt.Println("Please select the correct device type to continue.")
 					fmt.Println()
-					picked, pickErr := pickDeviceTypeAndGetLatestOTA(nightly)
+					picked, pickErr := pickDeviceTypeAndGetLatestOTA(storageMedium, nightly)
 					if pickErr != nil {
 						return pickErr
 					}
@@ -446,7 +447,10 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				}
 			}
 
+			baseline := readOSUpdateBaseline(ctx, conn)
+			baseline.preVersion = preUpdateOSVersion
 			recordCleared, err := applyOSUpdate(ctx, conn, artifactURL)
+			baseline.recordCleared = recordCleared
 			if err != nil {
 				return err
 			}
@@ -456,7 +460,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				return err
 			}
 			fmt.Println("Device is back online.")
-			return reportOSUpdateOutcome(ctx, conn, preUpdateOSVersion, recordCleared)
+			return reportOSUpdateOutcome(ctx, conn, preUpdateOSVersion, baseline)
 		},
 	}
 
@@ -475,6 +479,9 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 // progress: a spinner when interactive, a silent drain otherwise. It does not
 // wait for the post-update reboot.
 func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artifactURL, updaterBackend string) error {
+	// Cancelling the stream once Completed arrives tells the agent it can reboot.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := conn.AgentService.UpdateOS(ctx, &agentpb.UpdateOSRequest{
 		ArtifactUrl:    artifactURL,
 		UpdaterBackend: updaterBackend,
@@ -484,35 +491,33 @@ func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artif
 	}
 
 	if !isInteractiveTerminal() {
-		return drainOSUpdateStream(stream)
+		err = drainOSUpdateStream(stream)
+	} else {
+		err = spinOSUpdateStream(stream)
 	}
+	if errors.Is(err, errOSUpdateLostAfterInstall) {
+		fmt.Fprintln(os.Stderr, tui.WarningMessage("Lost the connection after the update was installed; the device is rebooting to apply it."))
+		return nil
+	}
+	return err
+}
 
+var osUpdateProgressProgram = func(model tea.Model) *tea.Program { return tui.NewProgressProgram(model) }
+
+func spinOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 	spin := tui.NewSpinner("Downloading update...")
-	p := tui.NewProgressProgram(spin)
+	p := osUpdateProgressProgram(spin)
 
+	result := make(chan error, 1)
 	go func() {
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				p.Send(tui.SpinnerDoneMsg{})
-				return
-			}
-			if err != nil {
-				p.Send(tui.SpinnerDoneMsg{Err: err})
-				return
-			}
-			if progress := resp.GetProgress(); progress != nil {
-				p.Send(tui.SpinnerUpdateMsg{Label: progressLabel(progress.GetPhase(), progress.GetPercent())})
-			}
-			if completed := resp.GetCompleted(); completed != nil {
-				p.Send(tui.SpinnerDoneMsg{})
-				return
-			}
-			if failed := resp.GetFailed(); failed != nil {
-				p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("update failed: %s", failed.GetErrorMessage())})
-				return
-			}
+		err := receiveOSUpdate(stream, func(phase string, percent int32) {
+			p.Send(tui.SpinnerUpdateMsg{Label: progressLabel(phase, percent)})
+		})
+		result <- err
+		if errors.Is(err, errOSUpdateLostAfterInstall) {
+			err = nil
 		}
+		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
 	finalModel, err := p.Run()
@@ -526,10 +531,7 @@ func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artif
 	if !spinModel.Done() {
 		return ErrUserCancelled
 	}
-	if _, spinErr := spinModel.Result(); spinErr != nil {
-		return spinErr
-	}
-	return nil
+	return <-result
 }
 
 // resolveArtifactPath resolves a local file path or directory to an OS update
@@ -585,7 +587,8 @@ func artifactURLPath(filePath string) string {
 // pickDeviceTypeAndGetLatestOTA shows a device-type picker and returns the OTA
 // artifact URL for the latest stable release (or latest nightly when nightly is
 // true). No version picker is shown — the version is chosen automatically.
-func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
+// storageMedium is the device's reported medium, which picks the NVMe variant.
+func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, error) {
 	fmt.Println("Fetching available devices...")
 
 	devices, err := getAvailableDevices()
@@ -628,7 +631,7 @@ func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
 		return "", err
 	}
 
-	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, "", nightly)
+	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, storageMedium, nightly)
 	if err != nil {
 		return "", fmt.Errorf("resolving OTA artifact for %q: %w", key, err)
 	}
@@ -739,35 +742,75 @@ func applyOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artifa
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	_, probeErr := conn.AgentService.GetOSUpdateStatus(probeCtx, &agentpb.GetOSUpdateStatusRequest{})
 	cancel()
-	recordCleared = status.Code(probeErr) != codes.Unimplemented
+	// A transport failure cannot establish support for clearing old receipts.
+	// Without a successful probe, require independent freshness/slot evidence.
+	recordCleared = probeErr == nil
 	return recordCleared, streamOSUpdate(ctx, conn, artifactURL, "")
+}
+
+// A prior committed update can have the same version and still be within the
+// freshness window. Snapshot its result timestamp and booted slot before the
+// new transfer so that record cannot be mistaken for this update's verdict.
+type osUpdateBaseline struct {
+	recordCleared bool
+	preVersion    string
+	resultAtUnix  int64
+	bootedSlot    string
+}
+
+// The agent's engine probe can take ten seconds. Leave room for the RPC
+// overhead, and keep this budget separate from connection and version probes.
+const osUpdateStatusTimeout = 15 * time.Second
+
+func readOSUpdateStatus(ctx context.Context, conn *grpcclient.AgentConnection) (*agentpb.GetOSUpdateStatusResponse, error) {
+	callCtx, cancel := context.WithTimeout(ctx, osUpdateStatusTimeout)
+	defer cancel()
+	return conn.AgentService.GetOSUpdateStatus(callCtx, &agentpb.GetOSUpdateStatusRequest{IncludeEngineStatus: true})
+}
+
+func readOSUpdateBaseline(ctx context.Context, conn *grpcclient.AgentConnection) osUpdateBaseline {
+	resp, err := readOSUpdateStatus(ctx, conn)
+	if err != nil {
+		return osUpdateBaseline{}
+	}
+	baseline := osUpdateBaseline{bootedSlot: resp.GetEngineStatus().GetCurrentSlot()}
+	if resp.GetHasResult() {
+		baseline.resultAtUnix = resp.GetCreatedAtUnix()
+	}
+	return baseline
 }
 
 // reportOSUpdateOutcome queries the freshly booted device for the outcome of
 // the update (healthcheck verdict, rollback details) and prints it. It
-// returns a non-nil error when the update did not stick, so the command exits
-// non-zero. recordCleared comes from applyOSUpdate.
-func reportOSUpdateOutcome(ctx context.Context, prior *grpcclient.AgentConnection, preUpdateOSVersion string, recordCleared bool) error {
+// returns a non-nil error when the update failed or a same-version result
+// cannot be verified. Reconnection retains the original authenticated target.
+func reportOSUpdateOutcome(ctx context.Context, prior *grpcclient.AgentConnection, preUpdateOSVersion string, baseline osUpdateBaseline) error {
 	var resp *agentpb.GetOSUpdateStatusResponse
 	var rpcErr error
 	var postUpdateOSVersion string
 
-	// The agent already answers GetAgentVersion (waitForDeviceOnline), so a
-	// short retry window is enough to absorb transient connection hiccups.
-	deadline := time.Now().Add(15 * time.Second)
+	// The agent can answer GetAgentVersion before its boot health gate has
+	// committed and written the update result. Wait for that result, not just
+	// for a successful status RPC: same-version images cannot be distinguished
+	// from a rollback by comparing their version strings.
+	// The delegated wendyos-update commit can take up to 60 seconds.
+	deadline := time.Now().Add(75 * time.Second)
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		conn, err := dialOSUpdateAgent(callCtx, prior)
+		cancel()
+		postUpdateOSVersion = ""
 		if err == nil {
-			resp, rpcErr = conn.AgentService.GetOSUpdateStatus(callCtx, &agentpb.GetOSUpdateStatusRequest{})
-			if ver, verErr := conn.AgentService.GetAgentVersion(callCtx, &agentpb.GetAgentVersionRequest{}); verErr == nil {
+			resp, rpcErr = readOSUpdateStatus(ctx, conn)
+			versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
+			if ver, verErr := conn.AgentService.GetAgentVersion(versionCtx, &agentpb.GetAgentVersionRequest{}); verErr == nil {
 				postUpdateOSVersion = ver.GetOsVersion()
 			}
+			versionCancel()
 			conn.Close()
 		} else {
 			rpcErr = err
 		}
-		cancel()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -775,9 +818,11 @@ func reportOSUpdateOutcome(ctx context.Context, prior *grpcclient.AgentConnectio
 			return rpcErr
 		}
 
-		// Unimplemented is definitive (older agent); anything else transient
-		// is retried until the deadline.
-		if rpcErr == nil || status.Code(rpcErr) == codes.Unimplemented || time.Now().After(deadline) {
+		// Unimplemented is definitive (older agent). A missing or stale result
+		// can become a committed/rolled-back record as the boot gate finishes.
+		if !retryOSUpdateOutcome(resp, rpcErr, time.Now(), baseline) ||
+			verifiedSameVersionSlotSwitch(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, baseline) ||
+			time.Now().After(deadline) {
 			break
 		}
 		select {
@@ -787,15 +832,136 @@ func reportOSUpdateOutcome(ctx context.Context, prior *grpcclient.AgentConnectio
 		}
 	}
 
-	msg, outcomeErr := evaluateOSUpdateOutcome(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, recordCleared, time.Now())
+	msg, outcomeErr := evaluateOSUpdateOutcomeSince(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, baseline, time.Now())
 	fmt.Println(msg)
 	reportDriverAddonsAfterUpdate(ctx, prior)
 	return outcomeErr
 }
 
+func retryOSUpdateOutcome(resp *agentpb.GetOSUpdateStatusResponse, rpcErr error, now time.Time, baseline osUpdateBaseline) bool {
+	if status.Code(rpcErr) == codes.Unimplemented {
+		return false
+	}
+	return rpcErr != nil || !usableOSUpdateOutcomeSince(resp, now, baseline)
+}
+
+func usableOSUpdateOutcomeSince(resp *agentpb.GetOSUpdateStatusResponse, now time.Time, baseline osUpdateBaseline) bool {
+	// Agents that clear the previous receipt can report a fresh result even
+	// when the device clock is behind the CLI or moved backwards during boot.
+	clearedResult := baseline.recordCleared && baseline.preVersion != "" &&
+		resp.GetOldOsVersion() == baseline.preVersion && resp.GetHasResult() &&
+		resp.GetOutcome() != agentpb.GetOSUpdateStatusResponse_OUTCOME_UNSPECIFIED
+	if (!usableOSUpdateOutcome(resp, now) && !clearedResult) ||
+		(baseline.resultAtUnix != 0 && (resp.GetCreatedAtUnix() == baseline.resultAtUnix ||
+			(!clearedResult && resp.GetCreatedAtUnix() < baseline.resultAtUnix))) {
+		return false
+	}
+	// A/B OTA installs the inactive slot. A still-booted old slot alongside a
+	// committed record is contradictory, even when both images share a version.
+	if resp.GetOutcome() == agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED &&
+		baseline.bootedSlot != "" && resp.GetEngineStatus().GetCurrentSlot() != "" &&
+		resp.GetEngineStatus().GetCurrentSlot() == baseline.bootedSlot {
+		return false
+	}
+	return true
+}
+
+// A successful A/B install writes the inactive slot, then boots and commits
+// it. Some fielded devices retain an old agent result record even after the
+// updater has committed the new slot. For a same-version image, a changed,
+// booted updater slot with no pending work is sufficient independent evidence
+// that this install succeeded. The U-Boot connector does not report rootfs
+// health, so also require its bootloader to have disarmed the trial and pinned
+// the running slot. The updater can clear pending state after MarkGood fails.
+// Require an unambiguous A/B snapshot;
+// a changed version alone follows the existing fallback below.
+func verifiedSameVersionSlotSwitch(resp *agentpb.GetOSUpdateStatusResponse, rpcErr error, preVersion, postVersion string, baseline osUpdateBaseline) bool {
+	if rpcErr != nil || preVersion == "" || preVersion != postVersion ||
+		(baseline.bootedSlot != "A" && baseline.bootedSlot != "B") {
+		return false
+	}
+	engine := resp.GetEngineStatus()
+	if engine == nil || engine.GetPending() != nil || engine.GetCurrentSlot() == "" ||
+		engine.GetCurrentSlot() == baseline.bootedSlot {
+		return false
+	}
+	if engine.GetConnector() == "ubootenv" && !verifiedUBootCommit(engine) {
+		return false
+	}
+	want := "A"
+	if baseline.bootedSlot == "A" {
+		want = "B"
+	}
+	if engine.GetCurrentSlot() != want {
+		return false
+	}
+	if len(engine.GetSlots()) != 2 {
+		return false
+	}
+	bootedCount := 0
+	targetHealthy := false
+	seen := make(map[string]bool, 2)
+	for _, slot := range engine.GetSlots() {
+		name := slot.GetSlot()
+		if (name != "A" && name != "B") || seen[name] {
+			return false
+		}
+		seen[name] = true
+		if slot.GetBooted() {
+			bootedCount++
+		}
+		if slot.GetSlot() == want && slot.GetBooted() &&
+			(slot.GetRootfsHealth() == "normal" ||
+				(engine.GetConnector() == "ubootenv" && slot.GetRootfsHealth() == "")) {
+			targetHealthy = true
+		}
+	}
+	return seen["A"] && seen["B"] && bootedCount == 1 && targetHealthy
+}
+
+// U-Boot has no per-slot rootfs health field. Its environment must confirm
+// both that the trial is disarmed and that the next boot selects this slot.
+// Missing or unknown diagnostics cannot establish a committed boot.
+func verifiedUBootCommit(engine *agentpb.OSUpdateEngineStatus) bool {
+	var bootSlot string
+	switch engine.GetCurrentSlot() {
+	case "A":
+		bootSlot = "0"
+	case "B":
+		bootSlot = "1"
+	default:
+		return false
+	}
+	diagnostics := engine.GetDiagnostics()
+	return diagnostics["wendyos_upgrade_available"] == "0" && diagnostics["wendyos_boot_slot"] == bootSlot
+}
+
+func evaluateOSUpdateOutcomeSince(resp *agentpb.GetOSUpdateStatusResponse, rpcErr error,
+	preVersion, postVersion string, baseline osUpdateBaseline, now time.Time) (string, error) {
+	// A fresh terminal result, including rollback and commit failure, always
+	// takes precedence over a slot snapshot.
+	if rpcErr == nil && usableOSUpdateOutcomeSince(resp, now, baseline) {
+		return evaluateOSUpdateOutcome(resp, nil, preVersion, postVersion, baseline.recordCleared, now)
+	}
+	if verifiedSameVersionSlotSwitch(resp, rpcErr, preVersion, postVersion, baseline) {
+		return fmt.Sprintf("Update verified by A/B slot switch: slot %s is booted with no pending update; device is running %s.",
+			resp.GetEngineStatus().GetCurrentSlot(), postVersion), nil
+	}
+	// The previous attempt's record cannot prove this update. Preserve the
+	// existing version-only fallback, which fails closed for same-version OSes.
+	return evaluateOSUpdateOutcome(nil, rpcErr, preVersion, postVersion, false, now)
+}
+
+func usableOSUpdateOutcome(resp *agentpb.GetOSUpdateStatusResponse, now time.Time) bool {
+	return resp.GetHasResult() &&
+		resp.GetOutcome() != agentpb.GetOSUpdateStatusResponse_OUTCOME_UNSPECIFIED &&
+		now.Sub(time.Unix(resp.GetCreatedAtUnix(), 0)) <= osUpdateResultMaxAge
+}
+
 // evaluateOSUpdateOutcome turns the device's update-status report (or the
-// failure to obtain one) into a user-facing message and, when the update did
-// not stick, an error. Pure function, unit-tested.
+// failure to obtain one) into a user-facing message and an error when the
+// update failed or a same-version result cannot be verified. Pure function,
+// unit-tested.
 func evaluateOSUpdateOutcome(
 	resp *agentpb.GetOSUpdateStatusResponse,
 	rpcErr error,
@@ -817,20 +983,45 @@ func evaluateOSUpdateOutcome(
 		// commits without verification. Fall back to comparing OS versions.
 		switch {
 		case postUpdateOSVersion == "":
-			return "The update outcome could not be verified; check the device with `wendy status`.", nil
+			return "The update outcome could not be verified; check the device with `wendy status`.",
+				errors.New("OS update outcome unverified; no usable result or running OS version is available")
 		case postUpdateOSVersion == preUpdateOSVersion:
-			return fmt.Sprintf("Warning: the device is still running %s — the update was likely rolled back. "+
-					"This device's agent cannot report healthcheck details; see `journalctl -u wendyos-agent` on the device.",
-					postUpdateOSVersion),
-				errors.New("OS version unchanged after update; the device likely rolled back")
+			return fmt.Sprintf("The device is running %s, but the update outcome could not be verified. "+
+				"Images can share an OS version; check `wendy os update-status` for the committed slot or rollback details.",
+				postUpdateOSVersion), errors.New("OS update outcome unverified; unchanged version cannot distinguish commit from rollback")
 		default:
+			healthDetail := "A fresh post-update health result was not available; check `wendy os update-status` for the committed slot and health details."
+			if status.Code(rpcErr) == codes.Unimplemented {
+				healthDetail = "Post-update health verification is not supported by this device's agent."
+			}
 			return fmt.Sprintf("Update applied; device is now running %s. "+
-				"(Post-update health verification is not supported by this device's agent.)", postUpdateOSVersion), nil
+				"(%s)", postUpdateOSVersion, healthDetail), nil
 		}
 	}
 
 	switch resp.GetOutcome() {
 	case agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED:
+		// When the agent also reports a live updater snapshot, require its
+		// current slot to be booted and free of pending work before claiming
+		// success. Older agents without this snapshot still use the committed
+		// health record as the authoritative result.
+		if engine := resp.GetEngineStatus(); engine != nil {
+			if engine.GetPending() != nil {
+				return "Warning: the health gate recorded a commit but the updater still reports a pending update.",
+					errors.New("OS update status still has a pending update")
+			}
+			if engine.GetConnector() == "ubootenv" && !verifiedUBootCommit(engine) {
+				return "The health gate recorded a commit, but U-Boot confirmation of the running slot could not be verified; check `wendy os update-status`.",
+					errors.New("OS update outcome unverified; U-Boot slot confirmation is missing or contradictory")
+			}
+			for _, slot := range engine.GetSlots() {
+				if slot.GetSlot() == engine.GetCurrentSlot() && engine.GetCurrentSlot() != "" &&
+					(!slot.GetBooted() || (slot.GetRootfsHealth() != "" && slot.GetRootfsHealth() != "normal")) {
+					return "Warning: the committed update's current slot is not healthy and booted.",
+						errors.New("OS update committed but current slot is not healthy")
+				}
+			}
+		}
 		// Both versions come from wendyOSVersion() on the device, so they are
 		// directly comparable. A mismatch means the record describes a commit
 		// to an OS the device is not running — most likely a record from an
@@ -1289,23 +1480,43 @@ func ipForURL(ip string) string {
 func drainOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 	var lastPhase string
 	lastDecile := int32(-1)
+	return receiveOSUpdate(stream, func(phase string, percent int32) {
+		// Print on every phase change, and at each 10% step within a phase,
+		// so non-interactive logs show steady progress without flooding.
+		decile := percent / 10
+		if phase != lastPhase || (percent > 0 && decile != lastDecile) {
+			fmt.Fprintln(os.Stderr, progressLabel(phase, percent))
+			lastPhase = phase
+			lastDecile = decile
+		}
+	})
+}
+
+// errOSUpdateLostAfterInstall reports a stream that broke after the device said
+// the install was done: the update is staged and the device is rebooting.
+var errOSUpdateLostAfterInstall = errors.New("OS update stream lost after the install finished")
+
+// receiveOSUpdate reads an UpdateOS stream until Completed or Failed, passing
+// each progress frame to onProgress.
+func receiveOSUpdate(stream agentpb.WendyAgentService_UpdateOSClient, onProgress func(phase string, percent int32)) error {
+	installed := false
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
-			return nil
+			return fmt.Errorf("OS update stream ended without completion: %w", io.ErrUnexpectedEOF)
 		}
 		if err != nil {
+			// Agents that reboot straight after the last frames can lose them.
+			if installed && status.Code(err) == codes.Unavailable {
+				return fmt.Errorf("%w: %w", errOSUpdateLostAfterInstall, err)
+			}
 			return err
 		}
 		if progress := resp.GetProgress(); progress != nil {
-			phase, percent := progress.GetPhase(), progress.GetPercent()
-			// Print on every phase change, and at each 10% step within a phase,
-			// so non-interactive logs show steady progress without flooding.
-			decile := percent / 10
-			if phase != lastPhase || (percent > 0 && decile != lastDecile) {
-				fmt.Fprintln(os.Stderr, progressLabel(phase, percent))
-				lastPhase = phase
-				lastDecile = decile
+			onProgress(progress.GetPhase(), progress.GetPercent())
+			// wendyos-update reports done only after a successful install.
+			if phase := progress.GetPhase(); phase == "done" || phase == "finalizing" {
+				installed = true
 			}
 		}
 		if resp.GetCompleted() != nil {
@@ -1437,18 +1648,13 @@ func serveLocalArtifact(localPath, localIP string) (string, func(), error) {
 
 // downloadArtifactToTemp downloads a remote artifact URL to a temporary file,
 // showing a progress bar only on an interactive terminal outside JSON mode.
-// The caller is responsible for removing the file.
+// The caller is responsible for removing the file. Like OS images, the
+// multi-gigabyte artifact has no whole-transfer deadline and resumes after a
+// dropped or stalled connection (see downloadToFile).
 func downloadArtifactToTemp(artifactURL string) (string, error) {
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(artifactURL) //nolint:noctx
-	if err != nil {
-		return "", fmt.Errorf("downloading: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	img := &imageInfo{DownloadURL: artifactURL}
 
 	cacheDir, err := osCacheDir()
 	if err != nil {
@@ -1466,7 +1672,7 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 	// transfer errors are returned directly and no background writer outlives
 	// cleanup of a failed download.
 	if jsonOutput || !isInteractiveTerminal() {
-		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		if err := downloadToFile(ctx, img, tmpFile, func(int64, int64) {}); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
 			return "", fmt.Errorf("downloading: %w", err)
@@ -1478,38 +1684,12 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 		return tmpFile.Name(), nil
 	}
 
-	total := resp.ContentLength
 	prog := tui.NewProgress("Downloading artifact...")
 	p := tui.NewProgressProgram(prog)
+	sendProgress := throttledProgress(p, 33*time.Millisecond)
 
 	go func() {
-		var downloaded int64
-		buf := make([]byte, 64*1024)
-		for {
-			n, readErr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: writeErr})
-					return
-				}
-				downloaded += int64(n)
-				if total > 0 {
-					p.Send(tui.ProgressUpdateMsg{
-						Percent: float64(downloaded) / float64(total),
-						Written: downloaded,
-						Total:   total,
-					})
-				}
-			}
-			if readErr == io.EOF {
-				p.Send(tui.ProgressDoneMsg{})
-				return
-			}
-			if readErr != nil {
-				p.Send(tui.ProgressDoneMsg{Err: readErr})
-				return
-			}
-		}
+		p.Send(tui.ProgressDoneMsg{Err: downloadToFile(ctx, img, tmpFile, sendProgress)})
 	}()
 
 	finalModel, err := p.Run()

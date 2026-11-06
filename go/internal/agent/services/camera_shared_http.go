@@ -239,22 +239,42 @@ func (s *VideoService) streamSharedCamera(ctx context.Context, broadcast func([]
 }
 
 func (s *VideoService) streamSharedJPEG(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, sink rawSink, client *http.Client, endpoint sharedCameraEndpoint, first sharedCameraJPEG) error {
-	gst, err := resolveGSTBinary("gst-launch-1.0")
+	gst, enc, err := resolveJPEGFeedEncoder()
 	if err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
-	}
-	inspect, err := resolveGSTBinary("gst-inspect-1.0")
-	if err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
-	}
-	enc, err := findGStreamerEncoder(inspect)
-	if err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return err
 	}
 	plan, err := planSharedJPEGPipeline(gst, path, req, enc, first)
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
+	pump := func(ctx context.Context, w io.Writer) error {
+		return pumpSharedJPEG(ctx, w, client, endpoint, first)
+	}
+	return s.runJPEGFeed(ctx, broadcast, path, sink, enc, plan, pump, "camera owner's shared feed stopped")
+}
+
+// resolveJPEGFeedEncoder finds the GStreamer binary and H.264 encoder a JPEG
+// feed pipeline (planJPEGFeedPipeline) needs.
+func resolveJPEGFeedEncoder() (string, gstEncoderResult, error) {
+	gst, err := resolveGSTBinary("gst-launch-1.0")
+	if err != nil {
+		return "", gstEncoderResult{}, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	inspect, err := resolveGSTBinary("gst-inspect-1.0")
+	if err != nil {
+		return "", gstEncoderResult{}, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	enc, err := findGStreamerEncoder(inspect)
+	if err != nil {
+		return "", gstEncoderResult{}, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return gst, enc, nil
+}
+
+// runJPEGFeed encodes the whole JPEG frames pump writes to plan's stdin onto
+// the hub. A pump that fails while the hub still wants frames is reported as
+// Unavailable, prefixed with stopped.
+func (s *VideoService) runJPEGFeed(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, sink rawSink, enc gstEncoderResult, plan gstPipelinePlan, pump func(context.Context, io.Writer) error, stopped string) error {
 	feedCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r, w := io.Pipe()
@@ -262,7 +282,7 @@ func (s *VideoService) streamSharedJPEG(ctx context.Context, broadcast func([]by
 	var feedErr error
 	go func() {
 		defer close(done)
-		feedErr = pumpSharedJPEG(feedCtx, w, client, endpoint, first)
+		feedErr = pump(feedCtx, w)
 		_ = w.CloseWithError(feedErr)
 	}()
 	defer func() {
@@ -270,12 +290,12 @@ func (s *VideoService) streamSharedJPEG(ctx context.Context, broadcast func([]by
 		_ = r.Close()
 		<-done
 	}()
-	err = s.runCameraPipeline(ctx, broadcast, path, enc, plan, nil, sink, r)
+	err := s.runCameraPipeline(ctx, broadcast, path, enc, plan, nil, sink, r)
 	cancel()
 	_ = r.Close()
 	<-done
 	if ctx.Err() == nil && feedErr != nil && !errors.Is(feedErr, context.Canceled) && !errors.Is(feedErr, io.ErrClosedPipe) {
-		return status.Errorf(codes.Unavailable, "camera owner's shared feed stopped: %v", feedErr)
+		return status.Errorf(codes.Unavailable, "%s: %v", stopped, feedErr)
 	}
 	return err
 }
@@ -317,11 +337,20 @@ func pumpSharedJPEG(ctx context.Context, out io.Writer, client *http.Client, end
 }
 
 func planSharedJPEGPipeline(gst, path string, req *agentpb.StreamVideoRequest, enc gstEncoderResult, first sharedCameraJPEG) (gstPipelinePlan, error) {
+	return planJPEGFeedPipeline(gst, path, req, enc, first.width, first.height,
+		"app-owned JPEG capture", "camera owner publishes JPEG; original raw frames are not available")
+}
+
+// planJPEGFeedPipeline encodes whole width x height JPEG frames written to the
+// pipeline's stdin, without opening any capture device. The frames arrive at
+// their source's own pace, so a requested frame rate is refused rather than
+// promised; feed names the source in that refusal.
+func planJPEGFeedPipeline(gst, path string, req *agentpb.StreamVideoRequest, enc gstEncoderResult, width, height int, feed, rawWhy string) (gstPipelinePlan, error) {
 	if err := validateStreamParams(path, req); err != nil {
 		return gstPipelinePlan{}, err
 	}
 	if req.GetFramerate() != 0 {
-		return gstPipelinePlan{}, errors.New("app-owned JPEG capture uses the source's frame timing; omit the requested frame rate")
+		return gstPipelinePlan{}, fmt.Errorf("%s uses the source's frame timing; omit the requested frame rate", feed)
 	}
 	if !isValidGSTElementName(enc.element) {
 		return gstPipelinePlan{}, errors.New("invalid shared camera encoder")
@@ -329,7 +358,7 @@ func planSharedJPEGPipeline(gst, path string, req *agentpb.StreamVideoRequest, e
 	// jpegparse takes the frame rate from its sink caps. Constraining only
 	// its output conflicts with its default 0/1 rate and fails negotiation.
 	stages := []string{"fdsrc fd=0 do-timestamp=true",
-		fmt.Sprintf("image/jpeg,width=%d,height=%d,framerate=10/1", first.width, first.height),
+		fmt.Sprintf("image/jpeg,width=%d,height=%d,framerate=10/1", width, height),
 		"jpegparse", "jpegdec", leakyRawQueue}
 	if req.GetWidth() != 0 && req.GetHeight() != 0 {
 		stages = append(stages, "videoscale", fmt.Sprintf("video/x-raw,width=%d,height=%d", req.GetWidth(), req.GetHeight()))
@@ -337,6 +366,6 @@ func planSharedJPEGPipeline(gst, path string, req *agentpb.StreamVideoRequest, e
 	stages = append(stages, encoderSegment(enc.element, enc.hasH264Parse, keyframeIntervalFrames(10)), "fdsink fd=1")
 	return gstPipelinePlan{
 		args:   append([]string{gst, "-q"}, strings.Fields(strings.Join(stages, " ! "))...),
-		rawWhy: "camera owner publishes JPEG; original raw frames are not available",
+		rawWhy: rawWhy,
 	}, nil
 }

@@ -50,8 +50,11 @@ that the default is set but unreachable instead of opening a picker.
 
 ## 4. Show Picker
 
-mDNS and BLE discover nearby [WendyOS](../../wendyos/),
-Wendy-Agent and [Wendy Lite](../../wendy-lite/) devices.
+The picker finds nearby [WendyOS](/docs/#2-set-up-a-device), Wendy Agent and
+[Wendy Lite](/docs/advanced/wendy-lite/) devices using local-network and Bluetooth discovery.
+Finding a device here is separate from enabling
+[Wendy Net Bluetooth connections](/docs/hardware/bluetooth#wendy-net-over-bluetooth)
+between devices.
 A device picker is shown only when the terminal is interactive, so a user can
 select their target device for the current command invocation.
 
@@ -68,7 +71,7 @@ as a LAN device when local discovery is allowed by the network and macOS Local
 Network permissions.
 
 The picker table shows the same columns as
-[`wendy discover`](./commands/discover.md#interactive-table). The leading
+[`wendy discover`](./commands/discover.md#interactive-tui). The leading
 marker column displays provisioned state (`●`/`○`) for LAN devices alongside
 the `✦` default marker. If the CLI cannot verify the highlighted device's agent,
 a footer hint explains what went wrong and what to try next.
@@ -101,14 +104,38 @@ diagnose guest startup problems.
 
 ## Automatic connection recovery
 
-After a possible clock-related TLS failure, the CLI attempts to broadcast a
-signed time proof on the LAN and retries the connection. It reports whether
-sending failed and whether the retry connected; sending a proof does not confirm
-that the device received it or changed its clock.
+After a possible clock-related TLS failure, the CLI broadcasts a signed time
+proof on the LAN and retries the connection, sending the proof again before
+each of three retries over about 10 seconds. This applies to a saved default
+device, a device named with `--device`, and a device chosen in the picker.
+Nothing acknowledges the proof, so the CLI counts it as accepted only when the
+device accepts the connection. If the device still rejects it, the CLI says so
+and names the next step: give the device internet access so it sets its own
+clock, or, when no time server answered and the CLI sent a saved proof, give
+this computer internet access.
+
+A device's certificate names the organization it belongs to. If your login for
+that organization has expired, the CLI says so and does not send a time proof:
+the device clock is not the problem. A login from `wendy auth login` renews
+itself and the CLI retries the connection once. If it cannot renew, run
+`wendy auth login` and sign in to that organization, then retry.
 
 The CLI offers to refresh certificates when it has evidence that the client
 credentials need renewal. A timeout or generic TLS rejection alone does not
 trigger that offer.
+
+`wendy mcp serve` keeps its device connection for as long as it runs and
+checks it every 30 seconds. When the connection's certificate has expired and
+the connection has dropped, for example after a device reboot, the server
+connects to the same device again with the stored login. Before it reconnects
+a LAN or USB device, it renews an expired login from `wendy auth login`, once
+per connection. A Cloud device's connection renews its own login. While the
+device does not answer, the server keeps the connection and tries again at
+each check. If the device refuses the login, or no current login can be
+offered (a service-account login, or a renewal that failed), the server closes
+the connection and its tools report that no device is connected: run
+`wendy auth login`, then connect again. The server never reconnects a
+simulator this way, because connecting to a simulator starts it.
 
 ## Local Targets
 

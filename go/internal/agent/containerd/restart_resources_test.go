@@ -3,12 +3,15 @@ package containerd
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
@@ -85,6 +88,28 @@ func TestEnsureDBusProxyForStartIgnoresContainersWithoutBluetoothMount(t *testin
 	}
 }
 
+func TestEnsureDBusProxyForStartYieldsAvahiMount(t *testing.T) {
+	// B2 device proof 2026-09-29: an avahi-sourced /var/run/dbus mount
+	// reached the Bluetooth mismatch error and wedged container start.
+	// The Bluetooth handler must yield (false, nil); ensureAvahiForStart
+	// owns these mounts.
+	proxy := &recordingProxyManager{}
+	client := &Client{logger: zap.NewNop(), proxyManager: proxy}
+	mounts := []specs.Mount{{
+		Destination: "/var/run/dbus",
+		Source:      avahibridge.ProxySocketDir("com.example.go-time-web"),
+		Type:        "bind",
+	}}
+
+	started, err := client.ensureDBusProxyForStart(context.Background(), "com.example.go-time-web", mounts)
+	if err != nil {
+		t.Fatalf("ensureDBusProxyForStart() error = %v, want nil (avahi mount)", err)
+	}
+	if started || len(proxy.started) != 0 {
+		t.Fatalf("avahi mount unexpectedly touched Bluetooth proxy: started=%v calls=%v", started, proxy.started)
+	}
+}
+
 func TestRestoreDBusProxyForRunningTaskAfterAgentRestart(t *testing.T) {
 	proxy := &recordingProxyManager{}
 	client := &Client{logger: zap.NewNop(), proxyManager: proxy}
@@ -105,6 +130,32 @@ func TestRestoreDBusProxyForRunningTaskAfterAgentRestart(t *testing.T) {
 	started, err = client.restoreDBusProxyForRunningTask(context.Background(), "stopped", false, mounts)
 	if err != nil || started || len(proxy.started) != 1 {
 		t.Fatalf("stopped task unexpectedly restored proxy: started=%v calls=%v err=%v", started, proxy.started, err)
+	}
+}
+
+func TestEnsureDBusProxyForStartYieldsLegacyAvahiMount(t *testing.T) {
+	name := "sh.wendy.cloudv2.validation"
+	proxy := &recordingProxyManager{}
+	client := &Client{logger: zap.NewNop(), proxyManager: proxy}
+	mounts := []specs.Mount{{Destination: "/var/run/dbus", Source: filepath.Join("/run/wendy/avahi", name, "proxy"), Type: "bind"}}
+	started, err := client.ensureDBusProxyForStart(context.Background(), name, mounts)
+	if err != nil || started || len(proxy.started) != 0 {
+		t.Fatalf("legacy private Avahi mount routed to Bluetooth: started=%v err=%v calls=%v", started, err, proxy.started)
+	}
+}
+
+func TestEnsureAvahiForStartRequiresManagerForPersistedMounts(t *testing.T) {
+	name := "sh.wendy.cloudv2.validation"
+	for _, source := range []string{
+		avahibridge.ProxySocketDir(name),
+		filepath.Join("/run/wendy/avahi", name, "proxy"),
+	} {
+		client := &Client{logger: zap.NewNop()}
+		mounts := []specs.Mount{{Destination: "/var/run/dbus", Source: source, Type: "bind"}}
+		prepared, err := client.ensureAvahiForStart(context.Background(), name, mounts)
+		if err == nil || prepared {
+			t.Fatalf("persisted Avahi mount %q bypassed preparation: prepared=%v err=%v", source, prepared, err)
+		}
 	}
 }
 
@@ -234,5 +285,25 @@ func TestRefreshSerialMountsWithoutIdentityKeepsCompatibleExistingPath(t *testin
 	}
 	if changed {
 		t.Fatal("refreshSerialMountsForStart() changed = true, want unchanged fallback path")
+	}
+}
+
+func TestAvahiRequiresActualPrivateNamespace(t *testing.T) {
+	host := filepath.Join(t.TempDir(), "host")
+	private := filepath.Join(t.TempDir(), "private")
+	if err := os.WriteFile(host, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(private, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAvahiNamespace(host, host); err == nil {
+		t.Fatal("host namespace accepted")
+	}
+	if err := validateAvahiNamespace(private, host); err != nil {
+		t.Fatalf("private bridge namespace rejected: %v", err)
+	}
+	if err := validateAvahiNamespace(private+"-missing", host); err == nil {
+		t.Fatal("missing task namespace accepted")
 	}
 }

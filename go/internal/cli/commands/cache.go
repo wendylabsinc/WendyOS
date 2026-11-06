@@ -262,7 +262,7 @@ func newCacheListCmd() *cobra.Command {
 				}
 
 				for _, item := range selected {
-					if err := os.RemoveAll(item.Value); err != nil {
+					if err := removeCacheTree(item.Value); err != nil {
 						fmt.Fprintf(os.Stderr, "error: removing %s: %v\n", item.Label, err)
 					} else {
 						fmt.Printf("Deleted %s\n", item.Label)
@@ -359,7 +359,7 @@ func newCacheClearCmd() *cobra.Command {
 				return err
 			}
 
-			if err := os.RemoveAll(cacheDir); err != nil {
+			if err := removeCacheTree(cacheDir); err != nil {
 				return fmt.Errorf("clearing cache: %w", err)
 			}
 
@@ -367,4 +367,47 @@ func newCacheClearCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// removeCacheTree also handles extracted archives containing read-only
+// directories. Removing their children requires owner write/search permission,
+// even when the cache's parent directory is writable. Walk relative to an open
+// root and never follow symlinks while changing permissions: cached links must
+// not make a cleanup chmod files outside the selected cache tree.
+func removeCacheTree(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return os.Remove(path)
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return err
+	}
+	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		return root.Chmod(name, info.Mode().Perm()|0o700)
+	})
+	closeErr := root.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.RemoveAll(path)
 }

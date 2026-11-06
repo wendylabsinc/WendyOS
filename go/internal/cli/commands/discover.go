@@ -39,7 +39,7 @@ func newDiscoverCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "discover",
-		Short: "Discover local and cloud WendyOS devices",
+		Short: "Discover nearby, mesh, and Cloud Wendy devices",
 		Long:  "Continuously discover WendyOS devices in Nearby, Simulator, and Cloud tabs until Ctrl+C. Use --timeout to scan local devices once for a fixed duration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var opts discovery.DiscoveryOptions
@@ -51,18 +51,22 @@ func newDiscoverCmd() *cobra.Command {
 				opts.Types = []models.InterfaceType{models.InterfaceLAN}
 			case "bluetooth":
 				opts.Types = []models.InterfaceType{models.InterfaceBluetooth}
+			case "mesh":
+				opts.Types = []models.InterfaceType{models.InterfaceMesh}
 			case "external":
 				opts.Types = []models.InterfaceType{models.InterfaceExternal}
 			case "all", "":
 				// discover all types
 			default:
-				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, all)", discoverType)
+				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, mesh, all)", discoverType)
 			}
 
-			// Pre-flight: on Linux, if a USB-C Wendy device is tethered but its
+			// Pre-flight: on Linux, if a Wendy USB device is tethered but its
 			// host link isn't configured, offer to set it up so it shows up in
 			// the scan below. No-op on other platforms / non-interactive runs.
-			_ = maybeOfferUSBSetup(cmd.Context())
+			if discoverType != "mesh" {
+				_ = maybeOfferUSBSetup(cmd.Context())
+			}
 
 			timeoutSet := cmd.Flags().Changed("timeout")
 
@@ -91,7 +95,7 @@ func newDiscoverCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, all")
+	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, mesh, all")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "Scan once for this duration then exit")
 
 	return cmd
@@ -281,11 +285,11 @@ func noDevicesHint() string {
 		return "Hints:\n" +
 			"  • Is avahi-daemon running?   systemctl status avahi-daemon\n" +
 			"  • Firewall blocking mDNS?    sudo ufw allow 5353/udp   (if ufw is active)\n" +
-			"  • USB-C tethered device?     re-run 'wendy discover' and accept the USB setup prompt\n" +
+			"  • USB-tethered device?       re-run 'wendy discover' and accept the USB setup prompt\n" +
 			"  • Or connect directly by IP: wendy device connect <ip>:50051"
 	}
 	return "Hints:\n" +
-		"  • Device powered on and on the same network (or USB-C tethered).\n" +
+		"  • Device powered on and on the same network (or USB-tethered).\n" +
 		"  • mDNS uses UDP 5353 — make sure a firewall isn't blocking it.\n" +
 		"  • Or connect directly by IP: wendy device connect <ip>:50051"
 }
@@ -299,10 +303,13 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 	}
 	cloudAuth := devicePickerInitialAuth(cfg)
 	var createReq *errCreateSimulator
+	var startReq *errStartSimulator
 	// Resume the tab that opened the login, organization, or simulator prompt.
 	openOn := devicePickerLocalTab
+	var flash simulatorFlash
 	for {
-		err := discoverContinuousWithCloudAuth(ctx, opts, includeLocal, cloudAuth, defaultOrgForCloudAuth(cfg, cloudAuth), openOn)
+		err := discoverContinuousWithCloudAuth(ctx, opts, includeLocal, cloudAuth, defaultOrgForCloudAuth(cfg, cloudAuth), openOn, flash)
+		flash = simulatorFlash{}
 		switch {
 		case errors.Is(err, errDevicePickerLogin):
 			openOn = devicePickerCloudTab
@@ -328,6 +335,18 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 				return createErr
 			}
 			openOn = devicePickerSimulatorTab
+		case errors.As(err, &startReq):
+			// Same hand-off as create: the boot, the agent wait and the first
+			// robot build draw their own progress with the TUI gone, then the
+			// view comes back on the tab with the outcome on its status line.
+			name := startReq.name
+			startReq = nil
+			openOn = devicePickerSimulatorTab
+			flash = simulatorStartOutcome(name, startSimulatorFn(ctx, name))
+			if ctx.Err() != nil {
+				// Ctrl+C outside any TUI cancels the command, not just the start.
+				return ErrUserCancelled
+			}
 		case errors.Is(err, errDevicePickerSwitchOrg):
 			openOn = devicePickerCloudTab
 			cfg, err = config.Load()
@@ -362,13 +381,13 @@ func defaultOrgForCloudAuth(cfg *config.Config, auth *config.AuthConfig) int32 {
 	return 0
 }
 
-func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.DiscoveryOptions, includeLocal bool, cloudAuth *config.AuthConfig, defaultOrg int32, openOn devicePickerTab) error {
+func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.DiscoveryOptions, includeLocal bool, cloudAuth *config.AuthConfig, defaultOrg int32, openOn devicePickerTab, flash simulatorFlash) error {
 	opts.Timeout = 3 * time.Second // per-scan timeout
 	discoverCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	local := newDiscoverModel(discoverCtx, opts, includeLocal)
-	m := newDiscoverTabsModel(discoverCtx, local, cloudAuth, defaultOrg, openOn)
+	m := newDiscoverTabsModel(discoverCtx, local, cloudAuth, defaultOrg, openOn).withSimulatorFlash(flash)
 	// Alt screen: the table grows to fill the window, and the alternate
 	// buffer restores the user's terminal content when the TUI exits.
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -387,6 +406,8 @@ func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.Discove
 		return errDevicePickerSwitchOrg
 	case devicePickerCreateVM:
 		return &errCreateSimulator{name: dm.createVMName}
+	case devicePickerStartVM:
+		return &errStartSimulator{name: dm.startVMName}
 	}
 	return nil
 }
@@ -483,6 +504,7 @@ func waitExternalSnapshot(p providers.DeviceProvider, ch <-chan []models.Externa
 
 // discoverDeviceInfo is the JSON structure copied to the clipboard.
 type discoverDeviceInfo struct {
+	Mesh         *models.MeshDevice   `json:"mesh,omitempty"`
 	ProbeFailure *models.ProbeFailure `json:"probeFailure,omitempty"`
 	ID           int32                `json:"id,omitempty"`
 	Name         string               `json:"name"`
@@ -676,6 +698,9 @@ func (m discoverModel) scanExternalProvider(p providers.DeviceProvider) tea.Cmd 
 
 func (m discoverModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if includeMeshDiscovery(m.opts) {
+		cmds = append(cmds, m.startMeshStream())
+	}
 	if m.shouldDiscover(models.InterfaceUSB) {
 		cmds = append(cmds, m.scanUSB())
 	}
@@ -765,24 +790,33 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items := m.tableItems
 			cursor := m.table.Cursor()
 			if len(items) > 0 && cursor >= 0 && cursor < len(items) {
-				deviceID := items[cursor].defaultDevice
-				_ = saveDefaultDevice(deviceID)
-				m.flashMessage = "Default device set to: " + deviceID
+				// A toggle, as on the Simulator and Cloud tabs: 'd' on the
+				// row the ✦ is already on clears it.
+				if discoverItemIsDefault(items[cursor], discoverDefaultKey()) {
+					_ = saveDefaultDevice("")
+					m.flashMessage = "Default device cleared."
+				} else {
+					deviceID := items[cursor].defaultDevice
+					_ = saveDefaultDevice(deviceID)
+					m.flashMessage = "Default device set to: " + deviceID
+				}
 				m.flashIsError = false
 				m.refreshTable()
 				return m, clearFlashAfter(3 * time.Second)
 			}
 			return m, nil
-		case "x":
-			_ = saveDefaultDevice("")
-			m.flashMessage = "Default device cleared."
-			m.flashIsError = false
-			m.refreshTable()
-			return m, clearFlashAfter(3 * time.Second)
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
 		return m, cmd
+	case meshSnapshotMsg:
+		m.hasResults = true
+		m.collection.MeshDevices, m.collection.MeshDiscovery = meshCollection(msg.snapshot)
+		m.refreshTable()
+		if msg.ch != nil {
+			return m, waitMeshSnapshot(msg.ch)
+		}
+		return m, nil
 	case usbScanMsg:
 		m.collection.USBDevices = msg.devices
 		m.hasResults = true
@@ -949,9 +983,16 @@ func (m discoverModel) View() string {
 		if m.canScrollTable() {
 			scrollHint = ", ←/→ scroll"
 		}
-		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, d set default, x unset default, q quit")) + "\n")
+		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, d toggle default, q quit")) + "\n")
 	}
 
+	if state := m.collection.MeshDiscovery; state != nil && state.State != "not-connected" {
+		suffix := ""
+		if state.Truncated {
+			suffix = " (incomplete snapshot)"
+		}
+		sb.WriteString(m.viewLine(dimStyle.Render("  Wendy Net: "+state.State+suffix)) + "\n")
+	}
 	if warning := m.bleWarningLine(); warning != "" {
 		sb.WriteString(m.viewLine(dimStyle.Render("  Bluetooth: "+warning)) + "\n")
 	}
@@ -1520,6 +1561,9 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		}
 		address := d.Address()
 		defaultDevice := d.DisplayName
+		if d.Mesh != nil {
+			defaultDevice = d.Mesh.Selector
+		}
 		lanName := ""
 		lanKey := ""
 		if d.LAN != nil {
@@ -1527,6 +1571,14 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			lanKey = discoverycache.Key(d.LAN.ID, d.LAN.DisplayName)
 			address = preferredLANAddress(*d.LAN)
 			defaultDevice = firstNonEmpty(d.LAN.Hostname, d.LAN.IPAddress, d.LAN.DisplayName)
+		}
+		hint := lanProbeHint(d.LAN)
+		key := d.DisplayName
+		if d.Mesh != nil {
+			key = d.Mesh.Principal
+			if d.LAN == nil {
+				hint = meshPathHint(d.Mesh)
+			}
 		}
 		provisioned := lanProvisionedDisplay(d.LAN)
 		var failure *models.ProbeFailure
@@ -1545,16 +1597,17 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address:       address,
 				AgentVersion:  discovery.SanitiseDisplayName(d.AgentVersion),
 				AgentOutdated: agentBehindCLI(version.Version, d.AgentVersion),
-				OS:            d.OS,
+				OS:            d.DisplayOS(),
 				OSVersion:     d.OSVersion,
 				Provisioned:   provisioned,
-				Hint:          lanProbeHint(d.LAN),
+				Hint:          hint,
 				Probe:         probe,
-				DedupKey:      d.DisplayName,
+				DedupKey:      key,
 				SortKey:       deviceSortKey(d.DisplayName, usb),
 			},
 			info: discoverDeviceInfo{
 				Name:         d.DisplayName,
+				Mesh:         d.Mesh,
 				Type:         deviceType,
 				USB:          usb,
 				Address:      address,
@@ -1633,13 +1686,23 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 func discoverPickerItems(items []discoverTableItem) []tui.PickerItem {
 	pickerItems := make([]tui.PickerItem, 0, len(items))
 	for _, item := range items {
-		pickerItem := item.picker
-		if item.defaultDevice != "" {
-			pickerItem.DefaultKeys = append(pickerItem.DefaultKeys, item.defaultDevice)
-		}
-		pickerItems = append(pickerItems, pickerItem)
+		pickerItems = append(pickerItems, discoverPickerItem(item))
 	}
 	return pickerItems
+}
+
+func discoverPickerItem(item discoverTableItem) tui.PickerItem {
+	pickerItem := item.picker
+	if item.defaultDevice != "" {
+		pickerItem.DefaultKeys = append(pickerItem.DefaultKeys, item.defaultDevice)
+	}
+	return pickerItem
+}
+
+// discoverItemIsDefault reports whether item is the row the ✦ marks, matching
+// it the same way the table does.
+func discoverItemIsDefault(item discoverTableItem, defaultKey string) bool {
+	return tui.PickerItemIsDefault(discoverPickerItem(item), defaultKey)
 }
 
 func discoverSortKey(item tui.PickerItem) string {
@@ -1846,3 +1909,9 @@ func copyToClipboard(text string) error {
 type errCreateSimulator struct{ name string }
 
 func (e *errCreateSimulator) Error() string { return "create simulator " + e.name }
+
+// errStartSimulator asks the discover loop to start a VM and come back, for the
+// same reason as errCreateSimulator: the boot owns the terminal while it runs.
+type errStartSimulator struct{ name string }
+
+func (e *errStartSimulator) Error() string { return "start simulator " + e.name }

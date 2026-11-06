@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("wendyDesktop", {
   status: () => ipcRenderer.invoke("wendy:status"),
   containers: (runtime) => ipcRenderer.invoke("wendy:containers", runtime),
   deviceSnapshot: (args) => ipcRenderer.invoke("wendy:device:snapshot", args),
+  meshDiscover: () => ipcRenderer.invoke("wendy:mesh:discover"),
+  meshTopology: (args) => ipcRenderer.invoke("wendy:mesh:topology", args),
   deviceLogsStart: (args) => ipcRenderer.invoke("wendy:device:logs:start", args),
   deviceLogsSnapshot: (id) => ipcRenderer.invoke("wendy:device:logs:snapshot", id),
   deviceLogsStop: (id) => ipcRenderer.invoke("wendy:device:logs:stop", id),

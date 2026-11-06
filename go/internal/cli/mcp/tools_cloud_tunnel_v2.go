@@ -86,8 +86,7 @@ func (d mcpCloudDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientC
 }
 
 // mcpAgentRPCPingSession measures a real request/response over the authorized
-// wendy-agent tunnel. v2 sessions have no broker DATAGRAM/ping form
-// (cloudrelay is TCP-only), so ping RTT is one GetAgentVersion round-trip over
+// wendy-agent tunnel. Ping RTT is one GetAgentVersion round-trip over
 // the tunnelled agent conn. Satisfies mcpPingSession. Mirrors
 // commands.agentRPCPingSession.
 type mcpAgentRPCPingSession struct {
@@ -124,18 +123,9 @@ func (s *mcpAgentRPCPingSession) recv() (*cloudpb.TunnelData, error) {
 	}
 }
 
-// mcpTunnelService maps a device port to the symbolic service the v2 relay
-// authorizes. Cloud's catalog is closed: unknown ports are refused, mirroring
-// the CLI's openTunnel.
+// mcpTunnelService shares the CLI's loopback port vocabulary.
 func mcpTunnelService(remotePort uint32) (string, error) {
-	switch remotePort {
-	case 50052:
-		return "wendy-agent", nil
-	case 22:
-		return "ssh", nil
-	default:
-		return "", fmt.Errorf("Cloud's authorized tunnel catalog has no service for port %d", remotePort)
-	}
+	return cloudrelay.PortService("tcp", remotePort)
 }
 
 // mcpTunnelPrincipalSigner builds the ML-DSA operator request signer the v2

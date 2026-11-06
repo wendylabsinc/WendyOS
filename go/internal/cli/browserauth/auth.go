@@ -71,6 +71,7 @@ type Profile struct {
 type Session struct {
 	Settings *Settings
 	Store    CredentialStore
+	Pending  PendingStore
 	// RequireHostedMCPPolicy is set by the hosted gateway, never from saved
 	// credentials. Its verified user tokens must permit both MCP channels.
 	RequireHostedMCPPolicy                bool
@@ -81,6 +82,10 @@ type Session struct {
 	privatePEM, state, verifier, redirect string
 	started                               time.Time
 	certificate                           config.CertificateInfo
+	liteCertificate                       config.CertificateInfo
+	topologyGate                          chan struct{}
+	topologyFlights                       map[string]*topologyFlight
+	topologyMu                            sync.Mutex
 	tokens                                token
 	profile                               Profile
 }
@@ -137,28 +142,51 @@ func (s *Session) discover(ctx context.Context, issuer string) (metadata, error)
 	}
 	return m, nil
 }
-func (s *Session) Begin(ctx context.Context, email, redirect string) (string, error) {
+func (s *Session) Begin(ctx context.Context, email, issuer, redirect string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.settings().Validate(); err != nil {
+	m, authorize, pending, err := s.prepareLogin(ctx, email, issuer, redirect)
+	if err != nil {
 		return "", err
 	}
-	u, e := url.Parse(redirect)
-	if e != nil || u.User != nil || u.Path != "/auth/callback" || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && !(u.Scheme == "http" && u.Host == "localhost:5173")) {
-		return "", errors.New("Invalid browser callback")
+	if err := s.generateKey(); err != nil {
+		return "", err
+	}
+	s.meta = m
+	s.state, s.verifier, s.redirect, s.started = pending.State, pending.Verifier, pending.Redirect, pending.Started
+	s.tokens = token{}
+	s.profile = Profile{}
+	s.certificate = config.CertificateInfo{}
+	s.liteCertificate = config.CertificateInfo{}
+	return authorize, nil
+}
+
+// prepareLogin creates only PKCE material. No operator key is needed until
+// token exchange: this client does not pre-bind authorization with dpop_jkt.
+func (s *Session) prepareLogin(ctx context.Context, email, issuer, redirect string) (metadata, string, redirectTransaction, error) {
+	if err := s.settings().Validate(); err != nil {
+		return metadata{}, "", redirectTransaction{}, err
+	}
+	var e error
+	if !validRedirect(redirect) {
+		return metadata{}, "", redirectTransaction{}, errors.New("Invalid browser callback")
 	}
 	// Like `wendy auth login`: with no pinned realm the browser starts at the
 	// realm-less universal page and the realm arrives as the callback issuer.
-	// The system realm is never a login target.
-	issuer := ""
-	if email != "" {
+	// The system realm is never a login target. A caller-pinned issuer is held
+	// to the same rules as one from the email lookup.
+	if issuer != "" && !s.orgIssuer(issuer) {
+		return metadata{}, "", redirectTransaction{}, errors.New("Sign-in did not identify a valid organization realm")
+	}
+	pinned := issuer != ""
+	if issuer == "" && email != "" {
 		body, _ := json.Marshal(map[string]string{"email": email})
 		b, r, e := s.request(ctx, "POST", s.settings().AuthBase+"/api/login/realm", string(body), map[string]string{"Content-Type": "application/json"})
 		if e != nil {
-			return "", e
+			return metadata{}, "", redirectTransaction{}, e
 		}
 		if r.StatusCode != 200 {
-			return "", fmt.Errorf("Email lookup returned %d", r.StatusCode)
+			return metadata{}, "", redirectTransaction{}, fmt.Errorf("Email lookup returned %d", r.StatusCode)
 		}
 		var out struct {
 			LoginURL string `json:"loginURL"`
@@ -166,51 +194,50 @@ func (s *Session) Begin(ctx context.Context, email, redirect string) (string, er
 			State    string `json:"state"`
 		}
 		if e = json.Unmarshal(b, &out); e != nil {
-			return "", e
+			return metadata{}, "", redirectTransaction{}, e
 		}
 		if out.Realm != "" {
 			out.LoginURL = "/realms/" + out.Realm
 		}
 		if out.State != "unknown" && out.LoginURL != "" {
 			if issuer, e = s.issuerFromRealmLoginURL(out.LoginURL); e != nil {
-				return "", e
+				return metadata{}, "", redirectTransaction{}, e
 			}
 		}
-		if issuer == s.settings().AuthBase+"/realms/system" {
+		if issuer != "" && !s.orgIssuer(issuer) {
 			issuer = ""
 		}
 	}
 	m := metadata{Authorize: s.settings().AuthBase + "/authorize"}
 	if issuer != "" {
 		if m, e = s.discover(ctx, issuer); e != nil {
-			return "", e
+			return metadata{}, "", redirectTransaction{}, e
 		}
 	}
-	private, e := certs.GenerateMLDSAKeyPair()
-	if e != nil {
-		return "", e
-	}
-	key, e := certs.ParseSigningPrivateKeyPEM([]byte(private))
-	if e != nil {
-		return "", e
-	}
-	s.meta = m
-	s.key = key
-	s.privatePEM = private
-	s.state = random()
-	s.verifier = random()
-	s.redirect = redirect
-	s.started = time.Now()
-	s.tokens = token{}
-	s.profile = Profile{}
-	s.certificate = config.CertificateInfo{}
-	challenge := sha256.Sum256([]byte(s.verifier))
-	q := url.Values{"response_type": {"code"}, "client_id": {s.settings().ClientID}, "redirect_uri": {redirect}, "scope": {"openid email profile groups"}, "resource": {s.settings().IdentityResource}, "state": {s.state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
-	if issuer == "" && email != "" {
+	pending := redirectTransaction{Version: 1, State: random(), Verifier: random(), Redirect: redirect,
+		Issuer: m.Issuer, Started: time.Now(), Settings: s.settings(), RequireHostedMCPPolicy: s.RequireHostedMCPPolicy}
+	challenge := sha256.Sum256([]byte(pending.Verifier))
+	q := url.Values{"response_type": {"code"}, "client_id": {s.settings().ClientID}, "redirect_uri": {redirect}, "scope": {"openid email profile groups"}, "resource": {s.settings().IdentityResource}, "state": {pending.State}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
+	// A caller-pinned realm keeps the hint; a looked-up one, like `wendy auth
+	// login`, does not need it.
+	if email != "" && (issuer == "" || pinned) {
 		q.Set("login_hint", email)
 	}
-	return m.Authorize + "?" + strings.ReplaceAll(q.Encode(), "+", "%20"), nil
+	return m, m.Authorize + "?" + strings.ReplaceAll(q.Encode(), "+", "%20"), pending, nil
 }
+func (s *Session) generateKey() error {
+	private, err := certs.GenerateMLDSAKeyPair()
+	if err != nil {
+		return err
+	}
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(private))
+	if err != nil {
+		return err
+	}
+	s.key, s.privatePEM = key, private
+	return nil
+}
+
 func (s *Session) exchange(ctx context.Context, form url.Values) (token, error) {
 	form.Set("client_id", s.settings().ClientID)
 	nonce := ""
@@ -259,12 +286,18 @@ func (s *Session) Complete(ctx context.Context, code, state, issuer string) (Pro
 	if s.meta.Issuer != "" && issuer != s.meta.Issuer {
 		return Profile{}, errors.New("Authentication issuer changed; start sign-in again")
 	}
-	if s.meta.Issuer == "" && (!s.validIssuer(issuer) || issuer == s.settings().AuthBase+"/realms/system") {
+	if s.meta.Issuer == "" && !s.orgIssuer(issuer) {
 		return Profile{}, errors.New("Sign-in did not identify a valid organization realm; start sign-in again")
 	}
 	if code == "" {
 		return Profile{}, errors.New("No authorization code received")
 	}
+	return s.completeLogin(ctx, code, issuer)
+}
+
+// completeLogin is shared by the in-memory and redirect flows, after callback
+// validation and with one operator key for token proofs, CSR and Cloud signing.
+func (s *Session) completeLogin(ctx context.Context, code, issuer string) (Profile, error) {
 	m, e := s.discover(ctx, issuer)
 	if e != nil {
 		return Profile{}, e
@@ -516,7 +549,11 @@ func requestPKIIdentityCertificate(
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("parsing pki-core certificate chain: %w", err)
 	}
-	wantPublicKey, err := x509.MarshalPKIXPublicKey(key.Public())
+	csrKey, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return config.CertificateInfo{}, err
+	}
+	wantPublicKey, err := x509.MarshalPKIXPublicKey(csrKey.Public())
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("encoding generated operator public key: %w", err)
 	}

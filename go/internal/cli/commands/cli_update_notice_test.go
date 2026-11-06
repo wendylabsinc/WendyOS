@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,7 +12,11 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -137,7 +142,7 @@ func TestCLIUpdateDeclineSnoozesWithoutLosingReleaseOrConfig(t *testing.T) {
 	previous := confirmCLIUpdate
 	t.Cleanup(func() { confirmCLIUpdate = previous })
 	prompts := 0
-	confirmCLIUpdate = func(*cobra.Command) (bool, error) {
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
 		prompts++
 		err := config.Update(func(cfg *config.Config) (bool, error) {
 			cfg.DefaultDevice = "chosen-while-prompt-open"
@@ -172,7 +177,7 @@ func TestAcceptedCLIUpdateFailureDoesNotFailSuccessfulCommand(t *testing.T) {
 	previousConfirm, previousApply := confirmCLIUpdate, applyCLIUpdate
 	t.Cleanup(func() { confirmCLIUpdate, applyCLIUpdate = previousConfirm, previousApply })
 	prompts := 0
-	confirmCLIUpdate = func(*cobra.Command) (bool, error) {
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
 		prompts++
 		return true, nil
 	}
@@ -202,7 +207,10 @@ func TestFailedCommandUpdateNoticeNeverPrompts(t *testing.T) {
 	setupInteractiveCLIUpdate(t)
 	previous := confirmCLIUpdate
 	t.Cleanup(func() { confirmCLIUpdate = previous })
-	confirmCLIUpdate = func(*cobra.Command) (bool, error) { t.Fatal("failed command must not prompt"); return false, nil }
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
+		t.Fatal("failed command must not prompt")
+		return false, nil
+	}
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.WithValue(context.Background(), cliUpdateNoticeEligible{}, true))
 	var stderr bytes.Buffer
@@ -217,7 +225,7 @@ func TestFinishInvocationSkipsUnexecutedAndReportedFailures(t *testing.T) {
 	setupInteractiveCLIUpdate(t)
 	previous := confirmCLIUpdate
 	t.Cleanup(func() { confirmCLIUpdate = previous })
-	confirmCLIUpdate = func(*cobra.Command) (bool, error) {
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
 		t.Fatal("unexecuted or already reported command must not prompt")
 		return false, nil
 	}
@@ -292,7 +300,7 @@ func TestVerifiedCLIUpdateKeepsNewerConcurrentRelease(t *testing.T) {
 func TestCLIUpdateNoticeDoesNotWaitForAuthRefresh(t *testing.T) {
 	setupInteractiveCLIUpdate(t)
 	previous := confirmCLIUpdate
-	confirmCLIUpdate = func(*cobra.Command) (bool, error) { return false, nil }
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) { return false, nil }
 	t.Cleanup(func() { confirmCLIUpdate = previous })
 	unlock, err := acquireAuthRefreshLock(context.Background())
 	if err != nil {
@@ -340,5 +348,182 @@ func TestVerifiedCLIUpdateInformsAnOlderMCPProcess(t *testing.T) {
 	cfg, _ := config.Load()
 	if cfg.LatestCLIRelease != "2026.10.05-134249" || cfg.AvailableCLIUpdate != "" {
 		t.Fatal("verified version was not retained for an older process")
+	}
+}
+
+// runUpdateNotice poses as the binary at exe, records the release
+// 2026.02.01-000000 over a 2026.01.01-000000 CLI, and returns whether
+// notifyCLIUpdate showed a notice and what it printed. Detection reports a
+// supported Homebrew install, and an update popup fails the test.
+func runUpdateNotice(t *testing.T, exe string, interactive bool) (bool, string) {
+	t.Helper()
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	t.Setenv("WENDY_ANALYTICS", "false")
+	t.Setenv("SUDO_UID", "")
+	oldJSON, oldVersion := jsonOutput, version.Version
+	jsonOutput, version.Version = false, "2026.01.01-000000"
+	oldExe, oldDetect, oldConfirm := cliExecutable, detectCLIUpdate, confirmCLIUpdate
+	cliExecutable = func() (string, error) { return exe, nil }
+	detectCLIUpdate = func(context.Context) (cliupdate.Plan, error) {
+		return cliupdate.Plan{Method: "brew", Channel: "stable", Supported: true}, nil
+	}
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
+		t.Error("the notice opened an update popup")
+		return false, nil
+	}
+	t.Cleanup(func() {
+		jsonOutput, version.Version = oldJSON, oldVersion
+		cliExecutable, detectCLIUpdate, confirmCLIUpdate = oldExe, oldDetect, oldConfirm
+	})
+	if interactive {
+		stubInteractive(t)
+	} else {
+		stubNonInteractive(t)
+	}
+	setAvailableCLIUpdate(t, "2026.02.01-000000")
+	return runNotifyCLIUpdate(t)
+}
+
+func TestNotifyCLIUpdate_PluginManagedCLI(t *testing.T) {
+	home := isolateAIToolHome(t)
+	managed := filepath.Join(home, ".wendy", "cli", "2026.01.01-000000", "wendy")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// wendy update recognizes no updater for the launcher's copy, so even an
+	// interactive terminal gets advice rather than a prompt. The plugin pins
+	// its CLI version, which can trail the latest release, and its launcher
+	// runs an installed wendy ahead of its own copy: the notice names both
+	// ways to update and promises no version from the plugin.
+	shown, out := runUpdateNotice(t, managed, true)
+	if !shown || !strings.Contains(out, cliupdate.PluginAdvice(runtime.GOOS)) {
+		t.Errorf("notice lacks the plugin advice: shown=%v\n%s", shown, out)
+	}
+	if strings.Contains(out, "Update with:") || strings.Contains(out, "to get 2026.02.01-000000") {
+		t.Errorf("notice points at wendy update or promises the new version from the plugin:\n%s", out)
+	}
+
+	// Like the non-interactive notice, it shows once per release.
+	if shown, again := runUpdateNotice(t, managed, true); shown || again != "" {
+		t.Errorf("second run repeated the plugin notice: shown=%v out=%q", shown, again)
+	}
+}
+
+// WENDY_PLUGIN alone does not make a CLI plugin-managed: a user whose PATH
+// wendy (Homebrew) is new enough runs that binary under the plugin, and
+// wendy update still updates it.
+func TestNotifyCLIUpdate_HomebrewCLIUnderPluginKeepsUpdateAdvice(t *testing.T) {
+	home := isolateAIToolHome(t)
+	t.Setenv(pluginmode.EnvVar, "claude")
+	brew := filepath.Join(home, "homebrew", "bin", "wendy")
+
+	_, out := runUpdateNotice(t, brew, false)
+	if strings.Contains(out, "came with the Wendy plugin") {
+		t.Errorf("a Homebrew CLI was reported as plugin-managed:\n%s", out)
+	}
+	if !strings.Contains(out, "Update with: wendy update") {
+		t.Errorf("notice lost its wendy update advice:\n%s", out)
+	}
+}
+
+func TestCLIUpdateSnoozeIncludesNewReleases(t *testing.T) {
+	setupInteractiveCLIUpdate(t)
+	previous := confirmCLIUpdate
+	t.Cleanup(func() { confirmCLIUpdate = previous })
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) { return false, nil }
+	if shown, _ := runNotifyCLIUpdate(t); !shown {
+		t.Fatal("first prompt missing")
+	}
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.LatestCLIRelease = "2026.10.06-120000"
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if shown, _ := runNotifyCLIUpdate(t); shown {
+		t.Fatal("new release interrupted the promised 24-hour snooze")
+	}
+}
+
+func TestCLIUpdateDismissalOrFailedDownloadDoesNotSnooze(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		accepted  bool
+		promptErr error
+		event     string
+	}{
+		{name: "escape", promptErr: tui.ErrCancelled, event: "cli_update_dismissed"},
+		{name: "interrupted", promptErr: fmt.Errorf("CLI update prompt: %w", tea.ErrInterrupted), event: "cli_update_dismissed"},
+		{name: "download failed", accepted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupInteractiveCLIUpdate(t)
+			previous, previousApply := confirmCLIUpdate, applyCLIUpdate
+			t.Cleanup(func() { confirmCLIUpdate, applyCLIUpdate = previous, previousApply })
+			confirmCLIUpdate = func(*cobra.Command, string) (bool, error) { return tc.accepted, tc.promptErr }
+			applyCLIUpdate = func(_ *cobra.Command, latest string) error {
+				if latest != "2026.10.05-134249" {
+					t.Fatalf("wrong download target: %s", latest)
+				}
+				return errors.New("download failed")
+			}
+			events := map[string]int{}
+			analytics.SetTrackHookForTesting(func(event string, _ map[string]string) { events[event]++ })
+			t.Cleanup(func() { analytics.SetTrackHookForTesting(nil) })
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.Background())
+			cmd.SetErr(&bytes.Buffer{})
+			for range 2 {
+				if shown, _ := notifyCLIUpdate(cmd); !shown {
+					t.Fatal("unanswered or failed update was snoozed")
+				}
+			}
+			cfg, _ := config.Load()
+			if cfg.CLIUpdatePromptedAt != "" {
+				t.Fatal("recorded a snooze without explicit deferral")
+			}
+			if tc.event != "" && events[tc.event] != 2 {
+				t.Fatalf("events=%v, want %s twice", events, tc.event)
+			}
+		})
+	}
+}
+
+// A dialog that cannot open must not repeat the notice after every command.
+func TestCLIUpdatePromptFailureSnoozes(t *testing.T) {
+	setupInteractiveCLIUpdate(t)
+	previous := confirmCLIUpdate
+	t.Cleanup(func() { confirmCLIUpdate = previous })
+	prompts := 0
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
+		prompts++
+		return false, errors.New("CLI update prompt: error entering raw mode")
+	}
+	events := map[string]int{}
+	analytics.SetTrackHookForTesting(func(event string, _ map[string]string) { events[event]++ })
+	t.Cleanup(func() { analytics.SetTrackHookForTesting(nil) })
+	if shown, out := runNotifyCLIUpdate(t); !shown || !strings.Contains(out, "wendy update") || strings.Contains(out, "Remind you tomorrow") {
+		t.Fatalf("first run: shown=%v out=%q", shown, out)
+	}
+	if shown, out := runNotifyCLIUpdate(t); shown || out != "" || prompts != 1 {
+		t.Fatalf("second run: shown=%v out=%q prompts=%d", shown, out, prompts)
+	}
+	if events["cli_update_dismissed"] != 1 || events["cli_update_deferred"] != 0 {
+		t.Fatalf("events=%v", events)
+	}
+}
+
+func TestCLIUpdateJSONNeverPrompts(t *testing.T) {
+	setupInteractiveCLIUpdate(t)
+	jsonOutput = true
+	previous := confirmCLIUpdate
+	t.Cleanup(func() { confirmCLIUpdate = previous })
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) { t.Fatal("JSON opened popup"); return false, nil }
+	if shown, out := runNotifyCLIUpdate(t); !shown || !strings.Contains(out, "wendy update") {
+		t.Fatal("JSON mode lost its noninteractive guidance")
 	}
 }

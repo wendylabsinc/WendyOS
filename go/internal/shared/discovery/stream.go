@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
@@ -58,6 +60,10 @@ type LANProber func(ctx context.Context, dev models.LANDevice) (models.LANDevice
 
 // StreamOptions configures a streaming LAN discovery scan.
 type StreamOptions struct {
+	// Supplemental streams authenticated mesh presence alongside LAN.
+	// These rows are never probed over the host network or written to the LAN cache.
+	Supplemental func(context.Context) <-chan LANEvent
+
 	UseCache bool      // emit cached entries and persist discoveries
 	Prober   LANProber // nil = no probing (mDNS-only confirmation)
 	Exclude  LANFilter // nil = nothing is excluded
@@ -247,6 +253,9 @@ type lanDeviceState struct {
 	// fromCache: this identity entered the session as a LANCached row, so it
 	// is the only kind that can go LANOffline.
 	fromCache bool
+	// sighted records a current mDNS identity, rather than a cached address
+	// that still answers an agent version probe after enrollment changes its ID.
+	sighted bool
 	// confirmed: a live confirmation (mDNS sighting or probe success) has
 	// been emitted for this identity.
 	confirmed bool
@@ -334,7 +343,7 @@ type lanStream struct {
 }
 
 // runLANStream drives one session, ending after a quiet period in batch mode.
-func runLANStream(ctx context.Context, opts StreamOptions, out chan<- LANEvent, batch bool) {
+func runLANEngine(ctx context.Context, opts StreamOptions, out chan<- LANEvent, batch bool) {
 	ctx, cancel := context.WithCancel(ctx)
 	s := &lanStream{
 		ctx:       ctx,
@@ -570,12 +579,13 @@ func (s *lanStream) handleSighting(svc MDNSService) {
 	s.annotate(&dev)
 	now := time.Now()
 
+	s.retireCachedHostAliases(key, dev)
 	superseded := s.supersedeHostDerived(key, dev)
 	advertised := dev.WiredAddresses
 
 	st, known := s.states[key]
 	if !known {
-		st = &lanDeviceState{dev: dev, advertised: advertised, heard: unionAddresses(nil, dev.IPAddress), confirmed: true}
+		st = &lanDeviceState{dev: dev, advertised: advertised, heard: unionAddresses(nil, dev.IPAddress), confirmed: true, sighted: true}
 		st.dev.WiredAddresses = st.cables()
 		s.states[key] = st
 		s.persist(st, now)
@@ -585,6 +595,7 @@ func (s *lanStream) handleSighting(svc MDNSService) {
 		return
 	}
 
+	st.sighted = true
 	prevAddrs := st.dev.Addresses
 	updated := applySighting(st.dev, dev)
 	if !st.probeFailed {
@@ -711,6 +722,37 @@ func (s *lanStream) handleCableAnswer(a cableAnswer) {
 	st.dev.WiredAddresses = wired
 	s.persist(st, time.Now())
 	s.emit(LANEvent{Kind: LANUpdated, Device: st.dev, Probed: st.probeConfirmed, ProbeFailed: st.reportedFailure})
+}
+
+// retireCachedHostAliases removes old UUID inventory rows when the same hostname
+// now advertises another UUID, such as the first-boot to certificate-ID migration.
+// An agent version probe confirms an address, not the cached advertised ID, so it
+// cannot keep that old ID alive indefinitely. Distinct IDs actually sighted this
+// session remain distinct. This changes discovery inventory only; certificate
+// verification and saved connection pins remain responsible for authentication.
+func (s *lanStream) retireCachedHostAliases(key string, dev models.LANDevice) {
+	host := dev.HostKey()
+	if st := s.states[key]; st != nil && st.sighted {
+		return // Cache entries are loaded once; repeated announcements need no rescan.
+	}
+	if host == "" || !canonicalDiscoveryUUID(dev.ID) {
+		return
+	}
+	for oldKey, st := range s.states {
+		// Enrollment can change both the boot UUID and hostname. A stale
+		// cached record at the same IP and agent port is the same obsolete
+		// inventory entry; a responding version probe does not prove its ID.
+		sameEndpoint := dev.IPAddress != "" && dev.IPAddress == st.dev.IPAddress && dev.Port == st.dev.Port
+		if oldKey != key && st.fromCache && !st.sighted &&
+			(st.dev.HostKey() == host || sameEndpoint) && canonicalDiscoveryUUID(st.dev.ID) {
+			s.retract(oldKey)
+		}
+	}
+}
+
+func canonicalDiscoveryUUID(id string) bool {
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed != uuid.Nil && parsed.String() == id
 }
 
 // supersedeHostDerived retires an already-known identity that the sighting
@@ -1146,4 +1188,99 @@ func probeTargetChanged(old, updated models.LANDevice) bool {
 	return old.IPAddress != updated.IPAddress ||
 		old.Port != updated.Port ||
 		old.Hostname != updated.Hostname
+}
+
+func runLANStream(ctx context.Context, opts StreamOptions, out chan<- LANEvent, batch bool) {
+	if opts.Supplemental == nil {
+		runLANEngine(ctx, opts, out, batch)
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	extra := opts.Supplemental(ctx)
+	primary := make(chan LANEvent)
+	drain := primary
+	drainExtra := extra
+	done := make(chan struct{})
+	go func() { defer close(done); defer close(drain); runLANEngine(ctx, opts, drain, batch) }()
+	defer func() {
+		cancel()
+		for range drain {
+		}
+		<-done
+		if drainExtra != nil {
+			for range drainExtra {
+			}
+		}
+	}()
+	merged := supplementalRows{primary: map[string]LANEvent{}, extra: map[string]LANEvent{}}
+	for primary != nil || extra != nil {
+		fromExtra := false
+		var event LANEvent
+		var ok bool
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok = <-primary:
+			if !ok {
+				primary = nil
+				continue
+			}
+		case event, ok = <-extra:
+			fromExtra = true
+			if !ok {
+				extra = nil
+				continue
+			}
+		}
+		event, ok = merged.accept(event, fromExtra)
+		if !ok {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case out <- event:
+		}
+	}
+}
+
+// Keep both sources so a LAN update cannot overwrite a live authenticated mesh
+// selector, and removing either source cannot erase the other's live result.
+type supplementalRows struct{ primary, extra map[string]LANEvent }
+
+func (s *supplementalRows) accept(event LANEvent, extra bool) (LANEvent, bool) {
+	key := discoverycache.Key(event.Device.ID, event.Device.DisplayName)
+	source := s.primary
+	if extra {
+		source = s.extra
+	}
+	switch event.Kind {
+	case LANFound, LANUpdated:
+		if event.Supersedes != "" && event.Supersedes != key {
+			delete(source, event.Supersedes)
+		}
+		source[key] = event
+	case LANRetracted, LANOffline:
+		delete(source, key)
+	}
+	if !extra {
+		if mesh, ok := s.extra[key]; ok {
+			// Keep the mesh selector, but still retire the LAN alias that the
+			// primary engine has replaced with this enrolled identity.
+			if event.Supersedes != "" && (event.Kind == LANFound || event.Kind == LANUpdated) {
+				mesh.Kind = LANUpdated
+				mesh.Supersedes = event.Supersedes
+				return mesh, true
+			}
+			return LANEvent{}, false
+		}
+	}
+	if extra && (event.Kind == LANRetracted || event.Kind == LANOffline) {
+		if primary, ok := s.primary[key]; ok {
+			primary.Kind = LANUpdated
+			return primary, true
+		}
+	}
+	return event, true
 }

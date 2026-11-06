@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -131,5 +132,26 @@ func TestCombineFlashFailure_BothErrorsPresent(t *testing.T) {
 	// Offset survives into the final message.
 	if !strings.Contains(msg, "%") {
 		t.Errorf("combined error %q lost the failure offset", msg)
+	}
+}
+
+// A fallback that succeeds must not hide why the fast write failed: the
+// warning carries the framed error, helper output included.
+func TestAnnounceFastWriteFallback_ShowsTheReason(t *testing.T) {
+	// Helper stderr ends with a newline, as the bmap writers capture it.
+	cause := errors.New("bmap write failed: exit status 1\n✗ opening seekable image: won't read /c/image.img.zst: owned by uid 0, not by uid 1000 who ran sudo\n")
+	primary := framePrimaryFlashError("seekable block-map write", 0, 1_900_000_000, cause)
+
+	var out bytes.Buffer
+	announceFastWriteFallback(&out, primary)
+	for _, sub := range []string{"seekable block-map write failed", "owned by uid 0", "full-image write"} {
+		if !strings.Contains(out.String(), sub) {
+			t.Errorf("fallback warning %q missing %q", out.String(), sub)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			t.Errorf("fallback warning %q has a blank line", out.String())
+		}
 	}
 }

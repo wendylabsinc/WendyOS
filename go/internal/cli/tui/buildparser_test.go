@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -175,5 +177,151 @@ func TestParserSurfacesBaseImagePullWithBytes(t *testing.T) {
 	last := got[len(got)-1]
 	if last.Bytes.Current != 5_240_000 || last.Bytes.Total != 27_090_000 {
 		t.Fatalf("want pull byte counters, got %+v", last.Bytes)
+	}
+}
+
+// eventsFor returns the events for the row whose display starts with prefix.
+func eventsFor(got []BuildStepEvent, prefix string) []BuildStepEvent {
+	var out []BuildStepEvent
+	for _, e := range got {
+		if strings.HasPrefix(e.Display, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// collectFile replays a recorded progress stream with throttling disabled.
+func collectFile(t *testing.T, path string) []BuildStepEvent {
+	t.Helper()
+	fixture, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading fixture: %v", err)
+	}
+	return collectRaw(t, string(fixture))
+}
+
+// TestParserReopensLazilyPulledBaseImage replays BuildKit's plain printer (the
+// build host's `buildctl`, which streams --progress=plain) over a lazily pulled
+// 6.5 GB base image: testdata/buildkit-lazy-pull.jsonl replayed at its recorded
+// pace through progressui.NewDisplay(PlainMode) from buildkit v0.32.2. The FROM
+// reports DONE after 2s, then its layers are pulled and unpacked under the same
+// "#1", which used to leave the row frozen on "✓ … 2s" for nine minutes.
+func TestParserReopensLazilyPulledBaseImage(t *testing.T) {
+	got := collectFile(t, "testdata/buildkit-lazy-pull-plain.txt")
+	from := eventsFor(got, "[base-nvidia-jetson 1/5] FROM")
+	if len(from) < 4 {
+		t.Fatalf("want the FROM to start, finish, reopen and finish, got %+v", from)
+	}
+	if from[1].Status != BuildStepDone || from[1].Dur != 2*time.Second {
+		t.Fatalf("first DONE wrong: %+v", from[1])
+	}
+	if reopen := from[2]; reopen.Status != BuildStepRunning || reopen.Bytes.Total != 3_400_000_000 {
+		t.Fatalf("want the first layer download to reopen the step, got %+v", reopen)
+	}
+
+	var sawBytes bool
+	var details []string
+	for _, e := range from[2 : len(from)-1] {
+		if e.Status != BuildStepRunning {
+			t.Fatalf("reopened step finished early: %+v", e)
+		}
+		if e.Bytes.Current == 900_000_000 && e.Bytes.Total == 3_400_000_000 {
+			sawBytes = true
+		}
+		if e.Detail != "" && (len(details) == 0 || details[len(details)-1] != e.Detail) {
+			details = append(details, e.Detail)
+		}
+	}
+	if !sawBytes {
+		t.Errorf("want mid-pull byte counters, got %+v", from)
+	}
+	wantDetails := []string{
+		"unpacking layer 1", "unpacked 1 layer",
+		"unpacking layer 2", "unpacked 2 layers",
+		"unpacking layer 3", "unpacked 3 layers",
+	}
+	if strings.Join(details, "|") != strings.Join(wantDetails, "|") {
+		t.Errorf("unpack details = %q, want %q", details, wantDetails)
+	}
+
+	last := from[len(from)-1]
+	if last.Status != BuildStepDone || last.Dur != 533600*time.Millisecond {
+		t.Fatalf("final DONE wrong: %+v (dur=%v)", last, last.Dur)
+	}
+	if run := eventsFor(got, "[base-nvidia-jetson 2/5] RUN"); run[len(run)-1].Status != BuildStepDone {
+		t.Fatalf("RUN step should finish, got %+v", run)
+	}
+}
+
+// TestParserReopensBaseImageOnRealBuildxPlainOutput is the everyday shape of the
+// same thing, a small alpine pull: BuildKit's plain printer replaying the real
+// buildx recording. Setup steps also report after their first DONE, but only
+// unsized bookkeeping, and must not reopen.
+func TestParserReopensBaseImageOnRealBuildxPlainOutput(t *testing.T) {
+	got := collectFile(t, "testdata/buildx-plain.txt")
+	from := eventsFor(got, "[1/2] FROM")
+	if len(from) < 3 || from[1].Status != BuildStepDone || from[2].Status != BuildStepRunning {
+		t.Fatalf("want DONE then a reopen, got %+v", from)
+	}
+	var unpacking bool
+	for _, e := range from {
+		if e.Detail == "unpacking layer 1" && e.Bytes.Total == 4_090_000 {
+			unpacking = true
+		}
+	}
+	if !unpacking {
+		t.Errorf("want an unpacking detail beside the layer download, got %+v", from)
+	}
+	if last := from[len(from)-1]; last.Status != BuildStepDone || last.Dur != 500*time.Millisecond {
+		t.Fatalf("final DONE wrong: %+v", last)
+	}
+
+	def := eventsFor(got, "load build definition")
+	if len(def) != 2 || def[0].Status != BuildStepRunning || def[1].Status != BuildStepDone {
+		t.Fatalf("setup step should not reopen, got %+v", def)
+	}
+}
+
+// Only work in progress reopens a step. The tail of a finished run ("… done"
+// lines) and anything after a failure leave the row alone, and export vertices
+// stay collapsed.
+func TestParserDoesNotReopenWithoutNewWork(t *testing.T) {
+	cases := map[string]string{
+		"finished transfer": "#5 [1/2] FROM docker.io/library/alpine:3.20\n#5 DONE 0.1s\n" +
+			"#5 sha256:3f26bc2dec0b 4.09MB / 4.09MB 0.3s done\n" +
+			"#5 extracting sha256:3f26bc2dec0b 0.1s done\n",
+		"failed step": "#9 [4/6] RUN pip install\n#9 ERROR: process did not complete successfully\n" +
+			"#9 sha256:3f26bc2dec0b 1.00MB / 4.09MB 0.3s\n" +
+			"#9 extracting sha256:3f26bc2dec0b\n",
+		"export": "#12 exporting to image\n#12 DONE 0.5s\n" +
+			"#12 sha256:3f26bc2dec0b 1.00MB / 4.09MB 0.3s\n",
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := collectRaw(t, text)
+			for _, e := range got[1:] {
+				if e.Status == BuildStepRunning {
+					t.Fatalf("unexpected reopen: %+v", got)
+				}
+			}
+		})
+	}
+}
+
+// The reopen must reach the renderer even inside the detail throttle window, or
+// the row stays "done" until some later update happens to get through.
+func TestParserReopenIsNotThrottled(t *testing.T) {
+	var got []BuildStepEvent
+	p := NewBuildParser(func(e BuildStepEvent) { got = append(got, e) })
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return at }
+	p.Write([]byte("#5 [1/2] FROM docker.io/library/alpine:3.20\n" +
+		"#5 sha256:aaaa 1.00MB / 2.00MB 0.1s\n" +
+		"#5 DONE 0.2s\n" +
+		"#5 sha256:bbbb 1.00MB / 4.09MB 0.3s\n"))
+	last := got[len(got)-1]
+	if last.Status != BuildStepRunning || last.Bytes.Total != 4_090_000 {
+		t.Fatalf("reopen was throttled away: %+v", got)
 	}
 }

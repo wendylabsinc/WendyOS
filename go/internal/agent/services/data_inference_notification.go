@@ -25,8 +25,8 @@ type CampaignNotificationSender interface {
 	Send(context.Context, string, DetectionNotification) error
 }
 
-// CampaignCloudSender uses the campaign name as its Cloud app identity. Cloud
-// must authorize that identity for this device before accepting a notification.
+// CampaignCloudSender labels notifications with sh.wendy.campaign.<name>. Cloud derives
+// the destination organization from the enrolled device credential.
 // An explicit webhook continues to select direct HTTP delivery.
 type CampaignCloudSender struct {
 	Cloud NotificationSender
@@ -51,7 +51,7 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 	if err != nil {
 		return err
 	}
-	appID := "campaign:" + notification.Campaign
+	appID := data.CampaignAppID(notification.Campaign)
 	response, err := s.Cloud.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{
 		AppId: &appID,
 		Audience: &cloudpb.NotificationAudience{Roles: []cloudpb.OrganizationRole{

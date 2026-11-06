@@ -158,17 +158,24 @@ func runDeviceShell(cmd *cobra.Command, shellCmd []string) error {
 		}
 	}()
 
-	// stream -> stdout; exit on the final exit_code frame.
+	return receiveHostShell(stream.Recv, os.Stdout)
+}
+
+// A clean stream EOF is not a process result: only an explicit exit_code frame
+// proves the remote command completed, including for interactive shells.
+func receiveHostShell(recv func() (*agentpb.HostShellResponse, error), stdout io.Writer) error {
 	for {
-		resp, rerr := stream.Recv()
+		resp, rerr := recv()
 		if rerr == io.EOF {
-			return nil
+			return fmt.Errorf("remote shell ended without an exit code: %w", io.ErrUnexpectedEOF)
 		}
 		if rerr != nil {
 			return rerr
 		}
 		if len(resp.GetStdoutData()) > 0 {
-			_, _ = os.Stdout.Write(resp.GetStdoutData())
+			if _, err := stdout.Write(resp.GetStdoutData()); err != nil {
+				return fmt.Errorf("writing remote shell output: %w", err)
+			}
 			continue
 		}
 		if _, ok := resp.GetResponseType().(*agentpb.HostShellResponse_ExitCode); ok {

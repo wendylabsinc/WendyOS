@@ -471,7 +471,7 @@ func (hw handleWriterAt) WriteAt(p []byte, off int64) (int, error) {
 // writeImageWithBmap flashes the image to d using the block map. It acquires
 // the same locked disk handle as writeImageToDisk and calls applyBmap to write
 // only the mapped ranges. progress is driven directly by applyBmap.
-func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, progressFn func(written int64)) error {
+func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, fit imageFit, progressFn func(written int64)) error {
 	data, err := os.ReadFile(bmapPath)
 	if err != nil {
 		return fmt.Errorf("reading bmap: %w", err)
@@ -487,16 +487,16 @@ func writeImageWithBmap(r io.Reader, totalSize int64, d drive, bmapPath string, 
 	}
 	defer ld.close()
 
-	if err := applyBmap(r, handleWriterAt{h: ld.handle}, b, progressFn); err != nil {
+	if err := applyBmap(r, clipWrites(handleWriterAt{h: ld.handle}, fit.writeLimit), b, progressFn); err != nil {
 		return err
 	}
 	_ = totalSize
-	return nil
+	return finishLockedImageWrite(ld, d, fit)
 }
 
 // writeImageWithBmapSeekable opens the seekable source and writes only mapped
 // ranges to the locked disk handle in-process (no helper on Windows).
-func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, progressFn func(int64)) error {
+func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, fit imageFit, progressFn func(int64)) error {
 	data, err := os.ReadFile(bmapPath)
 	if err != nil {
 		return fmt.Errorf("reading bmap: %w", err)
@@ -522,15 +522,20 @@ func writeImageWithBmapSeekable(sourcePath, bmapPath string, d drive, progressFn
 	// concurrency directly from the storage type: parallel for NVMe, sequential
 	// for SD/USB media whose FTL is hurt by scattered concurrent writes.
 	bmapWriteConcurrency = writersForStorage(d.StorageType)
-	return applyBmapSeekable(si, handleWriterAt{h: ld.handle}, b, progressFn)
+	if err := applyBmapSeekable(si, clipWrites(handleWriterAt{h: ld.handle}, fit.writeLimit), b, progressFn); err != nil {
+		return err
+	}
+	return finishLockedImageWrite(ld, d, fit)
 }
 
-func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(written int64)) error {
+func writeImageToDisk(r io.Reader, totalSize int64, d drive, fit imageFit, progressFn func(written int64)) error {
 	ld, err := openLockedDisk(d)
 	if err != nil {
 		return err
 	}
 	defer ld.close()
+
+	r = fit.limitReader(r)
 
 	buf := make([]byte, 4*1024*1024) // 4 MiB
 	var totalWritten int64
@@ -566,7 +571,7 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 	// Suppress unused import warning — unsafe is needed for DeviceIoControl pointer args.
 	_ = unsafe.Sizeof(0)
 
-	return nil
+	return finishLockedImageWrite(ld, d, fit)
 }
 
 // unmountBeforeWrite is a no-op on Windows: the writers lock and dismount the

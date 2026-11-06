@@ -70,9 +70,10 @@ The episode directory is never modified.
 		fmt.Printf("%s\n", r.Output)
 		fmt.Printf("  index lines      %d\n", r.IndexLines)
 		fmt.Printf("  frames written   %d\n", r.Frames)
+		fmt.Printf("  fragments joined %d\n", r.Fragments)
 		fmt.Printf("  segments read    %d\n", r.Segments)
 		if r.Skipped > 0 {
-			fmt.Printf("  frames skipped   %d (bytes missing or truncated)\n", r.Skipped)
+			fmt.Printf("  records skipped  %d (unreadable or no coded picture)\n", r.Skipped)
 		}
 		if r.Unparsed > 0 {
 			fmt.Printf("  index lines unusable %d (expected for an interrupted episode)\n", r.Unparsed)

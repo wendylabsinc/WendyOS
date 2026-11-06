@@ -89,7 +89,7 @@ func resolveError(cause error) error {
 // keyAccount derives the deterministic Keychain account for a client
 // private key, so re-login for the same identity overwrites one item. It
 // hashes cloudGRPC|orgID|userID|assetID|principalURI. userID alone is not
-// enough because asset certs (from performLocalLogin) carry no UserID, only an
+// enough because legacy asset certs carry no UserID, only an
 // AssetID, so two asset certs on the same endpoint+org with different AssetID
 // must not collide. principalURI distinguishes newer pki-core SPIFFE
 // identities, which do not carry the legacy numeric org ID.
@@ -106,9 +106,8 @@ func keyAccount(cloudGRPC string, orgID int, userID string, assetID int, princip
 
 // tokenAccount derives the deterministic Keychain account for a cloud API
 // token. It hashes cloudDashboard|cloudGRPC|orgID — the same triple AddAuth
-// dedups auth entries on — because a browser login (CloudDashboard set) and
-// an --api-key login (CloudDashboard empty, see performLocalLogin) against
-// the same endpoint+org coexist as two distinct AddAuth entries; omitting
+// dedups auth entries on. Stored sessions with different dashboards against
+// the same endpoint+org coexist as distinct AddAuth entries; omitting
 // cloudDashboard would let one entry's dehydrated token overwrite the
 // other's Keychain item even though both entries' references kept pointing
 // at the same account. orgID matters for the analogous reason: several orgs
@@ -166,6 +165,14 @@ func (a AuthConfig) OAuthDPoPKey() (string, error) {
 	return resolveSecret(a.DPoPPrivateKey)
 }
 
+// RegistryKey resolves the session's registry encryption key.
+func (a AuthConfig) RegistryKey() (string, error) {
+	if !isRef(a.RegistryPrivateKey) {
+		return a.RegistryPrivateKey, nil
+	}
+	return resolveSecret(a.RegistryPrivateKey)
+}
+
 // InvalidateCachedSecrets forces subsequent reads to consult the credential
 // store. Use after reloading a session under the refresh lock: another process
 // can rotate a secret while its stored Keychain reference remains unchanged.
@@ -173,7 +180,7 @@ func (a AuthConfig) OAuthDPoPKey() (string, error) {
 func (a AuthConfig) InvalidateCachedSecrets() {
 	secretMu.Lock()
 	defer secretMu.Unlock()
-	for _, ref := range []string{a.APIKey, a.RefreshToken, a.DPoPPrivateKey, a.LitePrivateKey} {
+	for _, ref := range []string{a.APIKey, a.RefreshToken, a.DPoPPrivateKey, a.LitePrivateKey, a.RegistryPrivateKey} {
 		delete(secretCache, ref)
 	}
 	for _, cert := range a.Certificates {
@@ -230,9 +237,10 @@ func dehydrate(cfg *Config) {
 			}
 		}
 		for value, kind := range map[string]string{
-			a.RefreshToken:   "refresh",
-			a.DPoPPrivateKey: "dpop-key",
-			a.LitePrivateKey: "lite-key",
+			a.RefreshToken:       "refresh",
+			a.DPoPPrivateKey:     "dpop-key",
+			a.LitePrivateKey:     "lite-key",
+			a.RegistryPrivateKey: "registry-key",
 		} {
 			if value == "" || isRef(value) {
 				continue
@@ -245,8 +253,10 @@ func dehydrate(cfg *Config) {
 					a.RefreshToken = refPrefixV1 + acct
 				case "dpop-key":
 					a.DPoPPrivateKey = refPrefixV1 + acct
-				default:
+				case "lite-key":
 					a.LitePrivateKey = refPrefixV1 + acct
+				default:
+					a.RegistryPrivateKey = refPrefixV1 + acct
 				}
 			}
 		}
@@ -287,6 +297,11 @@ func inlineSecrets(cfg *Config) {
 		if isRef(a.LitePrivateKey) {
 			if v, err := resolveSecret(a.LitePrivateKey); err == nil {
 				a.LitePrivateKey = v
+			}
+		}
+		if isRef(a.RegistryPrivateKey) {
+			if v, err := resolveSecret(a.RegistryPrivateKey); err == nil {
+				a.RegistryPrivateKey = v
 			}
 		}
 		for j := range a.Certificates {
@@ -353,6 +368,9 @@ func countInlineSecrets(cfg *Config) int {
 		if a.LitePrivateKey != "" && !isRef(a.LitePrivateKey) {
 			n++
 		}
+		if a.RegistryPrivateKey != "" && !isRef(a.RegistryPrivateKey) {
+			n++
+		}
 		for _, c := range a.Certificates {
 			if c.PemPrivateKey != "" && !isRef(c.PemPrivateKey) {
 				n++
@@ -375,6 +393,9 @@ func countSecretRefs(cfg *Config) int {
 			n++
 		}
 		if isRef(a.LitePrivateKey) {
+			n++
+		}
+		if isRef(a.RegistryPrivateKey) {
 			n++
 		}
 		for _, c := range a.Certificates {
@@ -416,6 +437,9 @@ func DeleteStoredSecrets(cfg *Config) {
 		}
 		if isRef(a.LitePrivateKey) {
 			deleteRef(a.LitePrivateKey)
+		}
+		if isRef(a.RegistryPrivateKey) {
+			deleteRef(a.RegistryPrivateKey)
 		}
 		for _, c := range a.Certificates {
 			if isRef(c.PemPrivateKey) {

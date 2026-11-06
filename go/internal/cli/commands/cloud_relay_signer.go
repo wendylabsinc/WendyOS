@@ -76,17 +76,18 @@ func liteRelayOptions(ctx context.Context, auth *config.AuthConfig, renew bool) 
 // liteDeviceCAChain loads the selected tenant's Lite Device CA chain for the
 // relay, LAN and BLE verifiers; discovery caches it per PKI endpoint and tenant.
 func liteDeviceCAChain(auth *config.AuthConfig) liteclient.LiteDeviceCAChain {
+	return liteDeviceCAChainVia(auth, liteenroll.DiscoverLiteDeviceCAChain)
+}
+
+// liteDeviceCAChainVia freezes the session's PKI endpoint and tenant for
+// discover. Tests pass their own discover: the verifier calls it from a
+// prefetch goroutine that can outlive the dialing test.
+func liteDeviceCAChainVia(auth *config.AuthConfig, discover func(ctx context.Context, pkiEndpoint, tenantID string) (string, error)) liteclient.LiteDeviceCAChain {
 	pkiEndpoint, tenantID := auth.PKIEndpoint, auth.Certificates[0].TenantUUID()
-	// Capture the test hook before a verifier starts background discovery, so
-	// later tests can replace it without racing an in-flight lookup.
-	discover := discoverLiteDeviceCAChain
 	return func(ctx context.Context) (string, error) {
 		return discover(ctx, pkiEndpoint, tenantID)
 	}
 }
-
-// discoverLiteDeviceCAChain is replaced in tests.
-var discoverLiteDeviceCAChain = liteenroll.DiscoverLiteDeviceCAChain
 
 func configuredTunnelSigner(auth *config.AuthConfig, signer func(string, []byte) (func([]byte) ([]byte, error), error)) (func([]byte) ([]byte, error), error) {
 	if len(auth.Certificates) == 0 {

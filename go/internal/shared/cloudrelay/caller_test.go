@@ -135,6 +135,43 @@ func TestDeviceEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// Dev Cloud also answers on the mirror name api.dev.wendy.dev, but it has one
+// device listener and signs with one issuer. A login or enrollment through the
+// mirror must derive exactly what the primary host derives (WDY-3939 #20).
+func TestDevMirrorAPIHostDerivesPrimaryStack(t *testing.T) {
+	for _, tt := range []struct{ cloud, endpoint, issuer string }{
+		{"api.dev.wendy.dev", "devices.dev.wendy.sh:443", "https://api.dev.wendy.sh"},
+		{"api.dev.wendy.dev:443", "devices.dev.wendy.sh:443", "https://api.dev.wendy.sh"},
+		{"https://api.dev.wendy.dev", "devices.dev.wendy.sh:443", "https://api.dev.wendy.sh"},
+		{"https://api.dev.wendy.dev:443/", "devices.dev.wendy.sh:443", "https://api.dev.wendy.sh"},
+		{"api.dev.wendy.dev:9443", "devices.dev.wendy.sh:9443", "https://api.dev.wendy.sh:9443"},
+		{"api.dev.wendy.sh", "devices.dev.wendy.sh:443", "https://api.dev.wendy.sh"},
+		{"api.dev.wendy.sh:443", "devices.dev.wendy.sh:443", "https://api.dev.wendy.sh"},
+		{"api.dev.wendy.sh:9443", "devices.dev.wendy.sh:9443", "https://api.dev.wendy.sh:9443"},
+		// Unchanged: prod, the device listeners themselves, and other Clouds.
+		{"api.wendy.dev:443", "devices.wendy.dev:443", "https://api.wendy.dev"},
+		{"api.wendy.sh:443", "devices.wendy.sh:443", "https://api.wendy.sh"},
+		{"devices.dev.wendy.dev:443", "devices.dev.wendy.dev:443", "https://devices.dev.wendy.dev"},
+		{"dev.wendy.dev:443", "dev.wendy.dev:443", "https://dev.wendy.dev"},
+		{"custom.example:8443", "custom.example:8443", "https://custom.example:8443"},
+		{"localhost:8501", "localhost:8501", "https://localhost:8501"},
+	} {
+		if got, e := DeviceEndpoint(tt.cloud, ""); e != nil || got != tt.endpoint {
+			t.Errorf("DeviceEndpoint(%q) = %q, %v; want %q", tt.cloud, got, e, tt.endpoint)
+		}
+		if got, e := Issuer(tt.cloud, ""); e != nil || got != tt.issuer {
+			t.Errorf("Issuer(%q) = %q, %v; want %q", tt.cloud, got, e, tt.issuer)
+		}
+	}
+	// Explicit device overrides still win over the mirror mapping.
+	if got, e := DeviceEndpoint("api.dev.wendy.dev:443", "https://custom.example:9443"); e != nil || got != "custom.example:9443" {
+		t.Errorf("DeviceEndpoint override = %q, %v", got, e)
+	}
+	if got, e := Issuer("api.dev.wendy.dev:443", "https://issuer.example/"); e != nil || got != "https://issuer.example" {
+		t.Errorf("Issuer override = %q, %v", got, e)
+	}
+}
 func TestRelayKeysPersistDistinctAndPrivate(t *testing.T) {
 	dir := t.TempDir()
 	a := &Agent{StateDir: dir}

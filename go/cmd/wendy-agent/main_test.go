@@ -6,35 +6,16 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func TestBrokerURLForCloudHost(t *testing.T) {
-	tests := []struct {
-		name      string
-		cloudHost string
-		want      string
-	}{
-		{
-			name:      "host without port uses broker port",
-			cloudHost: "cloud.wendy.io",
-			want:      "cloud.wendy.io:50052",
-		},
-		{
-			name:      "cloud run endpoint keeps tls port",
-			cloudHost: "wendy-cloud-services-114319063177.us-central1.run.app:443",
-			want:      "wendy-cloud-services-114319063177.us-central1.run.app:443",
-		},
-		{
-			name:      "local certificate port maps to local broker port",
-			cloudHost: "localhost:50051",
-			want:      "localhost:50052",
-		},
+func TestCloudRosterEndpointPreservesEnrolledAddress(t *testing.T) {
+	t.Setenv("WENDY_CLOUD_URL", "")
+	for _, host := range []string{"api.wendy.sh", "api.dev.wendy.sh:443", "localhost:8443", "https://api.dev.wendy.sh"} {
+		if got := cloudGRPCURLForCloudHost(host); got != host {
+			t.Fatalf("Cloud roster input %q became %q", host, got)
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := brokerURLForCloudHost(tt.cloudHost); got != tt.want {
-				t.Fatalf("brokerURLForCloudHost(%q) = %q, want %q", tt.cloudHost, got, tt.want)
-			}
-		})
+	t.Setenv("WENDY_CLOUD_URL", "https://localhost:9443")
+	if got := cloudGRPCURLForCloudHost("api.wendy.sh"); got != "https://localhost:9443" {
+		t.Fatalf("override = %q", got)
 	}
 }
 

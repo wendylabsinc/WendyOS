@@ -45,6 +45,16 @@ Shows or adjusts the device's network priority order.
 
 Removes a saved network from the device.
 
+### `wendy device wifi regulatory`
+
+Shows the country and available channels on a Linux WendyOS device. See
+[check Wi-Fi country and available channels](#check-wi-fi-country-and-available-channels).
+
+### `wendy device wifi regulatory set-country`
+
+Requests a temporary country hint for the device's physical location. Query the
+regulatory state again to verify the result.
+
 ---
 
 ## Platform behavior
@@ -95,3 +105,40 @@ wendy device wifi disconnect
 ```
 
 > **Note:** `wendy device wifi connect` and `wendy device wifi disconnect` stop the running app on the device before applying the new Wi-Fi configuration. If no app is currently running, this step is skipped silently — no warning is printed.
+
+
+## Check Wi-Fi country and available channels
+
+On a Linux WendyOS device, inspect the current country and channel restrictions.
+This requires a device running the agent; local and Docker providers do not
+support the command.
+
+Inspect the current state:
+
+```sh
+wendy device wifi regulatory --device <device>
+```
+
+To request the country where the device is physically located, use its two-letter
+country code. For example, for a device in the United Kingdom:
+
+```sh
+wendy device wifi regulatory set-country GB --device <device>
+wendy device wifi regulatory --device <device>
+```
+
+This submits a temporary country hint; it does not override the radio's firmware
+or guarantee more channels become available. Changes can take time, so query
+again to check the result. The hint does not survive a reboot and does not restart
+Wi-Fi, Wi-Fi Aware, or the agent. Devices need `iw` installed; older or non-Linux
+agents may report that this operation is unsupported.
+
+### Detailed output and automation
+
+Add `--json` for the full channel report. It includes the kernel's country and
+per-radio restrictions, maximum transmit power, permitted widths, and radar-related
+restrictions where available. Use `globalCountry` for the kernel hint and
+`phys[].country` and `phys[].selfManaged` to distinguish each radio's own state.
+A self-managed radio may keep a different country from the kernel hint. `no IR` means the radio cannot initiate transmission
+on that channel. Raw output is retained as `rawRegulatory`, `rawPhy` and
+`rawChannels` for diagnosis.

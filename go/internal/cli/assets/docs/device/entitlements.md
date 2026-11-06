@@ -16,6 +16,8 @@ Declare them in the `entitlements` array of your `wendy.json`, or add one with `
 
 > **Complete reference:** for every entitlement type, its options, and security notes, see [wendy.json → Entitlements](../apps/wendy.json.md#entitlements-1). This page is a guide to the common ones and how to choose between similar options.
 
+A device's agent ignores an entitlement type it does not know, and starts the app without that access. When the agent reports the types it supports, `wendy run` checks your `wendy.json` against them before building and stops on a type the agent does not support, suggesting `wendy device update`. Agents that predate this report are not checked.
+
 ## Notifications
 
 Use `{ "type": "notifications" }` when an app needs to alert operators through
@@ -91,12 +93,16 @@ still accepted.
 
 ## Network
 
-The network entitlement allows the container to access the device's network. If the device is connected to WiFi, Ethernet or otherwise, the container will have access to make TCP and UDP connections to the internet.
+The network entitlement selects the container's network access. Host and bridge
+modes can use the device's Internet connection. Mesh mode grants Wendy Net
+service access without an Internet default route.
 
 A "network" type entitlement can have the following values:
 
 - **mode**: `host` shares the device's network for LAN access; `bridge` provides
-  outbound DNS/downloads through NAT without LAN port publishing; `none` provides
+  outbound DNS/downloads through NAT without LAN port publishing; `mesh` provides
+  isolated Wendy Net service access; `host-admin` adds host network administration;
+  `none` provides
   only loopback. Declare a mode explicitly. Omitting the entire entitlement gives
   an ordinary container only loopback, and `wendy run` warns before building.
   In a shared-network group, secondaries inherit the primary service's namespace.
@@ -109,6 +115,21 @@ A "network" type entitlement can have the following values:
     "mode": "host"
 }
 ```
+
+### Wendy Net service access
+
+Use `network` mode `mesh` with `serviceCIDR: "10.99.0.0/16"` and isolated
+networking. Declare incoming TCP or UDP ports explicitly. This enables service
+access, not general outbound Internet access. Follow the
+[service sharing guide](/docs/guides/wendy-net-services) for complete manifests.
+
+### Private Avahi
+
+Add `{ "type": "avahi" }` when an app uses Avahi through D-Bus or compatible
+client libraries. Apps using their own mDNS socket do not need this grant.
+Avahi does not grant network access by itself; combine it with the appropriate
+private network entitlement. See the
+[Avahi workflow](/docs/guides/wendy-net-services#alternative-use-private-avahi-through-d-bus).
 
 ## HTTP
 
@@ -127,6 +148,18 @@ Ordinary detached agent deployments include HTTP URLs in their
 [endpoint report](../clients/wendy-cli/commands/run.md#detached-output), without
 checking application health. See the [full `http` reference](../apps/wendy.json.md#http)
 for discovery and attached-run behavior.
+
+## Wi-Fi Aware
+
+Use `{ "type": "nan" }` only when your app needs to manage Wi-Fi Aware discovery
+and direct connections itself. Ordinary Wendy Net apps do not need this grant.
+For an app that sends IP traffic over those direct connections, also add
+`{ "type": "network", "mode": "host" }`.
+
+This grants direct radio control to a trusted app. Wi-Fi Aware shares the device's
+radio with other apps and Wendy Net, so avoid radio-wide start, stop, or reset
+commands. See the [configuration reference](../apps/wendy.json.md#nan) for the
+app's control socket, interface, and reply-directory settings.
 
 ## Input
 

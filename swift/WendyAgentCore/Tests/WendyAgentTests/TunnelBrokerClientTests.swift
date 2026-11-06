@@ -98,6 +98,7 @@ struct TunnelBrokerClientTests {
         #expect(TunnelBrokerClient.backoff(attempt: 6) == .seconds(64))
         #expect(TunnelBrokerClient.backoff(attempt: 7) == .seconds(90))
         #expect(TunnelBrokerClient.backoff(attempt: 20) == .seconds(90))
+        #expect(TunnelBrokerClient.backoff(attempt: 100) == .seconds(90))
     }
 
     // MARK: - relay pumps

@@ -29,12 +29,15 @@ instructions; users perform physical steps between calls. Success after flashing
 does not imply successful boot or application readiness.
 
 CLI updates appear in `wendy_status.cli_update` and as a text notice appended
-to the next tool result once per release per session. Keep notices independent
-of terminal notice state and preserve tool payloads and errors. Relay the update
-command and MCP restart step to the user. The injected release checker runs off
-the startup path and hourly, respects the existing 24-hour cache and development
-build exclusion, and cancels when serving stops. Cached availability is not proof
-of a successful latest check; the check timestamp records an attempt.
+to the next tool result once per release per session, repeated after 24 hours
+of wall-clock time while the server is outdated. Only the appended notice asks
+the assistant to tell the user; the status field stays informational. Keep
+notices independent of terminal notice state and preserve tool payloads and
+errors. Relay the update command and MCP restart step to the user. The injected
+release checker runs off the startup path and hourly, respects the existing
+24-hour cache and development build exclusion, and cancels when serving stops.
+Cached availability is not proof of a successful latest check; the check
+timestamp records an attempt.
 
 ## Constraints
 
@@ -46,7 +49,7 @@ backends; development tests must not flash hardware or install host dependencies
 
 ## Skills over MCP
 
-The CLI server and ChatGPT gateway advertise `io.modelcontextprotocol/skills`
+The CLI server and the hosted relay advertise `io.modelcontextprotocol/skills`
 under `capabilities.extensions`. Clients call `skills/list`, then `skills/get`
 with a catalog URI, and `resources/read` for the instructions and supporting
 files. The catalog is static and fits on one terminal page. Unknown cursors and
@@ -57,7 +60,7 @@ as one `wendy` skill, with a workflow index and the original skill directories
 under `references/skills/`. Preserve frontmatter, relative links, and source
 files; compute SHA-256 digests over the exact returned bytes. Engineering and
 unrelated embedded skills are excluded. Serve offline without a device, UI, or
-local skill installation. Gateway requests retain their existing authentication.
+local skill installation.
 
 `scripts/sync-agent-skills.py` generates the same bundle for the ChatGPT plugin
 and the embedded server files. Plugin onboarding points to the bundled

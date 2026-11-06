@@ -11,7 +11,7 @@ description: Install wendy-agent on any Linux machine to turn it into a managed 
 
 ## Overview
 
-Install `wendy-agent` on **any existing Linux installation**, including Ubuntu, Debian, Raspberry Pi OS, DGX Spark, NUCs, cloud VMs, or any other ARM64 or x86-64 (Intel or AMD) machine, to turn it into a managed Wendy device. Ubuntu 22.04 or later is recommended. Wendy Agent is also known to work on Fedora, Arch, and other popular Linux distributions. Once installed, your `wendy` CLI and the device discover each other over the local network.
+Install `wendy-agent` on **any existing Linux installation**, including Ubuntu, Debian, Raspberry Pi OS, DGX Spark, NUCs, cloud VMs, or any other ARM64 or x86-64 (Intel or AMD) machine. Ubuntu 22.04 or later is recommended. Wendy Agent is also known to work on Fedora, Arch, and other popular Linux distributions. Choose local access for apps controlled from this computer, or network access to manage it from another computer.
 
 (`wendy-agent` is already built into WendyOS — [Jetson Orin Nano](/docs/installation/wendyos-nvidia-jetson-orin-nano), [Jetson AGX Thor](/docs/installation/wendyos-nvidia-jetson-agx-thor), [Raspberry Pi](/docs/installation/wendyos-raspberry-pi-5). If you flashed WendyOS, skip this guide.)
 
@@ -29,7 +29,30 @@ SSH or log into the target machine and run:
 curl -fsSL https://install.wendy.dev/agent.sh | bash
 ```
 
-This installs the `wendy-agent` service, which registers the device on your local network via mDNS so that the Wendy CLI on your developer machine can discover it.
+The installer asks who should be able to connect:
+
+- **Only this computer** (default): management and image uploads bind to localhost;
+  Wendy discovery, cloud control relays, and BLE control are disabled.
+- **Other devices**: enables network discovery and remote access. Before enrollment,
+  reachable computers may deploy and run apps, so use this on a trusted network.
+
+Existing agent installations without a saved choice preserve network access during
+updates. An explicit `--network-access` flag overrides that migration default.
+
+The answer is saved in `/etc/wendy-agent/network-access`. Updates preserve the
+saved answer. With `-y` or no interactive terminal, a fresh install uses local
+access. Choose network access explicitly for an unattended edge installation:
+
+```bash
+curl -fsSL https://install.wendy.dev/agent.sh | bash -s -- -y --network-access network
+```
+
+To change the choice later, re-run the installer with `--network-access local`
+or `--network-access network`. The service restarts to apply it.
+
+This choice controls the agent's access points. Apps you deploy can expose
+their own network services. WendyOS images and existing package installations
+without a choice file retain their current device networking.
 
 ### Pre-enrolling into your org (optional)
 
@@ -38,13 +61,16 @@ one-liner that carries a short-lived enrollment token:
 
 ```bash
 curl -fsSL https://install.wendy.dev/agent.sh | \
-  WENDY_ENROLLMENT_TOKEN=<token> WENDY_CLOUD_HOST=<cloud-host> bash
+  WENDY_ENROLLMENT_TOKEN=<token> WENDY_CLOUD_HOST=<cloud-host> bash -s -- --network-access network
 ```
 
 The agent enrolls into your organization on first startup. No `wendy device
 enroll` step needed. The token expires after about an hour, so run the command
 promptly. Without these variables the agent installs unenrolled and is
-discovered over your local network as described above.
+discoverable over your local network if you chose network access. Enrollment
+does not override a local-only access choice: a local-only agent does not open
+the cloud relay, so the device stays offline in your org. The printed command
+therefore includes `--network-access network`.
 
 If the device cannot reach Wendy Cloud during its first startup (for example,
 because the network is not yet up), enrollment is skipped and the token file is
@@ -61,9 +87,17 @@ sudo systemctl status wendy-agent
 
 You should see the service active and running.
 
+For an unenrolled local-only agent, verify from the same computer:
+
+```bash
+wendy --device 127.0.0.1:50051 device info --json
+```
+
+After enrollment, the agent uses its authenticated mTLS port (normally 50052).
+
 ## Discovering Your Device
 
-Once `wendy-agent` is installed and running, go back to your developer machine (where you installed the Wendy CLI) and run:
+If you chose **Other devices**, go back to your developer machine (where you installed the Wendy CLI) and run:
 
 ```bash
 wendy discover

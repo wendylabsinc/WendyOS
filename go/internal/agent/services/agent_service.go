@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -49,6 +51,12 @@ type AgentService struct {
 	isJetson   func() bool
 	rebootFn   func() error
 
+	// selectOSUpdater, osUpdateReboot and osUpdateAckWait back UpdateOS;
+	// settable within-package so tests need neither an updater nor a reboot.
+	selectOSUpdater func(requested, artifactURL string) (osUpdater, error)
+	osUpdateReboot  func(osVersion string) error
+	osUpdateAckWait time.Duration
+
 	// verifier checks the update binary's signature before install. Defaults
 	// to sigverify.DefaultVerifier (disabled until a real pinned key is
 	// embedded); settable within-package so tests can inject an enabled
@@ -69,6 +77,12 @@ type AgentService struct {
 	// process was started from; see binarySHA256.
 	binaryHashOnce sync.Once
 	binaryHash     string
+
+	// Settable within-package so tests need neither a WendyOS image nor its disks.
+	deviceTypePath string
+	rootMedium     func() (medium, disk string, err error)
+	rootMediumOnce sync.Once
+	rootMediumName string
 }
 
 func NewAgentService(
@@ -91,6 +105,13 @@ func NewAgentService(
 		osUpdateStateDir:   oshealth.DefaultStateDir,
 		verifier:           sigverify.DefaultVerifier,
 		restartFn:          scheduleAgentRestartExit,
+		osUpdateAckWait:    osUpdateAckWait,
+		selectOSUpdater: func(requested, artifactURL string) (osUpdater, error) {
+			return selectUpdater(logger, requested, artifactURL)
+		},
+		osUpdateReboot: func(osVersion string) error {
+			return rebootAfterOSUpdate(newRebooter(logger), osVersion)
+		},
 	}
 }
 
@@ -101,6 +122,9 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		CpuArchitecture: runtime.GOARCH,
 		Featureset:      detectFeatureset(),
 		BinarySha256:    s.binarySHA256(),
+		// Every type the agent's app config parsing knows. It ignores any
+		// other, so the CLI refuses a project that uses one (WDY-4049).
+		EntitlementTypes: slices.Clone(appconfig.ValidEntitlementTypes),
 	}
 
 	if hn, err := os.Hostname(); err == nil {
@@ -113,12 +137,12 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		resp.OsVersion = &distroVer
 	}
 
-	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		deviceType, storageMedium := parseDeviceType(string(data))
+	if data, err := os.ReadFile(s.deviceTypeFile()); err == nil {
+		deviceType, imageMedium := parseDeviceType(string(data))
 		if deviceType != "" {
 			resp.DeviceType = &deviceType
 		}
-		if storageMedium != "" {
+		if storageMedium := pickStorageMedium(s.bootMedium(), imageMedium); storageMedium != "" {
 			resp.StorageMedium = &storageMedium
 		}
 	}
@@ -560,7 +584,7 @@ func detectNvidiaGPUArch() string {
 }
 
 func detectFeatureset() []string {
-	var features []string
+	features := []string{"data-inference-classification"}
 
 	if _, err := os.Stat("/dev/nvidia0"); err == nil {
 		features = append(features, "gpu")
@@ -1028,6 +1052,10 @@ func readWendyOSVersionFrom(paths ...string) (string, bool) {
 	return "", false
 }
 
+// Older clients never cancel on Completed and always wait this out, so it must
+// end well before they start polling for the rebooted device.
+const osUpdateAckWait = 3 * time.Second
+
 func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
@@ -1053,7 +1081,7 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	restoreUpdater := inhibitAutoUpdater(s.logger)
 	defer restoreUpdater()
 
-	updater, err := selectUpdater(s.logger, req.GetUpdaterBackend(), req.GetArtifactUrl())
+	updater, err := s.selectOSUpdater(req.GetUpdaterBackend(), req.GetArtifactUrl())
 	if err != nil {
 		s.logger.Warn("UpdateOS rejected: no usable updater backend", zap.Error(err))
 		return sendOSUpdateFailure(stream, err.Error())
@@ -1086,14 +1114,23 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 			},
 		},
 	}); err != nil {
-		return err
+		// The update is installed either way, and one left unbooted blocks
+		// every later update until someone reboots the device by hand.
+		s.logger.Warn("Could not send OS update completion; rebooting anyway", zap.Error(err))
+	} else {
+		// Send only queues the frame and reboot(2) drops whatever is still
+		// unsent; a client that has Completed cancels the stream, ending this early.
+		select {
+		case <-stream.Context().Done():
+		case <-time.After(s.osUpdateAckWait):
+		}
 	}
 
 	// The running OS decides how to reboot: an image whose wendyos-update leaves
 	// the staged capsule non-durable needs the flush-and-unmount path, or the
 	// update just installed is lost on restart (WDY-2200).
 	osVersion, _ := wendyOSVersion()
-	if err := rebootAfterOSUpdate(newRebooter(s.logger), osVersion); err != nil {
+	if err := s.osUpdateReboot(osVersion); err != nil {
 		s.logger.Error("Failed to reboot after OS update", zap.Error(err))
 	}
 

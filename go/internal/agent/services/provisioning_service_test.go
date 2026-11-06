@@ -197,12 +197,21 @@ func TestUnprovision_ClearsStateAndFiles(t *testing.T) {
 		t.Fatalf("StartProvisioning: %v", err)
 	}
 
-	// All on-disk artifacts should exist after provisioning.
-	stateFiles := []string{"provisioning.json", "device-key.pem", "device.pem", "ca.pem", ".provisioned"}
+	// Enrollment emits only the files that the agent reads.
+	assertNoLegacyProvisioningFiles(t, tmpDir)
+	stateFiles := []string{"provisioning.json", "device-key.pem"}
 	for _, f := range stateFiles {
 		if _, err := os.Stat(filepath.Join(tmpDir, f)); err != nil {
 			t.Fatalf("expected %s to exist after provisioning: %v", f, err)
 		}
+	}
+
+	// Older agents emitted these files; unprovision must still remove them.
+	for _, name := range []string{"device.pem", "ca.pem", ".provisioned"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("legacy"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stateFiles = append(stateFiles, name)
 	}
 
 	// OnUnprovisioned fires asynchronously after the response; capture it.
@@ -211,12 +220,13 @@ func TestUnprovision_ClearsStateAndFiles(t *testing.T) {
 	// BeforeUnprovisioned must finish before success is reported, after
 	// enrollment state is cleared and without holding the service lock.
 	beforeRan := false
-	svc.BeforeUnprovisioned = func() {
+	svc.BeforeUnprovisioned = func() error {
 		if _, _, _, enrolled := svc.ProvisioningInfo(); enrolled {
 			t.Error("BeforeUnprovisioned ran while still enrolled")
 		}
 		time.Sleep(50 * time.Millisecond) // an asynchronous hook would lose this race
 		beforeRan = true
+		return nil
 	}
 
 	if _, err := svc.Unprovision(context.Background(), &agentpb.UnprovisionRequest{}); err != nil {

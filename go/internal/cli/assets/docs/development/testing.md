@@ -2,6 +2,22 @@
 
 WendyOS uses both unit tests and integration tests to validate the CLI and agent behaviour.
 
+## Routing engine tests
+
+The routing library in `go/babel` is a separate Go module. A parent-module
+`go test ./...` or `go vet ./...` does not include it. Run both checks from its
+own directory:
+
+```sh
+cd go/babel
+go test -race -count=1 -timeout=300s ./...
+go vet ./...
+```
+
+The CI aggregate `Test` check requires the dedicated Babel job. The library's
+[README](https://github.com/wendylabsinc/WendyOS/blob/main/go/babel/README.md)
+contains additional fuzz and benchmark commands.
+
 ## Integration Tests
 
 Integration tests verify that specific features work end-to-end on a real (or simulated) Wendy device. They live under `.github/ci-tests/` in the repository.

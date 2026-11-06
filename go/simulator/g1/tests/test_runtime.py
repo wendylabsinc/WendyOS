@@ -14,6 +14,20 @@ from g1_sim.runtime import Runtime
 from g1_sim.server import Handler
 
 
+def test_camera_wanted_gates_render_on_real_demand():
+    """The expensive exposure loop runs only for a live browser or ROS consumer."""
+    from types import SimpleNamespace
+    sub = lambda count: SimpleNamespace(slow_node=SimpleNamespace(
+        image_pub=SimpleNamespace(get_subscription_count=lambda: count)))
+    # Idle: no recent /camera.jpg and no ROS bridge -> skip rendering.
+    assert Runtime.camera_wanted(SimpleNamespace(camera_demand=0.0, ros_bridge=None)) is False
+    # A browser request within the window keeps it live.
+    assert Runtime.camera_wanted(SimpleNamespace(camera_demand=time.monotonic(), ros_bridge=None)) is True
+    # A ROS subscriber demands frames even without a browser; zero subscribers do not.
+    assert Runtime.camera_wanted(SimpleNamespace(camera_demand=0.0, ros_bridge=sub(1))) is True
+    assert Runtime.camera_wanted(SimpleNamespace(camera_demand=0.0, ros_bridge=sub(0))) is False
+
+
 def wait_until(predicate, *, timeout=2.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

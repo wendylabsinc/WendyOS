@@ -51,10 +51,12 @@ needed. Test controller bounds and stopping on stale, invalid or missing inputs.
 
 Use MCP `run(project_path=..., device=...)` or connect first and omit the target
 to reuse that session. `device_name` is the legacy cloud-only selector. Check the
-returned target. CLI fallback: `wendy run --device <selector> --detach --yes`.
-`--deploy` creates without starting. Detached deployment does not wait for app
-readiness; inspect containers, startup logs and a finite sample of the app's
-actual output. A command published to ROS is not evidence the robot moved.
+returned target. CLI fallback:
+`wendy --json run --device <selector> --detach --wait-ready --yes`; drop
+`--wait-ready` when the CLI rejects it. `--deploy` creates without starting.
+Readiness covers a TCP port at most: inspect containers, startup logs and a
+finite sample of the app's actual output. A command published to ROS is not
+evidence the robot moved.
 
 Keep motion disabled at startup and after observation faults until an explicit
 start request. Preserve zero-command stop behavior, finite distance/time bounds

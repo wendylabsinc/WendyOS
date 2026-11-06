@@ -44,7 +44,11 @@ func (m *Manager) FreshTime(ctx context.Context) (TimeWindow, error) {
 	if err != nil {
 		return TimeWindow{}, fmt.Errorf("timesync: fresh authenticated query failed: %w", err)
 	}
-	if err := queryCtx.Err(); err != nil {
+	// QueryConsensus can collect a valid quorum before an unreachable server
+	// exhausts the collection deadline. Included responses already passed the
+	// RTT bound, and their offsets remain anchored to boot time. Preserve that
+	// quorum unless the caller canceled the operation.
+	if err := ctx.Err(); err != nil {
 		return TimeWindow{}, err
 	}
 	if !disciplinesClock(c) || c.Quorum < 2 || c.UpperOffsetNanos < c.LowerOffsetNanos {

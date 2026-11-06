@@ -27,6 +27,26 @@ import {
 
 const execute = promisify(execFile);
 
+function cloudDiscoverySelector(device) {
+  const selector = device?.selector;
+  if (typeof selector !== "string") return null;
+  try {
+    if (deviceTarget(selector) !== selector) return null;
+    const url = new URL(selector);
+    if (url.protocol !== "cloud:" || !url.hostname || url.username || url.password ||
+        selector !== `cloud://${url.host}${url.pathname}`) return null;
+    const parts = url.pathname.split("/");
+    if (parts.length !== 5 || parts[0] !== "" || parts[3] !== "asset" ||
+        parts[4] !== String(device.id ?? "")) return null;
+    const uuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) &&
+      value !== "00000000-0000-0000-0000-000000000000";
+    const positiveInt32 = (value) => /^[1-9][0-9]*$/.test(value) && Number(value) <= 2147483647;
+    if (parts[1] === "tenant" && uuid(parts[2]) && uuid(parts[4])) return selector;
+    if (parts[1] === "org" && positiveInt32(parts[2]) && positiveInt32(parts[4])) return selector;
+  } catch { /* An invalid inventory row must not discard other discovery results. */ }
+  return null;
+}
+
 export class DesktopService {
   constructor({
     resources,
@@ -55,13 +75,19 @@ export class DesktopService {
     this.viewerLeases = new Map();
     this.viewerChecks = new Map();
     this.deviceSnapshots = new Map();
+    this.meshSnapshots = new Map();
+    this.meshQueue = [];
+    this.meshActive = new Set();
+    this.meshControllers = new Set();
+    this.meshReporterKeys = new Map();
+    this.meshReporterTargets = new Map();
     this.monitorLogs = new DeviceLogs({ cli: this.cli, env });
     this.monitorGeneration = 0;
   }
 
   async initialize() {
     this.sources = {};
-    for (const kind of ["go2", "g1"]) {
+    for (const kind of ["go2", "g1", "so101"]) {
       const digest = (
         await readFile(join(this.resources, `${kind}-digest.txt`), "utf8")
       ).trim();
@@ -288,6 +314,230 @@ export class DesktopService {
     return request;
   }
 
+  meshTopology({ target }) {
+    target = deviceTarget(target);
+    const reporter = this.meshReporterKeys.get(target) || target;
+    const pending = this.meshSnapshots.get(reporter);
+    if (pending) return pending;
+    if (this.meshSnapshots.size >= 64)
+      throw new Error("The local observation queue is full. Try again shortly.");
+    const generation = this.monitorGeneration;
+    const expiresAt = Date.now() + 160_000;
+    const controller = new AbortController();
+    let entry;
+    const request = new Promise((resolve, reject) => {
+      entry = { reporter, generation, controller, resolve, reject, read: async () => {
+        if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+        const aliases = this.meshReporterTargets.get(reporter) || [];
+        let failure;
+        // Keep one management session at a time, but do not let a busy USB or
+        // unreachable mesh path suppress a working enrolled Cloud alias.
+        for (const candidate of new Set([target, ...aliases])) {
+          if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+          try {
+            const address = candidate === "cli://local" ? candidate : await this.monitorTarget(candidate);
+            if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+            const remaining = expiresAt - Date.now();
+            if (remaining <= 0) throw new Error("The topology observation timed out while waiting for admission.");
+            const output = await this.run(this.cli,
+              ["device", "wendy-net", "topology", ...(candidate === "cli://local" ? ["--local-cli"] : ["--device", address]), "--json", "--observation"],
+              { timeout: candidate === "cli://local" ? Math.min(remaining, 5_000) : remaining, maxBuffer: 2 * 1024 * 1024, signal: controller.signal });
+            if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+            const observation = JSON.parse(output);
+            if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
+                (observation.status === "ok" && (!observation.topology || typeof observation.topology.selfPrincipal !== "string")))
+              throw new Error("The CLI returned an invalid local observation.");
+            if (!["unavailable", "error"].includes(observation.status)) return observation;
+            failure = observation;
+          } catch (error) {
+            if (generation !== this.monitorGeneration || controller.signal.aborted) throw error;
+            failure = error;
+          }
+          if (Date.now() >= expiresAt) break;
+        }
+        if (failure instanceof Error) throw failure;
+        return failure;
+      }};
+      entry.timer = setTimeout(() => {
+        const index = this.meshQueue.indexOf(entry);
+        if (index >= 0) {
+          this.meshQueue.splice(index, 1);
+          reject(new Error("The topology observation timed out while waiting for admission."));
+        }
+      }, 160_000);
+      this.meshQueue.push(entry);
+    }).finally(() => { clearTimeout(entry.timer); this.meshSnapshots.delete(reporter); });
+    this.meshSnapshots.set(reporter, request);
+    this.drainMeshQueue();
+    return request;
+  }
+
+  drainMeshQueue() {
+    for (let index = 0; index < this.meshQueue.length;) {
+      const job = this.meshQueue[index];
+      if (job.generation !== this.monitorGeneration) {
+        this.meshQueue.splice(index, 1);
+        job.reject(new Error("This local network view is no longer open."));
+        continue;
+      }
+      if (this.meshActive.size >= 3 || this.meshActive.has(job.reporter)) { index++; continue; }
+      this.meshQueue.splice(index, 1);
+      clearTimeout(job.timer);
+      this.meshActive.add(job.reporter);
+      this.meshControllers.add(job.controller);
+      Promise.resolve().then(job.read).then(job.resolve, job.reject).finally(() => {
+        this.meshActive.delete(job.reporter);
+        this.meshControllers.delete(job.controller);
+        this.drainMeshQueue();
+      });
+    }
+  }
+
+  async meshDiscover() {
+    const sources = await Promise.allSettled([
+      this.run(this.cli, ["discover", "--json", "--type", "all", "--timeout", "5s"], { timeout: 20_000 }).then(JSON.parse),
+      this.run(this.cli, ["cloud", "discover", "--all", "--json"], { timeout: 25_000 }).then(JSON.parse),
+    ]);
+    const devices = new Map();
+    const reporterKeys = new Map();
+    const warnings = [];
+    let retainPrevious = sources.some(source => source.status === "rejected");
+    const identities = new Map();
+    const canonicalUUID = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) && id !== "00000000-0000-0000-0000-000000000000" ? id.toLowerCase() : undefined;
+    const add = (target, name, deviceType, platform, key, deviceUUID, tenantUUID) => {
+      target = deviceTarget(target);
+      if (key) reporterKeys.set(target, key);
+      const uuid = canonicalUUID(deviceUUID);
+      if (uuid) identities.set(target, { uuid, tenant: canonicalUUID(tenantUUID) });
+      if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType, platform, reporterKey: key });
+    };
+    // The desktop's own CLI owner is independent of device inventory. Reading
+    // it joins only an existing private broker and never enables a participant.
+    add("cli://local", "This computer's CLI router", "Operator router", "wendy-cli", "cli://local");
+    if (sources.every((source) => source.status === "rejected")) {
+      return { devices: [...devices.values()], retainPrevious: true, warnings: sources.map((source, index) =>
+        `${index === 0 ? "Local" : "Cloud"} discovery: ${source.reason.message}`) };
+    }
+    if (sources[0].status === "fulfilled") {
+      const collection = sources[0].value;
+      let invalidAddress = false;
+      if (!collection || typeof collection !== "object" || Array.isArray(collection))
+        warnings.push("Local discovery returned an invalid inventory.");
+      else for (const key of ["lanDevices", "ethernetDevices", "usbDevices"]) {
+        if (collection[key] != null && !Array.isArray(collection[key])) {
+          invalidAddress = true;
+          continue;
+        }
+        for (const device of collection[key] || []) {
+          // Local advertisements are untrusted. An invalid row must not hide
+          // other local devices or the independent Cloud inventory.
+          if (!device?.isWendyDevice) continue;
+          try {
+            const host = device.hostname || device.ipAddress;
+            if (!host) continue;
+            const address = device.port ? `${host.includes(":") ? `[${host}]` : host}:${device.port}` : host;
+            // Discovery names are labels only. Tenant grouping waits for a
+            // snapshot tied to the independently verified device certificate.
+            add(address, device.displayName || device.name, device.deviceType);
+          } catch { invalidAddress = true; }
+        }
+      }
+      // Existing provider IDs retain physical USB/LAN/BLE selection semantics.
+      // Inventory identity hints are labels; the selected stream authenticates
+      // its reporter independently before it can contribute graph edges.
+      for (const device of Array.isArray(collection?.externalDevices) ? collection.externalDevices : []) {
+        if (!device?.isWendyDevice || device.providerKey !== "wendy-lite" || device.connectionInfo?.needsInstall === "true") continue;
+        try {
+          const target = device.connectionInfo?.type === "BLE"
+            ? `wendy-lite:ble:${device.connectionInfo.address}` : device.id;
+          if (typeof target !== "string" || !target.startsWith("wendy-lite:")) continue;
+          add(target, device.displayName, "Wendy Lite", "wendy-lite", undefined, device.connectionInfo?.enrolledDeviceId, device.connectionInfo?.tenantId);
+        } catch { invalidAddress = true; }
+      }
+      // CLI4 supplies retained, signed native endpoint metadata. Keep its
+      // selector intact: the CLI resolver refreshes/authenticates it at read.
+      // No IP/port is guessed and no extra target probe is performed here.
+      const mesh = collection?.meshDiscovery;
+      const meshRows = Array.isArray(collection?.meshDevices) ? collection.meshDevices : [];
+      const ready = mesh?.state === "ready" && Number.isFinite(mesh.capturedAtUnixMs) && mesh.capturedAtUnixMs > 0 && mesh.capturedAtUnixMs <= Date.now() + 1000;
+      const fresh = ready && Date.now() - mesh.capturedAtUnixMs <= 10_000;
+      if (mesh && (!fresh || mesh.truncated)) {
+        retainPrevious = true;
+        warnings.push(`Mesh discovery: ${fresh ? "partial signed inventory" : mesh.state === "ready" ? "stale signed inventory" : mesh.state || "unavailable"}. Previous observations may be stale.`);
+      }
+      // Another inventory source may have delayed this response. Retain a
+      // still-live selector as a candidate; the provider refreshes it at read.
+      if (ready) {
+        let omitted = false;
+        for (const row of meshRows) {
+          if (row?.platform !== "Lite") continue;
+          const tenant = canonicalUUID(row.tenant), uuid = canonicalUUID(row.device);
+          if (!tenant || !uuid || row.tenant !== tenant || row.device !== uuid ||
+              row.selector !== `mesh://${tenant}/${uuid}` || row.principal !== `spiffe://wendy.sh/tenant/${tenant}/device/${uuid}` ||
+              row.transport !== "mtls-v1" || !Number.isFinite(row.expiresAtUnixMs) || row.expiresAtUnixMs <= Date.now()) {
+            omitted = true; continue;
+          }
+          add(row.selector, row.name, "Wendy Lite", "wendy-lite", undefined, uuid, tenant);
+        }
+        if (omitted) {
+          retainPrevious = true;
+          warnings.push("Mesh discovery omitted expired or incomplete Lite reporters.");
+        }
+      }
+      if (invalidAddress) warnings.push("Local discovery omitted devices with invalid addresses.");
+    } else warnings.push("Local discovery: " + sources[0].reason.message);
+    if (sources[1].status === "fulfilled") {
+      if (!Array.isArray(sources[1].value)) warnings.push("Cloud discovery returned an invalid inventory.");
+      else {
+        let invalidSelector = false;
+        for (const device of sources[1].value) {
+          // The CLI supplies the complete selector from its authenticated
+          // session. An asset ID alone cannot identify a Cloud login.
+          const selector = cloudDiscoverySelector(device);
+          if (!selector) { invalidSelector = true; continue; }
+          const parts = new URL(selector).pathname.split("/");
+          const tenant = parts[1] === "tenant" ? canonicalUUID(parts[2]) : undefined;
+          const asset = canonicalUUID(device.id);
+          // v2 asset IDs carry device UUIDs. Match a known physical/signed
+          // identity before treating it as an alias; Cloud-only contexts keep
+          // their complete independent endpoint/tenant selectors.
+          const known = canonicalUUID(device.pkiDeviceName) || (tenant && asset && [...identities.values()].some(identity => identity.uuid === asset && (!identity.tenant || identity.tenant === tenant)) ? asset : undefined);
+          add(selector, device.name, device.type, device.osType || (/lite/i.test(device.type || "") ? "wendy-lite" : undefined), undefined, known, tenant);
+        }
+        if (invalidSelector) warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
+      }
+    } else warnings.push("Cloud discovery: " + sources[1].reason.message);
+    // A physical USB row may know its enrolled UUID before its tenant. Join
+    // that alias only when this inventory has one unambiguous tenant for it.
+    const tenants = new Map();
+    for (const { uuid, tenant } of identities.values()) if (tenant) {
+      if (!tenants.has(uuid)) tenants.set(uuid, new Set());
+      tenants.get(uuid).add(tenant);
+    }
+    for (const [target, identity] of identities) {
+      const choices = tenants.get(identity.uuid);
+      const tenant = identity.tenant || (choices?.size === 1 ? [...choices][0] : undefined);
+      reporterKeys.set(target, `device:${tenant ? tenant + "/" : ""}${identity.uuid}`);
+    }
+    // Publish the aliases together. A partial inventory cannot establish that
+    // a previous alias disappeared, including while a read is in flight.
+    this.meshReporterKeys = retainPrevious
+      ? new Map([...this.meshReporterKeys, ...reporterKeys]) : reporterKeys;
+    this.meshReporterTargets = new Map();
+    for (const [target, key] of this.meshReporterKeys) {
+      if (!this.meshReporterTargets.has(key)) this.meshReporterTargets.set(key, []);
+      this.meshReporterTargets.get(key).push(target);
+    }
+    const reporters = [], seen = new Set();
+    for (const [target, device] of devices) {
+      const key = this.meshReporterKeys.get(target);
+      if (key && seen.has(key)) continue;
+      if (key) { seen.add(key); device.reporterKey = key; }
+      reporters.push(device);
+    }
+    return { devices: reporters, warnings, ...(retainPrevious ? { retainPrevious: true } : {}) };
+  }
+
   deviceLogsSnapshot(id) {
     return this.monitorLogs.snapshot(id);
   }
@@ -298,6 +548,8 @@ export class DesktopService {
 
   close() {
     this.monitorGeneration++;
+    for (const controller of this.meshControllers) controller.abort();
+    this.drainMeshQueue();
     this.monitorLogs.close();
   }
 
@@ -560,7 +812,7 @@ export class DesktopService {
       "/api/scene/lidar",
       "/camera.jpg",
     ];
-    const writes = [
+    const writes = sim.kind === "so101" ? ["pose", "pause", "reset", "demo"].map((action) => `/api/${action}`) : [
       "arm",
       "release",
       "stop",
@@ -682,7 +934,7 @@ export class DesktopService {
             args: [
               "build",
               "--platform",
-              "linux/arm64",
+              kind === "so101" && process.arch === "x64" ? "linux/amd64" : "linux/arm64",
               "--tag",
               source.image,
               ".",
@@ -734,7 +986,7 @@ export class DesktopService {
               args: [
                 "build",
                 "--platform",
-                "linux/arm64",
+                kind === "so101" && process.arch === "x64" ? "linux/amd64" : "linux/arm64",
                 "--tag",
                 source.image,
                 ".",

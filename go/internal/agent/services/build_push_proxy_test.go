@@ -18,17 +18,27 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
+// testAssetUUID is a canonical Cloud asset UUID standing in for the delivery
+// target's asset record across these tests.
+const testAssetUUID = "5b8f3a2e-1c4d-4e9a-8b7c-6d5e4f3a2b1c"
+
 // stubPeerDialer stands in for MeshDialer so the proxy can be tested without a
-// broker or a real peer.
+// broker or a real peer. It records the last target it was asked to dial: the
+// proxy must dial the RESOLVED target — the roster-supplied device identity —
+// because that identity is what the pinned TLS hop is authorized against.
 type stubPeerDialer struct {
 	addr  string // when set, dial this instead of a mesh peer
 	err   error
 	calls *int
+	last  *DeliveryTarget
 }
 
-func (d stubPeerDialer) DialDevice(_ context.Context, _ int32, _ uint16) (net.Conn, string, error) {
+func (d stubPeerDialer) DialTarget(_ context.Context, target DeliveryTarget, _ uint16) (net.Conn, string, error) {
 	if d.calls != nil {
 		(*d.calls)++
+	}
+	if d.last != nil {
+		*d.last = target
 	}
 	if d.err != nil {
 		return nil, "", d.err
@@ -41,7 +51,11 @@ func (d stubPeerDialer) DialDevice(_ context.Context, _ int32, _ uint16) (net.Co
 }
 
 func testTarget() *agentpbv2.PushTarget {
-	return &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "myapp:latest"}
+	return &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "myapp:latest"}
+}
+
+func testDeliveryTarget() DeliveryTarget {
+	return DeliveryTarget{AssetUUID: testAssetUUID}
 }
 
 // A push that cannot reach the target must surface WHY. Without this the
@@ -52,7 +66,7 @@ func TestPushProxy_SurfacesDialFailure(t *testing.T) {
 	var calls int
 	dialer := stubPeerDialer{err: errors.New("no route to peer"), calls: &calls}
 
-	proxy, err := startPushProxy(context.Background(), dialer, testTarget(), &tls.Config{MinVersion: tls.VersionTLS12})
+	proxy, err := startPushProxy(context.Background(), dialer, testDeliveryTarget(), 5000, &tls.Config{MinVersion: tls.VersionTLS12})
 	if err != nil {
 		t.Fatalf("startPushProxy: %v", err)
 	}
@@ -120,7 +134,7 @@ func proxyToBackend(t *testing.T, handler http.Handler) *pushProxy {
 	backend := httptest.NewServer(handler)
 	t.Cleanup(backend.Close)
 
-	proxy, err := newPushProxy(stubPeerDialer{addr: backend.Listener.Addr().String()}, testTarget(), nil)
+	proxy, err := newPushProxy(stubPeerDialer{addr: backend.Listener.Addr().String()}, testDeliveryTarget(), 5000, nil)
 	if err != nil {
 		t.Fatalf("newPushProxy: %v", err)
 	}
@@ -184,12 +198,12 @@ func TestPushProxy_RefusesWrongCredential(t *testing.T) {
 // Each build mints its own credential, so one leaked from a previous build is
 // not a standing key to the next one.
 func TestPushProxy_CredentialIsPerBuild(t *testing.T) {
-	first, err := newPushProxy(stubPeerDialer{}, testTarget(), nil)
+	first, err := newPushProxy(stubPeerDialer{}, testDeliveryTarget(), 5000, nil)
 	if err != nil {
 		t.Fatalf("newPushProxy: %v", err)
 	}
 	defer first.ln.Close()
-	second, err := newPushProxy(stubPeerDialer{}, testTarget(), nil)
+	second, err := newPushProxy(stubPeerDialer{}, testDeliveryTarget(), 5000, nil)
 	if err != nil {
 		t.Fatalf("newPushProxy: %v", err)
 	}
@@ -385,7 +399,7 @@ func TestDockerConfigWithPushAuth_WritesUsableCredential(t *testing.T) {
 
 func TestPushProxy_NoErrorWhenNothingConnects(t *testing.T) {
 	proxy, err := startPushProxy(context.Background(),
-		stubPeerDialer{addr: "127.0.0.1:1"}, testTarget(), &tls.Config{MinVersion: tls.VersionTLS12})
+		stubPeerDialer{addr: "127.0.0.1:1"}, testDeliveryTarget(), 5000, &tls.Config{MinVersion: tls.VersionTLS12})
 	if err != nil {
 		t.Fatalf("startPushProxy: %v", err)
 	}
@@ -396,9 +410,32 @@ func TestPushProxy_NoErrorWhenNothingConnects(t *testing.T) {
 	}
 }
 
+// The hop the pinned certificate authorizes is the resolved device, not the
+// asset number the CLI named: dialing anything else would let the image reach
+// a device nobody resolved it to.
+func TestPushProxy_DialsResolvedTarget(t *testing.T) {
+	var dialed DeliveryTarget
+	proxy, err := startPushProxy(context.Background(),
+		stubPeerDialer{addr: "127.0.0.1:1", last: &dialed}, testDeliveryTarget(), 5000, &tls.Config{MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Fatalf("startPushProxy: %v", err)
+	}
+	defer proxy.stop()
+
+	req, _ := http.NewRequest(http.MethodHead, "http://"+proxy.addr+"/v2/", nil)
+	req.SetBasicAuth(pushProxyUser, proxy.credential)
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
+	if dialed.AssetUUID != testAssetUUID {
+		t.Fatalf("proxy dialled asset %q, want the resolved %q", dialed.AssetUUID, testAssetUUID)
+	}
+}
+
 func TestValidatePushTarget_AcceptsMeshPeer(t *testing.T) {
 	if err := validatePushTarget(&agentpbv2.PushTarget{
-		AssetId: 214, RegistryPort: 5000, Repository: "myapp:latest",
+		AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "myapp:latest",
 	}); err != nil {
 		t.Fatalf("validatePushTarget: %v", err)
 	}
@@ -410,17 +447,28 @@ func TestValidatePushTarget_RejectsMissingTarget(t *testing.T) {
 	}
 }
 
-func TestValidatePushTarget_RejectsBadAssetID(t *testing.T) {
-	if err := validatePushTarget(&agentpbv2.PushTarget{
-		AssetId: 0, RegistryPort: 5000, Repository: "a:latest",
-	}); err == nil {
-		t.Fatal("a non-positive asset id must be rejected")
+// Only canonical Cloud asset UUID text names a device: a bare number, a
+// non-canonical spelling, or nothing at all cannot be resolved against the
+// roster and must fail before any build runs.
+func TestValidatePushTarget_RejectsNonCanonicalAsset(t *testing.T) {
+	for _, asset := range []string{
+		"",
+		"214",
+		"not-a-uuid",
+		"5b8f3a2e1c4d4e9a8b7c6d5e4f3a2b1c",
+		"5B8F3A2E-1C4D-4E9A-8B7C-6D5E4F3A2B1C",
+	} {
+		if err := validatePushTarget(&agentpbv2.PushTarget{
+			AssetUuid: asset, RegistryPort: 5000, Repository: "a:latest",
+		}); err == nil {
+			t.Fatalf("asset %q was accepted; it is not canonical UUID text", asset)
+		}
 	}
 }
 
 func TestValidatePushTarget_RejectsBadPort(t *testing.T) {
 	if err := validatePushTarget(&agentpbv2.PushTarget{
-		AssetId: 214, RegistryPort: 0, Repository: "a:latest",
+		AssetUuid: testAssetUUID, RegistryPort: 0, Repository: "a:latest",
 	}); err == nil {
 		t.Fatal("a zero registry port must be rejected")
 	}
@@ -430,7 +478,7 @@ func TestValidatePushTarget_RejectsBadPort(t *testing.T) {
 // address, quietly redirecting the push somewhere else.
 func TestValidatePushTarget_RejectsHostInRepository(t *testing.T) {
 	if err := validatePushTarget(&agentpbv2.PushTarget{
-		AssetId: 214, RegistryPort: 5000, Repository: "evil.example.com/a:latest",
+		AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "evil.example.com/a:latest",
 	}); err == nil {
 		t.Fatal("a repository containing a host component must be rejected")
 	}
@@ -452,7 +500,7 @@ func TestValidatePushTarget_RejectsBuildctlOutputOptionInjection(t *testing.T) {
 		"a:latest,name=other.example.com/x:1", // rename the push destination outright
 	} {
 		if err := validatePushTarget(&agentpbv2.PushTarget{
-			AssetId: 214, RegistryPort: 5000, Repository: repo,
+			AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: repo,
 		}); err == nil {
 			t.Fatalf("repository %q was accepted; it can rewrite the buildctl output spec", repo)
 		}
@@ -469,7 +517,7 @@ func TestValidatePushTarget_AcceptsRealAppRepositories(t *testing.T) {
 		"app",
 	} {
 		if err := validatePushTarget(&agentpbv2.PushTarget{
-			AssetId: 214, RegistryPort: 5000, Repository: repo,
+			AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: repo,
 		}); err != nil {
 			t.Fatalf("repository %q was rejected: %v", repo, err)
 		}

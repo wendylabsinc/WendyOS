@@ -54,8 +54,7 @@ command that reaches the multi-context branch):
 |-----|--------|
 | `↑` / `↓` | Navigate contexts |
 | `enter` | Use this context for the current invocation only |
-| `d` | Switch to the highlighted context (equivalent to `wendy auth use`) |
-| `x` | Clear the current context |
+| `d` | Switch to the highlighted context (equivalent to `wendy auth use`); on the current context, clear it |
 | `q` / `Ctrl+C` | Cancel |
 
 The current context is marked with `✦`.

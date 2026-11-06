@@ -10,6 +10,10 @@ export function monitoringError(error) {
 
   if (/identity (?:changed|mismatch)|pin mismatch|key (?:has )?changed|different device|does not match (?:the )?(?:saved|expected|pinned)|certificate.*mismatch/i.test(message))
     return "The device identity does not match the saved identity. Verify that you selected the intended device before reconnecting.";
+  // A pinned device reset to unprovisioned: the refusal also says "pinned to an
+  // enrolled identity", which the sign-in rule below would otherwise claim.
+  if (/answers unprovisioned/i.test(message))
+    return "This device now answers as unprovisioned, but its previous enrollment is still saved on this computer. If you reset or reflashed it on purpose, clear the saved identity with the Wendy CLI's device unpin command and reconnect; otherwise verify the device first.";
   if (/no authenticated endpoint/i.test(message) && unreachable.test(message))
     return "Cannot reach this device. Check that it is running and connected to the network.";
   if (/pinned.*(?:enrolled|authenticated)|no authenticated endpoint|unauthenticated|not authenticated|authentication (?:failed|required)|permission denied|access denied|not authorized|unauthorized|authorization failed|not logged in|login required|sign in to/i.test(message))

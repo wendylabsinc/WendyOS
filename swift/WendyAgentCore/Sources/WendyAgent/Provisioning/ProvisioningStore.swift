@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Logging
 
@@ -9,10 +10,12 @@ import Logging
 /// only the SE-wrapped blob lives in the Keychain (`KeychainStore`).
 struct ProvisioningStore {
     let configPath: URL
+    private let keychainStore: KeychainStore
     private let logger = Logger(label: "sh.wendy.agent.provisioning.store")
 
-    init(configPath: URL) {
+    init(configPath: URL, keychainStore: KeychainStore = KeychainStore()) {
         self.configPath = configPath
+        self.keychainStore = keychainStore
     }
 
     /// How the device's private key is stored: in the Secure Enclave (no key
@@ -48,6 +51,7 @@ struct ProvisioningStore {
 
     private var statePath: URL { self.configPath.appendingPathComponent("provisioning.json") }
     private var keyPath: URL { self.configPath.appendingPathComponent("device-key.pem") }
+    // Removed outputs from older agents are retained only for unprovision cleanup.
     private var certPath: URL { self.configPath.appendingPathComponent("device.pem") }
     private var caPath: URL { self.configPath.appendingPathComponent("ca.pem") }
     private var markerPath: URL { self.configPath.appendingPathComponent(".provisioned") }
@@ -64,37 +68,48 @@ struct ProvisioningStore {
 
         let backing: KeyBacking
         if state.keyBacking == "secureEnclave" {
-            // No key file for SE-backed devices; still restore cert/ca/marker
-            // if lost across an update (mirrors the software-key path below).
-            if !certPEM.isEmpty {
-                try? self.writeFile(self.certPath, contents: certPEM, permissions: 0o644)
-                try? self.writeFile(self.caPath, contents: chainPEM, permissions: 0o644)
-                try? self.writeFile(self.markerPath, contents: "", permissions: 0o644)
-            }
             backing = .secureEnclave
         } else {
-            var keyPEM = (try? String(contentsOf: self.keyPath, encoding: .utf8)) ?? ""
-            if keyPEM.isEmpty, let legacy = state.keyPem, !legacy.isEmpty {
-                // Migrate a legacy in-JSON key into device-key.pem, then rewrite the
-                // JSON without it.
-                keyPEM = legacy
-                try? self.writeFile(self.keyPath, contents: legacy, permissions: 0o600)
-                var stripped = state
-                stripped.keyPem = nil
-                if let rewritten = try? JSONEncoder().encode(stripped) {
-                    try? self.writeFile(self.statePath, data: rewritten, permissions: 0o600)
-                }
-                self.logger.info("Migrated device key from provisioning.json to device-key.pem")
-            }
-
-            // Restore individual PEM files if missing (e.g., lost across an update).
-            if !keyPEM.isEmpty, !certPEM.isEmpty {
-                try? self.writePEMFiles(keyPEM: keyPEM, certPEM: certPEM, chainPEM: chainPEM)
-            }
-
-            // Fail closed: an enrolled-but-keyless software device is not usable.
+            let storedKey = (try? String(contentsOf: self.keyPath, encoding: .utf8)) ?? ""
+            let keyPEM = storedKey.isEmpty ? (state.keyPem ?? "") : storedKey
             guard !keyPEM.isEmpty else { return nil }
+            do {
+                try self.writeFile(self.keyPath, contents: keyPEM, permissions: 0o600)
+            } catch let error where storedKey.isEmpty {
+                // A failed migration must leave the legacy JSON key intact.
+                self.logger.error("Failed to migrate device key: \(error)")
+                return nil
+            } catch {
+                // The key is already on disk, so like the Go agent, a failed
+                // repair keeps the enrollment instead of discarding it.
+                self.logger.warning("Failed to repair device key file: \(error)")
+            }
             backing = .softwarePEM(keyPEM)
+        }
+
+        do {
+            if state.keyPem != nil {
+                // Retain fields written by a newer agent while removing the
+                // migrated secret, matching the Go agent's state migration.
+                guard var stripped = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else {
+                    return nil
+                }
+                stripped.removeValue(forKey: "keyPem")
+                try self.writeFile(
+                    self.statePath,
+                    data: JSONSerialization.data(
+                        withJSONObject: stripped,
+                        options: [.prettyPrinted, .sortedKeys]
+                    ),
+                    permissions: 0o600
+                )
+            } else {
+                // Preserve original formatting and unknown fields during normal startup.
+                try self.writeFile(self.statePath, data: data, permissions: 0o600)
+            }
+        } catch {
+            self.logger.warning("Failed to repair provisioning state file: \(error)")
         }
 
         return LoadedState(
@@ -124,7 +139,7 @@ struct ProvisioningStore {
             attributes: [.posixPermissions: 0o700]
         )
 
-        // Write the key/cert/ca PEM files FIRST. provisioning.json (with
+        // Write the software key FIRST. provisioning.json (with
         // enrolled: true) is the commit marker `load()` treats as the source
         // of truth, so it must be written LAST: if anything above fails, the
         // device is left honestly unprovisioned (no json => load() -> nil)
@@ -132,14 +147,11 @@ struct ProvisioningStore {
         let keyBackingValue: String?
         switch keyBacking {
         case .softwarePEM(let pem):
-            try self.writePEMFiles(keyPEM: pem, certPEM: certPEM, chainPEM: chainPEM)
+            try self.writeFile(self.keyPath, contents: pem, permissions: 0o600)
             keyBackingValue = nil
         case .secureEnclave:
             // No key file: the key never leaves the Secure Enclave.
             try? FileManager.default.removeItem(at: self.keyPath)
-            try self.writeFile(self.certPath, contents: certPEM, permissions: 0o644)
-            try self.writeFile(self.caPath, contents: chainPEM, permissions: 0o644)
-            try self.writeFile(self.markerPath, contents: "", permissions: 0o644)
             keyBackingValue = "secureEnclave"
         }
 
@@ -175,14 +187,28 @@ struct ProvisioningStore {
         // Best-effort: also purge any Secure-Enclave-backed key blob so a
         // re-provision on this device starts clean. A missing Keychain item
         // is not an error here.
-        try? KeychainStore().remove(account: "device-key-se")
+        try? self.keychainStore.remove(account: "device-key-se")
     }
 
-    private func writePEMFiles(keyPEM: String, certPEM: String, chainPEM: String) throws {
-        try self.writeFile(self.keyPath, contents: keyPEM, permissions: 0o600)
-        try self.writeFile(self.certPath, contents: certPEM, permissions: 0o644)
-        try self.writeFile(self.caPath, contents: chainPEM, permissions: 0o644)
-        try self.writeFile(self.markerPath, contents: "", permissions: 0o644)
+    /// Avoid replacing correct state. Symlinks and incorrect permissions must
+    /// go through the writer even when their readable contents match.
+    private func fileMatches(_ url: URL, data: Data, permissions: Int) -> Bool {
+        let manager = FileManager.default
+        guard
+            let before = try? manager.attributesOfItem(atPath: url.path),
+            before[.type] as? FileAttributeType == .typeRegular,
+            before[.posixPermissions] as? Int == permissions,
+            before[.size] as? Int == data.count,
+            let contents = try? Data(contentsOf: url), contents == data,
+            let after = try? manager.attributesOfItem(atPath: url.path),
+            after[.type] as? FileAttributeType == .typeRegular,
+            after[.posixPermissions] as? Int == permissions,
+            let inode = before[.systemFileNumber] as? NSNumber,
+            let device = before[.systemNumber] as? NSNumber,
+            after[.systemFileNumber] as? NSNumber == inode,
+            after[.systemNumber] as? NSNumber == device
+        else { return false }
+        return true
     }
 
     private func writeFile(_ url: URL, contents: String, permissions: Int) throws {
@@ -190,6 +216,7 @@ struct ProvisioningStore {
     }
 
     private func writeFile(_ url: URL, data: Data, permissions: Int) throws {
+        if self.fileMatches(url, data: data, permissions: permissions) { return }
         let directory = url.deletingLastPathComponent()
         let tmpURL = directory.appendingPathComponent(
             ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
@@ -209,28 +236,47 @@ struct ProvisioningStore {
         }
 
         do {
-            let handle = try FileHandle(forWritingTo: tmpURL)
-            do {
-                try handle.write(contentsOf: data)
-                try handle.close()
-            } catch {
-                try? handle.close()
-                throw error
-            }
-
             // umask may have masked bits from createFile's attributes; re-assert.
             try FileManager.default.setAttributes(
                 [.posixPermissions: permissions],
                 ofItemAtPath: tmpURL.path
             )
 
-            // Remove any existing destination first, then rename atomically
-            // within the directory so the final path never observes the old
-            // (or a partially-written) content.
-            if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.removeItem(at: url)
+            let handle = try FileHandle(forWritingTo: tmpURL)
+            do {
+                try handle.write(contentsOf: data)
+                try handle.synchronize()
+                try handle.close()
+            } catch {
+                try? handle.close()
+                throw error
             }
-            try FileManager.default.moveItem(at: tmpURL, to: url)
+
+            // Rename over the destination without unlinking it first. Readers
+            // see a complete old or new file, and an unexpected directory is
+            // rejected without recursively removing its contents.
+            let result = tmpURL.path.withCString { source in
+                url.path.withCString { destination in
+                    unsafe Darwin.rename(source, destination)
+                }
+            }
+            guard result == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            // Make the directory entry durable after the replacement.
+            let parent = unsafe Darwin.open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard parent >= 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            let synced = Darwin.fsync(parent)
+            let syncError = errno
+            let closed = Darwin.close(parent)
+            guard synced == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: syncError) ?? .EIO)
+            }
+            guard closed == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
         } catch {
             try? FileManager.default.removeItem(at: tmpURL)
             throw error

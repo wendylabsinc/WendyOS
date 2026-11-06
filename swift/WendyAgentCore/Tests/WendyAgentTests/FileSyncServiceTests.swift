@@ -541,37 +541,37 @@ struct RunSessionTests {
         let destinationURL = appsBaseURL.appendingPathComponent(appID).appendingPathComponent("app")
 
         let recorder = ResponseRecorder()
-        var continuation: AsyncStream<Wendy_Agent_Services_V1_FileSyncRequest>.Continuation!
-        let stream = AsyncStream<Wendy_Agent_Services_V1_FileSyncRequest> { continuation = $0 }
-
-        let task = Task {
-            try await FileSyncService.runSession(
-                messages: stream,
-                writeResponse: { response in await recorder.append(response) },
-                appsBase: appsBaseURL,
-                logger: .init(label: "test")
-            )
-        }
-
-        continuation.yield(startRequest(appID: appID, manifest: manifest))
-        continuation.yield(
-            chunkRequest(
-                path: "app",
-                data: content,
-                sequence: 0,
-                cumulativeSize: Int64(content.count),
-                sha256: digest
-            )
+        // The consumer asks for commit only after it has handled the chunk.
+        // Change permissions at that boundary instead of racing a disk poll
+        // against scheduling of a separate producer task on a loaded CI host.
+        let requests = CommitRequestSource(
+            messages: [
+                startRequest(appID: appID, manifest: manifest),
+                chunkRequest(
+                    path: "app",
+                    data: content,
+                    sequence: 0,
+                    cumulativeSize: Int64(content.count),
+                    sha256: digest
+                ),
+                commitRequest(path: "app", size: Int64(content.count), sha256: digest),
+            ],
+            beforeCommit: {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o000],
+                    ofItemAtPath: tempURL.path
+                )
+            }
         )
-        try await waitForFile(at: tempURL, size: content.count)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o000],
-            ofItemAtPath: tempURL.path
+        let stream = AsyncThrowingStream<Wendy_Agent_Services_V1_FileSyncRequest, any Error>(
+            unfolding: { try await requests.next() }
         )
-        continuation.yield(commitRequest(path: "app", size: Int64(content.count), sha256: digest))
-        continuation.finish()
-
-        try await task.value
+        try await FileSyncService.runSession(
+            messages: stream,
+            writeResponse: { response in await recorder.append(response) },
+            appsBase: appsBaseURL,
+            logger: .init(label: "test")
+        )
 
         let responses = await recorder.snapshot()
         #expect(responses.count == 3)
@@ -1080,30 +1080,30 @@ private func temporaryURL(appsBase: URL, appID: String, path: String, digest: Da
     return destinationURL.deletingLastPathComponent().appendingPathComponent(temporaryName)
 }
 
-private func waitForFile(
-    at url: URL,
-    size expectedSize: Int? = nil,
-    timeoutNanoseconds: UInt64 = 1_000_000_000
-) async throws {
-    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
-    while DispatchTime.now().uptimeNanoseconds < deadline {
-        if FileManager.default.fileExists(atPath: url.path) {
-            if let expectedSize {
-                let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-                if attributes[.size] as? Int == expectedSize {
-                    return
-                }
-            } else {
-                return
-            }
-        }
-        try await Task.sleep(nanoseconds: 10_000_000)
+// An unfolding stream calls this source on demand, so the permission change
+// happens after chunk handling and before commit handling without a deadline.
+private actor CommitRequestSource {
+    let messages: [Wendy_Agent_Services_V1_FileSyncRequest]
+    let beforeCommit: @Sendable () throws -> Void
+    private var index = 0
+
+    init(
+        messages: [Wendy_Agent_Services_V1_FileSyncRequest],
+        beforeCommit: @escaping @Sendable () throws -> Void
+    ) {
+        self.messages = messages
+        self.beforeCommit = beforeCommit
     }
-    throw NSError(
-        domain: "FileSyncServiceTests",
-        code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for \(url.path)"]
-    )
+
+    func next() throws -> Wendy_Agent_Services_V1_FileSyncRequest? {
+        guard index < messages.count else { return nil }
+        let request = messages[index]
+        index += 1
+        if case .commit = request.requestType {
+            try beforeCommit()
+        }
+        return request
+    }
 }
 
 private func permissions(of url: URL) throws -> Int {

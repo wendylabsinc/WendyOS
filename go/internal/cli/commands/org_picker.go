@@ -180,8 +180,8 @@ func buildOrgPickerItems(orgs []*cloudpb.Organization, credIDs map[int32]bool) [
 //
 // Key bindings:
 //
-//   - d: mark highlighted org as the persisted default.
-//   - x: clear the default.
+//   - d: mark highlighted org as the persisted default; on the current
+//     default, clear it.
 //   - r: remove stored credentials for the highlighted org (if any).
 //   - enter: select the highlighted org and close the picker.
 //   - q / esc / ctrl+c: quit without selecting.

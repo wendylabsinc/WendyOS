@@ -34,28 +34,37 @@ func testLifecycle(deleted bool) *v2AssetState {
 	}
 	return &v2AssetState{Active: testUnenrollAsset()}
 }
-func TestV2UnenrollCloudOwnedPhases(t *testing.T) {
-	for _, failure := range []string{"", "initial-read", "delete", "confirm-deletion", "proof", "reset"} {
+func testAuthorizedReset(t *testing.T) *v2AuthorizedReset {
+	t.Helper()
+	deleted := testLifecycle(true).Deleted
+	deleted.DeletedAt = timestamppb.New(time.Unix(1700000000, 0))
+	raw, err := proto.Marshal(deleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &v2AuthorizedReset{deletion: raw, token: []byte("verified-by-authorize")}
+}
+
+func TestV2UnenrollCloudOwnedSignedResponsePhases(t *testing.T) {
+	for _, failure := range []string{"", "initial-read", "authorize", "proof", "refresh", "reset"} {
 		t.Run(failure, func(t *testing.T) {
 			j := testUnenrollProgress()
-			reads, resets := 0, 0
-			deleted := false
+			calls, resets := 0, 0
 			order := []string{}
 			ops := v2UnenrollOps{
 				lookup: func(context.Context, string) (*v2AssetState, error) {
-					reads++
-					if (reads == 1 && failure == "initial-read") || (reads == 2 && failure == "confirm-deletion") {
+					if failure == "initial-read" {
+						return nil, errors.New("unavailable")
+					}
+					return testLifecycle(false), nil
+				},
+				authorize: func(context.Context, string) (*v2AuthorizedReset, error) {
+					calls++
+					order = append(order, "authorize")
+					if (calls == 1 && failure == "authorize") || (calls == 2 && failure == "refresh") {
 						return nil, errors.New("uncertain")
 					}
-					return testLifecycle(deleted), nil
-				},
-				delete: func(context.Context, string) error {
-					order = append(order, "cloud")
-					if failure == "delete" {
-						return errors.New("uncertain")
-					}
-					deleted = true
-					return nil
+					return testAuthorizedReset(t), nil
 				},
 				proof: func(context.Context) ([]byte, error) {
 					order = append(order, "verify-PKI")
@@ -64,10 +73,10 @@ func TestV2UnenrollCloudOwnedPhases(t *testing.T) {
 					}
 					return []byte("verified"), nil
 				},
-				reset: func(_ context.Context, p, fp string, evidence []byte, d *cloudpbv2.DeletedAsset) error {
-					order = append(order, "reset")
+				reset: func(_ context.Context, p, fp string, evidence []byte, a *v2AuthorizedReset) error {
 					resets++
-					if p != j.Principal || fp != j.Fingerprint || string(evidence) != "verified" || d.GetId() != j.AssetID {
+					order = append(order, "reset")
+					if p != j.Principal || fp != j.Fingerprint || string(evidence) != "verified" || a == nil {
 						t.Fatal("binding lost")
 					}
 					if failure == "reset" {
@@ -80,62 +89,112 @@ func TestV2UnenrollCloudOwnedPhases(t *testing.T) {
 			if (err != nil) != (failure != "") {
 				t.Fatal(err)
 			}
-			wantDeleted := failure == "" || failure == "proof" || failure == "reset"
-			wantRevoked := failure == "" || failure == "reset"
-			if j.Deleted != wantDeleted || j.Revoked != wantRevoked || j.Reset != (failure == "") || (resets > 0) != wantRevoked {
+			wantDeleted := failure == "" || failure == "proof" || failure == "refresh" || failure == "reset"
+			wantRevoked := failure == "" || failure == "refresh" || failure == "reset"
+			if j.Deleted != wantDeleted || j.Revoked != wantRevoked || j.Reset != (failure == "") || (resets > 0) != (failure == "" || failure == "reset") {
 				t.Fatalf("false progress: %+v", j)
 			}
-			if failure == "" && strings.Join(order, ",") != "cloud,verify-PKI,reset" {
+			if failure == "" && strings.Join(order, ",") != "authorize,verify-PKI,authorize,reset" {
 				t.Fatal(order)
 			}
 		})
 	}
 }
+
 func TestV2UnenrollStatelessResumeAfterLostDeleteResponse(t *testing.T) {
-	deleted := false
-	deletions, resets := 0, 0
-	ops := v2UnenrollOps{lookup: func(context.Context, string) (*v2AssetState, error) { return testLifecycle(deleted), nil }, delete: func(context.Context, string) error { deletions++; deleted = true; return errors.New("reply lost") }, proof: func(context.Context) ([]byte, error) { return []byte("proof"), nil }, reset: func(context.Context, string, string, []byte, *cloudpbv2.DeletedAsset) error { resets++; return nil }}
+	gone := false
+	deletions, resets, authorizations := 0, 0, 0
+	ops := v2UnenrollOps{
+		lookup: func(context.Context, string) (*v2AssetState, error) {
+			if gone {
+				return nil, status.Error(codes.NotFound, "asset not found")
+			}
+			return testLifecycle(false), nil
+		},
+		authorize: func(context.Context, string) (*v2AuthorizedReset, error) {
+			authorizations++
+			if !gone {
+				gone = true
+				deletions++
+				return nil, errors.New("reply lost")
+			}
+			return testAuthorizedReset(t), nil
+		},
+		proof: func(context.Context) ([]byte, error) { return []byte("proof"), nil },
+		reset: func(context.Context, string, string, []byte, *v2AuthorizedReset) error { resets++; return nil },
+	}
 	first := testUnenrollProgress()
 	if err := performV2Unenroll(context.Background(), &first, ops); err == nil || resets != 0 {
 		t.Fatal("uncertain delete allowed erasure")
 	}
+	// A plain NotFound cannot discover a former Cloud UUID. Require the explicit
+	// asset ID, then obtain fresh signed audit evidence rather than trust NotFound.
+	missing := testUnenrollProgress()
+	missing.AssetID = ""
+	if err := performV2Unenroll(context.Background(), &missing, ops); err == nil || authorizations != 1 {
+		t.Fatal("unknown deleted asset accepted")
+	}
 	retry := testUnenrollProgress()
-	retry.AssetID = ""
 	if err := performV2Unenroll(context.Background(), &retry, ops); err != nil {
 		t.Fatal(err)
 	}
-	if !retry.Reset || retry.AssetID != unenrollAsset || deletions != 1 || resets != 1 {
-		t.Fatal("stateless retry failed")
+	if !retry.Reset || deletions != 1 || resets != 1 || authorizations != 3 {
+		t.Fatal("exact-asset stateless retry failed")
 	}
 }
-func TestV2UnenrollDeletedErrorDetails(t *testing.T) {
-	d := testLifecycle(true).Deleted
-	s, err := status.New(codes.NotFound, "arbitrary message").WithDetails(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := v2AssetLookupResult(nil, s.Err())
-	if err != nil {
-		t.Fatal(err)
-	}
-	j := testUnenrollProgress()
-	if deleted, err := v2UnenrollLifecycle(result, &j); err != nil || !deleted {
-		t.Fatal("typed evidence lost")
-	}
-	for _, e := range []error{status.Error(codes.NotFound, "deleted"), status.Error(codes.InvalidArgument, "old server requires id"), status.Error(codes.PermissionDenied, "denied")} {
-		if _, err := v2AssetLookupResult(nil, e); err == nil {
-			t.Fatal("status alone accepted")
-		}
-	}
-	wrong, _ := status.New(codes.FailedPrecondition, "wrong").WithDetails(d)
-	if _, err := v2AssetLookupResult(nil, wrong.Err()); err == nil {
-		t.Fatal("wrong status accepted")
-	}
-	multiple, _ := status.New(codes.NotFound, "ambiguous").WithDetails(d, d)
-	if _, err := v2AssetLookupResult(nil, multiple.Err()); err == nil {
-		t.Fatal("ambiguous evidence accepted")
+
+func TestV2UnenrollSignedEvidenceRequiredAfterNotFound(t *testing.T) {
+	for _, bad := range []string{"missing", "token", "deletion", "wrong-asset", "changed", "unavailable", "denied"} {
+		t.Run(bad, func(t *testing.T) {
+			j := testUnenrollProgress()
+			calls, resets := 0, 0
+			ops := v2UnenrollOps{
+				lookup: func(context.Context, string) (*v2AssetState, error) {
+					code := codes.NotFound
+					if bad == "unavailable" {
+						code = codes.Unavailable
+					}
+					if bad == "denied" {
+						code = codes.PermissionDenied
+					}
+					return nil, status.Error(code, "absent")
+				},
+				authorize: func(context.Context, string) (*v2AuthorizedReset, error) {
+					calls++
+					a := testAuthorizedReset(t)
+					switch bad {
+					case "missing":
+						return nil, nil
+					case "token":
+						a.token = nil
+					case "deletion":
+						a.deletion = []byte("invalid")
+					case "wrong-asset":
+						d := testLifecycle(true).Deleted
+						d.Id = "44444444-4444-4444-8444-444444444444"
+						a.deletion, _ = proto.Marshal(d)
+					case "changed":
+						if calls == 2 {
+							d := testLifecycle(true).Deleted
+							d.DeletedAt = timestamppb.New(time.Now().Add(-time.Hour))
+							a.deletion, _ = proto.Marshal(d)
+						}
+					}
+					return a, nil
+				},
+				proof: func(context.Context) ([]byte, error) { return []byte("proof"), nil },
+				reset: func(context.Context, string, string, []byte, *v2AuthorizedReset) error { resets++; return nil },
+			}
+			if err := performV2Unenroll(context.Background(), &j, ops); err == nil || resets != 0 {
+				t.Fatal("unconfirmed authorization allowed reset")
+			}
+			if (bad == "unavailable" || bad == "denied") && calls != 0 {
+				t.Fatal("Cloud refusal bypassed")
+			}
+		})
 	}
 }
+
 func TestV2UnenrollLifecycleRejectsUnknownOrChangedBinding(t *testing.T) {
 	for _, bad := range []string{"unknown", "nil", "tenant", "device", "asset", "missing-time"} {
 		for _, deleted := range []bool{false, true} {
@@ -178,32 +237,6 @@ func TestV2UnenrollLifecycleRejectsUnknownOrChangedBinding(t *testing.T) {
 		}
 	}
 }
-func TestV2UnenrollRechecksBindingAndDeletionEvidence(t *testing.T) {
-	for _, failure := range []string{"rebound", "purged", "still-active"} {
-		t.Run(failure, func(t *testing.T) {
-			j := testUnenrollProgress()
-			reads, resets := 0, 0
-			ops := v2UnenrollOps{lookup: func(context.Context, string) (*v2AssetState, error) {
-				reads++
-				r := testLifecycle(false)
-				if reads == 2 {
-					switch failure {
-					case "rebound":
-						r = testLifecycle(true)
-						r.Deleted.DeviceId = "other"
-					case "purged":
-						r = &v2AssetState{}
-					}
-				}
-				return r, nil
-			}, delete: func(context.Context, string) error { return nil }, proof: func(context.Context) ([]byte, error) { t.Fatal("proof check after bad Cloud binding"); return nil, nil }, reset: func(context.Context, string, string, []byte, *cloudpbv2.DeletedAsset) error { resets++; return nil }}
-			if err := performV2Unenroll(context.Background(), &j, ops); err == nil || resets != 0 {
-				t.Fatal("reset without authoritative proof")
-			}
-		})
-	}
-}
-
 func TestV2UnenrollUnauthenticatedAgentRefusedBeforeCloudAccess(t *testing.T) {
 	// The prerelease CloudUnenrollmentSupported flag alone never qualifies,
 	// not even for --check.
@@ -224,7 +257,7 @@ func TestV2UnenrollUnauthenticatedAgentRefusedBeforeCloudAccess(t *testing.T) {
 				}
 				// Missing connection/auth configuration would fail if the gate
 				// let the Cloud workflow start.
-				err := runV2DeviceUnenroll(context.Background(), nil, prov, nil, "", "", flags.yes, flags.checkOnly)
+				err := runV2DeviceUnenroll(context.Background(), nil, prov, nil, "", "", flags.yes, flags.checkOnly, false)
 				if err == nil || !strings.Contains(err.Error(), "does not support Cloud-authenticated reset") || !strings.Contains(err.Error(), "no mutation performed") {
 					t.Fatalf("unsafe workflow was not rejected before preflight: %v", err)
 				}
@@ -241,9 +274,34 @@ func TestV2UnenrollAuthenticatedResetBitAloneQualifies(t *testing.T) {
 			CloudAuthenticatedResetSupported: true,
 		}
 		// Passes the capability gate, then stops at the direct-mTLS peer check.
-		err := runV2DeviceUnenroll(context.Background(), nil, prov, nil, "", "", true, checkOnly)
+		err := runV2DeviceUnenroll(context.Background(), nil, prov, nil, "", "", true, checkOnly, false)
 		if err == nil || !strings.Contains(err.Error(), "directly verified mTLS device connection") {
 			t.Fatalf("check=%t: want direct-mTLS refusal after the capability gate, got %v", checkOnly, err)
+		}
+	}
+}
+
+// Each mode has its own capability: local-reset support never admits the
+// Cloud flow, and Cloud-authenticated reset support never admits --force.
+func TestV2UnenrollModesRequireTheirOwnCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		cloud, local, force bool
+		want                string
+	}{
+		{name: "local only, Cloud flow", local: true, want: "does not support Cloud-authenticated reset"},
+		{name: "Cloud only, forced", cloud: true, force: true, want: "does not support forced local enrollment reset"},
+		{name: "local, forced", local: true, force: true, want: "directly verified mTLS device connection"},
+	} {
+		prov := &agentpbv2.ProvisionedResponse{
+			CloudHost:                        testUnenrollProgress().Cloud,
+			PrincipalUri:                     testUnenrollProgress().Principal,
+			CloudAuthenticatedResetSupported: tc.cloud,
+			LocalResetSupported:              tc.local,
+		}
+		err := runV2DeviceUnenroll(context.Background(), nil, prov, nil, "", "", true, false, tc.force)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: want %q before Cloud access, got %v", tc.name, tc.want, err)
 		}
 	}
 }
@@ -257,5 +315,29 @@ func TestV2UnenrollRequiresDeviceConnectionOperatorLeaf(t *testing.T) {
 	}
 	if err := requireDeviceOperatorLeaf(&grpcclient.AgentConnection{CertInfo: &config.CertificateInfo{PemCertificate: "renewed"}}, auth); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Before cloud #873 the device UUID is pki_device_name on a random asset id;
+// after it, the UUID is the asset id and pki_device_name is empty.
+func TestV2UnenrollBindingMatchesBothAssetShapes(t *testing.T) {
+	postProgress := testUnenrollProgress()
+	postProgress.AssetID = unenrollDevice
+	for name, tc := range map[string]struct {
+		asset    *cloudpbv2.Asset
+		progress v2UnenrollProgress
+	}{
+		"pre-873":  {testUnenrollAsset(), testUnenrollProgress()},
+		"post-873": {&cloudpbv2.Asset{Id: unenrollDevice, OrganizationId: unenrollTenant}, postProgress},
+	} {
+		if err := checkV2UnenrollBinding(tc.asset, tc.progress); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// Deletion evidence without a device id falls back to the asset id too.
+	reply := &v2AssetState{Deleted: &cloudpbv2.DeletedAsset{Id: unenrollDevice, OrganizationId: unenrollTenant, DeletedAt: timestamppb.New(time.Now())}}
+	progress := postProgress
+	if _, err := v2UnenrollLifecycle(reply, &progress); err != nil {
+		t.Errorf("post-873 deletion evidence: %v", err)
 	}
 }

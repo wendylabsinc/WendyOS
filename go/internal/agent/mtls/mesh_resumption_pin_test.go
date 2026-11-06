@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 // meshPeerCert signs a leaf certificate carrying urn as its wendy identity SAN
@@ -110,27 +112,27 @@ func dialMeshPeer(t *testing.T, addr string, cfg *tls.Config) (*tls.Conn, error)
 	return conn, nil
 }
 
-// TestNewClientTLSConfigExpectingPeerRejectsPinMismatchOnResume is the
+// TestNewClientTLSConfigExpectingDeviceRejectsPinMismatchOnResume is the
 // regression test for the "mesh peer pin bypassed on resumed connections"
-// finding: NewClientTLSConfigExpectingPeer enforced the mesh anti-MITM pin
-// (org + asset ID, see its doc comment) only inside VerifyPeerCertificate,
-// which Go skips entirely on a resumed TLS 1.3 handshake — only
-// VerifyConnection runs, with ConnectionState.PeerCertificates restored from
-// the cached ticket rather than freshly presented. Because all mesh dials
-// share one process-wide meshSessionCache AND one constant gRPC authority
-// ("passthrough:///mesh-peer", see mesh_dialer.go's meshDialTarget), a ticket
-// cached while dialing one asset could previously be resumed while a LATER
-// dial "expects" a completely different asset, performing ZERO client-side
-// verification of the peer's actual certificate.
+// finding: NewClientTLSConfigExpectingDevice enforced the mesh anti-MITM pin
+// (dialed device principal, see its doc comment) only inside
+// VerifyPeerCertificate, which Go skips entirely on a resumed TLS 1.3
+// handshake — only VerifyConnection runs, with ConnectionState.PeerCertificates
+// restored from the cached ticket rather than freshly presented. Because all
+// mesh dials share one process-wide meshSessionCache AND one constant gRPC
+// authority ("passthrough:///mesh-peer", see mesh_dialer.go's meshDialTarget),
+// a ticket cached while dialing one device could previously be resumed while a
+// LATER dial "expects" a completely different device, performing ZERO
+// client-side verification of the peer's actual certificate.
 //
 // This test reproduces the shared-cache scenario directly against a real TLS
 // server rather than through the gRPC/mesh-dialer plumbing: one physical
-// server presents a fixed identity (asset 100 in org 7). Two
-// NewClientTLSConfigExpectingPeer configs share one tls.ClientSessionCache —
-// one correctly pinned to asset 100, one (mis)pinned to a different asset
-// 999 — simulating two mesh dials to different devices that land on the same
-// cache slot. The mispinned dial must fail once it resumes a session
-// actually established with asset 100.
+// server presents a fixed identity (device D-peer in tenant T). Two
+// NewClientTLSConfigExpectingDevice configs share one tls.ClientSessionCache —
+// one correctly pinned to D-peer, one (mis)pinned to a different device
+// D-other — simulating two mesh dials to different devices that land on the
+// same cache slot. The mispinned dial must fail once it resumes a session
+// actually established with D-peer.
 //
 // Ordering note: Go's client evicts a ClientSessionCache entry whenever a
 // handshake that attempted resumption subsequently fails (see
@@ -141,21 +143,32 @@ func dialMeshPeer(t *testing.T, addr string, cfg *tls.Config) (*tls.Conn, error)
 // which is a reasonable side effect but would make a THIRD, post-attack
 // assertion meaningless (it would force a full handshake for an unrelated
 // reason, telling us nothing about the pin-mismatch fix).
-func TestNewClientTLSConfigExpectingPeerRejectsPinMismatchOnResume(t *testing.T) {
+func TestNewClientTLSConfigExpectingDeviceRejectsPinMismatchOnResume(t *testing.T) {
+	const tenant = "11111111-1111-4111-8111-111111111111"
+	const peerDevice = "33333333-3333-4333-8333-333333333333"
+	const otherDevice = "44444444-4444-4444-8444-444444444444"
 	ca, caKey, chainPEM := testCAKeyPair(t)
-	peerCert := meshPeerCert(t, ca, caKey, "urn:wendy:org:7:asset:100")
+	peerCert := meshPeerCert(t, ca, caKey, "spiffe://wendy.sh/tenant/"+tenant+"/device/"+peerDevice)
 	addr := startMeshPeerServer(t, peerCert)
 
-	// The dialing side's own identity supplies the expected tenant (org 7,
-	// matching the server); the bare server above never requests a client
-	// certificate, so the cert itself is never presented.
-	ownCertPEM, ownKeyPEM := testLeafCertificate(t, "sh/wendy/7/1")
+	// The dialing side's own identity is a device in the same tenant; the bare
+	// server above never requests a client certificate, so the cert itself is
+	// never presented.
+	ownCertPEM, ownKeyPEM := testDeviceLeafPEM(t, "spiffe://wendy.sh/tenant/"+tenant+"/device/"+otherDevice)
+	wantPeer, err := meshid.ParseDevice(mustTenant(t, tenant), peerDevice)
+	if err != nil {
+		t.Fatalf("parsing peer device: %v", err)
+	}
+	wantOther, err := meshid.ParseDevice(mustTenant(t, tenant), otherDevice)
+	if err != nil {
+		t.Fatalf("parsing other device: %v", err)
+	}
 
 	cache := tls.NewLRUClientSessionCache(4)
 
-	cfgX, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, "100")
+	cfgX, err := NewClientTLSConfigExpectingDevice(ownCertPEM, chainPEM, ownKeyPEM, nil, wantPeer)
 	if err != nil {
-		t.Fatalf("NewClientTLSConfigExpectingPeer(asset 100): %v", err)
+		t.Fatalf("NewClientTLSConfigExpectingDevice(peer): %v", err)
 	}
 	cfgX.ClientSessionCache = cache
 
@@ -182,22 +195,22 @@ func TestNewClientTLSConfigExpectingPeerRejectsPinMismatchOnResume(t *testing.T)
 	}
 	conn2.Close()
 
-	// Dial 3: a DIFFERENT NewClientTLSConfigExpectingPeer, pinned to a
-	// DIFFERENT asset (999), but wired to the SAME session cache — simulating
-	// a later mesh dial to a different device sharing meshSessionCache and
-	// the constant mesh dial authority. The cache holds a ticket for the
-	// server's real identity (asset 100, refreshed by dial 2's post-handshake
+	// Dial 3: a DIFFERENT NewClientTLSConfigExpectingDevice, pinned to a
+	// DIFFERENT device, but wired to the SAME session cache — simulating a
+	// later mesh dial to a different device sharing meshSessionCache and the
+	// constant mesh dial authority. The cache holds a ticket for the server's
+	// real identity (the peer device, refreshed by dial 2's post-handshake
 	// ticket), so the server will happily accept resumption; the fix must
 	// catch the pin mismatch in VerifyConnection and fail the handshake.
-	cfgY, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, "999")
+	cfgY, err := NewClientTLSConfigExpectingDevice(ownCertPEM, chainPEM, ownKeyPEM, nil, wantOther)
 	if err != nil {
-		t.Fatalf("NewClientTLSConfigExpectingPeer(asset 999): %v", err)
+		t.Fatalf("NewClientTLSConfigExpectingDevice(other): %v", err)
 	}
 	cfgY.ClientSessionCache = cache
 
 	conn3, err := dialMeshPeer(t, addr, cfgY)
 	if err == nil {
 		conn3.Close()
-		t.Fatal("dial pinned to a different asset than the resumed session succeeded — the peer pin was bypassed on resumption")
+		t.Fatal("dial pinned to a different device than the resumed session succeeded — the peer pin was bypassed on resumption")
 	}
 }

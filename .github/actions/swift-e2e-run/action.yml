@@ -399,13 +399,6 @@ runs:
           swift-e2e-swiftpm-${{ runner.os }}-${{ steps.swift-toolchain-unix.outputs.version || steps.swift-toolchain-windows.outputs.version }}-
           swift-e2e-swiftpm-${{ runner.os }}-
 
-    - name: Set up Node.js for the embedded CLI app
-      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-      with:
-        node-version: '22'
-        cache: npm
-        cache-dependency-path: web-client/mcp-app/package-lock.json
-
     - name: Run Swift E2E tests (Unix)
       if: runner.os != 'Windows' && steps.validate-unix.outputs.validated == 'true'
       working-directory: swift

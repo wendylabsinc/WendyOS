@@ -42,6 +42,9 @@ func receiveCLIAnalytics(t *testing.T) (chan receivedAnalytics, string) {
 	t.Setenv("WENDY_SECRET_STORE", "file")
 	t.Setenv("WENDY_DEVICE", "")
 	t.Setenv("SUDO_UID", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	dir := t.TempDir()
 	t.Setenv("WENDY_CONFIG_DIR", dir)
 	events := make(chan receivedAnalytics, 32)
@@ -252,6 +255,7 @@ func TestInvocationAnalyticsExcludesLocalDiagnosticsAndHelpers(t *testing.T) {
 		{"install", "plan", "--help"}, {"os", "install", "plan", "--help"},
 		{"__session-broker", "--help"}, {"__usb-setup", "--help"},
 		{"__t234-write", "--help"}, {"__ble-check", "--help"},
+		{"__gpt-relocate", "--help"},
 		{"analytics", "disable", "--help"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

@@ -11,6 +11,9 @@
     "stagefile",
     "multi-app-deployments",
     "fleet-deployment",
+    "wendy-net",
+    "wendy-net-services",
+    "nvidia-pair",
     "llm-integration"
   ]
 }

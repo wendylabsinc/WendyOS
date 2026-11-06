@@ -2,17 +2,19 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"sort"
 	"time"
 
-	mcpclient "github.com/mark3labs/mcp-go/client"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -358,19 +360,14 @@ func listContainerMCPApps(ctx context.Context, conn *grpcclient.AgentConnection)
 	}
 }
 
-type proxiedAppMCPClient struct {
-	*mcpclient.Client
-	closeProxy func()
-}
-
-func (c *proxiedAppMCPClient) Close() error {
-	c.closeProxy()
-	return c.Client.Close()
-}
-
 func connectAppMCP(lifetimeCtx, initCtx context.Context, conn *grpcclient.AgentConnection, appName string) (appMCPClient, error) {
 	proxyErrors := make(chan error, 1)
 	addr, closeProxy, err := startMCPProxy(lifetimeCtx, conn, appName, func(err error) {
+		// Closing the proxy cancels its streams. That is not a transport failure
+		// and must not replace the app's actual response.
+		if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+			return
+		}
 		select {
 		case proxyErrors <- err:
 		default:
@@ -379,17 +376,8 @@ func connectAppMCP(lifetimeCtx, initCtx context.Context, conn *grpcclient.AgentC
 	if err != nil {
 		return nil, err
 	}
-	client, err := mcpclient.NewStreamableHttpClient("http://" + addr)
+	client, err := newAppHTTPClient(lifetimeCtx, initCtx, "http://"+addr, closeProxy)
 	if err != nil {
-		closeProxy()
-		return nil, err
-	}
-	proxied := &proxiedAppMCPClient{Client: client, closeProxy: closeProxy}
-	var init mcpgo.InitializeRequest
-	init.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
-	init.Params.ClientInfo = mcpgo.Implementation{Name: "wendy-app-proxy", Version: "1"}
-	if _, err := client.Initialize(initCtx, init); err != nil {
-		_ = proxied.Close()
 		select {
 		case proxyErr := <-proxyErrors:
 			return nil, fmt.Errorf("app MCP transport: %w", proxyErr)
@@ -397,5 +385,5 @@ func connectAppMCP(lifetimeCtx, initCtx context.Context, conn *grpcclient.AgentC
 		}
 		return nil, err
 	}
-	return proxied, nil
+	return client, nil
 }

@@ -69,7 +69,7 @@ func TestSourceDigestCanonical(t *testing.T) {
 func TestEmbeddedSourcesAllowlist(t *testing.T) {
 	want := []string{
 		".dockerignore", "Dockerfile", "Dockerfile.ros", "UPSTREAM.md", "assets.lock.json", "compatibility.json", "cyclonedds.xml", "entrypoint.sh",
-		"go2_sim/__init__.py", "go2_sim/browser_lidar.py", "go2_sim/camera.py", "go2_sim/commands.py", "go2_sim/index.html", "go2_sim/isolation.py", "go2_sim/isolation_legacy.py", "go2_sim/lidar.py", "go2_sim/lidar-view.js", "go2_sim/policy.py",
+		"go2_sim/__init__.py", "go2_sim/browser_lidar.py", "go2_sim/camera.py", "go2_sim/commands.py", "go2_sim/index.html", "go2_sim/isolation.py", "go2_sim/isolation_legacy.py", "go2_sim/lidar.py", "go2_sim/lidar-view.js", "go2_sim/policy.py", "go2_sim/project.py",
 		"go2_sim/native_commands.py", "go2_sim/native_state.py", "go2_sim/observations.py",
 		"go2_sim/ros.py", "go2_sim/runtime.py", "go2_sim/scene.py", "go2_sim/sensors.py", "go2_sim/server.py",
 		"go2_sim/simulation.py", "go2_sim/slow_sensors.py", "go2_sim/unitree_crc.py",

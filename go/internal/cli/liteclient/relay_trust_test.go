@@ -140,7 +140,7 @@ func TestRelayDeviceTrustFallbackChainsToSessionTrust(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			started, release := make(chan struct{}), make(chan struct{})
-			cfg, err := deviceTLSConfig(ctx, operator, session, "441bf6804ff8", func(got context.Context) (string, error) {
+			cfg, err := deviceTLSConfig(ctx, operator, session, liteTestDevice, func(got context.Context) (string, error) {
 				if got != ctx {
 					t.Error("discovery lost the caller's context")
 				}

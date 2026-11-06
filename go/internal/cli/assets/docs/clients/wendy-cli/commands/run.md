@@ -24,6 +24,7 @@ Runs your app on a Wendy-enabled device:
 | `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
 | `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. Cannot be combined with `--build-host`. |
+| `--build-arg KEY=VALUE` | Repeatable build argument for container builds targeting WendyOS devices. Overrides device defaults and Compose build args for every built service; the last occurrence wins. See [Image build-args](#image-build-args) for examples and restrictions. |
 | `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
 | `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
 | `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
@@ -73,6 +74,18 @@ When another deployment replaces the app (for example `wendy run --detach` from 
 > Devices whose agent reports neither how apps exit nor restart counts (WendyOS agents that predate exit reporting, and the Mac agent) list an app that crashed and was restarted by its restart policy the way they list a replacement: stopped with no exit recorded, then running with no restart counted, or crash-looping with no restart counted. Until the run has seen a record with an exit recorded or a restart counted, it cannot tell the two apart: a run that started the app prints `Application <app> stopped; the device did not report how it exited, so it may have crashed and been restarted by its restart policy, or another deployment may have replaced it.` and exits 0, and with `--wait-ready` the check fails as `not_ready` and does not stop the app. A current device reads the same way when the run sees no exit or restart recorded during a fast replacement.
 
 When the image build fails, `wendy run` prints the build failure details, including the builder's own error and the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last informative line of the step's output, skipping generic closing lines such as make's `make: *** [...] Error 1` or pip's closing notes, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
+
+## Checks before the build
+
+Before it builds on this computer, `wendy run` checks the free space on the disks the build writes to: the one holding your user cache directory, where Wendy keeps the exported image and its build cache; on Linux, the one holding Docker's data directory (`/var/lib/docker`); and for Swift and Xcode projects, the one holding the project. With less than 3 GiB free on any of them, the run stops before building with the error class `disk_full`, names the disk, and lists ways to free space, such as `docker system prune`, `wendy cache clear` or `--build-host`. With less than 10 GiB free it warns and builds. A disk whose free space cannot be read is skipped.
+
+Runs that build nothing, because the app's image is already on the device, skip the check, and so do `--build-host` runs, which check the build host's disk instead. On macOS and Windows, Docker Desktop keeps its data in a virtual disk with a size limit of its own, which the check does not read.
+
+The device needs room for the image too. Before the build, the run stops with `disk_full` when the disk that holds the device's container images has less than 512 MiB free, and suggests `wendy device cache prune` and removing apps the device no longer needs. Above that, a device disk more than 85% full only prints a warning, since a re-deploy sends only the layers that changed. `--build-host` runs check the device too, because the build host delivers the image to it. After the build, the default chunked deploy asks the device which layers it lacks before sending any. It stops with `disk_full` when those layers' compressed size alone is more than the device's free space, and warns when their unpacked size, estimated at three times the compressed size, may be more. Registry pushes (Mac agents, `--chunking off`, `--deploy`) get only the check before the build. A Compose project with nothing to build, because its services are unchanged or use prebuilt images, skips the checks on both disks. These checks need an agent that reports where it keeps container images (`containerStorage` in `wendy device info`); older agents are not checked.
+
+If Docker has no Buildx plugin, the run stops when it first sets up its builder, with the error class `builder_unavailable` and a link to install Buildx.
+
+An agent ignores an entitlement type it does not know and starts the app without that access. When the device's agent reports the entitlement types it supports, the run checks every entitlement in `wendy.json` (each service's, for multi-service and Compose projects) against that list before building, including when the app's image is already on the device. On a type the agent does not support it stops with `project_target_mismatch` (exit status 4), names the type, and suggests `wendy device update`. Agents that predate this report are not checked.
 
 ## Detached output
 
@@ -179,7 +192,14 @@ The CLI derives this URL from either:
 
 The printed URL uses a routable IP address reported by the device instead of the `.local` hostname, which makes it easier to open from browsers that do not resolve mDNS names reliably. If neither an `openURL` hook nor a TCP readiness port is configured, or if the device cannot report an IP address, `wendy run` skips this line.
 
-When the device is reached through Wendy Cloud and the Wendy Mesh VPN is active on your machine, the readiness check, the printed URL, and the `openURL` and `cli` postStart actions use the device's mesh hostname. Without an active mesh route, `wendy run` checks once, for up to 1.5 seconds, whether your machine can connect to the device's agent on its LAN address. If it can (you are on the device's network), those actions work as on a LAN connection. If it cannot, `wendy run` does not print, probe, or open that address: the host-side readiness check and the `openURL` and `cli` postStart actions are skipped with a notice.
+When the device is reached through Wendy Cloud and the Wendy Mesh VPN is active on your machine, the readiness check, the printed URL, and the `openURL` and `cli` postStart actions use the device's mesh hostname. Without an active mesh route, `wendy run` checks once, for up to 1.5 seconds, whether your machine can connect to the device's agent on its LAN address. If it can (you are on the device's network), those actions work as on a LAN connection. If it cannot, `wendy run` does not print, probe, or open that address. Instead, an attached run forwards the app's port through Wendy Cloud, the way `wendy cloud tunnel` does, from `localhost` on your machine (listening on 127.0.0.1 only):
+
+```text
+Forwarding http://localhost:3005 → camera-feed-yolo on Dev Kit through Wendy Cloud (closes when wendy run exits)
+App reachable at http://localhost:3005
+```
+
+The forwarded port is the one `wendy run` would show you: the port of an `openURL` that uses `WENDY_HOSTNAME`, otherwise the `http` entitlement's port, otherwise `readiness.tcpSocket.port`. It is forwarded only when a postStart action addresses the device (an `openURL` or `cli` action that uses `WENDY_HOSTNAME`, or an `http` entitlement). `wendy run` keeps the same port number on your machine when nothing there uses it, and picks a free one otherwise. The readiness check, the printed URL and the `openURL` go through the forward, and `WENDY_HOSTNAME` expands to `localhost`. Connecting to the local end of the forward always succeeds, so the readiness check asks the device's agent, over the existing connection, whether the app is listening on that port, as a TCP check on the device's network would. Once it is, one Wendy Cloud relay to the port confirms the forward works, and the app need not speak HTTP. In case the agent cannot see the app's socket, the check also sends an HTTP request through a relay every 5 to 30 seconds and passes on any reply. With an agent that cannot answer, those requests start 1 second apart and back off to every 5 seconds. If Wendy Cloud refuses a relay, because it does not authorize the tunnel or does not offer port tunnels, the check stops at once, the forward closes, and the `openURL` and `cli` postStart actions are skipped with a notice that gives the reason. When the port number changed, a `cli` action that uses `WENDY_HOSTNAME` is skipped and the local URL is printed instead. The forward closes when the attached run ends; `--watch` keeps one forward for the whole session. If the forward cannot be opened, the host-side readiness check and the `openURL` and `cli` postStart actions are skipped with a notice that gives the `wendy cloud tunnel <port>:<port> --device "<cloud name>"` command to run yourself. A detached run cannot keep a forward open, so it prints that command and the `localhost` URL to open instead.
 
 When an attached run's readiness probe times out but the app is still running, `wendy run` keeps checking every 5 seconds for up to ten probe timeouts in total (5 minutes with the default 30-second timeout), then warns. `--readiness-timeout` replaces the probe timeout and ends the wait at that deadline.
 
@@ -195,7 +215,7 @@ Regular ESP-IDF projects are the recommended app model for ESP32 targets. Wendy 
 wendy run
 ```
 
-The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 5.5.4 is available through `eim` (offering to install `eim` with Homebrew when it is missing), runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
+The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 6.0.3 is available through `eim` (offering to install `eim` with Homebrew when it is missing), runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
 
 See [ESP32 installation](/docs/installation/wendy-lite-esp32) for setup and a minimal project layout.
 
@@ -217,7 +237,19 @@ The error explains the project/target mismatch and tells you to set `platform: "
 
 ## Image build-args
 
-When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as `--build-arg` values so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`:
+When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as build arguments so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`.
+
+Pass your own values with repeatable `--build-arg KEY=VALUE` flags:
+
+```sh
+wendy run --device my-wendy.local --build-arg WENDY_VERSION=2026.11.03-074612 --build-arg 'OPTIONS=a,b=c with spaces' --build-arg EMPTY=
+```
+
+Explicit values override device-reported defaults and Compose `build.args` for every built service. Repeating a key uses its last value. Arguments apply to single-container, multi-service and Compose builds on WendyOS devices, including supported `--build-host` builds. Changing an argument invalidates the build-input cache.
+
+Empty values are allowed, and commas, spaces and additional `=` characters stay in the value; quote shell arguments as needed. Keys must start with a letter or underscore and contain only letters, digits and underscores. Values cannot start with `-` or contain control characters. Invalid arguments fail before project setup without printing their values.
+
+`--build-arg` is incompatible with `--stagefile-backend=llb` (including when selected through `WENDY_STAGEFILE_BACKEND`); use `--stagefile-backend=dockerfile` instead. External provider targets such as `--device docker` or `--device apple-container`, native Swift builds, Xcode projects and `run.command` apps do not support this flag.
 
 On Apple silicon Macs with Apple's `container` runtime, Wendy tries
 Apple Container first when `--builder` is omitted. If Apple Container is
@@ -663,3 +695,16 @@ grant it in Cloud app settings.
 Registration errors stop deployment. Use `--skip-cloud-registration` for an
 offline deployment, then deploy again without it to register later. Unenrolled
 devices skip registration automatically.
+
+## Recording a release
+
+`--record-release <tag>` records the deploy in Cloud as a release of the app:
+the CLI creates the release under the tag before the deploy, the device labels
+the container with it, and the CLI stores the image digest the device reports.
+It is off by default. Without it nothing is recorded, and the device still
+reports the app, which Cloud keeps as an unassigned app. It needs a
+single-container app and one WendyOS device enrolled with Wendy Cloud, checked
+before anything is built. It does not combine with `--watch`,
+`--skip-cloud-registration`, several devices in one run, Compose projects or
+provider targets such as `--device docker`. To record a release without
+deploying, use [`wendy app release`](app/release.md).

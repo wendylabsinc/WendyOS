@@ -69,7 +69,7 @@ func TestSourceDigestCanonical(t *testing.T) {
 func TestEmbeddedSourcesAllowlist(t *testing.T) {
 	want := []string{
 		".dockerignore", "Dockerfile", "Dockerfile.ros", "UPSTREAM.md", "assets.lock.json", "compatibility.json", "cyclonedds.xml", "entrypoint.sh",
-		"g1_sim/__init__.py", "g1_sim/camera.py", "g1_sim/commands.py", "g1_sim/index.html", "g1_sim/isolation.py", "g1_sim/isolation_legacy.py", "g1_sim/lidar.py", "g1_sim/policy.py",
+		"g1_sim/__init__.py", "g1_sim/camera.py", "g1_sim/commands.py", "g1_sim/index.html", "g1_sim/isolation.py", "g1_sim/isolation_legacy.py", "g1_sim/lidar.py", "g1_sim/policy.py", "g1_sim/project.py",
 		"g1_sim/native_commands.py", "g1_sim/native_state.py", "g1_sim/observations.py",
 		"g1_sim/ros.py", "g1_sim/runtime.py", "g1_sim/scene.py", "g1_sim/sensors.py", "g1_sim/server.py",
 		"g1_sim/simulation.py", "g1_sim/slow_sensors.py", "g1_sim/unitree_crc.py",

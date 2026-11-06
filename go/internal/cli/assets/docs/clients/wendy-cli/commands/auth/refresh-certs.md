@@ -1,104 +1,59 @@
 # `wendy auth refresh-certs`
 
-Refreshes the mTLS certificate of the current auth context (the one chosen
-with [`wendy auth use`](./use.md)) directly against
-[pki-core](../../../../pki/). Other stored contexts are left alone unless you
-pass `--all`. OIDC sessions use their refresh token and PKI identity endpoint
-to obtain a fresh operator certificate. Certificate-only sessions use the renew
-frontend described below. Cloud does not relay either request.
+Renew the certificate Wendy uses to connect to your organization's devices.
+Wendy normally renews it automatically near expiry; use this command when a
+connection reports an expired or incompatible certificate.
 
-A renewal is a re-issue, not a re-key of the same certificate: the CLI generates
-a new key pair of the same algorithm as the current one (an ML-DSA-65 session
-stays ML-DSA-65), builds a CSR for it, and posts the CSR to the renew frontend
-over mTLS, presenting the certificate being renewed. Next to the CSR the body
-carries a `possession_proof`: a signature by the current certificate's key over
-that certificate and the CSR, in the key's own algorithm, fresh for every
-request. pki-core checks it itself rather than trusting the frontend's
-handshake.
-
-The renewed certificate keeps the identity of the one it replaces, and the CLI
-does not get to assert what that identity is. pki-core reads the principal off
-the presented certificate and stamps it into the new leaf itself; any identity
-the CSR asserts is replaced or refused.
-
-## When you see a TLS authentication failure
-
-If a command reports `TLS authentication failed. Your certificates may be
-outdated or incompatible with the device.`, run `wendy auth refresh-certs`,
-then retry the original command. If it still fails, rerun the original command
-with `WENDY_TLS_DEBUG=1` to see TLS diagnostics. See the renewal limits below
-if refreshing the certificates is refused.
-
-## Usage
+## Renew and retry
 
 ```sh
-wendy auth refresh-certs         # current context only
-wendy auth refresh-certs --all   # every stored context
+wendy auth status
+wendy auth refresh-certs
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--all` | Refresh every stored context. Each one is reported by name; a failure in one does not stop the others, and the command exits non-zero if any failed. |
+Then retry the command that failed. Renewal applies only to your current saved
+sign-in. To use another one, select it first:
 
-With more than one stored context and none selected, the command asks you to
-pick one with `wendy auth use` or pass `--all` rather than guessing. To refresh
-another context, switch to it first with `wendy auth use <context>`.
+```sh
+wendy auth use <context>
+wendy auth refresh-certs
+```
 
-Refreshing an OIDC session spends its refresh token, so a context you did not
-select is never touched. This holds for the "Refresh certificates and retry?"
-offer after a rejected device connection too: when the rejected certificate
-belongs to another context, the CLI names it and asks you to switch with
-`wendy auth use <context>` first instead of refreshing the current one. When
-the device does not reveal its organization and several contexts hold
-certificates, the CLI lists them and refreshes none.
+To renew every saved sign-in explicitly:
 
-## The renew frontend
+```sh
+wendy auth refresh-certs --all
+```
 
-`WENDY_PKI_RENEW_ENDPOINT` names pki-core's renew frontend, e.g.
-`https://renew.pki.example:8451/v1/renew`, and overrides deployment defaults.
-Without it, the renew frontend is derived from the pki-core identity endpoint
-the session already holds, by replacing its leading `identity.` label:
-`https://identity.<rest>/...` becomes `https://renew.<rest>/v1/renew`, port
-included. The derivation therefore stays inside one PKI deployment and names no
-environment.
+With `--all`, each result is reported separately. The command exits with an
+error if any renewal fails, even when others succeed.
 
-A session whose identity endpoint is not an `https://identity.<rest>` URL
-derives nothing and requires the override. That includes a session which knows
-only its Cloud endpoint: which cloud answers says nothing about which PKI
-mints, so no renew host is ever derived from one.
+## If renewal is refused
 
-## It also runs by itself
+Sign in again to obtain a fresh certificate:
 
-The CLI renews ahead of expiry without being asked: when an auth session is
-resolved and its certificate has less than 15 minutes of validity left, the
-renewal happens before the connection is attempted. This command is the manual
-trigger for the same path, and is useful when a certificate is close to expiry
-and you would rather not discover it mid-command.
+```sh
+wendy cloud login
+```
 
-## What renewal will not do
+An expired certificate, an older sign-in, or an organization's renewal limits
+can require a new login. Interactive runs may offer this directly. If a
+connection fails while you have several saved sign-ins, follow the named-context
+instruction rather than renewing an unrelated organization.
 
-- **No renewal of a certificate pki-core did not issue.** The renew frontend
-  routes a request by the tenant identity on the presented certificate and
-  renews only lineages it recorded at first mint. A session predating that —
-  one whose certificate carries no pki-core tenant identity — has no renewal
-  path at all; log in again to be issued one that does.
-- **No roll-forward from an expired certificate.** Renewal requires a
-  currently-valid certificate to present. Once yours has expired the renew
-  frontend needs an approved grant, which the CLI cannot mint — log in again
-  with [`wendy cloud login`](../cloud/login.md), which issues a fresh
-  certificate outright.
-- **Renewals are budgeted per lineage, and the budget is inherited rather than
-  requested.** A plain operator certificate renews a fixed number of times and
-  then has to be re-minted.
-- **Entitlement-bearing and over-duration certificates are not renewable at
-  all** unless their tenant has opted in.
+If fresh sign-in does not help, retry the failing command with
+`WENDY_TLS_DEBUG=1` and share the diagnostics with your administrator.
 
-Each of these arrives as an explicit refusal and is reported as itself, not
-retried as a generic failure. In an interactive terminal the refusals that only
-a new certificate can resolve offer to log you in again on the spot.
+## Advanced: self-hosted certificate renewal
+
+Certificate-only sign-ins need a renewal service in your deployment. Wendy
+normally derives it from the saved certificate service address. If your
+deployment uses a different address, your administrator can provide
+`WENDY_PKI_RENEW_ENDPOINT`, for example
+`https://renew.example.com/v1/renew`. A Cloud endpoint alone does not identify a
+certificate renewal service.
 
 ## Related
 
-- [`wendy cloud login`](../cloud/login.md) — issue a fresh operator certificate.
-- [`wendy auth use`](./use.md) — choose which stored session is the default.
-- [PKI](../../../../pki/) — the three authorized certificate paths.
+- [Sign in to Wendy Cloud](../cloud/login.md)
+- [Choose a saved sign-in](./use.md)

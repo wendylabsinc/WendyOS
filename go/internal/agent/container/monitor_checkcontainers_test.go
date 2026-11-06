@@ -101,6 +101,9 @@ func (f *fakeContainerd) CreateContainer(ctx context.Context, req *agentpb.Creat
 func (f *fakeContainerd) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
 	return nil
 }
+func (f *fakeContainerd) ValidateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	return nil
+}
 func (f *fakeContainerd) StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan services.ContainerOutput, error) {
 	return f.StartContainer(ctx, appName, postStartAgentCommand, restartPolicy)
 }

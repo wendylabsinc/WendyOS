@@ -63,6 +63,8 @@ class Runtime:
         # holding the physics lock, while reset/pause waits for that sample.
         self.observation_lock = threading.RLock()
         self.lock = threading.RLock()
+        self.project_lock = threading.RLock()
+        self.project_status = {"project_id": None, "revision": "", "error": None, "watcher_seen": None}
         self.observation_generation = 0
         self.sensor_generation = 0
         self.sensor_settings = {"lidar_enabled": True, "camera_enabled": True, "lidar_dropout": 0.0}
@@ -255,12 +257,22 @@ class Runtime:
             options.geomgroup[3] = False
             from .camera import CameraFrame
             while not self.stop_event.is_set():
+                current_model = self.visual_model
+                if model is not current_model:
+                    renderer.close()
+                    model = current_model
+                    model.vis.quality.offsamples = 0
+                    renderer = mujoco.Renderer(model, height=360, width=640)
+                    data = mujoco.MjData(model)
+                    robot_camera = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "front")
                 started = time.perf_counter()
                 thread_started = time.thread_time()
                 stages = {}
                 wanted = self.camera_wanted()
                 with self.lock:
                     stages["capture_lock_wait"] = (time.perf_counter() - started) * 1000
+                    if model is not self.visual_model:
+                        continue
                     data.qpos[:] = self.sim.data.qpos
                     data.qvel[:] = self.sim.data.qvel
                     data.time = self.sim.data.time
@@ -347,6 +359,7 @@ class Runtime:
         elapsed = max(time.monotonic() - self.started, 0.001)
         with self.lock:
             result = self.sim.snapshot()
+            result["project"] = self.project_status.copy()
             result["sensor_settings"] = self.sensor_settings.copy()
             result["sensor_generation"] = self.sensor_generation
             inference = list(self.sim.policy.inference_ms)

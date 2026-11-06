@@ -20,10 +20,10 @@ struct `'wendy device enroll'` {
                 #expect(result.status.isSuccess)
                 #expect(
                     result.stdout.contains(
-                        "Enrolls the selected device using your stored auth session"
+                        "Add the selected device to your organization using your saved sign-in"
                     )
                 )
-                #expect(result.stdout.contains("OIDC accounts"))
+                #expect(result.stdout.contains("Run 'wendy cloud login' first"))
                 #expect(result.stdout.contains("wendy device enroll [flags]"))
                 #expect(result.stdout.contains("--name"))
                 #expect(result.stdout.contains("--org"))

@@ -1,0 +1,42 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+// Host-local USB bindings only. No serial opens, motor probing or adapter startup.
+service WendyRobotArmService {
+  rpc ListRobotArms(ListRobotArmsRequest) returns (ListRobotArmsResponse);
+  rpc BindRobotArm(BindRobotArmRequest) returns (BindRobotArmResponse);
+  rpc ForgetRobotArm(ForgetRobotArmRequest) returns (ForgetRobotArmResponse);
+}
+message RobotArm {
+  string id = 1;
+  string name = 2;
+  string model = 3; // "so101" only after explicit user configuration
+  bool configured = 4;
+  bool verified = 5; // Always false: USB metadata cannot verify a servo bus.
+  bool connected = 6; // One matching USB serial endpoint is present, not motor health.
+  string connection_status = 7; // present, disconnected, ambiguous
+  string identity_kind = 8; // usb_serial or usb_location
+  string device_path = 9; // Current enumerated endpoint; empty when disconnected.
+  string usb_location = 10;
+  string usb_interface = 11;
+  string vendor_id = 12; // Lowercase four-digit hex
+  string product_id = 13;
+  string serial_number = 14;
+  string manufacturer = 15;
+  string product = 16;
+  bool candidate = 17; // Adapter hint only, never conclusive SO-101 identification.
+  string note = 18;
+  string access_status = 19; // unknown: no port is opened to test busy/power/access.
+}
+message ListRobotArmsRequest {}
+message ListRobotArmsResponse { repeated RobotArm devices = 1; }
+message BindRobotArmRequest {
+  string id = 1;
+  string model = 2;
+  string name = 3;
+  bool allow_location_binding = 4; // Explicit acknowledgement of port-based identity.
+}
+message BindRobotArmResponse { RobotArm device = 1; }
+message ForgetRobotArmRequest { string id = 1; }
+message ForgetRobotArmResponse {}

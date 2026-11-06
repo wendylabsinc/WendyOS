@@ -25,6 +25,17 @@ func clientWithoutDBusProxy() *Client {
 	return &Client{logger: zap.NewNop(), proxyManager: dbusProxyManagerOrNil(nil)}
 }
 
+func TestOptionalDBusProxyManagerNilDoesNotBecomeNonNilInterface(t *testing.T) {
+	var absent *dbusproxy.Manager
+	if got := dbusProxyManagerOrNil(absent); got != nil {
+		t.Fatal("typed nil proxy manager became a non-nil interface")
+	}
+	manager := dbusproxy.NewManager(zap.NewNop())
+	if got := dbusProxyManagerOrNil(manager); got == nil {
+		t.Fatal("present proxy manager was discarded")
+	}
+}
+
 // TestRequireDBusProxyRefusesBluetoothWithoutProxy is the regression test for
 // WDY-1093: a container that declares the bluetooth (D-Bus) entitlement must be
 // refused when xdg-dbus-proxy is unavailable. Without the proxy there is no way

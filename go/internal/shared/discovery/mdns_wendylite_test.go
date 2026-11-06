@@ -46,8 +46,9 @@ func TestLANDeviceFromWendyLiteServiceParsesPKITenant(t *testing.T) {
 	if dev.AssetID != 0 || dev.OrgID != 0 {
 		t.Fatalf("PKI identity must not invent legacy IDs: %+v", dev)
 	}
-	if dev.PrincipalURI != "spiffe://wendy.sh/tenant/"+tenant+"/device/lite-board-a" {
-		t.Fatalf("missing old-firmware identity hint: %+v", dev)
+	// Without principal=, id= (a hardware id on older firmware) is no pin hint.
+	if dev.PrincipalURI != "" {
+		t.Fatalf("derived an identity hint from id=: %+v", dev)
 	}
 	for _, raw := range []string{"not-a-uuid", "11111111-2222-4333-8444-AAAAAAAAAAAA", "11111111222243338444555555555555"} {
 		dev := LANDeviceFromWendyLiteService(MDNSService{TXTRecords: map[string]string{"tenant": raw}})

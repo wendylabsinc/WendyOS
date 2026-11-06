@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/networkaccess"
 )
 
 // listenDualStackLoopback binds to both 127.0.0.1:port (IPv4) and [::1]:port
@@ -34,6 +36,16 @@ func listenDualStackLoopback(port string) (net.Listener, error) {
 		return lis4, nil
 	}
 	return newDualStackListener(lis4, lis6), nil
+}
+
+// listenForAccess binds a management listener on all interfaces when the
+// access policy allows network access. In local mode it binds both loopback
+// families, so clients that resolve localhost to ::1 first still connect.
+func listenForAccess(policy networkaccess.Policy, port string) (net.Listener, error) {
+	if policy.AllowsNetwork {
+		return net.Listen("tcp", policy.Address(port))
+	}
+	return listenDualStackLoopback(port)
 }
 
 // dualStackListener multiplexes two underlying listeners (IPv4 and IPv6) into

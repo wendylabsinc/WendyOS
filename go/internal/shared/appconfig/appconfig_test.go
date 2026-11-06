@@ -2042,6 +2042,25 @@ func TestLoadComposeCompanion_ContextNotRequired(t *testing.T) {
 	}
 }
 
+func TestLoadComposeCompanion_ServiceInheritsROS2Scope(t *testing.T) {
+	// A service without its own ROS 2 config runs with the app's, so its
+	// bridge network must fail scope "device" just as Validate fails it.
+	dir := t.TempDir()
+	data := `{
+		"appId": "com.example.robot",
+		"frameworks": { "ros2": { "scope": "device" } },
+		"services": {
+			"vision": { "entitlements": [{ "type": "network", "mode": "bridge" }] }
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "wendy.json"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadComposeCompanion(dir); err == nil || !strings.Contains(err.Error(), `services["vision"]`) {
+		t.Fatalf("LoadComposeCompanion error = %v, want the inherited scope rejected for vision", err)
+	}
+}
+
 func TestFrameworksConfig_ParseJSON(t *testing.T) {
 	data := `{
 		"appId": "com.example.app",
@@ -2334,6 +2353,23 @@ func TestAdminEntitlementJSONUnknownKeyWarns(t *testing.T) {
 	warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"admin","bogus":1}]}`))
 	if len(warnings) == 0 {
 		t.Fatal("expected warning for unknown key on admin entitlement")
+	}
+}
+
+func TestNANEntitlementValidation(t *testing.T) {
+	cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementNAN}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("nan entitlement rejected: %v", err)
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"nan"}]}`)); len(warnings) != 0 {
+		t.Fatalf("nan entitlement warnings: %v", warnings)
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"nan","mode":"host"}]}`)); len(warnings) == 0 {
+		t.Fatal("nan entitlement must not accept network options")
+	}
+	cfg.Entitlements = append(cfg.Entitlements, Entitlement{Type: EntitlementNAN})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("duplicate nan entitlement accepted")
 	}
 }
 

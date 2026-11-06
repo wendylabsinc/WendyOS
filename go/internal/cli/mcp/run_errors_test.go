@@ -112,7 +112,7 @@ func TestRunExplicitDeviceOverridesSessionAndSaysToConnect(t *testing.T) {
 		args = a
 		return "ok", false, nil
 	}
-	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot-b.local:50051"}))
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": runProject(t), "device": "robot-b.local:50051"}))
 	if err != nil || r.IsError {
 		t.Fatalf("run: %v %v", r, err)
 	}
@@ -133,13 +133,13 @@ func TestRunExplicitDeviceOverridesSessionAndSaysToConnect(t *testing.T) {
 	// Deploying to the connected target itself needs no reconnect, and a
 	// deploy with no session names the connect call for the deployed device.
 	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) { return "ok", false, nil }
-	same, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t)}))
+	same, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": runProject(t)}))
 	if next := structuredMap(t, same)["suggested_next_step"].(string); strings.Contains(next, "device_connect") {
 		t.Fatalf("session target run asks to reconnect: %s", next)
 	}
 	fresh := New(&config.Config{}, nil)
 	fresh.runCommandFn = s.runCommandFn
-	cloud, _ := fresh.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device_name": "robot-c"}))
+	cloud, _ := fresh.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": runProject(t), "device_name": "robot-c"}))
 	// cloud_connect is outside the core tool group, so the hint enables it first.
 	next = structuredMap(t, cloud)["suggested_next_step"].(string)
 	for _, want := range []string{`wendy_tools(groups=["cloud"])`, `cloud_connect(device_name="robot-c")`} {
@@ -164,7 +164,7 @@ func TestRunResolvesRelativeProjectPath(t *testing.T) {
 		args = a
 		return "ok", false, nil
 	}
-	if r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": ".", "device": "vm:test"})); err != nil || r.IsError {
+	if r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": ".", "device": "vm:test"})); err != nil || r.IsError {
 		t.Fatalf("run: %v %v", r, err)
 	}
 	if !strings.Contains(strings.Join(args, " "), "--prefix "+want+" ") {
@@ -186,14 +186,14 @@ func TestRunLeavesProjectValidationToTheCLI(t *testing.T) {
 		args = a
 		return "ok", false, nil
 	}
-	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": compose, "device": "vm:test", "build_type": "compose"}))
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": compose, "device": "vm:test", "build_type": "compose"}))
 	if err != nil || r.IsError || !strings.Contains(strings.Join(args, " "), "--prefix "+compose+" ") {
 		t.Fatalf("compose project without wendy.json was not deployed: %v %v %v", r, err, args)
 	}
 	file := filepath.Join(compose, "compose.yaml")
 	for _, path := range []string{filepath.Join(compose, "missing"), file} {
 		args = nil
-		r, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": path, "device": "vm:test"}))
+		r, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": path, "device": "vm:test"}))
 		if !r.IsError || args != nil || structuredMap(t, r)["error_code"] != string(errCodeInvalidArgument) || !strings.Contains(structuredMap(t, r)["message"].(string), "directory") {
 			t.Fatalf("project_path %s must be rejected as not a directory: %v", path, r)
 		}
@@ -308,7 +308,7 @@ func TestRunAlwaysDetaches(t *testing.T) {
 			got = a
 			return "ok", false, nil
 		}
-		args := map[string]any{"project_path": project, "device": "vm:test"}
+		args := map[string]any{"wait_ready": false, "project_path": project, "device": "vm:test"}
 		for k, v := range tc.args {
 			args[k] = v
 		}
@@ -387,7 +387,7 @@ func TestRunNextStepComparesNormalizedTargets(t *testing.T) {
 			s := New(&config.Config{}, nil)
 			s.commandTarget = tc.session
 			s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) { return "ok", false, nil }
-			args := map[string]any{"project_path": runProject(t)}
+			args := map[string]any{"wait_ready": false, "project_path": runProject(t)}
 			for k, v := range tc.args {
 				args[k] = v
 			}
@@ -400,5 +400,124 @@ func TestRunNextStepComparesNormalizedTargets(t *testing.T) {
 				t.Fatalf("reconnect = %v, want %v: %s", got, tc.reconnect, next)
 			}
 		})
+	}
+}
+
+// A run the CLI refused for lack of disk space, on this computer or on the
+// device, deployed nothing: the result must say so and point at freeing space
+// rather than at inspecting the device.
+func TestRunDiskSpaceRefusalSaysNothingWasDeployed(t *testing.T) {
+	for _, message := range []string{
+		"not enough free disk space to build: 1.0 GiB free on the disk holding /Users/me/Library/Caches, and a build needs at least 3.0 GiB",
+		"not enough free disk space on the device: 300 MiB free on /data, where it keeps container images, and a deploy needs at least 512 MiB",
+		"not enough free disk space on the device for this image: the layers it lacks are 2.1 GiB compressed, and 1.5 GiB is free on /data",
+	} {
+		s := New(&config.Config{}, nil)
+		s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+			return `{"error":{"code":"disk_full","exit":1,"message":"` + message + `","retryable":false,"next_steps":["Run ` + "`wendy device cache prune`" + ` to delete container data the device no longer uses."]}}` + "\n", false, errors.New("exit status 1")
+		}
+		r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051"}))
+		if err != nil || !r.IsError {
+			t.Fatalf("want tool error: %v %v", r, err)
+		}
+		out := structuredMap(t, r)
+		got, _ := out["message"].(string)
+		if strings.Contains(got, "may already have created") || !strings.Contains(got, "disk space") {
+			t.Fatalf("%.50s: message = %q; want one saying the run was refused for disk space before anything was deployed", message, got)
+		}
+		if next, _ := out["suggested_next_step"].(string); !strings.Contains(next, "free") {
+			t.Fatalf("%.50s: suggested_next_step = %q; want freeing disk space", message, next)
+		}
+	}
+}
+
+// An entitlement the device's agent does not support stops the run before
+// the build: the result must say nothing was deployed and point at updating
+// the device or the project, with the user's agreement.
+func TestRunEntitlementRefusalSaysNothingWasDeployed(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+		return `{"error":{"code":"project_target_mismatch","exit":4,"message":"the device's agent does not support the \"camera\" entitlement in wendy.json (agent version 2026.10.01-120000); it would start the app without that access","retryable":false,"next_steps":["Update the device: wendy device update"]}}` + "\n", false, errors.New("exit status 4")
+	}
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051"}))
+	if err != nil || !r.IsError {
+		t.Fatalf("want tool error: %v %v", r, err)
+	}
+	out := structuredMap(t, r)
+	message, _ := out["message"].(string)
+	if strings.Contains(message, "may already have created") || !strings.Contains(message, "entitlement") {
+		t.Fatalf("message = %q; want one saying an unsupported entitlement stopped the run before anything was deployed", message)
+	}
+	if next, _ := out["suggested_next_step"].(string); !strings.Contains(next, "wendy device update") {
+		t.Fatalf("suggested_next_step = %q; want updating the device", next)
+	}
+}
+
+// With wait_ready the CLI also prints a "failed" receipt for a refusal. It
+// comes on stdout, a separate pipe from the error on stderr, so either can
+// arrive last.
+func TestRunWaitReadyRefusalSaysNothingWasDeployed(t *testing.T) {
+	const refusal = `the device's agent does not support the \"camera\" entitlement in wendy.json (agent version 2026.10.01-120000); it would start the app without that access`
+	receipt := `{"status":"failed","app":"test","device":"robot.local:50051","readiness":"not_checked","message":"` + refusal + `"}` + "\n"
+	envelope := `{"error":{"code":"project_target_mismatch","exit":4,"message":"` + refusal + `","retryable":false,"next_steps":["Update the device: wendy device update"]}}` + "\n"
+	for name, output := range map[string]string{"receipt first": receipt + envelope, "error first": envelope + receipt} {
+		s := New(&config.Config{}, nil)
+		s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+			return encodeRunReceipt([]byte(receipt), output), false, errors.New("exit status 4")
+		}
+		r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051", "wait_ready": true}))
+		if err != nil || !r.IsError {
+			t.Fatalf("%s: want tool error: %v %v", name, r, err)
+		}
+		out := structuredMap(t, r)
+		if message, _ := out["message"].(string); !strings.HasPrefix(message, "Nothing was deployed") || !strings.Contains(message, "entitlement") {
+			t.Fatalf("%s: message = %q; want the entitlement refusal", name, message)
+		}
+		if out["status"] != "failed" {
+			t.Fatalf("%s: status = %v, want failed", name, out["status"])
+		}
+	}
+}
+
+// Only the CLI's own error decides a refusal. A run that got past the checks
+// and then failed keeps its own report even when its output mentions a
+// refusal phrase, for example in a build step's log.
+func TestRunFailureThatMentionsARefusalIsNotOne(t *testing.T) {
+	const crash = "app test exited before becoming ready (exit code 1); see its logs with `wendy device logs --app test`"
+	for _, phrase := range []string{"not enough free disk space", "the device's agent does not support"} {
+		buildLog := "#7 0.214 warning: " + phrase + " here\n#7 DONE 0.3s\n"
+		crashed := `{"status":"crashed","app":"test","device":"robot.local:50051","readiness":"failed","exit_code":1,"termination_reason":"crashed","message":"` + crash + `"}` + "\n"
+		cases := []struct {
+			name, stdout, output string
+			waitReady            bool
+			wantStatus           string
+			wantMessage          string
+		}{
+			{
+				name: "crashed", stdout: crashed, waitReady: true, wantStatus: "crashed", wantMessage: crash,
+				output: buildLog + crashed + `{"error":{"code":"app_crashed","exit":1,"message":"` + crash + `","retryable":false,"next_steps":[]}}` + "\n",
+			},
+			{
+				name: "start failed", wantStatus: "failed", wantMessage: "Deployment or readiness verification did not complete",
+				output: buildLog + `{"error":{"code":"error","exit":1,"message":"starting app test: container exited during start","retryable":false,"next_steps":[]}}` + "\n",
+			},
+		}
+		for _, tc := range cases {
+			s := New(&config.Config{}, nil)
+			s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+				return encodeRunReceipt([]byte(tc.stdout), tc.output), false, errors.New("exit status 1")
+			}
+			r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051", "wait_ready": tc.waitReady}))
+			if err != nil || !r.IsError {
+				t.Fatalf("%s, %q: want tool error: %v %v", tc.name, phrase, r, err)
+			}
+			out := structuredMap(t, r)
+			if message, _ := out["message"].(string); !strings.HasPrefix(message, tc.wantMessage) {
+				t.Fatalf("%s, %q: message = %q; want it to start %q", tc.name, phrase, message, tc.wantMessage)
+			}
+			if out["status"] != tc.wantStatus {
+				t.Fatalf("%s, %q: status = %v, want %s", tc.name, phrase, out["status"], tc.wantStatus)
+			}
+		}
 	}
 }

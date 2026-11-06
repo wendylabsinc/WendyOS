@@ -209,7 +209,7 @@ func (c *Client) reusableNetworkSandbox(ctx context.Context, containerID, identi
 	if s == nil || s.identity != identity || !networkSandboxHealthy(s.path, s.ip) {
 		return nil, false
 	}
-	if !networkSandboxChecksPassed(true, c.CNICheck(ctx, s.appID, s.containerID, s.path, s.result)) || !c.refreshBridgeDNS(s.containerID, s.appID) {
+	if !networkSandboxChecksPassed(true, c.CNICheck(ctx, s.appID, s.containerID, s.path, s.result, true)) || !c.refreshBridgeDNS(s.containerID, s.appID) {
 		return nil, false
 	}
 	return s, true
@@ -332,7 +332,7 @@ func (c *Client) recoverNetworkSandbox(ctx context.Context, ctr containerd.Conta
 		return nil, false
 	}
 	result, err := readNetworkSandboxResult(ctr.ID())
-	if err != nil || !networkSandboxChecksPassed(true, c.CNICheck(ctx, appID, ctr.ID(), path, result)) {
+	if err != nil || !networkSandboxChecksPassed(true, c.CNICheck(ctx, appID, ctr.ID(), path, result, true)) {
 		return nil, false
 	}
 	if !c.refreshBridgeDNS(ctr.ID(), appID) {

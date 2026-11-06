@@ -36,21 +36,6 @@ func TestAuthLoginModeSelection(t *testing.T) {
 			args:    []string{"--legacy", "--issuer", "https://auth.example/realms/x"},
 			wantErr: "--legacy selects the old cloud-dashboard login",
 		},
-		{
-			name:    "api-key conflicts with oidc",
-			args:    []string{"--api-key", "wnd_x", "--email", "a@b.com"},
-			wantErr: "select different login modes",
-		},
-		{
-			name:    "api-key conflicts with a built-in target",
-			args:    []string{"--api-key", "wnd_x", "--development"},
-			wantErr: "select different login modes",
-		},
-		{
-			name:    "api-key needs cloud-grpc",
-			args:    []string{"--api-key", "wnd_x"},
-			wantErr: "--cloud-grpc is required",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(serviceAccountKeyEnv, "")
@@ -63,6 +48,19 @@ func TestAuthLoginModeSelection(t *testing.T) {
 			err := cmd.Execute()
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("args %v: got err %v, want containing %q", tc.args, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestAuthLoginRejectsRetiredLocalFlags(t *testing.T) {
+	for _, flag := range []string{"api-key", "org"} {
+		t.Run(flag, func(t *testing.T) {
+			cmd := newAuthLoginCmd()
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+			cmd.SetArgs([]string{"--" + flag, "fixture-value"})
+			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "unknown flag: --"+flag) {
+				t.Fatalf("got %v, want unknown flag --%s", err, flag)
 			}
 		})
 	}
@@ -318,7 +316,7 @@ func TestAuthLoginTargetFlagsStayHidden(t *testing.T) {
 			t.Errorf("user-facing help exposes transitional flag %s", hidden)
 		}
 	}
-	for _, want := range []string{"production Wendy Cloud", "OIDC flow by default", "Pass --email"} {
+	for _, want := range []string{"Wendy Cloud in your browser", "saves the sign-in", "Pass --email"} {
 		if !strings.Contains(cmd.Long, want) {
 			t.Errorf("long help does not mention %q: %s", want, cmd.Long)
 		}

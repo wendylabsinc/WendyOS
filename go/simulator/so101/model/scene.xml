@@ -1,0 +1,25 @@
+<!-- Custom lab scene. The included official SO-101 follower model is unmodified. -->
+<mujoco model="SO101 lab">
+  <include file="so101_new_calib.xml"/>
+  <option timestep="0.005" integrator="implicitfast">
+    <flag nativeccd="disable"/>
+  </option>
+  <visual>
+    <global offwidth="800" offheight="600"/>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+    <quality shadowsize="1024"/>
+  </visual>
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+      rgb1="0.17 0.19 0.21" rgb2="0.20 0.22 0.24"/>
+    <material name="floor" texture="grid" texrepeat="8 8" texuniform="true"/>
+  </asset>
+  <worldbody>
+    <light pos="0 -0.4 1.5" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <geom name="floor" type="plane" size="1 1 0.02" material="floor"/>
+    <body name="cube" pos="0.25 0 0.021">
+      <freejoint/>
+      <geom name="cube" type="box" size="0.02 0.02 0.02" mass="0.025" rgba="0.25 0.65 0.95 1" friction="1 0.01 0.001"/>
+    </body>
+  </worldbody>
+</mujoco>

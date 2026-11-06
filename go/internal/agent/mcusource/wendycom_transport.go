@@ -111,8 +111,8 @@ func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, 
 	}, nil
 }
 
-// certAssetID returns the asset ID a board's certificate names, read the same
-// way mtls.NewClientTLSConfigExpectingPeer reads a peer agent's.
+// certAssetID returns the asset ID a board's certificate names, read the
+// same way mtls.NewClientTLSConfigExpectingIdentity reads a peer agent's.
 func certAssetID(leaf *x509.Certificate) (int32, bool) {
 	if leaf == nil {
 		return 0, false
@@ -174,7 +174,11 @@ func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	connectCtx, cancel := context.WithTimeout(ctx, wendycomConnectTimeout)
+	budget := wendycomConnectTimeout
+	if t.sourcePrincipalURI != "" {
+		budget = liteclient.SensorSourceSetupTimeout
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	c, err := t.connect(connectCtx)
 	if connectCtx.Err() != nil {

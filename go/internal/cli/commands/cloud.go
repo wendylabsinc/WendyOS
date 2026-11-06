@@ -78,6 +78,15 @@ func newCloudDeviceCmd() *cobra.Command {
 			BrokerURL:  brokerURL,
 		}
 	})
+	// Enrollment needs a direct LAN/USB path to a device that is not in Cloud
+	// yet, so the mirror's copy of `wendy device enroll` stays off the help page.
+	// It remains runnable (wrapCloudDeviceCommands leaves it on the local path),
+	// and `wendy cloud enroll-device` is the visible alias under `wendy cloud`.
+	for _, child := range cmd.Commands() {
+		if child.Annotations[localEnrollmentAnnotation] == "true" {
+			child.Hidden = true
+		}
+	}
 	return cmd
 }
 
@@ -119,9 +128,14 @@ func effectiveDeviceName(local string) string {
 	return deviceFlag
 }
 
+// localEnrollmentAnnotation marks a command that enrolls a device it reaches
+// directly. The `wendy cloud device` mirror neither routes it through the cloud
+// tunnel nor lists it in help.
+const localEnrollmentAnnotation = "wendy.local-enrollment"
+
 func wrapCloudDeviceCommands(cmd *cobra.Command, cfg func(*cobra.Command) cloudDeviceConfig) {
 	// Enrollment provisions a local target before it can be reached through Cloud.
-	if cmd.Annotations["wendy.local-enrollment"] == "true" {
+	if cmd.Annotations[localEnrollmentAnnotation] == "true" {
 		return
 	}
 	if cmd.RunE != nil {
@@ -152,7 +166,7 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 	cmd := newDeviceEnrollCmd()
 	cmd.Use = "enroll-device"
 	cmd.Hidden = false
-	cmd.Short = "Enroll the selected device with Wendy Cloud or a local pki-core"
+	cmd.Short = "Enroll the selected device in Wendy Cloud"
 	cmd.Long = "Alias for 'wendy device enroll'. " + cmd.Long
 	return cmd
 }

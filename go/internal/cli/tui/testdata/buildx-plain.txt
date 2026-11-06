@@ -1,0 +1,37 @@
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 135B done
+#1 DONE 0.1s
+
+#2 [internal] load metadata for docker.io/library/alpine:3.20
+#2 DONE 1.2s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.1s
+
+#4 [1/2] FROM docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+#4 resolve docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc 0.0s done
+#4 DONE 0.0s
+
+#4 [1/2] FROM docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+#4 sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc 9.23kB / 9.23kB done
+#4 sha256:45e09956dc667c5eff3583c9d94830261fb1ca0be10a0a7db36266edf5de9e1d 1.03kB / 1.03kB done
+#4 sha256:ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4 628B / 628B done
+#4 sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78 0B / 4.09MB 0.1s
+#4 extracting sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78
+#4 sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78 4.09MB / 4.09MB 0.3s done
+#4 extracting sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78 0.1s done
+#4 DONE 0.5s
+
+#5 [2/2] RUN for i in $(seq 1 5); do echo "[$i/5] Compiling Thing$i.swift"; sleep 1; done
+#5 0.112 [1/5] Compiling Thing1.swift
+#5 1.115 [2/5] Compiling Thing2.swift
+#5 2.117 [3/5] Compiling Thing3.swift
+#5 3.123 [4/5] Compiling Thing4.swift
+#5 4.130 [5/5] Compiling Thing5.swift
+#5 DONE 5.3s
+
+#6 exporting to image
+#6 exporting layers 0.0s done
+#6 writing image sha256:75c66278b978acb00fdb463adf94f8cd1a0ff538dfd2932cf27bebf65659fce6 done
+#6 DONE 0.1s

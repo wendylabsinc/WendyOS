@@ -160,11 +160,16 @@ returned conn closes the underlying BLE connection.
 * **With no read deadline set, `Read` blocks indefinitely**, as `net.Conn` requires. The 2 s slice is
   polling granularity, not a timeout callers see. With a deadline it returns a `net.Error` whose
   `Timeout()` is true, which is what stops `crypto/tls` treating a deadline as a broken connection.
-  Write deadlines are ignored.
+* On macOS, `SetWriteDeadline` can set, change, or clear a deadline during a pending write.
+  Direct `Connection` callers can use `SetL2CAPWriteDeadline` for the same control.
+  `SetDeadline` sets both read and write deadlines; on Linux and Windows, only its read
+  deadline has an effect.
 * `Close` takes the same lock `Read` holds across `L2CAPRecv`, so it waits out an in-flight read (at
   most 2 s). That matters on macOS, where `wendy_ble_disconnect` hands the CoreBluetooth wrapper to
-  ARC while a blocked reader still holds a bare pointer to it. Its idempotency flag is now belt and
-  braces — `Connection.Close` is idempotent on both backends.
+  ARC while a blocked reader still holds a bare pointer to it. A write may still be in flight:
+  `Connection.Close` interrupts it first (Linux shuts the socket down, macOS aborts the native
+  write) and then waits for it to return. Its idempotency flag is now belt and braces —
+  `Connection.Close` is idempotent on both backends.
 * `LocalAddr`/`RemoteAddr` are placeholders (`"ble-l2cap"` / `"ble"`).
 
 The TLS config that runs over this is the caller's business. Wendy's is
@@ -273,11 +278,15 @@ CoreBluetooth normally assumes exists.
   falls back to scanning. This avoids a 10 s stall when the device stops advertising between
   discovery and connect.
 * L2CAP streams get a **dedicated `NSThread` running a real `NSRunLoop`**, because
-  `NSStreamDelegate` events are otherwise never delivered. Writes are marshalled onto that thread
-  with `performSelector:onThread:waitUntilDone:YES` — a `CBL2CAPChannel` output stream returns `-1`
+  `NSStreamDelegate` events are otherwise never delivered. Writes are queued onto that thread
+  with `performSelector:onThread:waitUntilDone:NO` — a `CBL2CAPChannel` output stream returns `-1`
   when written from a foreign thread (e.g. Go's TLS goroutine), even when the stream reports open.
-  Channel setup waits for `NSStreamEventHasSpaceAvailable` (5 s cap) before declaring the channel
-  usable.
+  The stream may accept only a prefix of a write, or nothing under backpressure, so the I/O thread
+  keeps writing until every byte is taken, pumping its run loop while it waits. The sender gives up
+  after 10 s without positive progress, after 60 s in total, at the caller's write deadline if set,
+  or at once if the I/O thread has exited. A failed write fails the whole channel,
+  because part of the record may already be on the wire. Channel setup waits for
+  `NSStreamEventHasSpaceAvailable` (5 s cap) before declaring the channel usable.
 * Incoming L2CAP bytes accumulate in an `NSMutableData` behind a lock; `L2CAPRecv` drains the whole
   buffer at once. Reads use a 4096-byte chunk.
 * Requires cgo, `-framework CoreBluetooth`, and the macOS Bluetooth TCC permission. Sandboxed
@@ -291,9 +300,9 @@ CoreBluetooth normally assumes exists.
   `wendy_blescan_*` / `WendyBLEScanSession` there.
 * Error codes are a small C enum (`timeout`, `not found`, `connect failed`, `discover failed`,
   `write failed`, `read failed`, `L2CAP failed`, `disconnected`) mapped to Go `error` strings by
-  `bleError`. The one exception is `L2CAPRecv`, which returns the `ErrRecvTimeout` sentinel instead
-  of routing a timeout through `bleError`, so a caller can tell an idle channel from a dead one and
-  retry. Everything else surfaces as an opaque string.
+  `bleError`, with two exceptions: an idle `L2CAPRecv` returns `ErrRecvTimeout`, so callers can
+  retry without treating the channel as dead; `L2CAPSend` timeouts return a `net.Error` with
+  `Timeout()` true. Other errors surface as opaque strings.
 
 ### Linux (`central/ble_linux.go`, `bluez_linux.go`, `gatt_linux.go`)
 
@@ -364,10 +373,13 @@ These are all about `central`'s `Connection` API; `scan`'s own caveats are in it
   connection. The L2CAP data path is the exception: one concurrent sender plus one concurrent
   receiver is supported and relied on (`liteclient`'s framing writes from command goroutines while
   its read loop blocks in `Read`). On macOS that holds because sends are dispatched onto the I/O
-  thread and never touch the recv buffer or its semaphore; on Linux because `write(2)` and `read(2)`
-  on one socket are independent. Two concurrent *senders* are still unsafe — on macOS they race on
-  the shared write result, and on Linux `L2CAPSend`'s write loop would interleave and corrupt the
-  stream — so callers must serialize writes, as `liteclient` does.
+  thread and never touch the recv buffer, only signalling its semaphore to wake the reader when the
+  channel fails; on Linux because `write(2)` and `read(2)` on one socket are independent. Two
+  concurrent *senders* are still unsafe on Linux, where `L2CAPSend`'s write loop would interleave
+  and corrupt the stream, so callers must serialize writes, as `liteclient` does. macOS serializes
+  them in `Connection.L2CAPSend`, because the I/O thread pumps its run loop while a write waits for
+  space and a second queued write would otherwise run inside the first; `wendy_ble_l2cap_send`
+  itself must not be called concurrently.
 * **macOS only: `WaitNotification` is per-connection, not per-characteristic.** All subscriptions
   share one semaphore; a notification on characteristic *A* wakes a waiter on *B*, which then finds
   its own queue empty and reports a timeout. Fine with one subscription, fragile with several. Linux

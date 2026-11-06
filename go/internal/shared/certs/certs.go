@@ -41,8 +41,9 @@ func GenerateKeyPair() (privateKeyPEM string, err error) {
 //
 // ML-DSA-65 is the operator credential (WDY-3032): the same key signs the DPoP
 // proof, the CSR, and — once pki-core has minted the leaf — every request the
-// operator signs. GenerateKeyPair's P-256 output remains for the device and
-// legacy paths that have not moved.
+// operator signs. It is also the tier A/B device key, from pki-core enrollment
+// or the next renewal (T10). GenerateKeyPair's P-256 output remains for the
+// legacy Cloud enrollment and other paths that have not moved.
 //
 // The encoding is PKCS#8 carrying the 32-byte seed (RFC 9881), which is why the
 // PEM is ~128 bytes rather than the multi-kilobyte expanded key. That matters

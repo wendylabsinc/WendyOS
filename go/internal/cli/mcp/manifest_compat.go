@@ -240,6 +240,14 @@ type relayManifestProfile struct {
 	tools map[string]*relayManifestTool
 }
 
+// No remote schema references: a relay tool schema must not turn compilation
+// into an HTTP request or filesystem read.
+type noRemoteSchemaLoader struct{}
+
+func (noRemoteSchemaLoader) Load(string) (any, error) {
+	return nil, fmt.Errorf("external schema references are not supported")
+}
+
 func prepareRelayManifest(version string) (*relayManifestProfile, error) {
 	manifest, err := ResolveRelayManifest(version)
 	if err != nil {
@@ -252,7 +260,7 @@ func prepareRelayManifest(version string) (*relayManifestProfile, error) {
 			return nil, err
 		}
 		compiler := jsonschema.NewCompiler()
-		compiler.UseLoader(gatewaySchemaLoader{})
+		compiler.UseLoader(noRemoteSchemaLoader{})
 		const schemaURI = "urn:wendy:relay-tool"
 		if err := compiler.AddResource(schemaURI, doc["inputSchema"]); err != nil {
 			return nil, err

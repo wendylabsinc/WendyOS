@@ -1,50 +1,39 @@
-# Lite Cloud relay
+# Connect to Wendy Lite through Wendy Cloud
 
-WDY-3512 uses `wendycloud.tunnel.lite.v1` from service-protos commit
-`a5edcce` ([PR #110](https://github.com/wendylabsinc/service-protos/pull/110)).
-The vendored contract is `Proto/wendycloud/tunnel/lite/v1/relay.proto`;
-`go/scripts/generate-proto.sh` generates its Go client. Cloud PR #753 and
-firmware PR #56 must be deployed together with this client.
+Use Wendy Cloud to reach an enrolled Lite board when you are away from its local
+network. The board needs an internet connection and must appear online.
 
-The CLI discovers the owning TunnelBroker through Cloud API with its authenticated
-session. It opens a signed tunnel principal request for service `wendycom` at
-that endpoint; the client permits at most three stream attempts, including up to two
-authorized ownership redirects.
-Resolved organization policy must grant `tunnel:connect`. DPoP continues to bind
-Cloud authentication where the access token requires it.
+## Find and select your board
 
-Lite uses ES256 operator proofs and TLS 1.3 with P-256 identities. An operator
-login holds two certificates for one SPIFFE principal: the ML-DSA primary, used
-for every other Cloud call, and a P-256 Lite leaf, used only on this lane for
-Lite proof signing and device TLS. The CLI never presents the primary here. When
-the session has no Lite leaf, or it expires within 30 minutes before the primary
-does, the CLI requests
-one from pki-core's identity endpoint with a fresh P-256 key, proved by the
-ML-DSA session. pki-core marks the leaf with EKU `1.3.6.1.4.1.65441.1.9` and caps
-its lifetime at the primary's. If Cloud refuses the Lite leaf, the CLI requests a
-new one once and retries. Service-account sessions cannot use this lane.
-`WENDY_LITE_OPERATOR_CERT` and `WENDY_LITE_OPERATOR_KEY` still override the Lite
-leaf with a PEM leaf plus chain and its key, for the same principal.
+```sh
+wendy cloud login
+wendy cloud discover
+```
 
-The broker returns a compact P-256 WLG2 grant after pki-core verifies the operator
-request. The CLI then completes inner mTLS with the intended device, sends the
-grant as its first application data, and waits for WLA2 before WendyCom. The
-device verifies the signature, identities, authenticated operator key, session
-and upgrade hash. The current WLG2 record has `309 + key-ID length` bytes and
-includes the grant ID, correlation ID, asset ID, operator public-key hash,
-request hash and attestation hash. Older, shorter WLG2 records are rejected.
-The grant must be presented within its signed window of at most 60 seconds.
-That window is separate from the session's 1800-second limit, which is also
-bounded by both endpoint certificates' expiry.
-After WLA2, the CLI sends `WendyComRelayEstablished` on the gRPC stream to mark
-the inner handshake and grant admission complete.
-Grant verification keys come from the authenticated outer device/broker
-connection, never from the CLI.
+Use the Cloud selector shown for the board when a command asks for a device.
+You can also choose the board in the device picker's Cloud tab. Wendy opens an
+encrypted connection to the selected board automatically; you do not need to
+configure a tunnel or open an inbound port on its network.
 
-Before returning a grant, the stream may return `WendyComRelayRoute` if another
-process owns the device connection. The CLI closes the stream and connection,
-then authenticates at that endpoint within the attempt limit.
+Your account needs permission to connect to the device in its organization.
+Use a personal sign-in for Lite connections; service-account sessions do not
+support this connection path.
 
-Raw payloads are bounded to 65536 bytes. The broker enforces establishment,
-idle and absolute session deadlines, plus shared per-user and per-device caps.
-The old unsigned open and un-packaged RPC name are unsupported.
+## If the connection fails
+
+1. Check that the board is powered, connected to Wi-Fi, and online in
+   `wendy cloud discover`.
+2. Confirm that your selected sign-in belongs to its organization with
+   `wendy auth status`. Use `wendy auth use` to switch if needed.
+3. If authentication has expired, sign in again with `wendy cloud login`.
+4. Update the CLI and board firmware if the error reports an unsupported protocol.
+
+Connections have idle and maximum-duration limits. Start the command again if a
+session expires. The connection is also limited by certificate expiry.
+
+## Enrollment and removal
+
+[Enroll a board over USB](/docs/advanced/cli/lite-enrollment) before using Cloud access.
+USB is also required to clear the board's local enrollment. You can
+[remove Cloud access](/docs/advanced/clients/wendy-cli/commands/device/unenroll)
+while the board is offline, but that does not erase its local settings.

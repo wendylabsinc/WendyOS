@@ -52,7 +52,7 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 		}
 		p.Method, p.EraseScope = "agent", "No OS image write; install the Wendy Agent on the existing Linux system."
 		p.Documentation = "https://docs.wendy.dev/latest/installation/linux"
-		p.Requirements = []string{"Confirm the target Linux host, SSH access, sudo access, and Internet connectivity.", "Run the agent installer on the target host: curl -fsSL https://install.wendy.dev/agent.sh | bash"}
+		p.Requirements = []string{"Confirm the target Linux host, SSH access, sudo access, and Internet connectivity.", "Run the agent installer on the target host: " + linuxDesktopCommand("", "", linuxDesktopMachineLabel)}
 		if o.DeviceType == "unitree-g1" {
 			p.Documentation = "https://docs.wendy.dev/latest/installation/wendy-agent-unitree-g1"
 			p.Requirements = append(p.Requirements, "Use the G1 PC2's vendor Ubuntu installation. Do not flash a generic Jetson developer-kit image onto its custom carrier.")
@@ -60,6 +60,12 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 		p.NextSteps = []string{"Discover and verify the explicit target with install verify; agent-only systems do not report a WendyOS version or device type.", "Verify the robot's existing ROS topics and DDS configuration before deploying an application."}
 		return p, nil
 	}
+	// Mapped after the agent-only plans above, which must not need the manifest.
+	var err error
+	if o.DeviceType, o.Storage, err = resolveInstallDeviceType(ctx, o.DeviceType, o.Storage, 0); err != nil {
+		return nil, err
+	}
+	p.DeviceType = o.DeviceType
 	jetson := isT234RecoveryDevice(o.DeviceType) || o.DeviceType == thorDeviceType
 	if jetson && o.Carrier != "developer-kit" {
 		return nil, fmt.Errorf("Jetson image planning requires carrier=developer-kit; for a robot/custom carrier use its vendor installation guide or install the agent on its existing OS")

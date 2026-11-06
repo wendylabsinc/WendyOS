@@ -16,6 +16,7 @@
     "build-host",
     "---Reference---",
     "enroll",
+    "unenroll",
     "rename",
     "power-mode",
     "setup",

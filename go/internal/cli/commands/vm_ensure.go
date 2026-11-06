@@ -11,6 +11,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc/codes"
@@ -260,6 +261,9 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 	if choice == nil {
 		return nil, fmt.Errorf("no simulator selected")
 	}
+	// All of this is simulator setup -- the boot wait, an agent update and the
+	// robot build -- so none of its progress views rotate tips about projects.
+	ctx = withoutProgressHints(ctx)
 
 	if choice.Create {
 		if err := createSimulator(choice.Name); err != nil {
@@ -337,6 +341,42 @@ var createSimulator = func(name string) error {
 	return attachSimulatorProfile(name, profile)
 }
 
+// startSimulatorFn powers 's' on discover's Simulator tab: the same boot, agent
+// wait and first-time robot build as --device vm:<name>, after which the
+// connection is closed -- discover lists devices, it does not hold one.
+//
+// Like createSimulator, the caller must not be inside a Bubble Tea program.
+var startSimulatorFn = func(ctx context.Context, name string) error {
+	cliLogln("Starting simulator %q...", name)
+	picked, err := connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, false)
+	if err != nil {
+		return err
+	}
+	if picked != nil {
+		picked.Agent.Close()
+	}
+	return nil
+}
+
+// simulatorStartOutcome is the status line the Simulator tab shows when it
+// comes back. A failure is printed in full as well: the status line holds one
+// line, and a boot failure carries the guest's last console output, which
+// stays in the terminal once discover exits.
+func simulatorStartOutcome(name string, err error) simulatorFlash {
+	switch {
+	case err == nil:
+		return simulatorFlash{msg: fmt.Sprintf("Started %s.", name)}
+	case errors.Is(err, ErrUserCancelled), errors.Is(err, tui.ErrCancelled), errors.Is(err, context.Canceled):
+		return simulatorFlash{msg: fmt.Sprintf("Start of %s cancelled.", name)}
+	}
+	cliLogln("Could not start %s: %v", name, err)
+	msg, rest, multiline := strings.Cut(err.Error(), "\n")
+	if multiline && strings.TrimSpace(rest) != "" {
+		msg += " (full output is printed when you quit)"
+	}
+	return simulatorFlash{msg: fmt.Sprintf("Could not start %s: %s", name, msg), isErr: true}
+}
+
 // awaitSimulator waits under a spinner for the guest agent to answer. Shared by
 // the picker and the --device alias so both wait the same way: "running" means
 // QEMU is up, not that the guest has finished booting.
@@ -366,7 +406,9 @@ func awaitSimulatorWith(ctx context.Context, name, addr string, booting bool,
 	var conn *grpcclient.AgentConnection
 	var err error
 	if isInteractiveTerminalFn() {
-		conn, err = runAgentConnectionSpinner(ctx, label, wait)
+		// Booting the simulator is setup, like the robot build after it: tips
+		// about scaffolding projects would only distract from the wait.
+		conn, err = runAgentConnectionSpinner(withoutProgressHints(ctx), label, wait)
 	} else {
 		// The spinner needs a TTY it cannot open here, and `--device sim` has
 		// to work from a script. Wait the same way, just without the animation.

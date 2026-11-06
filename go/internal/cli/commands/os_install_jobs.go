@@ -357,7 +357,7 @@ func executeMediaInstallJob(ctx context.Context, j *onboarding.Job, checkpoint o
 	}
 	// The image already contains its agent. Optional first-boot provisioning is
 	// intentionally left to the terminal installer or the network tools.
-	return writeImageToDisk(stream, stream.uncompressedSize, *target, nil)
+	return writeImageToDisk(stream, stream.uncompressedSize, *target, imageFit{}, nil)
 }
 
 func executeOrinInstallJob(ctx context.Context, j *onboarding.Job, cache string, detail func(string), checkpoint onboarding.Checkpoint) error {

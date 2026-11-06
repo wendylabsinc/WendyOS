@@ -24,6 +24,8 @@ service WendyContainerService {
     rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
     rpc ListContainerStats(ListContainerStatsRequest) returns (ListContainerStatsResponse);
     rpc GetResourceStats(GetResourceStatsRequest) returns (GetResourceStatsResponse);
+    // Lightweight network-only sample; does not scan containers or GPUs.
+    rpc GetNetworkStats(GetNetworkStatsRequest) returns (NetworkStats);
     rpc GetContainerPorts(GetContainerPortsRequest) returns (GetContainerPortsResponse);
     rpc StreamMCP(stream MCPChunk) returns (stream MCPChunk);
     rpc QueryChunks(QueryChunksRequest) returns (QueryChunksResponse);
@@ -39,6 +41,14 @@ service WendyContainerService {
     // RunContainer remains the source of truth and repeats these idempotent
     // operations, so callers can fall back safely when this RPC is unavailable.
     rpc PrepareImage(RunContainerLayersRequest) returns (PrepareImageResponse);
+    // ValidateContainer makes the checks CreateContainer makes before it
+    // replaces an existing container of the same name (image availability,
+    // entitlement refusals, env, resource limits, the spec) without creating
+    // or replacing anything. A multi-service deploy validates every service
+    // before it replaces any, so one failing service leaves the whole app on
+    // its previous version. Agents without it return UNIMPLEMENTED, and
+    // callers then create service by service as before.
+    rpc ValidateContainer(CreateContainerRequest) returns (ValidateContainerResponse);
 }
 
 message ListContainersRequest {}
@@ -137,6 +147,9 @@ message RunContainerLayersRequest {
     // Same semantics as CreateContainerRequest.env, which this path forwards to.
     // Agents predating this field ignore it and start the container without it.
     repeated string env = 11;
+
+    // See CreateContainerRequest.release_id.
+    optional string release_id = 12;
 }
 
 message CreateContainerRequest {
@@ -151,9 +164,22 @@ message CreateContainerRequest {
     // Applied after the image's built-in env and before Wendy system env vars,
     // so Wendy vars always win.
     repeated string env = 8;
+
+    // Cloud AppRelease id (a UUID) this deploy was recorded as, set only when
+    // the operator opted into recording (`wendy run --record-release`). The
+    // agent labels the container with it and reports it as the running
+    // release. Unset: the deploy is not a recorded release. Agents predating
+    // this field ignore it.
+    optional string release_id = 9;
 }
 
-message CreateContainerResponse {}
+message CreateContainerResponse {
+    // Digest of the image manifest the container was created from, as the
+    // device holds it. The CLI records it on the release it created.
+    optional string image_digest = 1;
+}
+
+message ValidateContainerResponse {}
 
 message CreateContainerProgress {
     enum Phase {
@@ -259,7 +285,10 @@ message RunContainerLayersResponse {
         ConsoleOutput stderr_output = 3;
     }
 
-    message Started {}
+    message Started {
+        // See CreateContainerResponse.image_digest.
+        optional string image_digest = 1;
+    }
 
     message ConsoleOutput {
         bytes data = 1;
@@ -345,6 +374,42 @@ message HostStats {
     // Aggregate system-battery state, from /sys/class/power_supply. Absent on
     // mains-powered devices, which is the overwhelming majority of them.
     optional BatteryStats battery = 8;
+    // Absent on older agents. Missing counters mean unavailable, never zero.
+    NetworkStats network = 9;
+}
+
+message GetNetworkStatsRequest {}
+
+message NetworkStats {
+    string boot_id = 1;
+    // CLOCK_BOOTTIME on the device, for rates unaffected by clock adjustments
+    // or client/relay latency. Compare samples only within the same boot.
+    uint64 sampled_at_boottime_ns = 2;
+    repeated NetworkInterfaceStats interfaces = 3;
+    // The agent's systemd service, including helper processes and IP loopback,
+    // but excluding app containers. IP bytes, not Ethernet/wire bytes.
+    AgentNetworkStats agent = 4;
+    string interfaces_unavailable_reason = 5;
+    string agent_unavailable_reason = 6;
+}
+
+message NetworkInterfaceStats {
+    string name = 1;
+    uint32 index = 2;
+    uint64 received_bytes = 3;
+    uint64 sent_bytes = 4;
+    // Virtual interfaces are listed but must not be summed with physical links.
+    bool virtual = 5;
+    bool loopback = 6;
+    // Interface counters cover all traffic since interface creation/reset.
+}
+
+message AgentNetworkStats {
+    uint64 received_bytes = 1;
+    uint64 sent_bytes = 2;
+    // Changes when service accounting restarts. Totals are since accounting
+    // was enabled, and do not represent historical daily/monthly usage.
+    string accounting_id = 3;
 }
 
 // ThermalZone is one temperature sensor read from /sys/class/thermal.

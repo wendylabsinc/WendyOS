@@ -124,6 +124,31 @@ func removeLayerSnapshots(ctx context.Context, sn snapshotRemover, chainIDs []st
 	return nil
 }
 
+// layerRepairBlockedError reports layer snapshots that UnpackImage had to
+// replace but could not, because something is stacked on them (WDY-3799).
+type layerRepairBlockedError struct {
+	// users are the containers and snapshots stacked on the layers, as
+	// snapshotUsers names them. Empty when they could not be determined.
+	users []string
+	err   error
+}
+
+func (e *layerRepairBlockedError) Error() string {
+	if len(e.users) == 0 {
+		return fmt.Sprintf("replacing layer snapshots that are not stacked on their parent layers: %v", e.err)
+	}
+	return fmt.Sprintf("layer snapshots that are not stacked on their parent layers are still used by %s; delete those containers and redeploy: %v",
+		strings.Join(e.users, ", "), e.err)
+}
+
+func (e *layerRepairBlockedError) Unwrap() error { return e.err }
+
+// onlyBlockedBy reports whether removing the named container could unblock
+// the repair: it is the only user, or the users are unknown.
+func (e *layerRepairBlockedError) onlyBlockedBy(containerID string) bool {
+	return len(e.users) == 0 || (len(e.users) == 1 && e.users[0] == containerID)
+}
+
 // snapshotUsers names what is stacked on the given layer snapshots, apart
 // from those snapshots themselves: the IDs of containers whose rootfs is
 // stacked on them, and the keys of any other snapshots, such as a rootfs
@@ -267,10 +292,7 @@ func (c *Client) UnpackImage(ctx context.Context, img containerd.Image, progress
 			// Images built from identical layers share these snapshots, so the
 			// user may be another app's container rather than this image's.
 			if errdefs.IsFailedPrecondition(err) {
-				if users := c.snapshotUsers(ctx, sn, unstacked); len(users) > 0 {
-					return fmt.Errorf("layer snapshots that are not stacked on their parent layers are still used by %s; delete those containers and redeploy: %w",
-						strings.Join(users, ", "), err)
-				}
+				return &layerRepairBlockedError{users: c.snapshotUsers(ctx, sn, unstacked), err: err}
 			}
 			return fmt.Errorf("replacing layer snapshots that are not stacked on their parent layers: %w", err)
 		}

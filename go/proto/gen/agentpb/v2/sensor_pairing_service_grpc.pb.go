@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WendySensorPairingService_AddSensorPairing_FullMethodName    = "/wendy.agent.services.v2.WendySensorPairingService/AddSensorPairing"
-	WendySensorPairingService_RemoveSensorPairing_FullMethodName = "/wendy.agent.services.v2.WendySensorPairingService/RemoveSensorPairing"
-	WendySensorPairingService_ListSensorPairings_FullMethodName  = "/wendy.agent.services.v2.WendySensorPairingService/ListSensorPairings"
+	WendySensorPairingService_AddSensorPairing_FullMethodName      = "/wendy.agent.services.v2.WendySensorPairingService/AddSensorPairing"
+	WendySensorPairingService_RemoveSensorPairing_FullMethodName   = "/wendy.agent.services.v2.WendySensorPairingService/RemoveSensorPairing"
+	WendySensorPairingService_ListSensorPairings_FullMethodName    = "/wendy.agent.services.v2.WendySensorPairingService/ListSensorPairings"
+	WendySensorPairingService_DiscoverSensorSources_FullMethodName = "/wendy.agent.services.v2.WendySensorPairingService/DiscoverSensorSources"
 )
 
 // WendySensorPairingServiceClient is the client API for WendySensorPairingService service.
@@ -31,6 +32,15 @@ type WendySensorPairingServiceClient interface {
 	AddSensorPairing(ctx context.Context, in *AddSensorPairingRequest, opts ...grpc.CallOption) (*AddSensorPairingResponse, error)
 	RemoveSensorPairing(ctx context.Context, in *RemoveSensorPairingRequest, opts ...grpc.CallOption) (*RemoveSensorPairingResponse, error)
 	ListSensorPairings(ctx context.Context, in *ListSensorPairingsRequest, opts ...grpc.CallOption) (*ListSensorPairingsResponse, error)
+	// DiscoverSensorSources browses this device's own network for sensor
+	// sources, so a client can pair from anywhere: WendyOS agents
+	// (_wendyos._udp) and Wendy Lite boards (_wendy-lite._tcp) that advertise
+	// the "sensors" capability. The device never lists itself. Addresses are as
+	// seen from this device. Identity fields come from mDNS TXT records and are
+	// unauthenticated hints; the pairing transport verifies the source's
+	// certificate when it connects. Agents that predate this RPC return
+	// UNIMPLEMENTED.
+	DiscoverSensorSources(ctx context.Context, in *DiscoverSensorSourcesRequest, opts ...grpc.CallOption) (*DiscoverSensorSourcesResponse, error)
 }
 
 type wendySensorPairingServiceClient struct {
@@ -71,6 +81,16 @@ func (c *wendySensorPairingServiceClient) ListSensorPairings(ctx context.Context
 	return out, nil
 }
 
+func (c *wendySensorPairingServiceClient) DiscoverSensorSources(ctx context.Context, in *DiscoverSensorSourcesRequest, opts ...grpc.CallOption) (*DiscoverSensorSourcesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscoverSensorSourcesResponse)
+	err := c.cc.Invoke(ctx, WendySensorPairingService_DiscoverSensorSources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WendySensorPairingServiceServer is the server API for WendySensorPairingService service.
 // All implementations must embed UnimplementedWendySensorPairingServiceServer
 // for forward compatibility.
@@ -78,6 +98,15 @@ type WendySensorPairingServiceServer interface {
 	AddSensorPairing(context.Context, *AddSensorPairingRequest) (*AddSensorPairingResponse, error)
 	RemoveSensorPairing(context.Context, *RemoveSensorPairingRequest) (*RemoveSensorPairingResponse, error)
 	ListSensorPairings(context.Context, *ListSensorPairingsRequest) (*ListSensorPairingsResponse, error)
+	// DiscoverSensorSources browses this device's own network for sensor
+	// sources, so a client can pair from anywhere: WendyOS agents
+	// (_wendyos._udp) and Wendy Lite boards (_wendy-lite._tcp) that advertise
+	// the "sensors" capability. The device never lists itself. Addresses are as
+	// seen from this device. Identity fields come from mDNS TXT records and are
+	// unauthenticated hints; the pairing transport verifies the source's
+	// certificate when it connects. Agents that predate this RPC return
+	// UNIMPLEMENTED.
+	DiscoverSensorSources(context.Context, *DiscoverSensorSourcesRequest) (*DiscoverSensorSourcesResponse, error)
 	mustEmbedUnimplementedWendySensorPairingServiceServer()
 }
 
@@ -96,6 +125,9 @@ func (UnimplementedWendySensorPairingServiceServer) RemoveSensorPairing(context.
 }
 func (UnimplementedWendySensorPairingServiceServer) ListSensorPairings(context.Context, *ListSensorPairingsRequest) (*ListSensorPairingsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSensorPairings not implemented")
+}
+func (UnimplementedWendySensorPairingServiceServer) DiscoverSensorSources(context.Context, *DiscoverSensorSourcesRequest) (*DiscoverSensorSourcesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiscoverSensorSources not implemented")
 }
 func (UnimplementedWendySensorPairingServiceServer) mustEmbedUnimplementedWendySensorPairingServiceServer() {
 }
@@ -173,6 +205,24 @@ func _WendySensorPairingService_ListSensorPairings_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendySensorPairingService_DiscoverSensorSources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiscoverSensorSourcesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendySensorPairingServiceServer).DiscoverSensorSources(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendySensorPairingService_DiscoverSensorSources_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendySensorPairingServiceServer).DiscoverSensorSources(ctx, req.(*DiscoverSensorSourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WendySensorPairingService_ServiceDesc is the grpc.ServiceDesc for WendySensorPairingService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -191,6 +241,10 @@ var WendySensorPairingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSensorPairings",
 			Handler:    _WendySensorPairingService_ListSensorPairings_Handler,
+		},
+		{
+			MethodName: "DiscoverSensorSources",
+			Handler:    _WendySensorPairingService_DiscoverSensorSources_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

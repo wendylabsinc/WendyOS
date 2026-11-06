@@ -4,6 +4,7 @@
 package unitreecloud
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5" // Unitree's API requires MD5 for password and request signing.
 	"encoding/hex"
@@ -26,6 +27,11 @@ import (
 // This public mobile-app constant is a vendor compatibility value, not a
 // Wendy secret or independent authentication proof. Account traffic uses HTTPS.
 const cloudSignSecret = "XyvkwK45hp5PHfA8"
+
+// Identify Wendy instead of claiming to be the Android app's embedded WebView.
+// That copied WebView identity triggers an HTML/JavaScript verification page
+// on login/email, even though system/pubKey still returns JSON.
+const cloudUserAgent = "Wendy/0.1 (Unitree Go2 client)"
 
 type cloudHTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
@@ -64,7 +70,14 @@ func NewClient(region string) (*Client, error) {
 
 // Login logs in and fetches robots already bound to this Unitree account.
 // A robot must first be bound using the official Unitree Go app.
-func (c *Client) Login(ctx context.Context, email, password string) (*unitree.Account, error) {
+func (c *Client) Login(ctx context.Context, email, password string) (_ *unitree.Account, loginErr error) {
+	// Every error below is constructed locally. Vendor bodies and transport
+	// errors are discarded by request before this public error is created.
+	defer func() {
+		if loginErr != nil {
+			loginErr = &loginFailure{cause: loginErr}
+		}
+	}()
 	email = strings.TrimSpace(email)
 	if email == "" || password == "" {
 		return nil, errors.New("Unitree email and password are required")
@@ -145,7 +158,7 @@ func (c *Client) request(ctx context.Context, method, path, token string, form u
 		"AppVersion":     {"1.11.4"},
 		"AppLocale":      {"en_US"},
 		"Channel":        {"UMENG_CHANNEL"},
-		"User-Agent":     {"Mozilla/5.0 (Linux; Android 14; SM-S931B Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/127.0.6533.103 Mobile Safari/537.36"},
+		"User-Agent":     {cloudUserAgent},
 		"AppTimezone":    {zone},
 		"AppTimestamp":   {ts},
 		"AppNonce":       {nonce},
@@ -156,22 +169,25 @@ func (c *Client) request(ctx context.Context, method, path, token string, form u
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("Unitree %s request failed: %w", path, ctx.Err())
+			return fmt.Errorf("%s: %w", operationFailure(path), ctx.Err())
 		}
 		// Transport errors can include request headers or echoed content.
-		return fmt.Errorf("Unitree %s could not reach the cloud service", path)
+		return fmt.Errorf("%s: could not reach the Unitree cloud service. Check your internet connection", operationFailure(path))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		// Never echo response bodies, which may contain credentials or keys.
-		return fmt.Errorf("Unitree %s returned HTTP %d", path, resp.StatusCode)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return fmt.Errorf("%s: Unitree is limiting requests (HTTP 429). Wait before retrying", operationFailure(path))
+		}
+		return fmt.Errorf("%s: the service returned HTTP %d", operationFailure(path), resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil {
 		if ctx.Err() != nil {
-			return fmt.Errorf("reading Unitree %s response: %w", path, ctx.Err())
+			return fmt.Errorf("%s: %w", operationFailure(path), ctx.Err())
 		}
-		return fmt.Errorf("Unitree %s response could not be read", path)
+		return fmt.Errorf("%s: the response could not be read", operationFailure(path))
 	}
 	if len(raw) > 1<<20 {
 		return errors.New("Unitree cloud response exceeds 1 MiB")
@@ -181,13 +197,16 @@ func (c *Client) request(ctx context.Context, method, path, token string, form u
 		Data json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil {
-		return fmt.Errorf("Unitree %s returned an invalid response", path)
+		if bytes.Contains(raw, []byte("EO_Bot_Ssid")) && bytes.Contains(raw, []byte("__tst_status")) {
+			return fmt.Errorf("%s: Unitree returned a browser-verification page instead of a login response. Your password has not been verified; try again later", operationFailure(path))
+		}
+		return fmt.Errorf("%s: the service returned an invalid response", operationFailure(path))
 	}
 	if envelope.Code != 100 {
-		return fmt.Errorf("Unitree %s failed (code %d); check your account credentials and region", path, envelope.Code)
+		return fmt.Errorf("%s: Unitree returned code %d. Confirm the account region matches the Unitree Go app", operationFailure(path), envelope.Code)
 	}
 	if json.Unmarshal(envelope.Data, out) != nil {
-		return fmt.Errorf("Unitree %s returned invalid data", path)
+		return fmt.Errorf("%s: the service returned invalid data", operationFailure(path))
 	}
 	return nil
 }
@@ -195,4 +214,32 @@ func (c *Client) request(ctx context.Context, method, path, token string, form u
 func md5Hex(value string) string {
 	digest := md5.Sum([]byte(value))
 	return hex.EncodeToString(digest[:])
+}
+
+// loginFailure marks diagnostics assembled solely from local messages and
+// numeric response codes, never vendor-provided text or credentials.
+type loginFailure struct{ cause error }
+
+func (e *loginFailure) Error() string { return e.cause.Error() }
+func (e *loginFailure) Unwrap() error { return e.cause }
+
+// LoginFailureMessage is safe to show in a desktop form. Unrecognized errors
+// remain redacted so a future client implementation cannot leak credentials.
+func LoginFailureMessage(err error) string {
+	var failure *loginFailure
+	if errors.As(err, &failure) {
+		return failure.Error()
+	}
+	return "Unitree sign-in could not be completed. Check your connection and account region."
+}
+
+func operationFailure(path string) string {
+	switch path {
+	case "login/email":
+		return "Unitree sign-in failed"
+	case "device/bind/list":
+		return "Unitree sign-in succeeded, but loading your robots failed"
+	default:
+		return "Unitree cloud request failed"
+	}
 }

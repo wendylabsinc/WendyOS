@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	containerdlog "github.com/containerd/log"
 	"github.com/sirupsen/logrus"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
 
@@ -114,6 +115,61 @@ func TestRunBuildWithProgressCtrlCCancelsAndJoinsBuilder(t *testing.T) {
 	case <-exited:
 	default:
 		t.Fatal("runBuildWithProgress returned before the cancelled builder exited")
+	}
+}
+
+func TestRunBuildWithProgressLeavesTipsOutOfSimulatorSetup(t *testing.T) {
+	// The managed robot's build runs under withoutProgressHints; an ordinary
+	// build keeps its tips.
+	restoreInteractive := forceBuildProgressInteractive(true)
+	defer restoreInteractive()
+	originalProgram := buildProgressProgram
+	defer func() { buildProgressProgram = originalProgram }()
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		tips bool
+	}{
+		{"ordinary build", context.Background(), true},
+		{"simulator setup", withoutProgressHints(context.Background()), false},
+	} {
+		var view string
+		buildProgressProgram = func(model tea.Model) *tea.Program {
+			view = model.View()
+			return tui.NewProgressProgram(model,
+				tea.WithInput(strings.NewReader("\x03")),
+				tea.WithOutput(io.Discard),
+			)
+		}
+		_ = runBuildWithProgress(tc.ctx, "Building image...", dumpRawAlways, func(ctx context.Context, _, _ io.Writer) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		if got := strings.Contains(view, "💡"); got != tc.tips {
+			t.Errorf("%s: tip shown = %t, want %t: %q", tc.name, got, tc.tips, view)
+		}
+	}
+}
+
+func TestSimulatorBootWaitShowsNoTips(t *testing.T) {
+	origInteractive, origSpinner := isInteractiveTerminalFn, runAgentConnectionSpinner
+	t.Cleanup(func() { isInteractiveTerminalFn, runAgentConnectionSpinner = origInteractive, origSpinner })
+	isInteractiveTerminalFn = func() bool { return true }
+	var hintsOff bool
+	runAgentConnectionSpinner = func(ctx context.Context, _ string, _ func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+		hintsOff = progressHintsOff(ctx)
+		return &grpcclient.AgentConnection{}, nil
+	}
+	if _, err := awaitSimulatorWith(context.Background(), "sim", "127.0.0.1:50051", true,
+		func(context.Context) (*grpcclient.AgentConnection, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !hintsOff {
+		t.Fatal("the simulator boot spinner rotates tips")
+	}
+	if progressHintsOff(context.Background()) {
+		t.Fatal("tips are off without being asked")
 	}
 }
 

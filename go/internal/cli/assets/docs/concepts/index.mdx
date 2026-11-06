@@ -41,11 +41,17 @@ Linux targets run containers. Mac targets run native macOS apps. ESP32 uses Wend
 
 ## App configuration
 
-[`wendy.json`](/docs/advanced/apps/wendy.json) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path but does not provide physical hardware access.
+[`wendy.json`](/docs/advanced/apps/wendy.json) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path. Physical hardware access is limited to opt-in [serial passthrough](/docs/installation/wendyos-virtual-machine#serial-passthrough); other peripherals need a real device.
 
 ## Optional cloud management
 
-You can develop locally without enrolling in Wendy Cloud. [Cloud](https://cloud.wendy.dev/login) adds remote access and fleet management when you need to deploy beyond your local network.
+You can develop locally without enrolling in Wendy Cloud. The [Cloud guide](/docs/cloud)
+covers Cloud v2 setup and a Legacy tab for existing v1 devices. Signing into v2
+does not migrate those devices; follow [Moving to Cloud v2](/docs/cloud-migration)
+before changing enrollment.
+
+For Data, BI, Companion, SensorLink, and the other products, see
+[The Wendy ecosystem](/docs/concepts/ecosystem).
 
 ## Deeper explanations
 

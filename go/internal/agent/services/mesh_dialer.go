@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,23 +13,21 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
-	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
-	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-// Compile-time assertion that MeshDialer satisfies mesh.PeerDialer (Task 4).
-var _ mesh.PeerDialer = (*MeshDialer)(nil)
+// Compile-time assertion that MeshDialer satisfies this package's PeerDialer
+// (build delivery, push proxy). The VIP dialer is mesh.PeerDialer, implemented
+// by MeshAppDialer over this dialer's self and local-mesh legs.
+var _ PeerDialer = (*MeshDialer)(nil)
 
 const (
 	// lanBudget bounds mDNS discovery + LAN connect before falling back to
-	// the cloud relay; the outcome cache keeps repeat dials from re-paying it.
+	// the routed mesh or the cloud relay; the outcome cache keeps repeat dials
+	// from re-paying it.
 	lanBudget   = 1 * time.Second
 	lanCacheTTL = 60 * time.Second
 
@@ -41,6 +40,13 @@ const (
 	meshDialTarget = "passthrough:///mesh-peer"
 )
 
+// DeliveryTarget binds a Cloud asset record to its authenticated device principal.
+// Build callers perform endpoint mTLS pinned to Device after opening the transport.
+type DeliveryTarget struct {
+	Device    meshid.Device
+	AssetUUID string
+}
+
 // meshDialContextDialer returns a gRPC dialer that connects to hostport
 // verbatim via the standard library, which is the only component that
 // understands IPv6 zone ids. hostport is the address MeshDialer resolved from
@@ -52,34 +58,126 @@ func meshDialContextDialer(hostport string) func(context.Context, string) (net.C
 	}
 }
 
-// meshIdentity is the dialer's mTLS asset identity plus broker coordinates,
+// meshIdentity is this device's mesh principal plus its credential material,
 // held as one value behind MeshDialer.mu so every dial reads a consistent
 // snapshot and UpdateIdentity can swap it wholesale when the device is
-// (re-)provisioned while the agent is running.
+// (re-)provisioned while the agent is running. device is read off certPEM: it
+// is what a VIP dial aimed at this host is recognized as, what a local-mesh
+// session authenticates with, and what the LAN leg compares against a
+// discovered peer's advertised principal. A certificate carrying no device
+// principal leaves it zero, which keeps the self-VIP and local-mesh legs
+// closed instead of guessing an identity.
 type meshIdentity struct {
-	brokerURL string
-	orgID     int32
-	assetID   int32
-	certPEM   string
-	keyPEM    string
-	chainPEM  string
+	device   meshid.Device
+	certPEM  string
+	keyPEM   string
+	chainPEM string
 }
 
-// MeshDialer implements mesh.PeerDialer: LAN-direct MeshDial when the peer is
-// discoverable locally, cloud-broker ClientTunnel otherwise.
+// MeshDialer is the agent's mesh dialer. Every leg is keyed by the target's
+// device principal: this device's own apps, end-to-end QUIC app sessions over
+// the routed local mesh, direct mTLS dials to LAN peers, and — for callers
+// that name a Cloud asset — the Cloud relay's symbolic services.
 type MeshDialer struct {
 	logger  *zap.Logger
 	metrics *MeshMetrics
 
 	// Seams (overridden in tests).
-	lanLookup  func(ctx context.Context, assetID int32) (hostport string, ok bool)
-	dialLAN    func(ctx context.Context, hostport string, deviceID int32, port uint16) (net.Conn, error)
-	dialBroker func(ctx context.Context, deviceID int32, port uint16) (net.Conn, error)
-	now        func() time.Time
+	lanLookup   func(ctx context.Context, device meshid.Device) (hostport string, ok bool)
+	dialLAN     func(ctx context.Context, hostport string, device meshid.Device, port uint16) (net.Conn, error)
+	serviceDial func(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error)
+	localDial   func(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error)
+	selfDial    func(ctx context.Context, port uint16) (net.Conn, error)
+	now         func() time.Time
 
 	mu    sync.Mutex
 	ident meshIdentity
-	cache map[int32]lanCacheEntry
+	cache map[meshid.Device]lanCacheEntry
+}
+
+// SetLocalMeshDialer supplies the end-to-end QUIC app session toward one
+// device principal over the routed local mesh. A missing authenticated route
+// is reported with meshsession.ErrNoRoute.
+func (d *MeshDialer) SetLocalMeshDialer(dial func(context.Context, meshid.Device, uint16) (net.Conn, error)) {
+	d.mu.Lock()
+	d.localDial = dial
+	d.mu.Unlock()
+}
+
+// SetSelfDialer supplies the same live ingress authorization used by peer
+// sessions for this device's own VIP. A local app never needs a Babel route
+// or a peer session to reach a sibling app on its own device.
+func (d *MeshDialer) SetSelfDialer(dial func(context.Context, uint16) (net.Conn, error)) {
+	d.mu.Lock()
+	d.selfDial = dial
+	d.mu.Unlock()
+}
+
+// SetLocalServiceDialer supplies routed TCP for administrative services. App
+// sessions keep their separate ingress registry and never use this dial path.
+func (d *MeshDialer) SetLocalServiceDialer(dial func(context.Context, meshid.Device, uint16) (net.Conn, error)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.serviceDial = dial
+}
+
+// dialSelf answers a VIP dial aimed at this device's own principal. The flow
+// never leaves the host, so it needs no Babel route and no peer session — only
+// the live ingress authorization a peer app session would have been granted.
+// own is false when the target is a different device.
+func (d *MeshDialer) dialSelf(ctx context.Context, device meshid.Device, port uint16) (net.Conn, string, error, bool) {
+	d.mu.Lock()
+	self, dial := d.ident.device, d.selfDial
+	d.mu.Unlock()
+	if self == (meshid.Device{}) || device != self {
+		return nil, "", nil, false
+	}
+	conn, mode, err := d.dialLocalApp(ctx, dial, port, func(result string, durMs float64) {
+		d.metrics.RecordDial(device, "local-app", result, durMs)
+	})
+	return conn, mode, err, true
+}
+
+// dialLocalMesh opens the end-to-end QUIC app session toward a device
+// principal over the routed local mesh. routed is false when this agent has no
+// local mesh configured at all; a routed failure is reported with
+// meshsession.ErrNoRoute when no authenticated route exists yet.
+func (d *MeshDialer) dialLocalMesh(ctx context.Context, device meshid.Device, port uint16) (net.Conn, string, error, bool) {
+	d.mu.Lock()
+	dial := d.localDial
+	d.mu.Unlock()
+	if dial == nil {
+		return nil, "", nil, false
+	}
+	started := d.now()
+	conn, err := dial(ctx, device, port)
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	d.metrics.RecordDial(device, "local-mesh", result, float64(d.now().Sub(started).Milliseconds()))
+	if err != nil {
+		return nil, "", err, true
+	}
+	return conn, "local-mesh", nil, true
+}
+
+// dialLocalApp opens one loopback connection to a local app port under the
+// live ingress authorization, recording the outcome against whichever peer
+// label the caller addressed the dial with.
+func (d *MeshDialer) dialLocalApp(ctx context.Context, dial func(context.Context, uint16) (net.Conn, error), port uint16, record func(result string, durMs float64)) (net.Conn, string, error) {
+	started := d.now()
+	var conn net.Conn
+	err := errors.New("wendy net app ingress is unavailable")
+	if dial != nil {
+		conn, err = dial(ctx, port)
+	}
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	record(result, float64(d.now().Sub(started).Milliseconds()))
+	return conn, "local-app", err
 }
 
 type lanCacheEntry struct {
@@ -87,29 +185,45 @@ type lanCacheEntry struct {
 	expires  time.Time
 }
 
-// NewMeshDialer builds a MeshDialer. certPEM/keyPEM/chainPEM are this
-// device's mTLS asset identity, used both to dial peers directly on the LAN
-// and to authenticate to the cloud tunnel broker. metrics may be nil (e.g. in
-// tests); RecordDial no-ops on a nil *MeshMetrics.
-func NewMeshDialer(logger *zap.Logger, brokerURL string, orgID, assetID int32, certPEM, keyPEM, chainPEM string, metrics *MeshMetrics) *MeshDialer {
+// NewMeshDialer builds a MeshDialer. certPEM/keyPEM/chainPEM are this device's
+// credentials; the device principal dialed and pinned against is read off
+// certPEM. metrics may be nil (e.g. in tests); RecordDial no-ops on a nil
+// *MeshMetrics.
+func NewMeshDialer(logger *zap.Logger, certPEM, keyPEM, chainPEM string, metrics *MeshMetrics) *MeshDialer {
 	d := &MeshDialer{
 		logger:  logger,
 		metrics: metrics,
 		ident: meshIdentity{
-			brokerURL: brokerURL,
-			orgID:     orgID,
-			assetID:   assetID,
-			certPEM:   certPEM,
-			keyPEM:    keyPEM,
-			chainPEM:  chainPEM,
+			device:   deviceFromCertPEM(certPEM),
+			certPEM:  certPEM,
+			keyPEM:   keyPEM,
+			chainPEM: chainPEM,
 		},
 		now:   time.Now,
-		cache: make(map[int32]lanCacheEntry),
+		cache: make(map[meshid.Device]lanCacheEntry),
 	}
 	d.lanLookup = d.discoverOnLAN
 	d.dialLAN = d.meshDialLAN
-	d.dialBroker = d.meshDialBroker
 	return d
+}
+
+// deviceFromCertPEM reads this device's mesh principal off its own leaf.
+// Legacy asset, user and service certificates carry no device principal: the
+// result is the zero Device, which every device-keyed leg treats as "not this
+// device" rather than inventing an identity for it.
+func deviceFromCertPEM(certPEM string) meshid.Device {
+	if certPEM == "" {
+		return meshid.Device{}
+	}
+	chain, err := certs.ParseCertsFromPEM([]byte(certPEM))
+	if err != nil || len(chain) == 0 {
+		return meshid.Device{}
+	}
+	device, err := meshid.DeviceFromCert(chain[0])
+	if err != nil {
+		return meshid.Device{}
+	}
+	return device
 }
 
 // UpdateIdentity swaps the dialer's identity snapshot; subsequent dials use
@@ -117,95 +231,138 @@ func NewMeshDialer(logger *zap.Logger, brokerURL string, orgID, assetID int32, c
 // Called from the OnProvisioned callback so a device enrolled while the agent
 // is running (the normal BLE first-boot flow) gets a working mesh without a
 // restart. The LAN outcome cache is cleared too: re-enrollment may move the
-// device to a different org, and stale positive entries could point at peers
-// the new identity can no longer authenticate against.
-func (d *MeshDialer) UpdateIdentity(brokerURL string, orgID, assetID int32, certPEM, keyPEM, chainPEM string) {
+// device to a different tenant, and stale positive entries could point at
+// peers the new identity can no longer authenticate against.
+func (d *MeshDialer) UpdateIdentity(certPEM, keyPEM, chainPEM string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.ident = meshIdentity{
-		brokerURL: brokerURL,
-		orgID:     orgID,
-		assetID:   assetID,
-		certPEM:   certPEM,
-		keyPEM:    keyPEM,
-		chainPEM:  chainPEM,
+		device:   deviceFromCertPEM(certPEM),
+		certPEM:  certPEM,
+		keyPEM:   keyPEM,
+		chainPEM: chainPEM,
 	}
-	d.cache = make(map[int32]lanCacheEntry)
+	d.cache = make(map[meshid.Device]lanCacheEntry)
 }
 
-// identity returns a consistent snapshot of the dialer's identity. The lock
-// is held only for the copy — never across network I/O.
+// identity returns a consistent snapshot of the dialer's identity. The lock is
+// held only for the copy — never across network I/O.
 func (d *MeshDialer) identity() meshIdentity {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.ident
 }
 
-// DialDevice opens a byte stream to port on the given mesh device. ctx bounds
-// dialing only; the returned conn has an independent lifetime. It returns the
-// mode that succeeded ("lan-direct" or "relay") so callers (mesh.Proxy) can
-// label their own logs/metrics without re-deriving it; on error mode is "".
-//
-// DialDevice is the authority on dial mode/result/timing: it records
-// mesh.connections + mesh.dial.duration_ms for each leg it attempts (the
-// failed LAN leg included, when it falls back to the broker).
-func (d *MeshDialer) DialDevice(ctx context.Context, deviceID int32, port uint16) (net.Conn, string, error) {
-	if hostport, ok := d.lanAddr(ctx, deviceID); ok {
-		lanStart := d.now()
-		conn, err := d.dialLAN(ctx, hostport, deviceID, port)
-		durMs := float64(d.now().Sub(lanStart).Milliseconds())
-		if err == nil {
-			d.metrics.RecordDial(deviceID, "lan-direct", "ok", durMs)
-			return conn, "lan-direct", nil
-		}
-		d.metrics.RecordDial(deviceID, "lan-direct", "error", durMs)
-		d.logger.Warn("mesh: LAN dial failed, falling back to cloud relay",
-			zap.Int32("device_id", deviceID), zap.String("lan_addr", hostport), zap.Error(err))
-	}
-
-	brokerStart := d.now()
-	conn, err := d.dialBroker(ctx, deviceID, port)
-	durMs := float64(d.now().Sub(brokerStart).Milliseconds())
-	if err != nil {
-		d.metrics.RecordDial(deviceID, "relay", "error", durMs)
-		return nil, "", err
-	}
-	d.metrics.RecordDial(deviceID, "relay", "ok", durMs)
-	return conn, "relay", nil
+// DialDevice opens a byte stream to port on the given mesh device. It is the
+// device-keyed form of DialTarget for callers that name a principal rather
+// than a Cloud asset (mesh.Proxy): with no asset record and no Cloud service,
+// the relay leg stays closed and only the direct mesh legs can answer.
+func (d *MeshDialer) DialDevice(ctx context.Context, device meshid.Device, port uint16) (net.Conn, string, error) {
+	return d.DialTarget(ctx, DeliveryTarget{Device: device}, port)
 }
 
-// lanAddr resolves deviceID to a LAN hostport, consulting (and refreshing) the
-// TTL cache so repeat dials don't re-pay the mDNS browse budget. Both
-// positive and negative outcomes are cached.
-func (d *MeshDialer) lanAddr(ctx context.Context, deviceID int32) (string, bool) {
+// DialTarget opens raw TCP to an administrative service, over LAN or Babel.
+// The caller must authenticate it with TLS pinned to target.Device. Cloud v2
+// currently authorizes operator-originated relays only; a device credential
+// cannot authorize a device-to-device relay fallback.
+func (d *MeshDialer) DialTarget(ctx context.Context, target DeliveryTarget, port uint16) (net.Conn, string, error) {
+	device := target.Device
+	if !device.IsValid() || port == 0 {
+		return nil, "", errors.New("invalid wendy net service target")
+	}
+	if target.AssetUUID != "" {
+		if target.AssetUUID != device.UUID().String() {
+			return nil, "", errors.New("Cloud target UUID does not match the device identity")
+		}
+	}
+	if device == d.identity().device {
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+		if err != nil {
+			return nil, "", err
+		}
+		return conn, "local-service", nil
+	}
+	if hostport, ok := d.lanAddr(ctx, device); ok {
+		started := d.now()
+		bounded, cancel := context.WithTimeout(ctx, lanBudget)
+		conn, err := d.dialLAN(bounded, hostport, device, port)
+		cancel()
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+		d.metrics.RecordDial(device, "lan-direct", result, float64(d.now().Sub(started).Milliseconds()))
+		if err == nil {
+			return conn, "lan-direct", nil
+		}
+	}
+	return d.DialRoutedTarget(ctx, target, port)
+}
+
+// DialRoutedTarget retries an administrative connection over Babel alone.
+// Delivery uses it after a LAN socket connects but fails principal-pinned TLS;
+// the returned stream still requires exactly the same endpoint authentication.
+func (d *MeshDialer) DialRoutedTarget(ctx context.Context, target DeliveryTarget, port uint16) (net.Conn, string, error) {
+	device := target.Device
+	if !device.IsValid() || port == 0 {
+		return nil, "", errors.New("invalid wendy net service target")
+	}
+	if target.AssetUUID != "" && target.AssetUUID != device.UUID().String() {
+		return nil, "", errors.New("Cloud target UUID does not match the device identity")
+	}
 	d.mu.Lock()
-	if e, ok := d.cache[deviceID]; ok && d.now().Before(e.expires) {
+	dial := d.serviceDial
+	d.mu.Unlock()
+	if dial == nil {
+		return nil, "", fmt.Errorf("wendy net: no LAN or Babel route to %s; Cloud does not authorize device-originated relays", device.Principal())
+	}
+	started := d.now()
+	conn, err := dial(ctx, device, port)
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	d.metrics.RecordDial(device, "local-mesh", result, float64(d.now().Sub(started).Milliseconds()))
+	if err != nil {
+		return nil, "", err
+	}
+	return conn, "local-mesh", nil
+}
+
+// lanAddr resolves device to a LAN hostport, consulting (and refreshing) the
+// TTL cache so repeat dials don't re-pay the mDNS browse budget. Both positive
+// and negative outcomes are cached.
+func (d *MeshDialer) lanAddr(ctx context.Context, device meshid.Device) (string, bool) {
+	d.mu.Lock()
+	if e, ok := d.cache[device]; ok && d.now().Before(e.expires) {
 		d.mu.Unlock()
 		return e.hostport, e.hostport != ""
 	}
 	d.mu.Unlock()
 
 	lctx, cancel := context.WithTimeout(ctx, lanBudget)
-	hostport, ok := d.lanLookup(lctx, deviceID)
+	hostport, ok := d.lanLookup(lctx, device)
 	cancel()
 	if !ok {
 		hostport = ""
 	}
 	d.mu.Lock()
-	d.cache[deviceID] = lanCacheEntry{hostport: hostport, expires: d.now().Add(lanCacheTTL)}
+	d.cache[device] = lanCacheEntry{hostport: hostport, expires: d.now().Add(lanCacheTTL)}
 	d.mu.Unlock()
 	return hostport, hostport != ""
 }
 
 // discoverOnLAN browses _wendyos._udp for a provisioned device advertising
-// the target asset ID.
-func (d *MeshDialer) discoverOnLAN(ctx context.Context, assetID int32) (string, bool) {
+// the target device principal. The principal TXT record is the device's full
+// SPIFFE identity; a sighting only counts when it parses to exactly the device
+// being dialed.
+func (d *MeshDialer) discoverOnLAN(ctx context.Context, device meshid.Device) (string, bool) {
 	devices, err := discovery.Discover(ctx, discovery.DiscoveryOptions{})
 	if err != nil {
 		return "", false
 	}
 	for _, dev := range devices.LANDevices {
-		if dev.AssetID != assetID || !dev.IsMTLS || dev.IPAddress == "" {
+		if dev.PrincipalURI != device.Principal() || !dev.IsMTLS || dev.IPAddress == "" {
 			continue
 		}
 		// Some hosts' avahi/mDNS advertisements include a loopback address
@@ -214,10 +371,11 @@ func (d *MeshDialer) discoverOnLAN(ctx context.Context, assetID int32) (string, 
 		// different physical device always reaches back into the DIALING
 		// device's own loopback instead of the peer, connect()ing (or
 		// refusing/timing out) against a totally unrelated local service.
-		// Skip it so the caller falls through to the cloud relay leg instead
-		// of retrying a hopeless local dial forever (found via RemoteCam demo
-		// debugging: repeated "dial tcp [::1]:50052: connect: connection
-		// refused" against the peer's own mTLS port number).
+		// Skip it so the caller falls through to the routed mesh or the cloud
+		// relay leg instead of retrying a hopeless local dial forever (found
+		// via RemoteCam demo debugging: repeated "dial tcp [::1]:50052:
+		// connect: connection refused" against the peer's own mTLS port
+		// number).
 		//
 		// dev.IPAddress is not always a numeric literal — some mDNS/avahi
 		// paths can hand back a bare hostname (e.g. "localhost"), which
@@ -230,8 +388,8 @@ func (d *MeshDialer) discoverOnLAN(ctx context.Context, assetID int32) (string, 
 			}
 		}
 		if isLoopback {
-			d.logger.Warn("mesh: ignoring loopback address in LAN discovery result",
-				zap.Int32("device_id", assetID), zap.String("ip", dev.IPAddress))
+			d.logger.Warn("wendy net: ignoring loopback address in LAN discovery result",
+				zap.String("peer", device.Principal()), zap.String("ip", dev.IPAddress))
 			continue
 		}
 		return net.JoinHostPort(dev.IPAddress, strconv.Itoa(dev.Port)), true
@@ -251,135 +409,24 @@ func dialBoundContext(ctx context.Context) (sctx context.Context, cancel context
 	return sctx, cancel, func() { stop() }
 }
 
-// meshDialLAN connects to a peer agent's mTLS port and opens a MeshDial
-// stream for one TCP connection. ctx bounds connecting and opening the
-// stream; once established the stream survives past ctx, and Close on the
-// returned conn tears it down.
-//
-// deviceID pins the expected peer identity (tenant + asset ID) on the TLS
-// handshake itself: hostport comes from discoverOnLAN, which trusts an
-// unauthenticated mDNS TXT record (assetid) to pick the peer to dial. Without
-// pinning, chain validity alone would let any other device holding a cert
-// signed by the same CA — a different asset in the same org, say — answer at
-// that address and be treated as deviceID, MITMing the connection.
-func (d *MeshDialer) meshDialLAN(ctx context.Context, hostport string, deviceID int32, port uint16) (net.Conn, error) {
-	ident := d.identity()
-	tlsCfg, err := mtls.NewClientTLSConfigExpectingPeer(ident.certPEM, ident.chainPEM, ident.keyPEM, d.logger,
-		strconv.Itoa(int(deviceID)))
-	if err != nil {
-		return nil, fmt.Errorf("mesh: client TLS config: %w", err)
-	}
-	cc, err := grpc.NewClient(meshDialTarget,
-		grpc.WithContextDialer(meshDialContextDialer(hostport)),
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+// meshDialLAN opens the requested service directly. Sending this through
+// MeshDial would apply the app-port allowlist to the agent and registry ports.
+// Delivery authenticates the returned connection before sending image data.
+func (d *MeshDialer) meshDialLAN(ctx context.Context, hostport string, device meshid.Device, port uint16) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(hostport)
 	if err != nil {
 		return nil, err
 	}
-	sctx, cancel, established := dialBoundContext(ctx)
-	stream, err := agentpbv2.NewWendyMeshServiceClient(cc).MeshDial(sctx)
-	if err != nil {
-		cancel()
-		cc.Close()
-		return nil, err
-	}
-	if err := stream.Send(&agentpbv2.MeshDialMessage{
-		Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: uint32(port)}},
-	}); err != nil {
-		cancel()
-		cc.Close()
-		return nil, err
-	}
-	established()
-	return streamNetConn(&meshDialAdapter{stream: stream}, func() { cancel(); cc.Close() }), nil
+	return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 }
 
-// meshDialBroker opens a ClientTunnel to the target asset through the cloud
-// broker, authenticated with this device's asset identity — the same relay
-// the CLI uses, from the other kind of caller. ctx bounds connecting and
-// opening the tunnel; once established the stream survives past ctx.
-func (d *MeshDialer) meshDialBroker(ctx context.Context, deviceID int32, port uint16) (net.Conn, error) {
-	ident := d.identity()
-	opts, requestMetadata, err := brokerDialOpts(
-		d.logger, ident.orgID, ident.assetID, ident.certPEM, ident.keyPEM, ident.chainPEM,
-	)
-	if err != nil {
-		return nil, err
-	}
-	cc, err := grpc.NewClient(ident.brokerURL, opts...)
-	if err != nil {
-		return nil, err
-	}
-	sctx, cancel, established := dialBoundContext(ctx)
-	md, err := requestMetadata(cloudpb.TunnelBrokerService_ClientTunnel_FullMethodName)
-	if err != nil {
-		cancel()
-		cc.Close()
-		return nil, err
-	}
-	stream, err := cloudpb.NewTunnelBrokerServiceClient(cc).ClientTunnel(metadata.NewOutgoingContext(sctx, md))
-	if err != nil {
-		cancel()
-		cc.Close()
-		return nil, err
-	}
-	if err := stream.Send(&cloudpb.ClientTunnelMessage{
-		Content: &cloudpb.ClientTunnelMessage_Open{Open: &cloudpb.ClientTunnelOpen{
-			AssetId: deviceID,
-			Host:    "localhost",
-			Port:    uint32(port),
-		}},
-	}); err != nil {
-		cancel()
-		cc.Close()
-		return nil, err
-	}
-	established()
-	return streamNetConn(&clientTunnelAdapter{stream: stream}, func() { cancel(); cc.Close() }), nil
-}
-
-// tunnelStream abstracts the two stream framings (MeshDial vs ClientTunnel)
-// behind one send/recv shape so streamNetConn can serve both.
+// tunnelStream abstracts the stream framing behind one send/recv shape so
+// streamNetConn can serve it.
 type tunnelStream interface {
 	send(payload []byte, halfClose bool) error
 	recv() (payload []byte, halfClose bool, err error)
 	closeSend() error
 }
-
-type meshDialAdapter struct {
-	stream agentpbv2.WendyMeshService_MeshDialClient
-}
-
-func (a *meshDialAdapter) send(p []byte, hc bool) error {
-	return a.stream.Send(&agentpbv2.MeshDialMessage{
-		Content: &agentpbv2.MeshDialMessage_Data{Data: &agentpbv2.MeshDialData{Payload: p, HalfClose: hc}},
-	})
-}
-func (a *meshDialAdapter) recv() ([]byte, bool, error) {
-	m, err := a.stream.Recv()
-	if err != nil {
-		return nil, false, err
-	}
-	return m.Payload, m.HalfClose, nil
-}
-func (a *meshDialAdapter) closeSend() error { return a.stream.CloseSend() }
-
-type clientTunnelAdapter struct {
-	stream cloudpb.TunnelBrokerService_ClientTunnelClient
-}
-
-func (a *clientTunnelAdapter) send(p []byte, hc bool) error {
-	return a.stream.Send(&cloudpb.ClientTunnelMessage{
-		Content: &cloudpb.ClientTunnelMessage_Data{Data: &cloudpb.TunnelData{Payload: p, HalfClose: hc}},
-	})
-}
-func (a *clientTunnelAdapter) recv() ([]byte, bool, error) {
-	m, err := a.stream.Recv()
-	if err != nil {
-		return nil, false, err
-	}
-	return m.Payload, m.HalfClose, nil
-}
-func (a *clientTunnelAdapter) closeSend() error { return a.stream.CloseSend() }
 
 // streamConn exposes a tunnelStream directly as a net.Conn — no intermediate
 // pipe, no relay goroutines — so the two stream directions stay fully
@@ -483,4 +530,10 @@ func (streamConnAddr) String() string  { return "wendy-mesh" }
 // once, on Close.
 func streamNetConn(s tunnelStream, teardown func()) net.Conn {
 	return &streamConn{s: s, teardown: teardown}
+}
+
+// IsSelf checks the authenticated full device principal.
+func (d *MeshDialer) IsSelf(device meshid.Device) bool {
+	self := d.identity().device
+	return self != (meshid.Device{}) && self == device
 }

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -63,6 +64,10 @@ type Camera struct {
 	FirstSeen  time.Time `json:"firstSeen"`
 	LastSeen   time.Time `json:"lastSeen"`
 
+	// DHCPServed distinguishes a client on our camera segment from legacy
+	// entries recorded merely by overhearing DHCP on a shared LAN.
+	DHCPServed bool `json:"dhcpServed,omitempty"`
+
 	// Online reflects the most recent probe and is deliberately not persisted:
 	// a camera reloaded from disk is offline until something reaches it.
 	Online bool `json:"-"`
@@ -109,6 +114,59 @@ func (r *Registry) Load() error {
 		r.by[c.MAC] = c
 	}
 	return nil
+}
+
+// PruneUnconfirmed removes records nobody has confirmed as a camera of
+// theirs, after both state files have loaded successfully. A camera with a
+// stored login (even an empty one) or one leased an address on a served camera
+// link is always kept. Two kinds of record go:
+//
+//   - WS-Discovery records, which carry no link, without a login. Before
+//     2026-10-21 any WS-Discovery responder was recorded, printers and
+//     computers included, and a camera on a shared LAN belongs to whoever
+//     stored a login for it. A real camera answers the next probe and is
+//     recorded again, so nothing a user set up is lost.
+//   - Legacy, addressless DHCP observations from links that were never served.
+//     A served lease always has an address, and ONVIF or stream details are
+//     evidence of a camera, so those records stay: old observations carry no
+//     record of whether their link was served.
+//
+// A nil credential lookup means protection is unavailable, so nothing is removed.
+// It returns the IDs of the removed records in ascending order, so their
+// loopback nodes can be removed too. Only removals successfully persisted to
+// disk are returned; a failed save restores the records and returns none.
+func (r *Registry) PruneUnconfirmed(hasCredentials func(string) bool) ([]uint32, error) {
+	if hasCredentials == nil {
+		return nil, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := make(map[string]Camera)
+	for mac, c := range r.by {
+		if c.DHCPServed || hasCredentials(mac) {
+			continue
+		}
+		if c.Link != "" && (c.Address != "" || c.ONVIFAddr != "" || c.StreamSub != "" || c.StreamMain != "") {
+			continue
+		}
+		removed[mac] = c
+		delete(r.by, mac)
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if err := r.save(); err != nil {
+		for mac, c := range removed {
+			r.by[mac] = c
+		}
+		return nil, err
+	}
+	ids := make([]uint32, 0, len(removed))
+	for _, c := range removed {
+		ids = append(ids, c.ID)
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // save writes the registry atomically. Callers hold r.mu.
@@ -181,6 +239,7 @@ func (r *Registry) Upsert(c Camera) (Camera, error) {
 	merged := existing
 	merged.LastSeen = now
 	merged.Online = true
+	merged.DHCPServed = existing.DHCPServed || c.DHCPServed
 	if c.Address != "" {
 		merged.Address = c.Address
 	}

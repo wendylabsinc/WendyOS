@@ -409,24 +409,24 @@ func TestConsumeBuildProgress_StopsAtEOF(t *testing.T) {
 
 func TestReportedDeliveryError_PreventsStartingFailedOrUnreportedTarget(t *testing.T) {
 	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
-		{AssetId: 1, Delivered: true},
-		{AssetId: 2, Error: "mesh link dropped"},
+		{AssetUuid: "00000000-0000-4000-8000-000000000001", Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000002", Error: "mesh link dropped"},
 	}}
 
-	if err := reportedDeliveryError(result, 1); err != nil {
+	if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000001"); err != nil {
 		t.Fatalf("delivered target rejected: %v", err)
 	}
-	if err := reportedDeliveryError(result, 2); err == nil || !strings.Contains(err.Error(), "mesh link dropped") {
+	if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000002"); err == nil || !strings.Contains(err.Error(), "mesh link dropped") {
 		t.Fatalf("failed target error = %v, want delivery reason", err)
 	}
-	if err := reportedDeliveryError(result, 3); err == nil || !strings.Contains(err.Error(), "no delivery result") {
+	if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000003"); err == nil || !strings.Contains(err.Error(), "no delivery result") {
 		t.Fatalf("unreported target error = %v, want fail-closed error", err)
 	}
 }
 
 func TestReportedDeliveryError_PreservesLegacySingleTargetContract(t *testing.T) {
 	for _, result := range []*agentpbv2.BuildImageResult{nil, {ImageDigest: "sha256:legacy"}} {
-		if err := reportedDeliveryError(result, 7); err != nil {
+		if err := reportedDeliveryError(result, "00000000-0000-4000-8000-000000000007"); err != nil {
 			t.Fatalf("legacy result %#v rejected: %v", result, err)
 		}
 	}
@@ -435,9 +435,9 @@ func TestReportedDeliveryError_PreservesLegacySingleTargetContract(t *testing.T)
 func TestStartAfterReportedDelivery_DoesNotStartAStaleImage(t *testing.T) {
 	started := false
 	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
-		{AssetId: 7, Error: "target delivery failed"},
+		{AssetUuid: "00000000-0000-4000-8000-000000000007", Error: "target delivery failed"},
 	}}
-	err := startAfterReportedDelivery(result, 7, func() error {
+	err := startAfterReportedDelivery(result, "00000000-0000-4000-8000-000000000007", func() error {
 		started = true
 		return nil
 	})
@@ -452,9 +452,9 @@ func TestStartAfterReportedDelivery_DoesNotStartAStaleImage(t *testing.T) {
 func TestStartAfterReportedDelivery_StartsDeliveredTarget(t *testing.T) {
 	started := false
 	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
-		{AssetId: 7, Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000007", Delivered: true},
 	}}
-	if err := startAfterReportedDelivery(result, 7, func() error {
+	if err := startAfterReportedDelivery(result, "00000000-0000-4000-8000-000000000007", func() error {
 		started = true
 		return nil
 	}); err != nil {
@@ -590,17 +590,17 @@ func TestCheckFleetDeliverySupported_RefusesOldAgent(t *testing.T) {
 // TestFleetDeliveryReport_CountsFailures is the rule that keeps a partial fleet
 // deploy from reading as a success.
 func TestFleetDeliveryReport_CountsFailures(t *testing.T) {
-	names := map[int32]string{1: "ccr1", 2: "ccr2", 3: "theta"}
+	names := map[string]string{"00000000-0000-4000-8000-000000000001": "ccr1", "00000000-0000-4000-8000-000000000002": "ccr2", "00000000-0000-4000-8000-000000000003": "theta"}
 	lines, failed := fleetDeliveryReport([]*agentpbv2.DeliveryResult{
-		{AssetId: 1, Delivered: true},
-		{AssetId: 2, Delivered: false, Error: "mesh dial failed"},
-		{AssetId: 3, Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000001", Delivered: true},
+		{AssetUuid: "00000000-0000-4000-8000-000000000002", Delivered: false, Error: "wendy net dial failed"},
+		{AssetUuid: "00000000-0000-4000-8000-000000000003", Delivered: true},
 	}, names)
 	if failed != 1 {
 		t.Fatalf("failed = %d, want 1", failed)
 	}
 	joined := strings.Join(lines, "\n")
-	for _, want := range []string{"ccr1", "ccr2", "theta", "mesh dial failed", "FAILED"} {
+	for _, want := range []string{"ccr1", "ccr2", "theta", "wendy net dial failed", "FAILED"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("report missing %q; got:\n%s", want, joined)
 		}
@@ -611,12 +611,12 @@ func TestFleetDeliveryReport_CountsFailures(t *testing.T) {
 // as fine.
 func TestFleetDeliveryReport_FailureWithoutReasonStillFails(t *testing.T) {
 	lines, failed := fleetDeliveryReport([]*agentpbv2.DeliveryResult{
-		{AssetId: 9, Delivered: false},
+		{AssetUuid: "00000000-0000-4000-8000-000000000009", Delivered: false},
 	}, nil)
 	if failed != 1 {
 		t.Fatalf("failed = %d, want 1", failed)
 	}
-	if !strings.Contains(strings.Join(lines, "\n"), "asset 9") {
+	if !strings.Contains(strings.Join(lines, "\n"), "asset 00000000-0000-4000-8000-000000000009") {
 		t.Errorf("an unnamed device must still be identifiable; got %v", lines)
 	}
 }
@@ -684,11 +684,11 @@ func TestValidateFleetRun_RequiresBuildHostAndDetach(t *testing.T) {
 }
 
 func TestDeliveryOutcome_RecordsFailureReason(t *testing.T) {
-	ok := deliveryOutcome(7, nil)
+	ok := deliveryOutcome("00000000-0000-4000-8000-000000000007", nil)
 	if !ok.GetDelivered() || ok.GetError() != "" {
 		t.Errorf("got %v, want a clean success", ok)
 	}
-	bad := deliveryOutcome(8, errors.New("container create refused"))
+	bad := deliveryOutcome("00000000-0000-4000-8000-000000000008", errors.New("container create refused"))
 	if bad.GetDelivered() {
 		t.Error("a failed create must not be recorded as delivered")
 	}

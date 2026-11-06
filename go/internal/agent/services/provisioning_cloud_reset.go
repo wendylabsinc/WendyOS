@@ -13,6 +13,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/unenrollproof"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -52,11 +53,18 @@ func (s *ProvisioningService) readProvisioningState() (*provisioningState, error
 	if err != nil {
 		return nil, err
 	}
+	// Older writers could leave a zero-byte file after an interrupted write.
+	// Like an absent file, it contains no enrollment or reset authorization.
+	// Leave all credentials untouched and allow a new enrollment to replace it.
+	// Nonempty invalid JSON must still fail closed, including truncated resets.
+	if len(raw) == 0 {
+		return &provisioningState{}, nil
+	}
 	var state provisioningState
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, err
 	}
-	if state.Unenrollment != nil && state.Unenrollment.Status == unenrollmentPending {
+	if (state.LocalReset != nil && state.LocalReset.Status == unenrollmentPending) || (state.Unenrollment != nil && state.Unenrollment.Status == unenrollmentPending) {
 		file, fileErr := os.Lstat(s.statePath())
 		directory, directoryErr := os.Stat(s.configPath)
 		if fileErr != nil || directoryErr != nil || !trustedResetStorage(file, directory) {
@@ -72,6 +80,9 @@ func (s *ProvisioningService) readProvisioningState() (*provisioningState, error
 // device identity: CLI receipt recovery separately anchors the historical leaf
 // to its configured roots before trusting a public status response.
 func validateUnenrollmentState(state *provisioningState) (*unenrollproof.Completion, error) {
+	if state.LocalReset != nil {
+		return nil, fmt.Errorf("local reset cannot carry Cloud completion evidence")
+	}
 	if state.Unenrollment == nil {
 		return nil, fmt.Errorf("reset authorization absent")
 	}
@@ -153,13 +164,22 @@ func (s *ProvisioningService) finishCloudReset() error {
 		Status: unenrollmentCompleted, Receipt: state.Unenrollment.Receipt,
 	}})
 }
-func (s *ProvisioningService) recoverCloudReset() error {
+func (s *ProvisioningService) recoverProvisioningReset() error {
 	state, err := s.readProvisioningState()
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if state.LocalReset != nil {
+		if err := validateLocalResetState(state); err != nil {
+			return err
+		}
+		if state.LocalReset.Status == unenrollmentPending {
+			return s.finishLocalReset()
+		}
+		return syncResetDirectory(s.configPath)
 	}
 	if state.Unenrollment == nil {
 		return nil
@@ -241,6 +261,7 @@ func (s *ProvisioningServiceV2) cloudUnprovision(ctx context.Context, req *agent
 	}
 	if timeErr != nil || window.Earliest.IsZero() || window.Latest.Before(window.Earliest) {
 		svc.mu.Unlock()
+		svc.logger.Warn("Cloud reset refused: no fresh authenticated time; keys retained", zap.Error(timeErr))
 		return nil, status.Error(codes.FailedPrecondition, "fresh authenticated time required; keys retained")
 	}
 	if err := svc.requirePKIOperator(ctx, window); err != nil {
@@ -251,8 +272,15 @@ func (s *ProvisioningServiceV2) cloudUnprovision(ctx context.Context, req *agent
 		svc.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "installed identity changed during authorization verification; keys retained")
 	}
-	if authorizationErr != nil || unenrollproof.VerifySavedCloudReset(req.GetCloudResetAuthorization(), cloudKey, cloud, svc.principalURI, req.GetExpectedCertificateSha256(), req.GetCloudDeletion(), operator, window.Earliest, window.Latest) != nil {
+	if authorizationErr == nil {
+		authorizationErr = unenrollproof.VerifySavedCloudReset(req.GetCloudResetAuthorization(), cloudKey, cloud, svc.principalURI, req.GetExpectedCertificateSha256(), req.GetCloudDeletion(), operator, window.Earliest, window.Latest)
+	}
+	if authorizationErr != nil {
 		svc.mu.Unlock()
+		// The caller only sees the generic refusal. Record which check failed
+		// (Cloud key fetch, freshness, deletion time) so the journal can say.
+		svc.logger.Warn("Cloud reset refused: authorization not verified; keys retained",
+			zap.Error(authorizationErr), zap.Time("earliest", window.Earliest), zap.Time("latest", window.Latest))
 		return nil, status.Error(codes.FailedPrecondition, "independently verified Cloud reset authorization required; keys retained")
 	}
 	leaves, _ := certs.ParseCertsFromPEM([]byte(svc.certPEM))
@@ -270,6 +298,10 @@ func (s *ProvisioningServiceV2) cloudUnprovision(ctx context.Context, req *agent
 	}
 	if err != nil {
 		svc.mu.Unlock()
+		// The CLI reuses one revocation proof across its retries, so a stale
+		// or too-new proof is refused every time; the journal says why.
+		svc.logger.Warn("Cloud reset refused: revocation evidence not verified; keys retained",
+			zap.Error(err), zap.Time("earliest", window.Earliest), zap.Time("latest", window.Latest))
 		return nil, status.Error(codes.FailedPrecondition, "authenticated installed-leaf revocation evidence required; keys retained")
 	}
 	var deleted cloudpbv2.DeletedAsset

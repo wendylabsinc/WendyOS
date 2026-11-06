@@ -444,3 +444,42 @@ test("integrated viewer accepts only data and control endpoints on an identity-c
   );
   assert.equal(requests.length, 3);
 });
+
+test("SO-101 allows bounded joint APIs and rejects locomotion through the desktop bridge", async () => {
+  const { service } = fixture();
+  service.simulators = [
+    { id: "arm", kind: "so101", url: "http://127.0.0.1:19432/", digest: "abc" },
+  ];
+  service.viewerLeases.set("arm", Date.now() + 12000);
+  const previous = globalThis.fetch;
+  const paths = [];
+  globalThis.fetch = async (url, options) => {
+    paths.push(new URL(url).pathname);
+    assert.equal(options.method, "POST");
+    return new Response(JSON.stringify({ healthy: true, joints: [] }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    await service.simulatorRequest({
+      id: "arm",
+      path: "/api/pose",
+      body: { joints_deg: { gripper: 20 } },
+    });
+    await service.simulatorRequest({ id: "arm", path: "/api/reset", body: {} });
+    for (const path of [
+      "/api/command",
+      "/api/arm",
+      "/api/arm_ros",
+      "/api/obstacle",
+    ]) {
+      await assert.rejects(
+        service.simulatorRequest({ id: "arm", path, body: {} }),
+        /Unsupported simulator request/,
+      );
+    }
+    assert.deepEqual(paths, ["/api/pose", "/api/reset"]);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});

@@ -28,6 +28,10 @@ The device listens on TCP port 5054 and advertises itself via mDNS as `_wendy-li
 - **Unauthenticated TLS** — When not enrolled, the device uses a built-in default certificate; client identity is not verified. This is the factory default. The mDNS TXT record advertises `mtls=false`.
 - **mTLS** — When enrolled, the device uses a provisioned certificate and requires the client to present a certificate signed by the configured chain of trust. The mDNS TXT record advertises `mtls=true`.
 
+### Connection liveness
+
+WendyCom has no heartbeat over TCP. Instead, the device enables TCP keepalive on every connection, so it can clean up a connection when the client is lost without closing it, for example when the host loses power or the network path drops. After 15 seconds without incoming data the device sends a TCP keepalive probe, then another one every 15 seconds. If no probe is answered, the device closes the connection 45 seconds after it last received data, and frees its link slot. The host's TCP stack answers the probes, so the client does not need to send anything, and an idle client that is still reachable stays connected.
+
 ## WendyCom over USB Serial JTAG
 
 WendyCom runs over the ESP32 USB Serial JTAG peripheral. This link supports several modes, WendyCom being one of them; the host switches between them by sending escape sequences.
@@ -126,33 +130,23 @@ USB Serial JTAG currently has no flow control. If the host sends data faster tha
 
 ## WendyCom via Cloud
 
-Devices enroll with Cloud and maintain an authenticated outer TLS connection to
-TunnelBroker. WR02 control records provision trusted Cloud grant keys and bind
-an upgrade to a session ID and grant hash. The outer TLS session shuts down;
-the same socket then carries an end-to-end TLS session between CLI and device.
-The device opens a replacement control connection after handoff.
+An enrolled board can be selected through `wendy cloud discover` without a direct
+USB or LAN connection. The CLI opens an encrypted connection through Wendy Cloud;
+WendyCom commands and replies remain encrypted between the CLI and board.
+See [connect through Cloud](../lite-cloud-relay.md) for setup and troubleshooting.
 
-The CLI uses its Cloud session to call
-`wendycloud.tunnel.lite.v1.WendyComRelayDiscoveryService.Resolve`, then opens
-`WendyComRelayService.WendyComRelay` at the owning process. The first message is
-`WendyComRelayOpen` with a signed tunnel principal request. A route response can
-redirect the client, with at most three stream attempts in total. A grant response
-allows the CLI to start inner mTLS and deliver the ML-DSA-65 grant. Firmware
-verifies it before acknowledging WLA1 and accepting WendyCom.
-
-Relay payloads carry opaque TLS bytes. Framing, channel numbers and WendyCom
-messages stay inside inner TLS; the broker neither decodes them nor allocates
-channels. Cloud enforces one active session per device and four per user.
-See [Lite Cloud relay](../lite-cloud-relay.md) for signing credentials and limits.
-The old unsigned `asset_id` open and un-packaged RPC name are unsupported.
+The board maintains an outbound control connection, so its network does not need
+an inbound port. After handing a client connection over to the relay, it reconnects
+to Cloud so it can continue reporting presence. The relayed WendyCom connection then
+uses the same TCP keepalive as a LAN connection (see
+[Connection liveness](#connection-liveness)).
 
 ### Time synchronization for enrollment
 
-`WendyComSyncTimeParams.server` is the pinned Roughtime server's `hostname:port`.
-The `response` bytes contain its signed reply to the device's current nonce.
-Firmware checks the server against its pinned keys and requires two-server
-consensus. This replaces the old numeric `server_index`; update CLI and firmware
-together.
+The CLI obtains signed time for the board automatically. Firmware verifies the
+reply before accepting it; your computer does not simply set the board's clock.
+The default enrollment flow uses Sigstore's signed-time service. Firmware that
+supports Roughtime can use that mode in a compatible custom deployment.
 
 ### Channel multiplexing
 
@@ -262,3 +256,55 @@ Queries the device for information about its hardware and software. The device r
 - `wasm_app_support` — whether the device can run WASM applications.
 - `native_app_support` — whether the device can run native applications.
 - `board` — the board identifier (e.g. `esp32c6_generic` or `esp32s3_seeed_xiao_native`). Empty when the board is not known.
+
+
+### NetGet
+
+Queries the board's saved Wendy Net policy and runtime status. The command's
+`net_get` parameter is field 22; a successful response carries `net_status`
+(field 8 of `WendyComResponse`). These commands require firmware with Wendy Net
+management support.
+
+`WendyComNetStatus` separates `desired`, the saved policy, from `applied`, the
+current runtime policy when available. An absent applied policy is unavailable,
+not an all-false configuration. It also reports:
+
+- `state`: `off`, `starting`, `running`, `stopping` or `failed` (the corresponding
+  `WendyComNetState` enum values).
+- `ble_supported`, `wifi_supported` and `nan_supported`: the board's carrier
+  capabilities, rather than proof that any carrier is connected.
+- `psram` and `memory_limit_bytes`: resource profile information.
+- Optional `allocated_bytes` and `internal_bytes`: current network allocation
+  measurements. An absent measurement is unknown, not zero.
+- `active_links`: the number of active mesh carriers.
+- `error_code`: a firmware diagnostic code, including when a configuration
+  request is rejected.
+- `restarting`: a saved carrier change has scheduled a board restart.
+
+### NetSet
+
+Applies the complete `WendyComNetConfig` supplied in `net_set.config` (command
+field 23). The policy contains `enabled`, `ble`, `infrastructure_wifi` and `nan`,
+plus `max_links`, `ble_links`, `wifi_links` and `nan_links`. Firmware validates
+carrier support and profile limits before saving the policy. The response's
+`net_status` distinguishes the saved policy from the currently applied policy.
+
+A direct protocol client must read the current desired policy with `NetGet` and
+preserve options it is not changing. `NetSet` is a complete configuration, not a
+partial update. The CLI's `wendy device wendy-net configure` command performs
+this read-modify-write step so omitted flags retain their saved values.
+
+`OK` means the request completed. `APPLIED_RESTARTING` also means the settings
+were accepted, but changing the selected carrier requires a board restart. The
+response is sent before the restart; reconnect after boot and check status and
+functional traffic. A restart warning is not a failed write.
+
+The Wendy Net management result codes supplement the general command results:
+
+| Result | Meaning |
+| --- | --- |
+| `WENDY_COM_RESULT_APPLIED_RESTARTING` (8) | Settings accepted; a board restart is scheduled for the carrier change. The response includes `net_status`. |
+| `WENDY_COM_RESULT_NET_NO_WIFI` (9) | The requested Wi-Fi carrier is unsupported. |
+| `WENDY_COM_RESULT_NET_NO_BLE` (10) | The requested Bluetooth carrier is unsupported. |
+| `WENDY_COM_RESULT_NET_NO_NAN` (11) | The requested NAN carrier is unsupported. |
+| `WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY` (12) | The configuration exceeds a single-carrier profile's supported carriers or link limits. |

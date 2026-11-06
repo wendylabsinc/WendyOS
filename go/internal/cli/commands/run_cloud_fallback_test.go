@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -33,7 +32,7 @@ func TestMCPRunKeepsCloudFallbackForBuildHostsOnly(t *testing.T) {
 	t.Cleanup(func() { deviceFlag, cloudFallbackConnectFn = oldFlag, oldConnect })
 	deviceFlag = unreachable
 	var tunnelled []string
-	cloudFallbackConnectFn = func(_ context.Context, _, name, _ string, _ *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+	cloudFallbackConnectFn = func(_ context.Context, _ *config.Config, name string) (*grpcclient.AgentConnection, error) {
 		tunnelled = append(tunnelled, name)
 		return nil, errors.New("offline")
 	}

@@ -1,15 +1,26 @@
 # Roadmap Status
 
-This page mirrors the current public roadmap language for engineering and docs references.
+Status reviewed on 19 October 2026. Available products and unfinished integration
+work have separate entries below. Planned work has no committed release date
+unless one is explicitly stated. See [The Wendy ecosystem](/docs/concepts/ecosystem)
+to choose a product and find its setup guide.
 
 ## In Progress
 
 - **MLX Swift support**: MLX Swift integration for unified-memory AI workloads. The containerised MLX LLM demo has landed (see Shipped); the remaining work is first-class MLX Swift integration in the Wendy ecosystem.
-- **Companion SDK** — _not yet shipped_ ([WDY-1235](https://linear.app/wendylabsinc/issue/WDY-1235)): the companion SDK and its associated applications are demoable today but still need polish for an official release. The original 2026-07-03 target and its sequencing behind the Pipecat Agent template refresh have both lapsed — the Pipecat refresh ([WDY-1228](https://linear.app/wendylabsinc/issue/WDY-1228)) shipped, so the launch is no longer gated on it and needs a new date.
+- **Companion SDK and Cloud v2 integration**: reusable SDK work and mobile support
+  for Cloud v2 continue separately from the released iOS app. Check cameras,
+  app controls, logs, and notifications in the intended mobile build before
+  migrating an existing deployment. See [Moving to Cloud v2](/docs/cloud-migration).
+- **Data, Cloud, and BI integration**: device capture exists; storage, querying,
+  and analytics workflows need their own configuration and validation. See
+  [Wendy Data](/docs/data) for supported capture and current limits.
 
 ## Available Beta
 
-- **Wendy Cloud** — _beta_: fleet management over the internet. Devices enroll once, dial home to the cloud broker over mutual TLS, and are reachable by name from anywhere via `wendy cloud` and `wendy fleet` — enroll, discover, deploy, tunnel, stream telemetry. See [Cloud](https://cloud.wendy.dev/login).
+- **Wendy Cloud v2**: remote device access and fleet management. The current CLI
+  signs into v2 by default; v1 remains available with `--legacy`. App-port and UDP
+  tunnels on v2 need updated Cloud, CLI, and Agent versions. Start with the [Cloud guide](/docs/cloud).
 - **Headless Mac** — _beta_: deploy native macOS apps to Apple Silicon Mac targets with [Headless Mac](/docs/installation/wendy-agent-macos). Apple Silicon only. Since the initial beta it has gained remote agent self-update, a LAN registry served over mTLS, app supervision and restart parity across agent restarts, and native gamepad entitlements. Beta limitations are documented in the macOS install guide.
 
 ## Available Preview
@@ -19,6 +30,16 @@ This page mirrors the current public roadmap language for engineering and docs r
 
 ## Shipped
 
+- **Wendy Companion for iOS**: [available in the App Store](https://apps.apple.com/us/app/wendy-companion/id6761771159).
+  Its release does not imply that every v1 workflow has a v2 equivalent.
+- **Wendy BI 1.0**: analytics and dashboards are available through
+  [Wendy BI](https://wendy.dev/products/wendy-bi), with separate access and
+  data-connection setup.
+- **TeleCollect**: capture and export pose demonstrations on supported Apple
+  devices. See the [product introduction](https://wendy.dev/blog/telecollect-pose-data-collection).
+- **Arduino Uno Q OS image**: included in
+  [WendyOS 0.19.5](https://github.com/wendylabsinc/WendyOS-Builder/releases/tag/0.19.5).
+  Image availability and hardware CI coverage are separate milestones.
 - **Jetson AGX Orin support**: stable — install, deploy, GPU, and camera.
 - **Jetson Orin Nano support**: stable.
 - **Raspberry Pi 3, 4, and 5 support** (8GB Pi 5 recommended).
@@ -36,6 +57,6 @@ This page mirrors the current public roadmap language for engineering and docs r
 ## Planned
 
 - **RISC-V support**.
-- **3D geospatial digital twin** targeted for Q3.
+- **3D geospatial digital twin**: planned; no current release date is committed here.
 - **Logging and telemetry demo** — _planned, not yet started_ ([WDY-1231](https://linear.app/wendylabsinc/issue/WDY-1231)): a demo showcasing remote hardware debugging through logging and telemetry. It was originally sequenced against the PKI release, which has since shipped; the demo is still in the backlog.
 - **Wendy Swift initiative** — _separate release track_: the Swift toolchain, templates, and debugging support have shipped (see Shipped). The remaining work is the coordinated launch, which is deliberately kept on its own track so it is not diluted by adjacent releases. The original sequencing behind the Pipecat Agent template refresh no longer applies — that work shipped.

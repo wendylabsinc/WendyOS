@@ -39,7 +39,7 @@ func TestRunPreservesTargetAndReportsReadinessSeparately(t *testing.T) {
 				actual = args
 				return "container started", false, nil
 			}
-			args := map[string]any{"project_path": project}
+			args := map[string]any{"project_path": project, "wait_ready": false}
 			for k, v := range tc.args {
 				args[k] = v
 			}
@@ -143,7 +143,7 @@ func TestRunStartAndLegacyDeploy(t *testing.T) {
 			if strings.Contains(strings.Join(args, " "), "--deploy") != tc.created || limit != 16384 {
 				t.Fatalf("wrong flags/budget: %v %d", args, limit)
 			}
-			return "ok", false, nil
+			return encodeRunReceipt([]byte(`{"status":"ready","app":"test","readiness":"passed"}`), "ok"), false, nil
 		}
 		args := map[string]any{"project_path": project, "device": "vm:test"}
 		for k, v := range tc.args {

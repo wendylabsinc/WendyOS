@@ -125,6 +125,13 @@ func (s *oidcEnrollmentServer) EnrollDevice(ctx context.Context, in *cloudpbv2.S
 	if err := proto.Unmarshal(in.GetPayload(), s.req); err != nil {
 		return nil, status.Error(codes.PermissionDenied, "payload does not decode")
 	}
+	// Like Cloud, adopt the requested device UUID as the asset id unless the
+	// test names one.
+	if s.response != nil && s.response.GetAssetId() == "" {
+		out := proto.Clone(s.response).(*cloudpbv2.EnrollDeviceResponse)
+		out.AssetId = s.req.GetDeviceId()
+		return out, s.err
+	}
 	return s.response, s.err
 }
 

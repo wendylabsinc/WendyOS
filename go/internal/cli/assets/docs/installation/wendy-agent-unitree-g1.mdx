@@ -130,12 +130,14 @@ network.
   <Step>
     ### Install Wendy Agent
 
-    Download and run the installer on PC2:
+    Download and run the installer on PC2. `--network-access network` lets
+    your development machine discover and manage the robot; without it a fresh
+    install is reachable only from PC2 itself:
 
     ```bash
     wget -O /tmp/wendy-agent.sh https://install.wendy.dev/agent.sh
     less /tmp/wendy-agent.sh
-    bash /tmp/wendy-agent.sh
+    bash /tmp/wendy-agent.sh --network-access network
     ```
 
     <Callout type="warning">
@@ -371,7 +373,7 @@ connection with PC2 over the Ethernet cable.
   test that exact pair with `nc -zv <address> <advertised-port>`. Do not assume
   every agent uses `50051` or `50052`.
 - **Installer reports `/dev/tty: No such device or address`:** Use the
-  downloaded script with `bash /tmp/wendy-agent.sh -y`.
+  downloaded script with `bash /tmp/wendy-agent.sh -y --network-access network`.
 - **The service is enabled but inactive after an upgrade:** Run
   `sudo systemctl start wendy-agent`, inspect the journal, and record the agent
   package version with `dpkg-query -W wendy-agent` when contacting support.

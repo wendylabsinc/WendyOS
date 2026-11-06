@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
@@ -84,6 +85,13 @@ func lanDeviceFromService(svc MDNSService) models.LANDevice {
 		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
 			dev.OrgID = int32(n)
 		}
+	}
+	// Discovery carries the canonical principal as a hint. Neither this field
+	// nor the advertised tenant authorizes a connection; TLS must prove the
+	// exact principal before any peer traffic or administrative delivery.
+	if device, err := meshid.DeviceFromPrincipal(svc.TXTRecords["principal"]); err == nil {
+		dev.PrincipalURI = device.Principal()
+		dev.TenantUUID = device.Tenant().String()
 	}
 	if v, ok := svc.TXTRecords["name"]; ok {
 		dev.MeshName = v

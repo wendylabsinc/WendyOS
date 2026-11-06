@@ -34,6 +34,13 @@ func startUDSAgentWithOS(t *testing.T, osName string, register ...func(*grpc.Ser
 
 func startUDSAgentWithFeatures(t *testing.T, osName string, features []string, register ...func(*grpc.Server)) {
 	t.Helper()
+	startUDSAgentServing(t, versionOnlyAgent{os: osName, features: features}, register...)
+}
+
+// startUDSAgentServing is startUDSAgent with the caller's agent service, for
+// tests that need agent RPCs beyond GetAgentVersion.
+func startUDSAgentServing(t *testing.T, agent agentpb.WendyAgentServiceServer, register ...func(*grpc.Server)) {
+	t.Helper()
 	// Short temp dir to stay under the unix-socket sun_path limit on macOS
 	// (see localsocket_test.go for the convention).
 	dir, err := os.MkdirTemp("/tmp", "wsk")
@@ -48,7 +55,7 @@ func startUDSAgentWithFeatures(t *testing.T, osName string, features []string, r
 		t.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	agentpb.RegisterWendyAgentServiceServer(srv, versionOnlyAgent{os: osName, features: features})
+	agentpb.RegisterWendyAgentServiceServer(srv, agent)
 	for _, registerService := range register {
 		registerService(srv)
 	}
