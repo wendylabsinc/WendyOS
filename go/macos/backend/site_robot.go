@@ -61,6 +61,7 @@ type SiteRobot struct {
 	navigationCommands              []siteNavigationCommand
 	preview                         []sitenav.Point
 	goal                            sitenav.Point
+	personExclusion                 *sitenav.Point // robot frame; only set by spatial summon orders
 	moving                          bool
 	lookTurn                        *siteLookTurn
 	lookState                       int
@@ -386,6 +387,11 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		return
 	}
 	p := r.observed.Pose.Position
+	if r.personExclusion != nil && !personalSpaceClear(r.personExclusion, append([]sitenav.Point{p}, r.route...)) {
+		r.message = "Stopped to preserve clearance around the wearer."
+		r.stopLocked()
+		return
+	}
 	if !r.checkForwardProgressLocked() {
 		return
 	}
@@ -426,6 +432,11 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		// 5 cm tracking tolerance. Slow approaches need less forward space.
 		horizon := forward*.5 + forward*forward + .05
 		look := sitenav.Point{X: p.X + math.Cos(r.observed.Pose.Yaw)*horizon, Y: p.Y + math.Sin(r.observed.Pose.Yaw)*horizon}
+		if !personalSpaceClear(r.personExclusion, []sitenav.Point{p, look}) {
+			r.message = "Stopped to preserve braking clearance around the wearer."
+			r.stopLocked()
+			return
+		}
 		if !grid.Sweep(p, look, r.observed.Pose.Yaw) {
 			r.replanLocked(grid, p)
 			return
@@ -468,12 +479,23 @@ func (r *SiteRobot) Align(sequence uint64, frame string, x, z, floor, yaw float6
 	}
 	r.alignment = sitenav.Alignment{Origin: r.observed.Pose.Position, Site: p, Rotation: yaw - r.observed.Pose.Yaw}
 	r.frame = frame
+	r.personExclusion = nil
 	r.floorY = floor
 	r.preview = nil
 	r.message = "Aligned to this site using robot odometry."
 	return nil
 }
 func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, move bool) error {
+	return r.destination(sequence, frame, x, z, move, nil)
+}
+
+// Summon keeps the headset's confirmed position protected throughout the order.
+// The UI separately owns headset freshness, preview expiry and wearer movement.
+func (r *SiteRobot) Summon(sequence uint64, frame string, x, z, wearerX, wearerZ float64, move bool) error {
+	return r.destination(sequence, frame, x, z, move, &sitenav.Point{X: wearerX, Y: -wearerZ})
+}
+
+func (r *SiteRobot) destination(sequence uint64, frame string, x, z float64, move bool, wearer *sitenav.Point) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sequence <= r.commandSequence {
@@ -499,6 +521,18 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		return errors.New("Invalid destination.")
 	}
 	goal := r.alignment.ToRobot(p)
+	var protected *sitenav.Point
+	if wearer != nil {
+		if !wearer.Valid() || math.Abs(p.Distance(*wearer)-1.5) > .05 {
+			return errors.New("A summon destination must stop 1.5 metres short of the wearer.")
+		}
+		position := r.alignment.ToRobot(*wearer)
+		distance := r.observed.Pose.Position.Distance(position)
+		if distance <= 1.8 || distance > 10 {
+			return errors.New("Summoning requires the wearer to be 1.8 to 10 metres from Go2.")
+		}
+		protected = &position
+	}
 	r.preview = nil
 	r.departure = nil
 	if r.underBodyAllowance {
@@ -508,6 +542,9 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 	if err != nil {
 		r.departure = nil
 		return err
+	}
+	if !personalSpaceClear(protected, path) {
+		return errors.New("The planned route passes too close to the wearer. Choose another position.")
 	}
 	arrivalYaw := r.observed.Pose.Yaw
 	if len(path) > 1 && path[len(path)-2].Distance(goal) > 1e-9 {
@@ -521,6 +558,7 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 	r.lastRouteRequest = &siteRouteRequest{At: time.Now(), Pose: r.observed.Pose, Alignment: r.alignment, SiteTarget: p, OdometryTarget: goal, Route: append([]sitenav.Point(nil), path...), Move: move}
 	r.navigationCommands = nil
 	r.preview = path
+	r.personExclusion = protected
 	r.routeOrigin = r.observed.Pose.Position
 	r.forwardOrigin = nil
 	r.goal = goal

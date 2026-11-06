@@ -19,6 +19,11 @@ func (r *SiteRobot) replanLocked(grid sitenav.Grid, position sitenav.Point) {
 		r.stopLocked()
 		return
 	}
+	if !personalSpaceClear(r.personExclusion, path) {
+		r.message = "The detour passes too close to the wearer. Movement stopped."
+		r.stopLocked()
+		return
+	}
 	arrivalYaw := r.observed.Pose.Yaw
 	if len(path) > 1 {
 		arrivalYaw = sitenav.Heading(path[len(path)-2], r.goal)
