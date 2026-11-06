@@ -24,10 +24,13 @@ _MESSAGE_FIELDS = frozenset({"jsonrpc", "id", "method", "params"})
 _CALL_FIELDS = frozenset({"name", "arguments"})
 _INVALID_REQUEST = {"code": -32600, "message": "Invalid Request"}
 _PARSE_ERROR = {"code": -32700, "message": "Parse error"}
+REPLY_TEXT_LIMIT = 2000
 
 
 class CannedPolicy:
-    def __init__(self, tools, canned, allow_real, block):
+    def __init__(self, tools, canned, allow_real, block, passthrough=False):
+        # Passthrough forwards every call except a block match: the agent runs on the device under test.
+        self.passthrough = passthrough
         self.tools = {t["name"]: t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)}
         self.canned, self.allow_real = set(canned), set(allow_real)
         # The proxy can't tell which agent is calling, so a block applies to every agent.
@@ -38,6 +41,8 @@ class CannedPolicy:
                  "canned": False, "captured": None}
         if any(grading.matches(m, entry) for m in self.block):
             return True
+        if self.passthrough:
+            return False
         if not isinstance(name, str) or name in self.canned:
             return True
         if name in self.allow_real or name in ALWAYS_REAL:
@@ -47,6 +52,20 @@ class CannedPolicy:
             return True
         annotations = tool.get("annotations")
         return not (isinstance(annotations, dict) and annotations.get("readOnlyHint") is True)
+
+
+def reply_text(message):
+    """The text of a child's response, bounded: its content[].text joined, or a JSON-RPC error's message."""
+    error = message.get("error")
+    if error is not None:
+        text = error.get("message") if isinstance(error, dict) else error
+        return str(text)[:REPLY_TEXT_LIMIT]
+    result = message.get("result")
+    content = result.get("content") if isinstance(result, dict) else None
+    if not isinstance(content, list):
+        return ""
+    texts = [c["text"] for c in content if isinstance(c, dict) and isinstance(c.get("text"), str)]
+    return "\n".join(texts)[:REPLY_TEXT_LIMIT]
 
 
 class _Object(dict):
@@ -170,9 +189,10 @@ class _Proxy:
         message = {"jsonrpc": "2.0", "id": request_id, key: value}
         self.to_client(json.dumps(message).encode() + b"\n")
 
-    def record(self, seq, tool, arguments, canned, captured, is_error, t):
+    def record(self, seq, tool, arguments, canned, captured, is_error, t, reply_text=None):
         line = json.dumps({"seq": seq, "tool": tool, "arguments": {} if arguments is None else arguments,
-                           "canned": canned, "captured": captured, "is_error": is_error, "t": t}) + "\n"
+                           "canned": canned, "captured": captured, "is_error": is_error, "t": t,
+                           "reply_text": reply_text}) + "\n"
         with self._log_lock:
             if self.log.closed:
                 return
@@ -288,7 +308,7 @@ class _Proxy:
         seq, name, arguments, t = call
         result = message.get("result")
         is_error = "error" in message or (isinstance(result, dict) and result.get("isError") is True)
-        self.record(seq, name, arguments, False, None, is_error, t)
+        self.record(seq, name, arguments, False, None, is_error, t, reply_text(message))
 
     def finish(self):
         """Log forwarded calls the child never answered, then stop logging."""
@@ -303,7 +323,8 @@ class _Proxy:
 
 def run_proxy(real_wendy, argv, scenario, stdin, stdout):
     policy = CannedPolicy(json.loads(Path(scenario["tools"]).read_text()), scenario.get("canned") or [],
-                          scenario.get("allow_real") or [], scenario.get("block") or [])
+                          scenario.get("allow_real") or [], scenario.get("block") or [],
+                          scenario.get("passthrough") is True)
     # After states key off canned calls in the proxy's own log and the CLI wrapper's.
     store = CannedStore(scenario["canned_dir"], scenario["canned_set"], scenario.get("context") or {},
                         proxy_log=scenario.get("proxy_log"), cli_log=scenario.get("cli_log"))

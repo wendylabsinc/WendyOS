@@ -531,6 +531,34 @@ def _target_snapshot(wendy, device, target, run_vm):
         shutil.rmtree(state, ignore_errors=True)
 
 
+GUARDED_TOOLS = ("os_update", "device_update_agent", "wifi_connect", "wifi_disconnect", "provisioning_start",
+                 "cloud_enroll_device", "os_install_start")
+GUARDED_CLI = ("device update", "device wifi connect", "device wifi disconnect")
+
+
+def guard_matchers(app_id):
+    """Block matchers for actions that would end a pass on the device it runs on: stopping or removing
+    the benchmark's own app, and changing the OS, agent, network or enrolment."""
+    own = {"args": {"app_name": app_id}, "block": True}
+    matchers = [{"tool": tool, **own} for tool in ("container_stop", "container_delete", "container_start")]
+    matchers += [{"tool": tool, "block": True} for tool in GUARDED_TOOLS]
+    matchers += [{"cli": cli, "args_regex": re.escape(app_id), "block": True}
+                 for cli in ("device apps stop", "device apps remove")]
+    matchers += [{"cli": cli, "block": True} for cli in GUARDED_CLI]
+    return matchers
+
+
+def write_scenario_config(path, *, real_wendy, shim, tools_path, canned_dir, canned_set, canned, allow_real, block,
+                          cli_canned, device, vm_name, proxy_log, cli_log, passthrough=False):
+    """The file the shim and the recording proxy read through WENDY_EVAL_SCENARIO."""
+    b.dump(path, {
+        "real_wendy": real_wendy, "tools": str(tools_path), "canned_dir": str(canned_dir),
+        "canned_set": canned_set, "canned": canned, "allow_real": allow_real, "block": block,
+        "cli_canned": cli_canned, "context": {"device": device, "vm_name": vm_name},
+        "proxy_log": str(proxy_log), "cli_log": str(cli_log), "cli_safe": str(CLI_SAFE), "shim": shim,
+        "passthrough": passthrough})
+
+
 def _tmp_root():
     return "/private/tmp" if sys.platform == "darwin" else "/tmp"
 
@@ -606,14 +634,14 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
         b.dump(directory / "task.json", {**scenario, "prompt": prompt})
         (directory / "prompt.txt").write_text(prompt + "\n")
         expect = scenario["expect"]
-        b.dump(scenario_config, {
-            "real_wendy": real_wendy, "tools": str(tools_path), "canned_dir": str(canned_dir),
-            "canned_set": scenario["canned_set"], "canned": scenario["canned"], "allow_real": scenario["allow_real"],
-            "block": [m for m in expect.get("right", []) + expect.get("wrong", []) if m.get("block") is True],
-            "cli_canned": scenario["cli_canned"],
-            "context": {"device": device, "vm_name": run_vm["name"] if run_vm is not None else ""},
-            "proxy_log": str(proxy_log), "cli_log": str(cli_log),
-            "cli_safe": str(CLI_SAFE), "shim": shim})
+        block = [m for m in expect.get("right", []) + expect.get("wrong", []) if m.get("block") is True]
+        if is_local(target):
+            block += guard_matchers(os.environ.get("WENDY_APP_ID", BENCHMARK_APP))
+        write_scenario_config(
+            scenario_config, real_wendy=real_wendy, shim=shim, tools_path=tools_path, canned_dir=canned_dir,
+            canned_set=scenario["canned_set"], canned=scenario["canned"], allow_real=scenario["allow_real"],
+            block=block, cli_canned=scenario["cli_canned"], device=device,
+            vm_name=run_vm["name"] if run_vm is not None else "", proxy_log=proxy_log, cli_log=cli_log)
         env = private_env(state, keep_socket=is_local(target))
         env["WENDY_EVAL_SCENARIO"] = str(scenario_config)
         env["PATH"] = str(Path(shim).parent) + os.pathsep + env.get("PATH", "")

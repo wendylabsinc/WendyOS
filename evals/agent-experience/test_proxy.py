@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from fake_mcp_server import TOOLS
 from mcp_client import StdioMCP
@@ -240,6 +241,51 @@ class ProxyTests(unittest.TestCase):
         self.assertFalse(bare.should_can("read_thing", {}))                          # readOnlyHint true
         self.assertTrue(bare.should_can("write_thing", {}))                          # readOnlyHint false
         self.assertTrue(mcp_proxy.CannedPolicy([{"name": "x", "annotations": {}}], [], [], []).should_can("x", {}))
+
+
+    def test_passthrough_forwards_state_changing_calls(self):
+        with self.proxy(passthrough=True) as mcp:
+            mcp.initialize()
+            self.assertIn("write_thing", mcp.call("write_thing", {"x": 1})["content"][0]["text"])
+            self.assertIn("mystery_tool", mcp.call("mystery_tool", {})["content"][0]["text"])
+        self.assertEqual(self.fake_calls(), [("write_thing", {"x": 1}), ("mystery_tool", {})])
+        self.assertEqual([r["canned"] for r in self.records()], [False, False])
+
+    def test_passthrough_still_cans_block_matches(self):
+        block = [{"tool": "write_thing", "args": {"app_name": "own"}, "block": True}]
+        with self.proxy(passthrough=True, block=block) as mcp:
+            mcp.initialize()
+            self.assertEqual(mcp.call("write_thing", {"app_name": "own"}), CAPTURED)
+            mcp.call("write_thing", {"app_name": "other"})
+        self.assertEqual(self.fake_calls(), [("write_thing", {"app_name": "other"})])
+        self.assertEqual([r["canned"] for r in self.records()], [True, False])
+        policy = mcp_proxy.CannedPolicy(TOOLS, [], [], block, passthrough=True)
+        self.assertTrue(policy.should_can("write_thing", {"app_name": "own"}))
+        self.assertFalse(policy.should_can("write_thing", {"app_name": "other"}))
+        self.assertTrue(mcp_proxy.CannedPolicy(TOOLS, [], [], [], passthrough=False).should_can("write_thing", {}))
+
+    def test_record_keeps_bounded_reply_text(self):
+        with mock.patch.dict(os.environ, {"FAKE_MCP_ERROR_TOOLS": "read_thing"}):
+            with self.proxy() as mcp:
+                mcp.initialize()
+                mcp.call("read_thing", {"pad": "x" * 5000})
+                mcp.call("write_thing", {})
+        failed, canned = self.records()
+        self.assertIs(failed["is_error"], True)
+        self.assertEqual(len(failed["reply_text"]), 2000)
+        self.assertTrue(failed["reply_text"].startswith('{"tool": "read_thing"'))
+        self.assertIs(canned["canned"], True)
+        self.assertIsNone(canned["reply_text"])
+
+    def test_unanswered_call_has_no_reply_text(self):
+        with mock.patch.dict(os.environ, {"FAKE_MCP_SILENT": "1"}):
+            with self.proxy() as mcp:
+                mcp.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                                                 "params": {"name": "read_thing", "arguments": {}}}).encode() + b"\n")
+                mcp.proc.stdin.flush()
+                time.sleep(.3)
+        [record] = self.records()
+        self.assertIsNone(record["reply_text"])
 
 
 if __name__ == "__main__":

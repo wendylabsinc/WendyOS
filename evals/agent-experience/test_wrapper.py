@@ -126,6 +126,25 @@ class WrapperTests(unittest.TestCase):
             self.assertFalse(self.marker.exists(), matcher)
             self.assertIs(self.records()[-1]["canned"], True)
 
+    def test_passthrough_cli_runs_for_real(self):
+        result = self.run_shim("wifi", "connect", "Lab5G", passthrough=True, cli_canned=[["wifi", "connect"]])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["argv"], ["wifi", "connect", "Lab5G"])
+        self.assertTrue(self.marker.exists())
+        self.assertIs(self.records()[0]["canned"], False)
+
+    def test_passthrough_cli_blocks_guarded_commands(self):
+        block = [{"cli": "device update", "block": True},
+                 {"cli": "device apps stop", "args_regex": "sh\\.wendy\\.own", "block": True}]
+        for argv in (["device", "update"], ["device", "apps", "stop", "sh.wendy.own"]):
+            result = self.run_shim(*argv, passthrough=True, block=block)
+            self.assertEqual((result.returncode, result.stdout), (0, ""), argv)
+            self.assertFalse(self.marker.exists(), argv)
+            self.assertIs(self.records()[-1]["canned"], True)
+        result = self.run_shim("device", "apps", "stop", "other", passthrough=True, block=block)
+        self.assertTrue(self.marker.exists())
+        self.assertIs(self.records()[-1]["canned"], False)
+
     def test_help_runs_the_real_help_command(self):
         # Every help lookup becomes `wendy help WORDS`: cobra's help command only resolves and prints.
         # Rebuilding as `WORDS --help` was not enough: `device ros2 exec` stops flag parsing at its

@@ -7,7 +7,7 @@ import shlex
 CHAT_BUILTINS = frozenset({
     "workspace_list", "workspace_read", "workspace_write", "workspace_exec", "wendy_docs",
     "background_process_list", "background_process_stop", "memory_save", "memory_search",
-    "memory_forget", "agent_delegate", "agent_remote", "camera_view", "audio_listen"})
+    "memory_forget", "agent_delegate", "agent_remote", "camera_view", "audio_listen", "profile_skill"})
 WRAPPERS = frozenset({"sudo", "env", "exec", "time", "nohup", "command"})
 SHELLS = frozenset({"sh", "bash", "zsh", "fish"})
 SPLITS = frozenset({"|", ";", "&&", "||", "&"})
@@ -157,9 +157,10 @@ def command_words(argv):
     return words
 
 
-def entry(channel, name, arguments, source="transcript", canned=False, captured=None):
+def entry(channel, name, arguments, source="transcript", canned=False, captured=None, is_error=None,
+          reply_text=None):
     return {"channel": channel, "name": name, "arguments": arguments, "source": source,
-            "canned": canned, "captured": captured}
+            "canned": canned, "captured": captured, "is_error": is_error, "reply_text": reply_text}
 
 
 def shell_entries(command):
@@ -234,7 +235,8 @@ def build_trace(adapter, events, proxy_records=None, cli_records=None):
     if proxy_records is not None:
         trace = [e for e in trace if e["channel"] != "mcp"]
         trace += [entry("mcp", r.get("tool", ""), r.get("arguments", {}), "proxy",
-                        bool(r.get("canned")), r.get("captured")) for r in proxy_records]
+                        bool(r.get("canned")), r.get("captured"), r.get("is_error"), r.get("reply_text"))
+                  for r in proxy_records]
     if cli_records is not None:
         trace = [e for e in trace if e["channel"] != "cli"]
         trace += [entry("cli", " ".join(cli_path(r.get("argv", []))), r.get("argv", []), "wrapper",

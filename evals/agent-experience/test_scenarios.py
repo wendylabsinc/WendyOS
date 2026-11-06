@@ -17,7 +17,7 @@ import benchmark as b
 import eval_wendy
 from fake_mcp_server import TOOLS
 import canned
-from grading import grade
+from grading import grade, matches as grade_matches
 import scenarios as sc
 
 HERE = Path(__file__).resolve().parent
@@ -459,6 +459,20 @@ class TrialTests(unittest.TestCase):
     def attempt_dir(self, row):
         return next(self.output.glob(f"*-{row['id']}"))
 
+    def test_local_scenario_attempts_also_block_the_guarded_actions(self):
+        config = self.config()
+        config["targets"] = {"sim": dict(LOCAL_TARGET, capabilities=[])}
+        run_vm = None
+        with mock.patch.object(sc, "vm_snapshot", return_value=[]), \
+                mock.patch.dict(os.environ, {"WENDY_EVAL_SHIM": str(self.shim), "WENDY_AGENT_SOCKET": "/run/wendy.sock"}):
+            row = sc.scenario_trial(config, "fake", "sim", self.scenario(), self.output, FAKE, self.shim, run_vm,
+                                    self.root / "tools.json", self.canned)
+        self.forget(row)
+        written = json.loads((self.attempt_dir(row) / "scenario.json").read_text())
+        self.assertEqual(written["block"][-len(sc.guard_matchers(sc.BENCHMARK_APP)):], sc.guard_matchers(sc.BENCHMARK_APP))
+        self.assertEqual(written["block"][0], {"tool": "container_exec", "args_regex": "nmcli", "block": True})
+        self.assertIs(written["passthrough"], False)
+
     def test_scenario_trial_with_fake_agent_grades_from_proxy_log(self):
         apps = [{"name": "dev.wendy.example", "version": "1", "state": "RUNNING"}]
         row, snapshot = self.run_trial(self.config(), self.scenario(), snapshots=(apps,))
@@ -694,6 +708,115 @@ class LocalTargetTests(unittest.TestCase):
             self.assertIsNone(sc.scenario_readiness(scenario, target, sc.canned_dir_for(target)))
             self.assertIn("not captured", sc.scenario_readiness(scenario, {"kind": "simulator"},
                                                                 sc.canned_dir_for({"kind": "simulator"}, root / "empty")))
+
+
+class LocalTaskTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        (self.root / "tools.json").write_text(json.dumps(TOOLS))
+        (self.root / "bin").mkdir()
+        self.shim = eval_wendy.write_shim(self.root / "bin")
+        self.out = self.root / "out"
+        self.out.mkdir()
+
+    def argv(self, name):
+        return [sys.executable, "-c", "pass", name]
+
+    def test_guard_matchers_hit_the_benchmarks_app_only(self):
+        block = sc.guard_matchers(sc.BENCHMARK_APP)
+        self.assertTrue(all(m.get("block") is True for m in block))
+
+        def hit(entry):
+            return any(grade_matches(m, entry) for m in block)
+
+        def mcp(name, **args):
+            return {"channel": "mcp", "name": name, "arguments": args}
+
+        def cli(*argv):
+            return {"channel": "cli", "name": " ".join(argv[:3]), "arguments": list(argv)}
+        for tool in ("container_stop", "container_delete", "container_start"):
+            self.assertTrue(hit(mcp(tool, app_name=sc.BENCHMARK_APP)), tool)
+            self.assertFalse(hit(mcp(tool, app_name="other")), tool)
+        for tool in ("os_update", "device_update_agent", "wifi_connect", "wifi_disconnect", "provisioning_start",
+                     "cloud_enroll_device", "os_install_start"):
+            self.assertTrue(hit(mcp(tool)), tool)
+        self.assertFalse(hit(mcp("container_list")))
+        for argv in (["device", "apps", "stop", sc.BENCHMARK_APP], ["device", "apps", "remove", sc.BENCHMARK_APP, "--force"],
+                     ["device", "update"], ["device", "wifi", "connect", "Lab"], ["device", "wifi", "disconnect"]):
+            self.assertTrue(hit(cli(*argv)), argv)
+        self.assertFalse(hit(cli("device", "apps", "stop", "other")))
+        self.assertFalse(hit(cli("device", "apps", "remove", "other")))
+        self.assertFalse(hit(cli("device", "apps", "list")))
+
+    def test_guard_matchers_escape_the_app_id(self):
+        block = sc.guard_matchers("a.b")
+        entry = {"channel": "cli", "name": "device apps stop", "arguments": ["device", "apps", "stop", "axb"]}
+        self.assertFalse(any(grade_matches(m, entry) for m in block))
+
+    def trial(self, local=True, **extra):
+        task = {"id": "probe-task", "prompt": "Use {device}.",
+                "prepare": [FAKE, "--version", "{wendy}"], "verify": [FAKE, "--version", "{wendy}"],
+                "cleanup": [FAKE, "--version", "{wendy}"]}
+        target = dict(LOCAL_TARGET, capabilities=[]) if local else {"kind": "simulator", "device": "vm:x"}
+        config = {"agents": {"fake": {"adapter": "wendy", "model": "fixture",
+                                      "command": ["{wendy}", "chat", "--json", "--prompt", "{prompt}"]}},
+                  "targets": {"t": target}, "disposable_device": True, "isolate_device_state": False}
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock", **extra.pop("env", {})}):
+            row = b.trial(config, "fake", "t", task, self.out, FAKE, **extra)
+        self.addCleanup(shutil.rmtree, row["workspace"], True)
+        return row
+
+    def test_local_task_routes_agent_through_shim_and_fixtures_through_real_wendy(self):
+        row = self.trial(shim=str(self.shim), tools_path=self.root / "tools.json")
+        directory = next(self.out.glob(f"*-{row['id']}"))
+        self.assertTrue((directory / "proxy.jsonl").exists())
+        self.assertEqual(len((directory / "proxy.jsonl").read_text().splitlines()), 2)
+        for phase in ("prepare", "verify", "cleanup"):
+            self.assertIn(FAKE, row["stages"][phase]["argv"], phase)
+            self.assertNotIn(str(self.shim), row["stages"][phase]["argv"], phase)
+        self.assertEqual(row["stages"]["agent"]["argv"][0], str(self.shim))
+        prompt = (directory / "prompt.txt").read_text()
+        self.assertIn(f"The Wendy executable for this environment is {self.shim}.", prompt)
+        self.assertNotIn(f"is {FAKE}.", prompt)
+        # the rebuilt trace carries the proxy's records before grading
+        trace = row["metrics"]["tool_trace"]
+        self.assertEqual([(e["name"], e["source"]) for e in trace if e["channel"] == "mcp"],
+                         [("write_thing", "proxy"), ("read_thing", "proxy")])
+        self.assertEqual(row["metrics"]["proxy_calls"], 2)
+        self.assertIsNotNone(row["metrics"]["tool_trace"][0]["reply_text"] or trace[1]["reply_text"])
+        scenario = json.loads((directory / "scenario.json").read_text())
+        self.assertIs(scenario["passthrough"], True)
+        self.assertEqual(scenario["real_wendy"], FAKE)
+        self.assertEqual(scenario["block"], sc.guard_matchers(sc.BENCHMARK_APP))
+        self.assertEqual(row["status"], "passed" if row["success"] else row["status"])
+
+    def test_guard_app_id_comes_from_the_environment(self):
+        self.trial(shim=str(self.shim), tools_path=self.root / "tools.json", env={"WENDY_APP_ID": "sh.example.app"})
+        directory = next(self.out.iterdir())
+        self.assertEqual(json.loads((directory / "scenario.json").read_text())["block"], sc.guard_matchers("sh.example.app"))
+
+    def test_laptop_trial_has_no_proxy_and_no_shim(self):
+        row = self.trial(local=False)
+        directory = next(self.out.glob(f"*-{row['id']}"))
+        self.assertFalse((directory / "proxy.jsonl").exists())
+        self.assertFalse((directory / "scenario.json").exists())
+        self.assertEqual(row["stages"]["agent"]["argv"][0], FAKE)
+
+    def test_write_scenario_config_records_passthrough(self):
+        path = self.root / "s.json"
+        sc.write_scenario_config(path, real_wendy="/r", shim="/s", tools_path="/t", canned_dir="/c", canned_set="x",
+                                 canned=[], allow_real=[], block=[{"cli": "a"}], cli_canned=[], device="d",
+                                 vm_name="v", proxy_log="/p", cli_log="/l", passthrough=True)
+        config = json.loads(path.read_text())
+        self.assertEqual((config["passthrough"], config["real_wendy"], config["context"]),
+                         (True, "/r", {"device": "d", "vm_name": "v"}))
+        self.assertEqual(config["cli_safe"], str(sc.CLI_SAFE))
+        sc.write_scenario_config(path, real_wendy="/r", shim="/s", tools_path="/t", canned_dir="/c", canned_set="x",
+                                 canned=[], allow_real=[], block=[], cli_canned=[], device="d",
+                                 vm_name="v", proxy_log="/p", cli_log="/l")
+        self.assertIs(json.loads(path.read_text())["passthrough"], False)
 
 
 class SweepTests(unittest.TestCase):
@@ -983,6 +1106,71 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(self.sweep_calls, [(["old"], sc.BENCHMARK_APP)])
         self.assertEqual(json.loads((output / "baseline_apps.json").read_text()), ["old"])
         self.assertNotIn("Usage unknown; charged", text)
+
+    def test_shim_stays_off_the_results_volume_when_disposable(self):
+        made = []
+        real = eval_wendy.write_shim
+
+        def write_shim(directory, *a, **k):
+            made.append(Path(directory))
+            return real(directory, *a, **k)
+        with mock.patch.object(eval_wendy, "write_shim", side_effect=write_shim):
+            code, text, output = self.disposable_main("--repetitions", "1")
+        self.assertEqual(code, 0, text)
+        [directory] = made
+        self.addCleanup(shutil.rmtree, directory, True)
+        self.assertTrue(directory.name.startswith("we-bin-"))
+        self.assertNotIn(output.resolve(), [directory.resolve(), *directory.resolve().parents])
+        self.assertFalse((output / "bin").exists())
+
+    def test_local_tasks_get_the_shim_and_the_tools_list(self):
+        self.scenarios.write_text(json.dumps([MINIMAL]))
+        seen = []
+
+        def trial(config, agent, target, task, output, wendy, treatment_root=None, shim=None, tools_path=None):
+            seen.append((target, task["id"], wendy, shim, tools_path))
+            return {"id": "x", "agent": agent, "target": target, "task": task["id"], "kind": "task", "status": "setup_error",
+                    "success": False, "cleanup_ok": True, "task_seconds": 0, "workspace": str(self.root),
+                    "metrics": {"estimated_cost_usd": 0}, "stages": {}}
+        self.config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
+        self.config["disposable_device"] = True
+        self.config["budget_usd"] = 100
+        path = self.root / "config.json"
+        path.write_text(json.dumps(self.config))
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}), \
+                mock.patch.object(b, "trial", side_effect=trial), \
+                mock.patch.object(b, "require_state_isolation"), \
+                mock.patch.object(sc, "list_apps", return_value=[]), \
+                mock.patch.object(sc, "sweep_apps", return_value={"removed": [], "failed": [], "list_error": None}), \
+                mock.patch.object(sys, "argv", ["benchmark.py", "--config", str(path), "--scenarios", str(self.scenarios),
+                                                "--output", str(self.root / "results"), "--wendy", FAKE, "--task", "deploy-http",
+                                                "--target", "local", "--repetitions", "1", "--execute"]), \
+                contextlib.redirect_stdout(out):
+            code = b.main()
+        self.assertEqual(code, 1, out.getvalue()[-600:])
+        [(target, task, wendy, shim, tools)] = seen
+        self.addCleanup(shutil.rmtree, Path(shim).parent, True)
+        self.assertEqual((target, task, wendy), ("local", "deploy-http", FAKE))
+        self.assertTrue(Path(shim).is_file())
+        self.assertTrue(Path(tools).name == "tools.json")
+
+    def test_chat_hook_is_checked_when_only_local_tasks_are_planned(self):
+        nohook = self.root / "nohook"
+        nohook.write_text("#!/bin/sh\n")
+        nohook.chmod(0o755)
+        self.config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
+        self.config["disposable_device"] = True
+        path = self.root / "config.json"
+        path.write_text(json.dumps(self.config))
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}), \
+                mock.patch.object(sys, "argv", ["benchmark.py", "--config", str(path), "--scenarios", str(self.scenarios),
+                                                "--output", str(self.root / "results"), "--wendy", str(nohook),
+                                                "--task", "deploy-http", "--target", "local", "--repetitions", "1", "--execute"]), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            b.main()
+        self.assertIn("predates the WENDY_CHAT_MCP_COMMAND hook", err.getvalue())
 
     def test_one_failed_sweep_does_not_halt(self):
         bad = {"removed": [], "failed": ["stuck"], "list_error": None}

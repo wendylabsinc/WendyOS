@@ -210,8 +210,10 @@ def main(argv):
         if help_argv is not None:
             run_real, real_argv, extra = True, help_argv, {"help": True}
         else:
-            safe = json.loads(Path(scenario["cli_safe"]).read_text()).get("read_only") or []
-            run_real = (cli_allowed(argv, safe) and not cli_canned(argv, scenario.get("cli_canned") or [])
+            safe = [] if scenario.get("passthrough") is True else (
+                json.loads(Path(scenario["cli_safe"]).read_text()).get("read_only") or [])
+            run_real = ((scenario.get("passthrough") is True
+                         or (cli_allowed(argv, safe) and not cli_canned(argv, scenario.get("cli_canned") or [])))
                         and not _blocked(argv, scenario.get("block") or []))
     except Exception as exc:  # fail closed, and keep the text from the agent
         run_real, error = False, f"policy failed: {exc!r}"

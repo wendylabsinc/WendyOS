@@ -2,6 +2,7 @@
 """Measure one-prompt Wendy tasks. Python standard library only."""
 
 import argparse
+import atexit
 import collections
 import hashlib
 import json
@@ -637,8 +638,15 @@ def stop_reason(row, config, env=os.environ):
     return None
 
 
-def trial(config, agent_name, target_name, task, output, wendy, treatment_root=ROOT):
+def trial(config, agent_name, target_name, task, output, wendy, treatment_root=ROOT, shim=None, tools_path=None):
+    """One end-to-end attempt. On the local target the agent runs through the recording shim in pass-through
+    mode (only the guarded actions are faked); fixtures and cleanup keep using the real binary."""
+    import scenarios as sc  # imported here: scenarios.py imports this module
     agent, target = config["agents"][agent_name], config["targets"][target_name]
+    local = sc.is_local(target)
+    if local and (shim is None or tools_path is None):
+        raise ValueError("a local-target task needs the shim and the tools list")
+    agent_wendy = os.path.abspath(shim) if local else wendy
     ident = uuid.uuid4().hex[:12]
     directory = output / f"{agent_name}-{target_name}-{task['id']}-{ident}"
     directory.mkdir()
@@ -664,13 +672,28 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
     dump(directory / "target.json", target)
     resolved = expand(task, variables)
     resolved["prompt"] = expand(task["prompt"], prompt_variables(variables, target))
-    resolved["prompt"] += f"\nThe Wendy executable for this environment is {wendy}. Use that absolute path for Wendy CLI commands."
+    resolved["prompt"] += f"\nThe Wendy executable for this environment is {agent_wendy}. Use that absolute path for Wendy CLI commands."
     if config.get("environment_context"):
         resolved["prompt"] += "\n" + expand(config["environment_context"], prompt_variables(variables, target))
     if state_dir is not None:
         resolved["prompt"] += (f"\nWendy device/cloud configuration and its VM store are isolated at {state_dir} "
                                "through WENDY_CONFIG_DIR. Preserve that environment setting. Do not change the host's ~/.wendy configuration or identity pins.")
     variables["prompt"] = resolved["prompt"]
+    logs = proxy_log = cli_log = None
+    if local:
+        scenario_config = directory / "scenario.json"
+        variables["scenario_config"] = scenario_config
+        # Outside the results tree, as for scenarios: a sandboxed agent shell may write only to /tmp.
+        logs = Path(tempfile.mkdtemp(prefix="we-log-", dir=sc._tmp_root()))
+        proxy_log, cli_log = logs / "proxy.jsonl", logs / "cli.jsonl"
+        proxy_log.touch()
+        cli_log.touch()
+        sc.write_scenario_config(
+            scenario_config, real_wendy=os.path.abspath(wendy), shim=agent_wendy, tools_path=tools_path,
+            canned_dir=sc.canned_dir_for(target), canned_set=task.get("canned_set", "tasks"), canned=[], allow_real=[],
+            block=sc.guard_matchers(os.environ.get("WENDY_APP_ID", sc.BENCHMARK_APP)), cli_canned=[],
+            device=variables["device"], vm_name=variables["vm_name"], proxy_log=proxy_log, cli_log=cli_log,
+            passthrough=True)
     row = {"id": ident, "agent": agent_name, "target": target_name, "task": task["id"],
            "target_config": target, "model_requested": agent["model"], "workspace": str(workspace),
            "device_state_isolated": state_dir is not None,
@@ -685,6 +708,10 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
         env["WENDY_CONFIG_DIR"] = str(state_dir)
         env["WENDY_SECRET_STORE"] = "file"
     env["PATH"] = str(Path(wendy).parent) + os.pathsep + env.get("PATH", "")
+    agent_env = env
+    if local:
+        agent_env = dict(env, WENDY_EVAL_SCENARIO=str(variables["scenario_config"]),
+                         PATH=str(Path(agent_wendy).parent) + os.pathsep + env["PATH"])
     guard = host_pin_guard()
     retry_guard = RetryGuard(directory / "agent.stdout", config.get("syntax_error_limit", 3))
     try:
@@ -692,25 +719,32 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
             row["stages"], ready = fixture_vm(config, variables, workspace, directory, env)
             if not ready:
                 return row
-        stage_context(workspace, agent["adapter"], wendy, state_dir, treatment_root)
+        stage_context(workspace, agent["adapter"], agent_wendy, state_dir, treatment_root,
+                      server_env={"WENDY_EVAL_SCENARIO": str(variables["scenario_config"])} if local else None)
         if agent["adapter"] == "claude":
             stage_plugin(treatment_root, directory / "plugin")
         for phase in ("prepare", "agent", "verify"):
             if phase == "agent":
-                argv = expand(agent["command"], variables)
+                argv = expand(agent["command"], dict(variables, wendy=agent_wendy))
                 timeout = row["agent_timeout_seconds"]
             else:
                 argv = resolved[phase]
                 timeout = task.get("setup_timeout_seconds", 900) if phase == "prepare" else task.get("verify_timeout_seconds", 90)
-            result = run_process(argv, workspace, directory / phase, timeout, env,
+            result = run_process(argv, workspace, directory / phase, timeout, agent_env if phase == "agent" else env,
                                  guard if phase == "agent" else None,
                                  retry_guard if phase == "agent" else None)
             row["stages"][phase] = result
             if phase == "prepare" and result["exit_code"] != 0:
                 return row
             if phase == "agent":
-                row["metrics"], _ = agent_metrics(agent["adapter"], directory / "agent.stdout", result,
-                                                  agent.get("prices_per_million"))
+                row["metrics"], events = agent_metrics(agent["adapter"], directory / "agent.stdout", result,
+                                                       agent.get("prices_per_million"))
+                if local:
+                    # Grading must see what the proxy and shim recorded, not what the transcript shows.
+                    proxy_records = read_jsonl(proxy_log)
+                    mcp_routing(row["metrics"], proxy_records)
+                    row["metrics"]["tool_trace"] = build_trace(agent["adapter"], events, proxy_records=proxy_records,
+                                                               cli_records=read_jsonl(cli_log))
                 row["task_seconds"] = result["seconds"]
                 row["tool_choice"] = (grade(row["metrics"]["tool_trace"], task["expect"], row["metrics"]["final_text"],
                                             row["metrics"]["agent_completed"], adapter=agent["adapter"])
@@ -739,6 +773,11 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
             discard_device_state(state_dir, row["cleanup_ok"])
             if not row["cleanup_ok"]:
                 row["device_state_retained"] = str(state_dir)
+        if logs is not None:
+            for path in (logs / "proxy.jsonl", logs / "cli.jsonl"):
+                if path.exists():
+                    shutil.move(str(path), str(directory / path.name))
+            shutil.rmtree(logs, ignore_errors=True)
         dump(directory / "result.json", row)
         # Keep the workspace for diagnosis; it contains only this run's fixtures.
     return row
@@ -974,7 +1013,9 @@ def main():
         parser.error("Wendy executable not found")
     wendy = os.path.abspath(wendy)
     chats = [name for name in agents if config["agents"][name]["adapter"] == "wendy"]
-    if selected_scenarios and chats:
+    # A task on the local target runs its agent through the shim too, so it needs the same chat hook.
+    local_tasks = any(kind == "task" and config["targets"][target]["kind"] == "local" for kind, _, target, _ in plan)
+    if (selected_scenarios or local_tasks) and chats:
         import eval_wendy
         if not eval_wendy.has_chat_hook(wendy):  # the shim refuses it too; fail before any attempt
             parser.error(f"{wendy} predates the WENDY_CHAT_MCP_COMMAND hook, so Wendy chat ({', '.join(chats)}) "
@@ -1051,11 +1092,17 @@ def main():
                 print(f"Removing the shared {profile} VM failed; its state is kept at {result.get('device_state_retained')}.")
         dump(output / "run_vms.json", removed_vms)
 
-    if selected_scenarios:
+    if selected_scenarios or local_tasks:
         import eval_wendy
         import preflight
-        (output / "bin").mkdir()
-        shim = eval_wendy.write_shim(output / "bin")
+        if on_disposable:
+            # Keep the shim off the results volume, which is kept and uploaded as evidence.
+            shim_dir = Path(tempfile.mkdtemp(prefix="we-bin-"))
+            atexit.register(shutil.rmtree, shim_dir, True)
+        else:
+            shim_dir = output / "bin"
+            shim_dir.mkdir()
+        shim = eval_wendy.write_shim(shim_dir)
         if on_disposable:
             failures = []  # the agent runs on the device under test, so another reachable wendy is expected
             snapshot["preflight"] = "skipped: disposable_device"
@@ -1135,7 +1182,8 @@ def main():
                                         run_vms.get(task["vm_profile"]) if on_vm else None,
                                         output / "tools.json", sc.canned_dir_for(config["targets"][target]), treatment_root)
             else:
-                row = trial(config, agent, target, task, output, wendy, treatment_root)
+                row = trial(config, agent, target, task, output, wendy, treatment_root,
+                            shim=shim, tools_path=output / "tools.json")
             if on_disposable:
                 # Anything the attempt left behind is removed before the next one; the sweep's result is part of the row.
                 sweep = sweep_env_run(lambda env: sc.sweep_apps(wendy, baseline, sc.BENCHMARK_APP, env))

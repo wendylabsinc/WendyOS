@@ -88,6 +88,19 @@ class ToolTraceTests(unittest.TestCase):
         self.assertIs(by["cli"]["canned"], True)
         self.assertIs(by["cli"]["captured"], False)
 
+    def test_trace_carries_error_and_reply_text(self):
+        trace = t.build_trace("claude", [], proxy_records=[
+            {"tool": "run", "arguments": {}, "canned": False, "captured": None, "is_error": True, "reply_text": "boom"},
+            {"tool": "x", "arguments": {}, "canned": True, "captured": False, "is_error": False, "reply_text": None}],
+            cli_records=[])
+        self.assertEqual([(e["is_error"], e["reply_text"]) for e in trace], [(True, "boom"), (False, None)])
+        self.assertEqual(t.entry("mcp", "run", {}), {"channel": "mcp", "name": "run", "arguments": {}, "source": "transcript",
+                                                     "canned": False, "captured": None, "is_error": None, "reply_text": None})
+
+    def test_profile_skill_is_a_chat_builtin(self):
+        events = [{"type": "tool_start", "id": "1", "tool": "profile_skill", "arguments": {}}]
+        self.assertEqual(pairs(t.build_trace("wendy", events)), [("builtin", "profile_skill")])
+
     def test_read_jsonl_skips_partial_last_line(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "x.jsonl"
