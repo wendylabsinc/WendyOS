@@ -75,7 +75,11 @@ func (a *httpAppAgent) StreamMCP(stream grpc.BidiStreamingServer[agentpb.MCPChun
 
 func appHTTPFixture(t *testing.T, handler http.Handler) (*grpcclient.AgentConnection, context.Context, context.CancelFunc) {
 	t.Helper()
-	httpServer := httptest.NewServer(handler)
+	return appHTTPServerFixture(t, httptest.NewServer(handler))
+}
+
+func appHTTPServerFixture(t *testing.T, httpServer *httptest.Server) (*grpcclient.AgentConnection, context.Context, context.CancelFunc) {
+	t.Helper()
 	t.Cleanup(httpServer.Close)
 	listener := bufconn.Listen(1024 * 1024)
 	srv := grpc.NewServer()
@@ -552,4 +556,32 @@ func TestAppHTTPOpensNoStandaloneStream(t *testing.T) {
 	if n := gets.Load(); n != 0 {
 		t.Fatalf("GET requests = %d, want 0", n)
 	}
+}
+
+func TestAppHTTPClosesIdleConnections(t *testing.T) {
+	original := appHTTPIdleConnTimeout
+	appHTTPIdleConnTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { appHTTPIdleConnTimeout = original })
+
+	var open atomic.Int32
+	httpServer := httptest.NewUnstartedServer(server.NewStreamableHTTPServer(server.NewMCPServer("app", "1")))
+	httpServer.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			open.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			open.Add(-1)
+		}
+	}
+	httpServer.Start()
+	conn, ctx, _ := appHTTPServerFixture(t, httpServer)
+	client, err := connectAppMCP(ctx, ctx, conn, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if open.Load() == 0 {
+		t.Fatal("app saw no connection")
+	}
+	waitContainerMCP(t, func() bool { return open.Load() == 0 })
 }

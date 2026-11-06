@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// A var so tests need not wait out the production timeout.
+var appHTTPIdleConnTimeout = 90 * time.Second
 
 // appHTTPClient adapts only app-facing HTTP. The server, stdio and embedded
 // clients retain mcp-go's types and transports.
@@ -33,7 +37,7 @@ func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, clo
 		cancelInit()
 	}
 	// App responses must never redirect requests outside the local TCP proxy.
-	transport := &http.Transport{}
+	transport := &http.Transport{IdleConnTimeout: appHTTPIdleConnTimeout}
 	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
 		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
 	session, err := client.Connect(initCtx, &sdk.StreamableClientTransport{
