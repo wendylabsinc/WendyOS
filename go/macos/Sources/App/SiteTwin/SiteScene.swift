@@ -26,6 +26,8 @@ public struct SiteScene: View {
     let selectRobot: () -> Void
     let fog: SiteFogConfiguration
     let fogSummary: (SiteFogSummary) -> Void
+    let robotConfirmation: (() -> AnyView)?
+    @State private var robotProjection = SiteRobotScreenProjection()
 
     public init(
         modelURL: URL,
@@ -46,6 +48,7 @@ public struct SiteScene: View {
         robot: SiteRobotRenderState? = nil,
         robotPoint: @escaping (SitePoint, Bool) -> Void = { _, _ in },
         selectRobot: @escaping () -> Void = {},
+        robotConfirmation: (() -> AnyView)? = nil,
         fog: SiteFogConfiguration = .init(),
         fogSummary: @escaping (SiteFogSummary) -> Void = { _ in }
     ) {
@@ -65,6 +68,7 @@ public struct SiteScene: View {
         self.robot = robot
         self.robotPoint = robotPoint
         self.selectRobot = selectRobot
+        self.robotConfirmation = robotConfirmation
         self.fog = fog
         self.fogSummary = fogSummary
     }
@@ -89,11 +93,28 @@ public struct SiteScene: View {
                 robot: robot,
                 robotPoint: robotPoint,
                 selectRobot: selectRobot,
+                robotScreenPosition: { point in
+                    robotProjection.point = point
+                },
                 fog: fog,
                 fogSummary: fogSummary,
                 refreshDate: context.date
             )
             .accessibilityLabel("3D model of \(site.name)")
+        .overlay {
+            GeometryReader { geometry in
+                if let point = robotProjection.point, let robotConfirmation {
+                    robotConfirmation()
+                        .frame(width: 250)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.secondary.opacity(0.3)))
+                        .shadow(radius: 8, y: 3)
+                        .position(x: min(max(point.x, 145), max(145, geometry.size.width - 145)),
+                                  y: min(max(point.y - 110, 90), max(90, geometry.size.height - 90)))
+                }
+            }
+        }
         }
         .task(id: colorSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString }) {
             let leases = colorSources.values.map { ($0, $0.acquire()) }
@@ -103,6 +124,10 @@ public struct SiteScene: View {
             }
         }
     }
+}
+
+@MainActor private final class SiteRobotScreenProjection {
+    var point: CGPoint?
 }
 
 private struct SceneSurface {
@@ -125,6 +150,7 @@ private struct SceneSurface {
     var robot: SiteRobotRenderState?
     var robotPoint: (SitePoint, Bool) -> Void
     var selectRobot: () -> Void
+    var robotScreenPosition: (CGPoint?) -> Void
     var fog: SiteFogConfiguration
     var fogSummary: (SiteFogSummary) -> Void
     // Forces a native-view update even when telemetry stops arriving.
@@ -387,7 +413,7 @@ private struct SceneSurface {
         private func updateRobot() {
             guard let state = parent.robot else { robotRoot.isHidden = true; orders.isHidden = true; scanRoot.isHidden = true; hazardsRoot.isHidden = true; return }
             hazardsRoot.isHidden = state.hazards.isEmpty || !state.fresh || state.placing ||
-                !(0...0.75).contains(parent.refreshDate.timeIntervalSince(state.receivedAt))
+                !SiteRobotHazardRenderer.isFresh(receivedAt: state.receivedAt, now: .now)
             if lastRobot?.hazards != state.hazards {
                 SiteRobotHazardRenderer.update(hazardsRoot, hazards: state.hazards)
             }
@@ -428,6 +454,15 @@ private struct SceneSurface {
                 Go2Model.pose(robotModel, joints: state.joints)
                 SCNTransaction.commit()
             }
+            if let view, let position = state.position {
+                let projected = view.projectPoint(SCNVector3(position.x, position.y + 0.4, position.z))
+                #if os(macOS)
+                let screenY = view.bounds.height - CGFloat(projected.y)
+                #else
+                let screenY = CGFloat(projected.y)
+                #endif
+                parent.robotScreenPosition((0...1).contains(projected.z) ? CGPoint(x: CGFloat(projected.x), y: screenY) : nil)
+            } else { parent.robotScreenPosition(nil) }
             selection.isHidden = !state.selected
             selection.geometry?.firstMaterial?.diffuse.contents = state.fresh ? platformAccent : platformEstimated
             selection.geometry?.firstMaterial?.emission.contents = state.fresh ? platformAccent : platformEstimated

@@ -594,6 +594,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     selectRobot: {
                         robots.selected = true; selectedCamera = nil; camerasExpanded = false; showingRobotControls = true
                     },
+                    robotConfirmation: robots.candidates.isEmpty ? nil : { AnyView(SiteRobotPositionConfirmation(model: robots)) },
                     fog: fogConfiguration(current, robot: robotRender),
                     fogSummary: { fogSummary = $0 }
                 )
