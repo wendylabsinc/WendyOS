@@ -18,6 +18,10 @@ struct SiteRobotHazard: Equatable, Sendable {
 
 @MainActor
 enum SiteRobotHazardRenderer {
+    static func isFresh(receivedAt: Date, now: Date) -> Bool {
+        (0...0.75).contains(now.timeIntervalSince(receivedAt))
+    }
+
     // Two batched meshes keep dense scans from creating thousands of nodes.
     static func update(_ root: SCNNode, hazards: [SiteRobotHazard]) {
         root.childNodes.forEach { $0.removeFromParentNode() }

@@ -246,6 +246,8 @@ final class SiteRobotMapModel: ObservableObject {
                             fusionReport = report
                             candidates = (report.candidates ?? []).map { SiteRobotCandidate(position: SitePoint(x: $0.X, y: $0.FloorY, z: $0.Z), yaw: $0.Yaw, rms: $0.RMS, coverage: $0.Coverage) }
                             matchSequence = remoteSearchSequence; candidateIndex = 0
+                            error = nil
+                            suggestionFreshness = RobotSuggestionFreshness(observationRevision: report.observationRevision, received: .now)
                             rotationState = .idle
                         } else { error = progress.SearchMessage; rotationState = .stopped(progress.SearchMessage) }
                     }
@@ -697,9 +699,6 @@ struct SiteRobotPanel: View {
         .padding(16).frame(width: 286)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(model.selected ? Color.green.opacity(0.5) : Color.white.opacity(0.1)))
-        .onChange(of: expanded) { _, visible in
-            if !visible && (model.localizing || model.reading?.moving == true) { model.stop() }
-        }
         .onChange(of: model.selected) { _, selected in
             if selected { expanded = true }
         }
@@ -931,5 +930,22 @@ struct SiteRobotLocalizationControls: View {
         }
         .buttonStyle(.bordered)
         .disabled(model.handle == 0 || model.reading?.moving == true || model.lensCalibrating)
+    }
+}
+
+struct SiteRobotPositionConfirmation: View {
+    @ObservedObject var model: SiteRobotMapModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Is Go2 here?", systemImage: "pawprint.fill").font(.headline)
+            Text("Check its position and heading.").font(.caption).foregroundStyle(.secondary)
+            if let error = model.error { Text(error).font(.caption).foregroundStyle(.orange) }
+            HStack {
+                Button("Confirm position") { model.confirmPosition() }.buttonStyle(.borderedProminent)
+                Button("Place manually") { model.beginAlignment() }.buttonStyle(.bordered)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Confirm Go2's estimated position")
     }
 }

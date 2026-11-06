@@ -85,3 +85,14 @@ import Testing
     SiteRobotHazardRenderer.update(root, hazards: [])
     #expect(root.childNodes.isEmpty)
 }
+
+@MainActor @Test func hazardFreshnessUsesRenderTimeAndStillExpires() {
+    let previousAnimationTick = Date(timeIntervalSince1970: 1000)
+    let received = previousAnimationTick.addingTimeInterval(0.12)
+    let rendered = previousAnimationTick.addingTimeInterval(0.15)
+    // New telemetry commonly arrives between animation ticks. The prior tick
+    // would incorrectly classify it as future-dated and hide every other frame.
+    #expect(!SiteRobotHazardRenderer.isFresh(receivedAt: received, now: previousAnimationTick))
+    #expect(SiteRobotHazardRenderer.isFresh(receivedAt: received, now: rendered))
+    #expect(!SiteRobotHazardRenderer.isFresh(receivedAt: received, now: received.addingTimeInterval(0.76)))
+}
