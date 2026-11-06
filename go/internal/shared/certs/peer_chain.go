@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 )
 
 // TLSKeyPair normalizes the trailing bytes some PKI issuer certificates carry
@@ -62,6 +64,22 @@ func VerifyPeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Cer
 // VerifyPeerCertificateChain and returns the earliest expiry on its successful
 // path. Unused issuers and trust anchors do not affect that path's lifetime.
 func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (time.Time, error) {
+	return verifyPeerCertificateChainExpiry(leaf, peers, roots, usage, now, leafNow, false)
+}
+
+// VerifyLivePeerCertificateChainExpiry also checks current issuer-signed CRLs.
+// Its deadline includes CRL NextUpdate. Historical receipts must use the pure
+// VerifyPeerCertificateChainExpiry function instead.
+func VerifyLivePeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (time.Time, error) {
+	return verifyPeerCertificateChainExpiry(leaf, peers, roots, usage, now, leafNow, true)
+}
+
+func VerifyLivePeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) error {
+	_, err := VerifyLivePeerCertificateChainExpiry(leaf, peers, roots, usage, now, leafNow)
+	return err
+}
+
+func verifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time, live bool) (time.Time, error) {
 	if len(peers) > 32 {
 		return time.Time{}, fmt.Errorf("too many peer certificates")
 	}
@@ -112,12 +130,30 @@ func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x5
 					if ca.NotAfter.Before(expires) {
 						expires = ca.NotAfter
 					}
+					if live {
+						deadline, err := revocation.Default.CheckPath([]*x509.Certificate{child, ca}, now)
+						if err != nil {
+							return time.Time{}, err
+						}
+						if deadline.Before(expires) {
+							expires = deadline
+						}
+					}
 					return expires, nil
 				}
 			}
 			if expires, err := walk(ca, depth+1); err == nil {
 				if child.NotAfter.Before(expires) {
 					expires = child.NotAfter
+				}
+				if live {
+					deadline, err := revocation.Default.CheckPath([]*x509.Certificate{child, ca}, now)
+					if err != nil {
+						return time.Time{}, err
+					}
+					if deadline.Before(expires) {
+						expires = deadline
+					}
 				}
 				return expires, nil
 			} else {

@@ -13,6 +13,7 @@ import (
 	circlSign "github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 )
 
 var (
@@ -294,7 +295,7 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		for _, cert := range cs.PeerCertificates[1:] {
 			intermediates.AddCert(cert)
 		}
-		_, stdErr := leaf.Verify(x509.VerifyOptions{
+		paths, stdErr := leaf.Verify(x509.VerifyOptions{
 			Roots:         caPool,
 			Intermediates: intermediates,
 			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -309,7 +310,13 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			if _, schemeErr := mldsaScheme(sigOID); schemeErr != nil {
 				return stdErr
 			}
-			if err := VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now); err != nil {
+			if err := VerifyLivePeerCertificateChain(leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now); err != nil {
+				return err
+			}
+		}
+
+		if stdErr == nil {
+			if _, err := revocation.Default.CheckPaths(paths, time.Now()); err != nil {
 				return err
 			}
 		}

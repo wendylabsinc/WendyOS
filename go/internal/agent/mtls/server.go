@@ -69,6 +69,17 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 	// Session resumption: stamp the client cert window into tickets and
 	// decline stale ones (see session_ticket.go for the security rationale).
 	wireSessionTicketChecks(cfg, notBeforeFloor, time.Now)
+	cfg.VerifyConnection = func(state tls.ConnectionState) error {
+		if !state.DidResume {
+			return nil
+		}
+		raw := make([][]byte, len(state.PeerCertificates))
+		for i, certificate := range state.PeerCertificates {
+			raw[i] = certificate.Raw
+		}
+		return cfg.VerifyPeerCertificate(raw, nil)
+	}
+
 	// Direct PKI device certificates carry a tenant SPIFFE identity instead
 	// of a legacy numeric org. Keep tenant enforcement active even when the
 	// legacy org interceptor has no numeric identity to compare. VerifyConnection
@@ -125,6 +136,7 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 	tlsConfig.NextProtos = []string{"h2"}
 	meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
 
+	checkLive := livePeerCheck(tlsConfig.VerifyPeerCertificate)
 	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
 	opts := []grpc.ServerOption{
 		grpc.Creds(creds),
@@ -132,9 +144,11 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		// so that no handler can be reached without a verified client certificate.
 		grpc.ChainUnaryInterceptor(
 			interceptor.UnaryMTLSInterceptor(logger, expected, orgMode),
+			liveUnaryInterceptor(checkLive),
 			interceptor.UnaryRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.ChainStreamInterceptor(
 			interceptor.StreamMTLSInterceptor(logger, expected, orgMode),
+			liveStreamInterceptor(checkLive),
 			interceptor.StreamRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),

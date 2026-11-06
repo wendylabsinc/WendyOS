@@ -13,7 +13,8 @@ import (
 
 // VerifiedOperator is a primary client-auth credential-path snapshot. It cannot
 // be constructed by role strings. Reverify against current local trust after a
-// trust/credential change; the snapshot is not an online revocation service.
+// trust/credential change or CRL refresh. The snapshot expires by CRL NextUpdate;
+// active mesh carriers also revalidate the original chain during maintenance.
 type VerifiedOperator struct {
 	operator Operator
 	leaf     *x509.Certificate
@@ -84,7 +85,7 @@ func VerifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tena
 	if leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
 		return result, errors.New("operator credential does not permit signing")
 	}
-	expires, err := certs.VerifyPeerCertificateChainExpiry(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, now, now)
+	expires, err := certs.VerifyLivePeerCertificateChainExpiry(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, now, now)
 	if err != nil {
 		return result, err
 	}

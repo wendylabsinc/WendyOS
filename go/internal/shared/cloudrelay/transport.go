@@ -160,7 +160,7 @@ func DialCloud(endpoint, certPEM, chainPEM string, keyPEM []byte) (*grpc.ClientC
 		if _, e := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); e == nil {
 			return nil
 		}
-		return certs.VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], trust, x509.ExtKeyUsageServerAuth, time.Now(), time.Now())
+		return certs.VerifyLivePeerCertificateChain(leaf, cs.PeerCertificates[1:], trust, x509.ExtKeyUsageServerAuth, time.Now(), time.Now())
 	}
 	return newCloudClient(t, credentials.NewTLS(config), true)
 }

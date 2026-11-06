@@ -12,18 +12,13 @@ import (
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"github.com/wendylabsinc/wendy/go/internal/shared/timefmt"
 	"go.uber.org/zap"
 )
 
-// maxCertLifetime is the maximum accepted certificate validity window.
-// Certificates valid for longer than this are rejected because they cannot be
-// promptly revoked: Go's crypto/tls does not fetch CRL distribution points
-// during the TLS handshake, and doing so from server code introduces SSRF
-// vectors, cache-poisoning risk, and availability dependencies.
-//
-// The value is 732 days (2 × 365 + 2) to cover any real-world "2-year"
-// certificate whose validity window includes a leap-year Feb 29 (max 731 days).
+// maxCertLifetime is an independent lifetime ceiling, retained for legacy
+// certificates without a CRL distribution point as well as CRL-backed peers.
 const maxCertLifetime = (2*365 + 2) * 24 * time.Hour
 
 // maxClockSkewTolerance is the maximum amount by which the NotBefore floor may
@@ -33,10 +28,8 @@ const maxCertLifetime = (2*365 + 2) * 24 * time.Hour
 // future (e.g. years ahead) cannot be accepted by a device with a stuck clock.
 const maxClockSkewTolerance = 24 * time.Hour
 
-// checkRevocation enforces that leaf was issued with a validity window short
-// enough that a compromised credential expires within maxCertLifetime even
-// without an explicit CRL/OCSP revocation check.
-func checkRevocation(leaf *x509.Certificate) error {
+// checkCertificateLifetime enforces the independent certificate lifetime ceiling.
+func checkCertificateLifetime(leaf *x509.Certificate) error {
 	lifetime := leaf.NotAfter.Sub(leaf.NotBefore)
 	if lifetime > maxCertLifetime {
 		return fmt.Errorf("certificate lifetime %v exceeds maximum %v; reissue with a shorter validity window", lifetime, maxCertLifetime)
@@ -189,7 +182,7 @@ func effectiveVerificationTime(realNow, notBeforeFloor, certNotBefore time.Time)
 // so that certs issued at provisioning time are still accepted. Pass a zero
 // time.Time to disable the floor.
 func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time) func([][]byte, [][]*x509.Certificate) error {
-	verify := buildPeerCertificateVerifier(caPool, caCerts, logger, notBeforeFloor)
+	verify := buildPeerCertificateVerifierWithCache(caPool, caCerts, logger, notBeforeFloor, newPeerPathCache())
 	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		_, err := verify(rawCerts, time.Now())
 		return err
@@ -199,8 +192,8 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 // NewPeerCertificateVerifier verifies against configured CA trust and returns
 // the expiry of the path that actually verified. Unlike the general mTLS
 // loopback policy, the local leaf is not an independent trust anchor.
-// Current time and checkRevocation's leaf validity-window policy are checked on
-// every call; this verifier does not query a Cloud revocation service. A bounded,
+// Current time and checkCertificateLifetime's leaf validity-window policy are checked on
+// every call; CRL updates invalidate cached paths. A bounded,
 // short-lived cache reuses only signature/path verification for exact chains.
 // New roots or policy require a new verifier and therefore a fresh cache.
 func NewPeerCertificateVerifier(chainPEM string, logger *zap.Logger, notBeforeFloor time.Time) (func([][]byte, time.Time) (time.Time, error), error) {
@@ -281,7 +274,7 @@ func buildPeerCertificateVerifierWithCache(caPool *x509.CertPool, caCerts []*x50
 			logCertRejection(logger, leaf, err, realNow, effectiveNow)
 			return time.Time{}, err
 		}
-		if err := checkRevocation(leaf); err != nil {
+		if err := checkCertificateLifetime(leaf); err != nil {
 			logCertRejection(logger, leaf, err, realNow, effectiveNow)
 			return time.Time{}, err
 		}
@@ -343,23 +336,20 @@ func verifyPeerCertificatePath(leaf *x509.Certificate, rawCerts [][]byte, caPool
 			return time.Time{}, stdErr
 		}
 		var mldsaErr error
-		expires, mldsaErr = certs.VerifyPeerCertificateChainExpiry(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
+		expires, mldsaErr = certs.VerifyLivePeerCertificateChainExpiry(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
 		if mldsaErr != nil {
 			return time.Time{}, mldsaErr
 		}
 	} else {
-		// Every returned path verified. Choose the path whose earliest
-		// certificate expiry is latest, without including unrelated input.
-		for _, path := range paths {
-			until := leaf.NotAfter
-			for _, certificate := range path {
-				if certificate.NotAfter.Before(until) {
-					until = certificate.NotAfter
-				}
-			}
-			if until.After(expires) {
-				expires = until
-			}
+		// The general server's explicit loopback anchor must not bypass a CDP
+		// on its own leaf. Resolve its issuer through configured trust instead.
+		if len(paths) == 1 && len(paths[0]) == 1 && len(leaf.CRLDistributionPoints) != 0 {
+			return certs.VerifyLivePeerCertificateChainExpiry(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
+		}
+		var err error
+		expires, err = revocation.Default.CheckPaths(paths, realNow)
+		if err != nil {
+			return time.Time{}, err
 		}
 	}
 	return expires, nil
