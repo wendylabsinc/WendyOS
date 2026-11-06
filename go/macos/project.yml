@@ -32,6 +32,10 @@ targets:
   WendyDesktop:
     type: application
     platform: macOS
+    info:
+      path: Resources/Desktop-Info.plist
+      properties:
+        WendySharedKeychainGroup: "$(AppIdentifierPrefix)dev.wendy.shared-login"
     sources:
       - path: Sources/App
       - path: Resources/Go2
@@ -145,6 +149,7 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: Wendy
+        WendySharedKeychainGroup: "$(AppIdentifierPrefix)dev.wendy.shared-login"
         NSCameraUsageDescription: Wendy uses the camera to recognize devices and scan your site into a 3D model.
         NSBonjourServices: ["_wendyos._udp", "_wendyos._tcp", "_wendy-lite._tcp", "_wendy-net._tcp", "_wendy-net._udp"]
         NSLocalNetworkUsageDescription: Wendy discovers and connects to your nearby devices.

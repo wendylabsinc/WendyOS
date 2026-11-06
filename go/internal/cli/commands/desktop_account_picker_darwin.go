@@ -27,7 +27,7 @@ func DesktopAccountChoices() ([]DesktopAccountChoice, error) {
 			organization = auth.OrganizationKey()
 		}
 		result = append(result, DesktopAccountChoice{DesktopAccountInfo: info,
-			OrganizationID: organization, OrganizationName: config.OrganizationName(info.Cloud, organization)})
+			OrganizationID: organization, OrganizationName: config.OrganizationName(auth.CloudGRPC, organization)})
 	}
 	return result, nil
 }

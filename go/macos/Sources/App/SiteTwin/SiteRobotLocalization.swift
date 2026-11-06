@@ -3,52 +3,6 @@ import SwiftUI
 import CryptoKit
 import simd
 
-struct SiteRobotGeometryPacket: Sendable { var architecture, furniture: [Double] }
-struct RobotMapPoint: Codable, Sendable { var X, Y: Double }
-struct RobotMapVertex: Codable, Sendable { var X, Y, Z: Double }
-struct RobotObservedSurface: Codable, Sendable {
-    var position: RobotMapVertex
-    var direction: RobotMapPoint
-    var horizontal: Bool
-    var stable: Bool
-}
-struct RobotVisualHint: Encodable, Sendable {
-    var position: RobotMapPoint
-    var yaw, at: Double
-    var inliers: Int
-    var residual: Double
-}
-struct RobotFusionRequest: Encodable, Sendable {
-    var frame: String
-    var architecture, furniture: [Double]
-    var visual: RobotVisualHint?
-    var reference: [RobotObservedSurface]
-}
-struct RobotScanPoint: Decodable, Equatable, Sendable {
-    var X, Y, Z: Double
-    var Class: Int
-}
-struct RobotFusionReport: Decodable, Sendable {
-    struct Candidate: Decodable, Sendable { var X, Z, Yaw, FloorY, RMS, Coverage: Double }
-    struct Tracking: Decodable, Sendable {
-        struct Fit: Decodable, Sendable { var architecture, furniture, reference, directions: Int; var cost: Double; var valid: Bool }
-        var fits: [Fit]?
-        var independentViews: Int
-        var novelFraction: Double
-        var selected: Int
-        var message: String
-    }
-    var message: String
-    var candidates: [Candidate]?
-    var tracking: Tracking
-    var overlay: [RobotScanPoint]?
-    var reference: [RobotObservedSurface]?
-    var Accepted, Rejected: Int
-    var waitingForObservations: Bool
-    var visualUsed: Bool
-    var observationRevision: UInt64
-}
-
 struct RobotSuggestionFreshness {
     var observationRevision: UInt64
     var received: Date
@@ -210,60 +164,4 @@ struct RobotLocalizationDiagnostics: View {
             }.font(.caption2).foregroundStyle(.secondary).padding(.top, 4)
         }.font(.caption)
     }
-}
-
-// Offer once per observation session. A failed match can offer immediately;
-// sparse scans get time to arrive before suggesting a new viewpoint.
-struct RobotRotationOffer {
-    private(set) var offered = false
-    private var waitingSince: Date?
-
-    mutating func shouldPresent(eligible: Bool, scanReady: Bool, failedMatch: Bool = false, now: Date) -> Bool {
-        guard eligible, !offered else { waitingSince = nil; return false }
-        if failedMatch {
-            offered = true
-            return true
-        }
-        guard !scanReady else { waitingSince = nil; return false }
-        if waitingSince == nil { waitingSince = now }
-        guard let waitingSince, now.timeIntervalSince(waitingSince) >= 5 else { return false }
-        offered = true
-        return true
-    }
-
-    mutating func dismiss() { offered = true; waitingSince = nil }
-}
-
-// Only accepting the rotation prompt arms movement. Passive observations never do.
-struct RobotPositionSearch {
-    enum Outcome { case exhausted, timedOut }
-    private(set) var outcome: Outcome?
-    private(set) var active = false
-    private(set) var remainingTurns = 0
-    private(set) var direction: Int32 = 0
-    private var deadline = Date.distantPast
-    mutating func start(now: Date) { active = true; outcome = nil; remainingTurns = 12; direction = 0; deadline = now.addingTimeInterval(300) }
-    mutating func resumeAfterCalibration(now: Date) { if active { deadline = now.addingTimeInterval(300) } }
-    mutating func shouldRetryLocalization(pose: Bool, scanReady: Bool, measurementsReady: Bool, aligned: Bool,
-                                         rematchAfterLook: Bool, attempts: Int, now: Date,
-                                         calibrating: Bool = false) -> Bool {
-        guard !calibrating else { return false }
-        if active && now >= deadline { finish(.timedOut) }
-        if outcome != nil || !measurementsReady { return false }
-        // An explicit search must be able to acquire another view when room
-        // landmarks are sparse. The backend still checks sensor freshness and
-        // the entire turning footprint before allowing any motion.
-        if active { return pose }
-        return scanReady && (!aligned || rematchAfterLook) && attempts < 3
-    }
-    mutating func takeTurn(now: Date) -> Bool {
-        guard active else { return false }
-        guard now < deadline else { finish(.timedOut); return false }
-        guard remainingTurns > 0 else { finish(.exhausted); return false }
-        remainingTurns -= 1
-        return true
-    }
-    mutating func recordDirection(_ value: Int32) { if active && direction == 0 && (value == 1 || value == -1) { direction = value } }
-    mutating func cancel() { active = false; outcome = nil; remainingTurns = 0; direction = 0 }
-    private mutating func finish(_ outcome: Outcome) { active = false; self.outcome = outcome }
 }

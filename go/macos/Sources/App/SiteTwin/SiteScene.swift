@@ -333,7 +333,9 @@ private struct SceneSurface {
                     material.lightingModel = .constant
                     material.transparency = kind == 0 ? 0.3 : 0.85
                     geometry.materials = [material]
-                    scanRoot.addChildNode(SCNNode(geometry: geometry))
+                    let node = SCNNode(geometry: geometry)
+                    node.categoryBitMask = SiteScenePicking.annotationCategory
+                    scanRoot.addChildNode(node)
                 }
             }
             orders.isHidden = false
@@ -400,14 +402,10 @@ private struct SceneSurface {
 
         func tap(at point: CGPoint, immediate: Bool = false) {
             guard let view else { return }
-            let hits = view.hitTest(
-                point,
-                options: [.searchMode: SCNHitTestSearchMode.all.rawValue,
-                          .categoryBitMask: ~(1 << 30)]
-            )
+            let hits = SiteScenePicking.hits(in: view, at: point)
             if parent.selectingPeopleFloor {
                 guard let hit = hits.first(where: { isDescendant($0.node, of: model) }),
-                      abs(hit.worldNormal.y) > 0.95 else { return }
+                      SiteScenePicking.isLevel(hit, minimumUp: 0.95) else { return }
                 let p = hit.worldCoordinates
                 parent.selectPeopleFloor(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)))
             } else if let camera = parent.placingCamera,
@@ -419,7 +417,7 @@ private struct SceneSurface {
                 // Placement owns the gesture even when the point is invalid.
                 // A missed floor tap must not switch to camera controls.
                 guard let hit = hits.first(where: { isDescendant($0.node, of: model) }),
-                      abs(hit.worldNormal.y) > 0.85 else { return }
+                      SiteScenePicking.isLevel(hit, minimumUp: 0.85) else { return }
                 let p = hit.worldCoordinates
                 parent.robotPoint(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)), false)
             } else if let hit = hits.first, isDescendant(hit.node, of: robotRoot) {
@@ -428,10 +426,12 @@ private struct SceneSurface {
                 let id = UUID(uuidString: String(name.dropFirst(7)))
             {
                 parent.select(id)
-            } else if parent.robot?.selected == true,
+            } else if parent.robot?.position != nil,
                       let hit = hits.first(where: { isDescendant($0.node, of: model) }),
-                      abs(hit.worldNormal.y) > 0.85 {
+                      SiteScenePicking.isLevel(hit, minimumUp: 0.85) {
                 let p = hit.worldCoordinates
+                // A floor destination also selects Go2 after inspecting a camera.
+                parent.selectRobot()
                 parent.robotPoint(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)), immediate)
             }
         }
@@ -457,6 +457,28 @@ private struct SceneSurface {
                 tap(at: gesture.location(in: view), immediate: true)
             }
         #endif
+    }
+}
+
+@MainActor
+enum SiteScenePicking {
+    static let annotationCategory = 1 << 30
+
+    static func isLevel(_ hit: SCNHitTestResult, minimumUp: Double) -> Bool {
+        let n = hit.worldNormal
+        let x = Double(n.x), y = Double(n.y), z = Double(n.z)
+        let length = sqrt(x*x + y*y + z*z)
+        return length.isFinite && length > 0 && abs(y)/length > minimumUp
+    }
+
+    static func hits(in view: SCNView, at point: CGPoint) -> [SCNHitTestResult] {
+        view.hitTest(point, options: [
+            .searchMode: SCNHitTestSearchMode.all.rawValue,
+            .sortResults: true,
+            // Imported floor meshes may face down even when rendered double-sided.
+            .backFaceCulling: false,
+            .categoryBitMask: ~annotationCategory,
+        ])
     }
 }
 

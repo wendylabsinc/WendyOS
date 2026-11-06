@@ -16,6 +16,13 @@ struct SiteRobotReading: Sendable {
     var route: [SitePoint]
     var joints: [Double]
 
+    var floorPolicy: SiteRobotFloorPolicy {
+        SiteRobotFloorPolicy(underBodyAllowance: underBodyAllowance, allowUnobservedFloor: allowUnobservedFloor)
+    }
+    var timing: SiteRobotTiming {
+        SiteRobotTiming(enabled: arrivalTiming, usingArrival: usingArrivalTiming, unavailable: timingUnavailable)
+    }
+
     // Joint and pose samples animate the scene without rebuilding its controls.
     func hasSameControls(as other: Self) -> Bool {
         disconnected == other.disconnected && controlWarning == other.controlWarning && lookDirection == other.lookDirection && lookState == other.lookState && message == other.message && pose == other.pose && ready == other.ready &&
@@ -43,14 +50,7 @@ final class SiteRobotClient: SiteRobotObserving {
         try await BlockingWork.run(on: queue, unlessCancelled: false, body)
     }
     func open(session: UInt64, serial: String) async throws -> UInt64 {
-        try await perform {
-            try GoClient.withCString(serial) { serial in
-                guard let p = WDSiteRobotOpen(session, serial) else { throw WendyError(message: "Missing robot connection.") }
-                defer { WDUnitreeConnectionFree(p) }
-                try GoClient.check(p.pointee.status)
-                return p.pointee.handle
-            }
-        }
+        try await SiteRobotSession.open(session: session, serial: serial)
     }
     func poll(_ handle: UInt64) async throws -> SiteRobotReading {
         try await perform {
@@ -83,7 +83,7 @@ final class SiteRobotClient: SiteRobotObserving {
         try await perform { try GoClient.withCString(frame) { try GoClient.finish(WDSiteRobotDestination(handle, sequence, $0, point.x, point.z, move ? 1 : 0)) } }
     }
     func look(_ handle: UInt64, sequence: UInt64, direction: Int32) async throws {
-        try await perform { try GoClient.finish(WDSiteRobotLook(handle, sequence, direction)) }
+        try await SiteRobotSession.look(handle, sequence: sequence, direction: direction)
     }
     func stop(_ handle: UInt64, sequence: UInt64) async { try? await perform { WDSiteRobotStop(handle, sequence) } }
     func localize(_ handle: UInt64, sequence: UInt64, frame: String, vertices: [Double]) async throws -> [SiteRobotCandidate] {
@@ -102,29 +102,20 @@ final class SiteRobotClient: SiteRobotObserving {
         }
     }
     func fuse(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws -> RobotFusionReport {
-        let bytes = try JSONEncoder().encode(request)
-        guard let json = String(data: bytes, encoding: .utf8) else { throw SiteLocalizationError.invalidMap }
-        return try await perform {
-            try GoClient.withCString(json) { request in
-                guard let p = WDSiteRobotFuse(handle, sequence, request) else { throw WendyError(message: "Missing localization report.") }
-                defer { WDSiteRobotFusionFree(p) }
-                try GoClient.check(p.pointee.status)
-                return try JSONDecoder().decode(RobotFusionReport.self, from: Data(GoClient.string(p.pointee.json).utf8))
-            }
-        }
+        try await SiteRobotSession.fuse(handle, sequence: sequence, request: request)
     }
     func confirmLocalization(_ handle: UInt64, sequence: UInt64, matchSequence: UInt64, frame: String, candidate: Int) async throws {
-        try await perform { try GoClient.withCString(frame) { try GoClient.finish(WDSiteRobotConfirmLocalization(handle, sequence, matchSequence, $0, Int32(candidate))) } }
+        try await SiteRobotSession.confirmLocalization(handle, sequence: sequence, matchSequence: matchSequence, frame: frame, candidate: candidate)
     }
     func arrivalTiming(_ handle: UInt64, sequence: UInt64, enabled: Bool) async throws {
-        try await perform { try GoClient.finish(WDSiteRobotArrivalTiming(handle, sequence, enabled ? 1 : 0)) }
+        try await SiteRobotSession.setSetting(handle, sequence: sequence, setting: .arrivalTiming, enabled: enabled)
     }
     func close(_ handle: UInt64) async { try? await perform { WDSiteRobotClose(handle) } }
     func underBodyAllowance(_ handle: UInt64, sequence: UInt64, enabled: Bool) async throws {
-        try await perform { try GoClient.finish(WDSiteRobotUnderBodyAllowance(handle, sequence, enabled ? 1 : 0)) }
+        try await SiteRobotSession.setSetting(handle, sequence: sequence, setting: .underBodyAllowance, enabled: enabled)
     }
     func allowUnobservedFloor(_ handle: UInt64, sequence: UInt64, enabled: Bool) async throws {
-        try await perform { try GoClient.finish(WDSiteRobotAllowUnobservedFloor(handle, sequence, enabled ? 1 : 0)) }
+        try await SiteRobotSession.setSetting(handle, sequence: sequence, setting: .unobservedFloor, enabled: enabled)
     }
 }
 

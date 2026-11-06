@@ -9,6 +9,10 @@ void WDCameraMetadataFree(WDCameraMetadataResult *value);
 #include "UnitreeTypes.h"
 #include "SiteRobotTypes.h"
 
+typedef struct { WDStatus status; uint8_t *data; size_t count; } WDSharedLoginResult;
+WDSharedLoginResult *WDSharedLoginExport(void);
+void WDSharedLoginFree(WDSharedLoginResult *value);
+WDStatus *WDSharedLoginImport(uint8_t *data, size_t count);
 WDAccountResult *WDAccount(void);
 WDAccountsResult *WDAccounts(void);
 void WDAccountsFree(WDAccountsResult *value);

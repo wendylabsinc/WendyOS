@@ -1,19 +1,17 @@
 # Mark generated protobuf/gRPC Swift files so GitHub collapses them in PRs
 swift/Sources/*/Proto/**/*.pb.swift    linguist-generated=true
 swift/Sources/*/Proto/**/*.grpc.swift  linguist-generated=true
-
 # Mark generated protobuf/gRPC Go files so GitHub collapses them in PRs.
 # Security review uses its own fixed generated-root allowlist.
 go/proto/gen/**                        linguist-generated=true
 *.pb.go                                linguist-generated=true
 *_grpc.pb.go                           linguist-generated=true
-
 # The Wendy plugin launcher and its tests run under sh (Git Bash on Windows)
 # and parse each other line by line, so they keep LF on every checkout.
 plugins/wendy/scripts/* text eol=lf
 scripts/pin-cli.sh text eol=lf
 scripts/test/plugin-launcher/* text eol=lf
-
 # Skill entrypoints are parsed and embedded byte-for-byte. Keep their YAML
 # frontmatter delimiters intact on Windows, including packaging sources.
 **/SKILL.md text eol=lf
+go/macos/Resources/Spatial/Go2.usdz filter=lfs diff=lfs merge=lfs -text

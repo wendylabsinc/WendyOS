@@ -13,7 +13,7 @@ func TestDesktopAccountPickerSelectsExactSavedContext(t *testing.T) {
 	secondOrg := "22222222-2222-4222-8222-222222222222"
 	cfg := &config.Config{CurrentContext: "first", DefaultDevice: "local-device", Auth: []config.AuthConfig{
 		{Name: "first", CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + firstOrg + "/operator/one"}}},
-		{Name: "second", CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + secondOrg + "/operator/two"}}},
+		{Name: "second", CloudGRPC: "cloud.test:443", CloudDashboard: "https://cloud.test", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + secondOrg + "/operator/two"}}},
 		{Name: "incomplete", CloudGRPC: "other.test:443"},
 	}}
 	if err := config.Save(cfg); err != nil {

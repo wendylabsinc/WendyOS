@@ -154,3 +154,58 @@ func TestRoomMatchingUsesSparseDistributedWalls(t *testing.T) {
 		t.Fatal("duplicate columns counted as structure")
 	}
 }
+
+func TestRoomFloorIgnoresWallOverhangAndSmallLowerFragments(t *testing.T) {
+	mesh := []Triangle{
+		{{0, 0, 0}, {4, 0, 0}, {4, 0, -4}}, {{0, 0, 0}, {4, 0, -4}, {0, 0, -4}},
+		{{0, -1, 0}, {4, -1, 0}, {4, 2, 0}}, {{0, -1, 0}, {4, 2, 0}, {0, 2, 0}},
+		{{0, -1, 0}, {0, -1, -4}, {0, 2, -4}}, {{0, -1, 0}, {0, 2, -4}, {0, 2, 0}},
+		{{0, -2, 0}, {.1, -2, 0}, {0, -2, -.1}},
+	}
+	room, err := RoomFromMesh(mesh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(room.FloorY) > 1e-6 || len(room.floor) != 2 {
+		t.Fatalf("wrong floor: height=%f triangles=%d", room.FloorY, len(room.floor))
+	}
+	// A ceiling without a floor must not become a usable room.
+	for i := 0; i < 2; i++ {
+		for j := range mesh[i] {
+			mesh[i][j].Y = 2
+		}
+	}
+	if _, err := RoomFromMesh(mesh); err == nil {
+		t.Fatal("ceiling accepted as floor")
+	}
+}
+
+func TestRoomFloorMergesHeightBinBoundaryWithoutInventingArea(t *testing.T) {
+	mesh := []Triangle{
+		{{0, .024, 0}, {1.2, .024, 0}, {0, .024, -1}},
+		{{1.2, .026, -1}, {0, .026, -1}, {1.2, .026, 0}},
+	}
+	y, err := roomFloorHeight(mesh)
+	if err != nil || math.Abs(y-.025) > 1e-6 {
+		t.Fatalf("floor across bin boundary: y=%f err=%v", y, err)
+	}
+	if _, err := roomFloorHeight(mesh[:1]); err == nil {
+		t.Fatal("undersized floor accepted")
+	}
+	if _, err := roomFloorHeight(nil); err == nil {
+		t.Fatal("missing floor accepted")
+	}
+}
+
+func TestRoomFloorAcceptsLevelToleranceWithoutLowestVertexCutoff(t *testing.T) {
+	// The normal passes the matcher's level tolerance, but both triangle
+	// centroids are more than 25 cm above the lowest corner.
+	mesh := []Triangle{
+		{{0, 0, 0}, {8, 1.2, 0}, {8, 1.2, -8}},
+		{{0, 0, 0}, {8, 1.2, -8}, {0, 0, -8}},
+	}
+	y, err := roomFloorHeight(mesh)
+	if err != nil || math.Abs(y-.4) > 1e-6 {
+		t.Fatalf("valid floor tolerance rejected: y=%f err=%v", y, err)
+	}
+}

@@ -338,7 +338,9 @@ final class SiteRobotMapModel: ObservableObject {
         selected = true; anchor = nil; lastPosition = nil; destination = nil; placing = true
     }
     func point(_ point: SitePoint, immediate: Bool) {
-        guard selected, point.isValid, handle != 0, !lensCalibrating else { return }
+        guard selected, point.isValid else { return }
+        guard handle != 0 else { error = "Reconnect Go2 before choosing a destination."; return }
+        guard !lensCalibrating else { error = "Finish camera lens calibration before choosing a destination."; return }
         if !candidates.isEmpty { error = "Confirm the suggested Go2 position before choosing a destination."; return }
         if placing {
             guard reading?.pose == true else { error = "Wait for a live pose before aligning Go2."; return }
@@ -736,18 +738,12 @@ struct SiteRobotRotationPrompt: ViewModifier {
     var onStart: () -> Void = {}
 
     func body(content: Content) -> some View {
-        content.alert("Rotate Go2 to find its position?", isPresented: Binding(
+        content.modifier(RobotSearchPrompt(presented: Binding(
             get: { enabled && model.showRotationPrompt },
             set: { if !$0 { model.dismissRotationPrompt() } }
-        )) {
-            Button("Start rotation") {
-                onStart()
-                model.startRotationSearch()
-            }.disabled(!model.canStartRotationSearch)
-            Button("Not now", role: .cancel) { model.dismissRotationPrompt() }
-        } message: {
-            Text("No reliable position match was found. Go2 will turn in 30° steps and retry matching after each turn. Keep Go2 in sight and its turning area clear.")
-        }
+        ), canStart: model.canStartRotationSearch, start: {
+            onStart(); model.startRotationSearch()
+        }, dismiss: model.dismissRotationPrompt))
     }
 }
 
@@ -777,13 +773,9 @@ struct SiteRobotSupervisionSummary: View {
             if let warning = model.reading?.controlWarning, !warning.isEmpty {
                 Text(warning).foregroundStyle(.orange)
             }
-            Text(model.reading?.arrivalTiming == true
-                 ? "Supervised · sensor age unverified. Keep Go2 in sight."
-                 : "Keep Go2 in sight and the route clear.")
-            if model.reading?.allowUnobservedFloor == true {
-                Text("Supervised navigation: unobserved floor allowed. Keep Go2 in sight and Stop within reach.")
-            } else if model.reading?.underBodyAllowance == true {
-                Text("Hidden-floor departure enabled. Check beneath Go2.")
+            Text(model.reading?.timing.supervisionMessage ?? "Keep Go2 in sight and the route clear.")
+            if let message = model.reading?.floorPolicy.supervisionMessage {
+                Text(message)
             }
         }.font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
@@ -792,29 +784,12 @@ struct SiteRobotSupervisionSummary: View {
 struct SiteRobotTimingControls: View {
     @ObservedObject var model: SiteRobotMapModel
     var body: some View {
-        Toggle("Supervised navigation through unobserved floor", isOn: Binding(
-            get: { model.reading?.allowUnobservedFloor ?? true },
-            set: { model.setAllowUnobservedFloor($0) }
-        )).font(.caption).disabled(model.reading == nil)
-        Text("Allows unobserved floor along the route. Detected obstacles, drops and lost telemetry still stop Go2. Unseen hazards cannot be ruled out; stay with Go2 and keep Stop within reach.")
-            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        Group {
-            Toggle("Allow hidden floor beneath Go2", isOn: Binding(
-                get: { model.reading?.underBodyAllowance ?? true },
-                set: { model.setUnderBodyAllowance($0) }
-            )).font(.caption).disabled(model.reading == nil)
-            Text("Allows departure when the floor beneath Go2 is hidden from its sensors. Check that it is level and clear. Detected obstacles and drops still block movement.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-        if model.reading?.timingUnavailable == true || model.reading?.arrivalTiming == true {
-            Toggle("Supervised arrival timing", isOn: Binding(
-                get: { model.reading?.arrivalTiming == true },
-                set: { model.setArrivalTiming($0) }
-            )).font(.caption)
-            Text(model.reading?.arrivalTiming == true
-                 ? "Uses live packet arrivals. Sensor capture age is unverified. Stay with Go2 and keep Stop within reach."
-                 : "This firmware rounds LiDAR timestamps. Supervised mode uses packet arrival times for this connection.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        SiteRobotSupervisionControls(timing: model.reading?.timing, floorPolicy: model.reading?.floorPolicy) { setting, enabled in
+            switch setting {
+            case .arrivalTiming: model.setArrivalTiming(enabled)
+            case .underBodyAllowance: model.setUnderBodyAllowance(enabled)
+            case .unobservedFloor: model.setAllowUnobservedFloor(enabled)
+            }
         }
     }
 }

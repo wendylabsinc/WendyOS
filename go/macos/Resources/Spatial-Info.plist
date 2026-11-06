@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Wendy</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Wendy site</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>dev.wendy.site</string>
+				<string>com.pixar.universal-scene-description-mobile</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Wendy discovers nearby devices.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_wendyos._udp</string>
+		<string>_wendyos._tcp</string>
+		<string>_wendy._tcp</string>
+		<string>_wendy-lite._tcp</string>
+		<string>_wendy-net._tcp</string>
+		<string>_wendy-net._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Wendy discovers and connects to nearby devices and robot gateways.</string>
+	<key>NSWorldSensingUsageDescription</key>
+	<string>Wendy anchors device labels and aligns your robot with your surroundings.</string>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Wendy site</string>
+			<key>UTTypeIdentifier</key>
+			<string>dev.wendy.site</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>wendysite</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>WendySharedKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)dev.wendy.shared-login</string>
+</dict>
+</plist>

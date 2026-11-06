@@ -1173,3 +1173,218 @@ do not feed robot navigation or collision avoidance.
 Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+
+## Android companion
+
+The native Android companion lives in [`../android`](../android/README.md). It
+shares this app's Go backend and has its own Kotlin/Compose UI and Android
+NSD, Bluetooth, camera and VPN adapters. Its README documents build instructions,
+validation and the remaining differences from the Apple apps.
+
+## Wendy for visionOS
+
+`WendySpatial.xcodeproj` is the native visionOS app. `spatial.yml` generates the
+project, independently of the desktop/iPhone schemes. It requires visionOS 26 or
+later, an Xcode installation with the visionOS SDK, XcodeGen, and the repository's
+Go toolchain. The bundled Go2 USDZ is stored in Git LFS. Install Git LFS, then
+fetch the model from the repository root before building:
+
+```sh
+git lfs install
+git lfs pull --include="go/macos/Resources/Spatial/Go2.usdz"
+```
+
+Build the simulator app with:
+
+```sh
+go/macos/Scripts/build-spatial.sh
+```
+
+Open `go/macos/WendySpatial.xcodeproj`, select the **WendySpatial** scheme, and
+choose Apple Vision Pro. For a physical headset, select your development team
+and enable signing. The unsigned simulator product is under
+`go/macos/Build/SpatialDerivedData/Build/Products/Debug-xrsimulator/`.
+
+The build uses the Go Apple mobile runtime with Clang's actual visionOS target
+and SDK. It embeds the existing Wendy backend, authenticated gateway connections,
+Go2 controller and H.264 decoder. It does not invoke a Mac companion process or
+require a headset main-camera enterprise entitlement. The shared color-frame
+value type is independent of SceneKit; the spatial renderer uses RealityKit.
+
+### Spatial workspace and Ask Wendy
+
+The workspace uses adaptive glass, warm action accents, native tabs and a bottom
+ornament for AR, tabletop and AI. A bundled, metric Go2 mesh previews the robot;
+this preview is explicitly a model, not a live observation. Its portal sits six
+points in front of the window glass to avoid coplanar flicker, with the nearest
+mesh surface 3 cm behind the portal. The preview reserves zero forward SwiftUI
+layout depth. The tabletop has its
+own floating zoom controls. Telemetry overlays reuse their RealityKit meshes and
+robot hierarchy between updates instead of rebuilding them at the polling rate.
+The mesh comes from the existing MuJoCo Menagerie Go2 assets; attribution and the
+BSD license ship in `Resources/Spatial`. Regenerate it with
+`swift Scripts/export-spatial-model.swift Resources` from `go/macos`.
+
+**Ask Wendy** opens a conversation beside the workspace and discovers models on
+the connected Wendy device through the existing chat backend. A reachable model
+service is required. Suggested questions fill the composer; sending is explicit.
+With spatial context enabled, each question captures an immutable snapshot of
+fresh robot state, alignment, available telemetry and your registered position
+in the twin, rounded to 10 cm. Stale readings are omitted. Replay questions use
+the recorded robot and sample time, excluding current room position and telemetry.
+Camera images and microphone audio are not sent. The context toggle controls
+new questions; previously sent snapshots remain in that conversation until it
+is cleared. Changing devices clears the conversation and model selection.
+
+AI mutation approval requests are declined by the visionOS client. Robot movement
+stays in the native preview, confirmation and stop controls. Read-only backend
+tools may obtain additional device observations. This is spatial context for a
+device-hosted language model, not autonomous scene recognition or a vision model.
+
+### Device overlays and robot calls
+
+Discover nearby devices, sign in for Cloud inventory, or enter a gateway
+selector/address. Select an already paired and connected Go2 from the gateway.
+Pairing remains in the Mac/iPhone app. Sign in separately on Vision Pro to
+connect to enrolled devices, including those discovered on the LAN. Discovery
+does not establish authentication. A signed-out TLS endpoint can report a gRPC
+server-preface EOF; the workspace offers sign-in and retries the selected device
+after authentication. Connection errors appear inline so they cannot block twin
+controls. Keychain login synchronization between Apple devices is not implemented.
+Connecting and selecting a robot do not
+issue movement commands. The Go2 camera appears beside the controls.
+
+Open **AR overlays** and allow World Sensing. **Place label** adds a named marker
+for a discovered device, including Wendy Lite microcontrollers. Drag its blue
+marker onto the physical device. Labels are manual, session-local placements,
+not visual object recognition. The connected device's label shows available
+resource measurements; missing or old telemetry is explicitly unavailable.
+Labels do not automatically follow a microcontroller moved after placement.
+
+With Go2 selected, look around until Vision Pro detects a level floor and at
+least two walls. The app passively matches Go2's live LiDAR against those
+headset surfaces, without needing an imported twin. If matching fails, or robot
+landmarks remain sparse for five seconds, the shared **Start rotation** popup
+appears. **Find Go2 in this room** can open it again. Accepting the popup arms
+up to twelve checked 30-degree turns; each completed turn is followed by another
+match. Stop, tracking loss, a new robot connection or a new AR frame cancels the
+search. A suggested position appears in AR and requires **Confirm robot
+position** before it can be used for movement. Headset plane extents are only
+localization references; Go2's live LiDAR still determines navigation clearance.
+
+For manual placement, select **Align in AR**. With the robot stationary, select the detected
+floor beneath the centre of its body and a second floor point 30 cm to 2 m
+directly in front of its nose. Confirm the displayed alignment. Live odometry
+then positions its status card, route and obstacle overlays in the anchored AR
+frame. This is manual registration, not automatic robot identification.
+
+**Come here** computes a destination on the robot's floor, 1.5 m short of the
+wearer's position on the robot's side. The controller must accept a route preview
+before **Confirm call** can start movement. Previews expire after five seconds
+or 30 cm of wearer movement, and only work within 10 m of the robot. The app
+stops an active call on tracking loss, app inactivity or wearer movement beyond
+30 cm. Stop remains available in the window and robot overlay. The existing
+controller's UI lease, sensor freshness checks, command sequence ordering and
+agent-side motion expiry also apply. A controller-side 1 m exclusion radius
+around the confirmed wearer position checks every route segment, detour and
+braking horizon; it can stop the robot before the nominal destination. Mac,
+iPhone, and Vision Pro share the robot connection, floor-policy controls and
+arrival-timing controls. All use the backend's supervised defaults for rounded
+LiDAR timestamps, hidden floor beneath Go2 and unobserved floor along the route.
+Sensor capture age is shown as unverified. Detected obstacles and drops still
+block movement on every platform.
+
+A software stop request is not proof of a physical stop. Failed stop confirmation
+remains a controller warning and blocks replacement movement. Physical alignment
+accuracy, radio/network behaviour and navigation performance require supervised
+headset-and-robot validation; simulator and unit tests do not establish them.
+
+### Locate yourself inside a digital twin
+
+Import a `.wendysite` archive or self-contained USDZ and open **Tabletop**.
+Archive metre scale and saved manual camera positions are retained. The v2
+visual reference map is not used for headset localization. Imports never
+establish free space for navigation.
+
+With AR overlays active, choose **Locate me in this twin**. Select a recognizable
+floor point in the tabletop model, then its matching position on the detected
+real floor. Repeat with a second point at least one metre away and confirm room
+alignment. The two baselines must agree within 10 cm or 5%; the app never fits
+an arbitrary scale to make mismatched points agree.
+
+This establishes a rigid translation/yaw transform between ARKit's anchored
+coordinate frame and the model's metre coordinates. Inside-out headset tracking
+then drives the cyan **You** marker, height indicator and facing direction in
+the twin. A separately aligned Go2 and its live observations use that same room
+transform. Tabletop display scaling does not affect any motion calculation.
+Tracking loss hides live overlays and invalidates registration. Room changes,
+model replacement and a new AR session require alignment again. Initial
+registration is manual; automatic matching against a previously scanned room
+and cross-session persistence are not implemented.
+
+### Capture a room on Vision Pro
+
+In **Space**, choose **Scan room**, allow World Sensing and look around slowly.
+Cyan surfaces show captured geometry. **Pause** stops capture; **Save twin**
+creates a metric USDZ and a shareable `.wendysite` archive. The tabletop opens
+after saving. Capture includes visible mesh surfaces, without camera photos,
+RoomPlan semantics or photo textures. It is bounded to 300,000 triangles and
+1,024 mesh anchors. Starting another scan clears the previous capture.
+
+A scan saved during uninterrupted tracking shares the current anchored AR frame,
+so the wearer marker is aligned immediately. Interrupted scans and imported twins
+need manual **Locate me** alignment. Geometry and room metadata survive app
+relaunch; alignment does not. Scans never establish navigable free space.
+
+### Share a login through iCloud Keychain
+
+On Mac or iPhone, open **Settings > Accounts > iCloud Keychain > Share login**.
+On Vision Pro, open **Connect > Use shared login**. Both devices need iCloud
+Passwords & Keychain enabled under the same Apple Account. All apps must be signed
+with the same team and the `dev.wendy.shared-login` Keychain access group. Signing
+profiles must allow it; unsigned builds cannot verify cross-device sharing.
+
+Sharing is explicit. The snapshot includes current client certificates and their
+private keys, plus an expiring access token and its DPoP key when available.
+Rotating refresh tokens, service-account credentials, Lite credentials and
+machine-specific registry keys are excluded. Import is allowed for at most
+24 hours and only while every included credential is valid. Imported certificates
+retain their original expiry; this is not a new server-issued session or a
+revocation mechanism. Share again when necessary or sign in separately for an
+independently refreshing session. Existing local accounts for the same cloud
+are never overwritten. Disconnect before importing a shared account.
+
+**Remove shared login** deletes the synchronizable Keychain entry. It does not
+revoke copies already imported on other devices. Cross-device synchronization
+and physical room sensing require validation with the user's Apple devices.
+
+### Spatial observation replay
+
+**Record observations** captures up to 1,800 samples, approximately three
+minutes, of robot pose, route, obstacle previews and controller messages.
+**Replay** stops live movement and opens these samples in the tabletop. The
+slider scrubs observations; Export/Share writes a bounded JSON recording, and
+Import opens it again. Replay never sends robot commands and is presented in its
+recorded coordinate frame, separately from any currently imported twin.
+
+This first spatial recorder does not import Wendy Data episodes, record camera
+video, or reconstruct ROS TF trees. Obstacle/route previews are bounded and do
+not represent complete sensor recordings. Live Go2 video remains available
+outside replay. Full episode playback stays in the desktop Data viewer.
+
+### Validation
+
+```sh
+cd go/macos
+xcodegen generate --spec spatial.yml
+xcodebuild -project WendySpatial.xcodeproj -scheme WendySpatial \
+  -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=26.0' \
+  -derivedDataPath Build/SpatialDerivedData CODE_SIGNING_ALLOWED=NO test
+```
+
+`VisionTests` covers summon distance and floor validation, coordinate headings,
+room registration and inverse transforms, changed frames/devices, stale
+observations, replay motion exclusion, preview expiry and recording validation.
+The AR tracking providers need a physical Vision Pro; Simulator can inspect
+imported models, recordings, discovery and connection UI. Hardware tracking and
+physical movement have not been verified as part of this implementation.
