@@ -416,12 +416,26 @@ private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = fa
         #expect(await robot.searches.count == 1)
         #expect(await robot.turns.isEmpty)
         model.offerRotationRetry()
-        #expect(model.showRotationPrompt)
-        model.startRotationSearch()
+        #expect(!model.showRotationPrompt)
         for _ in 0..<100 {
             if await robot.searches.count == 2 { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(await robot.searches.count == 2)
+    }
+}
+
+@MainActor @Test func liveRobotAutomaticallyStartsOneLinuxSearchWithoutPrompt() async throws {
+    try await withRotationModel { model, robot in
+        for _ in 0..<200 {
+            if await robot.searches.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await robot.searches.count == 1)
+        #expect(!model.showRotationPrompt)
+        #expect(await robot.turns.isEmpty)
+        model.stop()
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await robot.searches.count == 1)
     }
 }
