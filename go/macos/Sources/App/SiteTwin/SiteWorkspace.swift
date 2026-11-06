@@ -156,7 +156,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     public var body: some View {
         VStack(spacing: 0) {
             if loading {
-                ProgressView("Opening Sites…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView("Preparing Digital Twin on the device…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loadError {
                 ContentUnavailableView {
                     Label("Couldn’t Open Sites", systemImage: "exclamationmark.triangle")

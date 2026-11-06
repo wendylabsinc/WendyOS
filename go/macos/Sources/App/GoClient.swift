@@ -122,7 +122,14 @@ final class GoClient: Sendable {
     func openApp(_ app: String, session: UInt64) async throws -> URL {
         try await perform {
             try Self.withCString(app) {
-                guard let result = WDOpenApp($0, session) else { throw WendyError(message: "Missing app URL result.") }
+                let opened: UnsafeMutablePointer<WDOpenAppResult>?
+                if app == "dev.wendy.digital-twin" {
+                    guard let bundle = Bundle.main.resourceURL?.appendingPathComponent("DigitalTwin") else {
+                        throw WendyError(message: "This app is missing its Digital Twin service.")
+                    }
+                    opened = try Self.withCString(bundle.path) { WDOpenTwin(session, $0) }
+                } else { opened = WDOpenApp($0, session) }
+                guard let result = opened else { throw WendyError(message: "Missing app URL result.") }
                 defer { WDOpenAppFree(result) }
                 try Self.check(result.pointee.status)
                 guard let url = URL(string: Self.string(result.pointee.url)), url.scheme == "http", url.host != nil else {

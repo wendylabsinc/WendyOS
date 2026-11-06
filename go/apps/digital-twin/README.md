@@ -6,16 +6,22 @@ macOS and iOS connect through the selected gateway's authenticated app transport
 They render snapshots, contribute scans and camera observations, and send user
 intent. There is no fallback to a locally running robot engine.
 
-The app binds `127.0.0.1:8791`. Its `http` entitlement lets the gateway expose it
-through authenticated app forwarding. Do not publish this port directly to a LAN.
+The app binds `127.0.0.1:8791`. Its `http` entitlement declares the service
+port. Apple clients reach it through authenticated container exec, using the
+bundled binary’s fixed `--proxy` mode to forward bytes to that loopback listener. Do not publish this port directly to a LAN.
 The `admin` entitlement gives this trusted app access to the agent's local gRPC
 socket through `WENDY_AGENT_SOCKET`. The `persist` entitlement mounts the named
 `dev.wendy.digital-twin` volume at `/data`. Executables stay in the image.
 
 ## Deploy
 
-Prepare a standalone build context from this checkout, then deploy that directory
-with the Wendy CLI or the MCP `run` tool:
+Opening Digital Twin in the macOS or iOS app automatically installs the bundled
+Linux service on the selected device, starts it when stopped, and waits for its
+health endpoint. App updates replace the service version while preserving its
+named room-data volume. ARM64 and x86-64 bundles ship with the Apple app; no
+separate CLI or registry download is required.
+
+For standalone deployment, prepare a build context and use the Wendy CLI or MCP:
 
 ```sh
 ./go/apps/digital-twin/prepare.sh /tmp/wendy-digital-twin-project

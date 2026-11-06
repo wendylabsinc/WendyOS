@@ -96,6 +96,9 @@ targets:
         name: Build Go libraries and bundled CLI
         basedOnDependencyAnalysis: false
     postBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/bundle-twin.py"
+        name: Bundle Linux Digital Twin
+        basedOnDependencyAnalysis: false
       - path: Scripts/embed-cli.sh
         name: Embed CLI worker
         basedOnDependencyAnalysis: false
@@ -219,6 +222,10 @@ targets:
         basedOnDependencyAnalysis: false
       - path: Scripts/build-ios-go.sh
         name: Build embedded Go backend for iOS
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/bundle-twin.py"
+        name: Bundle Linux Digital Twin
         basedOnDependencyAnalysis: false
   WendyMobileNetwork:
     type: app-extension
