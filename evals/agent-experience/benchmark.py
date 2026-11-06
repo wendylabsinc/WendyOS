@@ -567,6 +567,15 @@ def scored(row):
     return True
 
 
+def write_model_report(output):
+    """Refresh report.md and report.json. A failure here must never stop the pass."""
+    try:
+        import model_report  # imported here: model_report imports this module
+        model_report.write_report([output], output)
+    except Exception as error:
+        print(f"Warning: could not write the model report: {error}", file=sys.stderr)
+
+
 def model_server_healthy(config, timeout=5):
     """True or False when the config names a health URL for the model server, else None (unknown)."""
     url = config.get("model_health_url")
@@ -1336,6 +1345,7 @@ def main():
                 print(message)
                 if on_disposable:
                     dump(output / "halt.json", {"reason": message})
+                    write_model_report(output)
                     return 3
                 return 2
             board["capabilities"] = capabilities
@@ -1375,6 +1385,7 @@ def main():
             message = f"Could not read the apps on the device before the pass: {error}"
             print(message)
             dump(output / "halt.json", {"reason": message})
+            write_model_report(output)
             return 3
     snapshot["run_vms"] = {p: {"name": v["name"], "device": v["device"]} for p, v in run_vms.items()}
     snapshot["unprepared_run_vms"] = unprepared
@@ -1397,6 +1408,8 @@ def main():
         # Recovered rows may have emptied the plan, so the loop below would never refresh these.
         report(rows, output)
         dump(output / "coverage.json", coverage_results(coverage, rows, agents, args.repetitions))
+        if on_disposable:
+            write_model_report(output)
     if on_disposable and not first:
         # The interrupted attempt may have left an app or a held port; clear them before the first attempt
         # so that failure isn't scored against the model.
@@ -1436,6 +1449,8 @@ def main():
                 f.write(json.dumps(row) + "\n")
             report(rows, output)
             dump(output / "coverage.json", coverage_results(coverage, rows, agents, args.repetitions))
+            if on_disposable:
+                write_model_report(output)
             reason = stop_reason(row, config)
             if reason is None and on_disposable and sweep_failures >= 2:
                 reason = "The app sweep failed twice running; stopping before more leftovers pile up."
@@ -1452,6 +1467,7 @@ def main():
             remove_run_vms()
     if halt:
         dump(output / "halt.json", {"reason": halt})
+        write_model_report(output)
     print(f"Results: {output / 'summary.md'}")
     if halt:
         return 3
