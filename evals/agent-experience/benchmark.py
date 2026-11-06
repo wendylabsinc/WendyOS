@@ -1071,7 +1071,11 @@ def main():
             capabilities, evidence = sc.detect_board(wendy, board)
             dump(output / f"capabilities-{name}.json", evidence)
             if capabilities is None:
-                print(f"Could not read the capabilities of {name} ({board['device']}); see {output / f'capabilities-{name}.json'}.")
+                message = f"Could not read the capabilities of {name} ({board['device']}); see {output / f'capabilities-{name}.json'}."
+                print(message)
+                if on_disposable:
+                    dump(output / "halt.json", {"reason": message})
+                    return 3
                 return 2
             board["capabilities"] = capabilities
             print(f"{name} capabilities: {', '.join(capabilities) or 'none of wifi, bluetooth, camera'}")
@@ -1107,8 +1111,10 @@ def main():
             baseline = sweep_env_run(lambda env: sc.baseline_apps(output / "baseline_apps.json", wendy, env))
         except sc.SWEEP_ERRORS as error:
             remove_run_vms()
-            print(f"Could not read the apps on the device before the pass: {error}")
-            return 2
+            message = f"Could not read the apps on the device before the pass: {error}"
+            print(message)
+            dump(output / "halt.json", {"reason": message})
+            return 3
     snapshot["run_vms"] = {p: {"name": v["name"], "device": v["device"]} for p, v in run_vms.items()}
     snapshot["unprepared_run_vms"] = unprepared
     dump(output / "manifest.json", snapshot)

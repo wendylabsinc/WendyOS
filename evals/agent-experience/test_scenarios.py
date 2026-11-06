@@ -904,7 +904,7 @@ class ExecuteTests(unittest.TestCase):
                                                    "--output", str(self.root / "results"), "--wendy", FAKE, *argv]),
                    mock.patch.object(b, "require_state_isolation"),
                    mock.patch("preflight.check_host", return_value=list(failures)),
-                   mock.patch.object(sc, "detect_board", return_value=(list(capabilities), {"capabilities": capabilities})),
+                   mock.patch.object(sc, "detect_board", return_value=((list(capabilities) if capabilities is not None else None), {"capabilities": capabilities})),
                    mock.patch.object(sc, "prepare_run_vm", side_effect=prepare),
                    mock.patch.object(sc, "remove_run_vm", side_effect=self.remove),
                    mock.patch.object(sc, "vm_snapshot", **({"side_effect": snapshots} if snapshots else {"return_value": []})),
@@ -946,9 +946,9 @@ class ExecuteTests(unittest.TestCase):
         coverage = json.loads((output / "coverage.json").read_text())
         self.assertEqual({(c["task"], c["status"]) for c in coverage}, {("probe", "ready"), ("wifi", "ready")})
 
-    def disposable_main(self, *argv, flag=True, sweeps=None, baseline=("old",), **kwargs):
+    def disposable_main(self, *argv, flag=True, sweeps=None, baseline=("old",), list_error=None, **kwargs):
         """A scenario pass on the local target with the agent socket set; sweeps are the sweep_apps results in order."""
-        self.config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
+        self.config["targets"].setdefault("local", dict(LOCAL_TARGET, capabilities=[]))
         if flag:
             self.config["disposable_device"] = True
         self.scenarios.write_text(json.dumps([dict(MINIMAL, environments=["local"])]))
@@ -960,7 +960,7 @@ class ExecuteTests(unittest.TestCase):
             return next(results, ok)
         with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}), \
                 mock.patch.object(sc, "sweep_apps", side_effect=sweep), \
-                mock.patch.object(sc, "list_apps", return_value=list(baseline)):
+                mock.patch.object(sc, "list_apps", **({"side_effect": list_error} if list_error else {"return_value": list(baseline)})):
             code, text = self.main("--scenario", "probe", "--target", "local", "--execute", *argv, **kwargs)
         outputs = list((self.root / "results").iterdir()) if (self.root / "results").exists() else []
         output = outputs[0] if outputs else None
@@ -1008,6 +1008,25 @@ class ExecuteTests(unittest.TestCase):
         ok = {"removed": [], "failed": [], "list_error": None}
         code, text, output = self.disposable_main("--repetitions", "4", sweeps=[bad, ok, bad])
         self.assertEqual(len((output / "results.jsonl").read_text().splitlines()), 4)
+        self.assertFalse((output / "halt.json").exists())
+
+    def test_an_unreadable_app_list_at_start_halts_with_a_reason(self):
+        code, text, output = self.disposable_main("--repetitions", "1", list_error=RuntimeError("agent unreachable"))
+        self.assertEqual(code, 3)
+        reason = json.loads((output / "halt.json").read_text())["reason"]
+        self.assertIn("agent unreachable", reason)
+        self.assertFalse((output / "results.jsonl").exists())
+
+    def test_unreadable_capabilities_halt_a_disposable_pass_with_a_reason(self):
+        self.config["targets"]["local"] = dict(LOCAL_TARGET)  # capabilities None: read under --execute
+        code, text, output = self.disposable_main("--repetitions", "1", capabilities=None)
+        self.assertEqual(code, 3, text)
+        self.assertIn("Could not read the capabilities of local", json.loads((output / "halt.json").read_text())["reason"])
+
+    def test_unreadable_capabilities_on_a_laptop_still_return_2_without_halt_json(self):
+        self.config["targets"]["local"] = dict(LOCAL_TARGET)
+        code, text, output = self.disposable_main("--repetitions", "1", flag=False, capabilities=None)
+        self.assertEqual(code, 2, text)
         self.assertFalse((output / "halt.json").exists())
 
     def test_a_laptop_still_stops_on_failed_cleanup(self):
