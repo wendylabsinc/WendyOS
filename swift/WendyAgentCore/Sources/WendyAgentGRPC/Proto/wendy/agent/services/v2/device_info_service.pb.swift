@@ -208,6 +208,96 @@ public nonisolated struct Wendy_Agent_Services_V2_GetDeviceInfoResponse: @unchec
     set {_uniqueStorage()._gpuCapabilities = newValue}
   }
 
+  /// Runtimes an app can use on the NPU (e.g. "qnn" for the Qualcomm Hexagon
+  /// reached over FastRPC). Only populated when has_npu is true; empty when the
+  /// vendor's runtime is unrecognized, or on agents predating this field.
+  public var npuBackends: [String] {
+    get {_storage._npuBackends}
+    set {_uniqueStorage()._npuBackends = newValue}
+  }
+
+  /// Board model from /proc/device-tree/model (e.g. "NVIDIA Jetson AGX Orin
+  /// Developer Kit"). May be empty: hosts without a device tree (x86, macOS)
+  /// and agents predating this field.
+  public var boardModel: String {
+    get {_storage._boardModel ?? String()}
+    set {_uniqueStorage()._boardModel = newValue}
+  }
+  /// Returns true if `boardModel` has been explicitly set.
+  public var hasBoardModel: Bool {_storage._boardModel != nil}
+  /// Clears the value of `boardModel`. Subsequent reads from it will return its default value.
+  public mutating func clearBoardModel() {_uniqueStorage()._boardModel = nil}
+
+  /// Device-tree compatible strings from /proc/device-tree/compatible, most
+  /// specific first; the last entry names the SoC (e.g. "nvidia,tegra264" on
+  /// Jetson Thor). May be empty, as board_model.
+  public var socCompatible: [String] {
+    get {_storage._socCompatible}
+    set {_uniqueStorage()._socCompatible = newValue}
+  }
+
+  /// Board serial number from /proc/device-tree/serial-number. May be empty:
+  /// many boards do not publish one.
+  public var serialNumber: String {
+    get {_storage._serialNumber ?? String()}
+    set {_uniqueStorage()._serialNumber = newValue}
+  }
+  /// Returns true if `serialNumber` has been explicitly set.
+  public var hasSerialNumber: Bool {_storage._serialNumber != nil}
+  /// Clears the value of `serialNumber`. Subsequent reads from it will return its default value.
+  public mutating func clearSerialNumber() {_uniqueStorage()._serialNumber = nil}
+
+  /// Running kernel release, from /proc/sys/kernel/osrelease (uname -r). May
+  /// be empty on non-Linux hosts.
+  public var kernelVersion: String {
+    get {_storage._kernelVersion ?? String()}
+    set {_uniqueStorage()._kernelVersion = newValue}
+  }
+  /// Returns true if `kernelVersion` has been explicitly set.
+  public var hasKernelVersion: Bool {_storage._kernelVersion != nil}
+  /// Clears the value of `kernelVersion`. Subsequent reads from it will return its default value.
+  public mutating func clearKernelVersion() {_uniqueStorage()._kernelVersion = nil}
+
+  /// Seconds since boot, from /proc/uptime. May be empty on non-Linux hosts.
+  public var uptimeSeconds: UInt64 {
+    get {_storage._uptimeSeconds ?? 0}
+    set {_uniqueStorage()._uptimeSeconds = newValue}
+  }
+  /// Returns true if `uptimeSeconds` has been explicitly set.
+  public var hasUptimeSeconds: Bool {_storage._uptimeSeconds != nil}
+  /// Clears the value of `uptimeSeconds`. Subsequent reads from it will return its default value.
+  public mutating func clearUptimeSeconds() {_uniqueStorage()._uptimeSeconds = nil}
+
+  /// MAC address (aa:bb:cc:dd:ee:ff) of the first up, non-virtual interface
+  /// with a routable address. May be empty when no such interface exists.
+  public var primaryMac: String {
+    get {_storage._primaryMac ?? String()}
+    set {_uniqueStorage()._primaryMac = newValue}
+  }
+  /// Returns true if `primaryMac` has been explicitly set.
+  public var hasPrimaryMac: Bool {_storage._primaryMac != nil}
+  /// Clears the value of `primaryMac`. Subsequent reads from it will return its default value.
+  public mutating func clearPrimaryMac() {_uniqueStorage()._primaryMac = nil}
+
+  /// Routable IPv4/IPv6 addresses of every up, non-virtual interface, without
+  /// a prefix suffix. May be empty.
+  public var ipAddresses: [String] {
+    get {_storage._ipAddresses}
+    set {_uniqueStorage()._ipAddresses = newValue}
+  }
+
+  /// Raw L4T version ("38.2.1") parsed from /etc/nv_tegra_release, unmapped,
+  /// so a reader need not rely on the agent's L4T-to-JetPack table. May be
+  /// empty: non-Jetson hosts and L4T releases without that file.
+  public var l4TVersion: String {
+    get {_storage._l4TVersion ?? String()}
+    set {_uniqueStorage()._l4TVersion = newValue}
+  }
+  /// Returns true if `l4TVersion` has been explicitly set.
+  public var hasL4TVersion: Bool {_storage._l4TVersion != nil}
+  /// Clears the value of `l4TVersion`. Subsequent reads from it will return its default value.
+  public mutating func clearL4TVersion() {_uniqueStorage()._l4TVersion = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -298,9 +388,9 @@ public nonisolated struct Wendy_Agent_Services_V2_GpuCapabilities: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Host compute backends usable on this GPU: cuda, rocm, metal, or qnn (the
-  /// Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing). Empty when
-  /// the GPU is present but no supported backend was detected.
+  /// Host compute backends usable on this GPU: cuda, rocm, or metal. Empty when
+  /// the GPU is present but no supported backend was detected. An on-SoC neural
+  /// accelerator is not a GPU backend; see npu_backends.
   public var computeBackends: [String] = []
 
   /// GPU vendor (nvidia, amd, intel, apple, broadcom, arm, qualcomm, vivante,
@@ -341,7 +431,7 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoRequest: SwiftProtobu
 
 nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetDeviceInfoResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}board_model\0\u{3}soc_compatible\0\u{3}serial_number\0\u{3}kernel_version\0\u{3}uptime_seconds\0\u{3}primary_mac\0\u{3}ip_addresses\0\u{3}l4t_version\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -365,6 +455,15 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtob
     var _npuVendor: String? = nil
     var _containerStorage: Wendy_Agent_Services_V2_DiskPartition? = nil
     var _gpuCapabilities: [Wendy_Agent_Services_V2_GpuCapabilities] = []
+    var _npuBackends: [String] = []
+    var _boardModel: String? = nil
+    var _socCompatible: [String] = []
+    var _serialNumber: String? = nil
+    var _kernelVersion: String? = nil
+    var _uptimeSeconds: UInt64? = nil
+    var _primaryMac: String? = nil
+    var _ipAddresses: [String] = []
+    var _l4TVersion: String? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -396,6 +495,15 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtob
       _npuVendor = source._npuVendor
       _containerStorage = source._containerStorage
       _gpuCapabilities = source._gpuCapabilities
+      _npuBackends = source._npuBackends
+      _boardModel = source._boardModel
+      _socCompatible = source._socCompatible
+      _serialNumber = source._serialNumber
+      _kernelVersion = source._kernelVersion
+      _uptimeSeconds = source._uptimeSeconds
+      _primaryMac = source._primaryMac
+      _ipAddresses = source._ipAddresses
+      _l4TVersion = source._l4TVersion
     }
   }
 
@@ -435,6 +543,15 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtob
         case 19: try { try decoder.decodeSingularStringField(value: &_storage._npuVendor) }()
         case 20: try { try decoder.decodeSingularMessageField(value: &_storage._containerStorage) }()
         case 21: try { try decoder.decodeRepeatedMessageField(value: &_storage._gpuCapabilities) }()
+        case 22: try { try decoder.decodeRepeatedStringField(value: &_storage._npuBackends) }()
+        case 23: try { try decoder.decodeSingularStringField(value: &_storage._boardModel) }()
+        case 24: try { try decoder.decodeRepeatedStringField(value: &_storage._socCompatible) }()
+        case 25: try { try decoder.decodeSingularStringField(value: &_storage._serialNumber) }()
+        case 26: try { try decoder.decodeSingularStringField(value: &_storage._kernelVersion) }()
+        case 27: try { try decoder.decodeSingularUInt64Field(value: &_storage._uptimeSeconds) }()
+        case 28: try { try decoder.decodeSingularStringField(value: &_storage._primaryMac) }()
+        case 29: try { try decoder.decodeRepeatedStringField(value: &_storage._ipAddresses) }()
+        case 30: try { try decoder.decodeSingularStringField(value: &_storage._l4TVersion) }()
         default: break
         }
       }
@@ -510,6 +627,33 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtob
       if !_storage._gpuCapabilities.isEmpty {
         try visitor.visitRepeatedMessageField(value: _storage._gpuCapabilities, fieldNumber: 21)
       }
+      if !_storage._npuBackends.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._npuBackends, fieldNumber: 22)
+      }
+      try { if let v = _storage._boardModel {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 23)
+      } }()
+      if !_storage._socCompatible.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._socCompatible, fieldNumber: 24)
+      }
+      try { if let v = _storage._serialNumber {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 25)
+      } }()
+      try { if let v = _storage._kernelVersion {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 26)
+      } }()
+      try { if let v = _storage._uptimeSeconds {
+        try visitor.visitSingularUInt64Field(value: v, fieldNumber: 27)
+      } }()
+      try { if let v = _storage._primaryMac {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 28)
+      } }()
+      if !_storage._ipAddresses.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._ipAddresses, fieldNumber: 29)
+      }
+      try { if let v = _storage._l4TVersion {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 30)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -540,6 +684,15 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtob
         if _storage._npuVendor != rhs_storage._npuVendor {return false}
         if _storage._containerStorage != rhs_storage._containerStorage {return false}
         if _storage._gpuCapabilities != rhs_storage._gpuCapabilities {return false}
+        if _storage._npuBackends != rhs_storage._npuBackends {return false}
+        if _storage._boardModel != rhs_storage._boardModel {return false}
+        if _storage._socCompatible != rhs_storage._socCompatible {return false}
+        if _storage._serialNumber != rhs_storage._serialNumber {return false}
+        if _storage._kernelVersion != rhs_storage._kernelVersion {return false}
+        if _storage._uptimeSeconds != rhs_storage._uptimeSeconds {return false}
+        if _storage._primaryMac != rhs_storage._primaryMac {return false}
+        if _storage._ipAddresses != rhs_storage._ipAddresses {return false}
+        if _storage._l4TVersion != rhs_storage._l4TVersion {return false}
         return true
       }
       if !storagesAreEqual {return false}
