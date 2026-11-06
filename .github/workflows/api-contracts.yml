@@ -1,0 +1,91 @@
+name: API Contracts
+
+# Required contexts must be reported for every ordinary PR, including docs-only
+# changes and deletions. Keep this workflow free of path filters and job skips.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+concurrency:
+  group: api-contracts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shared-grpc-api-contracts:
+    name: Shared gRPC API contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          version: '1.75.0'
+          setup_only: true
+          pr_comment: false
+      - uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0
+        with:
+          version: '34.0'
+          repo-token: ${{ github.token }}
+      - name: Install pinned Go generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+      - name: Check shared gRPC API contracts
+        run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
+
+  shared-grpc-api-contracts-swift:
+    name: Shared gRPC API contracts (Swift)
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: '26.3'
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          version: '1.75.0'
+          setup_only: true
+          pr_comment: false
+      - uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0
+        with:
+          version: '34.0'
+          repo-token: ${{ github.token }}
+      - name: Check shared gRPC API contracts
+        run: bash swift/Scripts/GenerateProto.sh --check-shared-grpc-api-contracts
+
+  agent-api-contracts:
+    name: Agent API breaking changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          version: '1.75.0'
+          setup_only: true
+          pr_comment: false
+      - name: Check Agent API against main
+        env:
+          # PRs compare to the target main snapshot; pushes compare to the
+          # previous main tree, never to the already-updated origin/main.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash .github/scripts/check-agent-api-contracts.sh "$BASE_SHA"
