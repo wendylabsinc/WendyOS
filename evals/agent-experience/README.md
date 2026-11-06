@@ -456,6 +456,55 @@ On a host without `docker buildx` (or without the ARM64 agent), every robotics
 scenario (`ros-topics`, `ros-rate`, `ros-sample`, `ros-lidar`, `ros-endpoints`) is
 also reported with `robot VM prerequisites missing: docker buildx`.
 
+## On a Jetson with a local model
+
+`wendy.json`, `Dockerfile` and `on_device.py` package the benchmark as a Wendy app,
+`sh.wendy.evals.model-tool-report`. One container fetches a pinned model, serves it
+with llama-server on the GPU, has `wendy chat` drive that model against the same
+device over the admin socket, and writes the report to the device. There is no laptop
+model, no upload and no remote fallback.
+
+Deploy from this directory on a spare Thor (the device is expected to break):
+
+```sh
+sh evals/agent-experience/stage-on-device.sh   # from the repo root: wendy for linux/arm64 + the skills
+cd evals/agent-experience
+EVAL_MODEL=qwen3.8-flash-next wendy run --device <thor>
+```
+
+`stage-on-device.sh` needs Docker, stops under 6 GiB of free disk, and keeps the Go
+module cache in the `wendy-evals-gomod` volume. It prunes nothing.
+
+The first start downloads the model into the `/models` volume, checking each file's
+SHA-256 (Flash is 102 GB, so a slow link takes hours; the download resumes).
+Settings are environment variables: `EVAL_MODEL` (default `qwen3.8-flash-next`),
+`EVAL_REPETITIONS` (1), `EVAL_PASS` (1), `EVAL_CONTEXT` (overrides the pin's context)
+and `EVAL_LIMIT` (run only the first N attempts). A pass refuses to start, and leaves
+the reason in `/results/last-error.txt`, when memory is short, the download fails,
+`wendy chat` sends a tool nobody can explain, or its baseline prompt takes more than
+half the context.
+
+Read the report once an attempt has finished; it is rewritten after every attempt:
+
+```sh
+wendy device attach sh.wendy.evals.model-tool-report -- cat /results/latest/report.md
+wendy device attach sh.wendy.evals.model-tool-report -- cat /results/last-error.txt
+```
+
+Stop and resume: `wendy device apps stop sh.wendy.evals.model-tool-report` gives the
+GPU back. Starting it again, or a reboot, resumes a pass that was halted or cut off.
+A pass whose `pass.json` says `finished` is not rerun. A new model, a new CLI commit
+or a new `EVAL_PASS` starts a new pass directory under `/results`.
+
+Switch models by setting `EVAL_MODEL` to a key in `models.json` (`qwen3.8-flash-next`
+or `qwen3-coder-30b-a3b`) and redeploying. Adding a model means adding a pin with its
+repo, revision, file sizes and SHA-256s.
+
+Accepted risks: the device is disposable, and a reflash loses the report. The
+container is root with the admin socket, so a model can bypass the shim and proxy;
+they record and fake normal calls but are not a safety boundary here. The results
+describe how a local model copes with Wendy, not how Claude Code or Codex would.
+
 ## Comparing a branch
 
 Compare a candidate branch against `main` with the same agents, models and

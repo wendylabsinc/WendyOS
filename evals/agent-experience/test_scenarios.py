@@ -642,6 +642,7 @@ def rescored_outcome(output, config, scenarios):
     return json.loads((out / "results.jsonl").read_text().splitlines()[0])["tool_choice"]["outcome"]
 
 
+HEALTH_URL = "http://127.0.0.1:9/health"  # a disposable config must name one; nothing listens here
 LOCAL_TARGET = {"kind": "local", "device": "local", "prompt_device": "this device", "canned_dir": "canned-local",
                 "capabilities": None, "fixtures": {}}
 LOCAL_SCENARIOS = {
@@ -792,7 +793,7 @@ class LocalTaskTests(unittest.TestCase):
         target = dict(LOCAL_TARGET, capabilities=[]) if local else {"kind": "simulator", "device": "vm:x"}
         config = {"agents": {"fake": {"adapter": "wendy", "model": "fixture",
                                       "command": ["{wendy}", "chat", "--json", "--prompt", "{prompt}"]}},
-                  "targets": {"t": target}, "disposable_device": True, "isolate_device_state": False}
+                  "targets": {"t": target}, "disposable_device": True, "model_health_url": HEALTH_URL, "isolate_device_state": False}
         if context:
             config["environment_context"] = context
         with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock", **extra.pop("env", {})}):
@@ -832,7 +833,7 @@ class LocalTaskTests(unittest.TestCase):
         config = {"agents": {"fake": {"adapter": "wendy", "model": "fixture", "command": [sys.executable, "-c", code]}},
                   "targets": {"t": target}, "isolate_device_state": False}
         if disposable:
-            config["disposable_device"] = True
+            config.update(disposable_device=True, model_health_url=HEALTH_URL)
         kwargs = {"shim": str(self.shim), "tools_path": self.root / "tools.json"} if local else {}
         with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"} if disposable else {}):
             row = b.trial(config, "fake", "t", task, self.out, FAKE, **kwargs)
@@ -1036,7 +1037,7 @@ class MainTests(unittest.TestCase):
         config = json.loads(self.config.read_text())
         config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
         if disposable:
-            config["disposable_device"] = True
+            config.update(disposable_device=True, model_health_url=HEALTH_URL)
         self.config.write_text(json.dumps(config))
         self.scenarios.write_text(json.dumps([dict(MINIMAL, id=name, environments=["local"]) for name in ("s1", "s2")]))
         with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}):
@@ -1061,7 +1062,7 @@ class MainTests(unittest.TestCase):
             os.environ.pop("WENDY_AGENT_SOCKET", None)
             config = json.loads(self.config.read_text())
             config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
-            config["disposable_device"] = True
+            config.update(disposable_device=True, model_health_url=HEALTH_URL)
             self.config.write_text(json.dumps(config))
             self.scenarios.write_text(json.dumps([dict(MINIMAL, id=name, environments=["local"]) for name in ("s1", "s2")]))
             code, text = self.main("--scenario", "all", "--task", "stop-app", "--task", "start-app", "--target", "local",
@@ -1177,7 +1178,7 @@ class ExecuteTests(unittest.TestCase):
             LOCAL_TARGET, kind="physical", device="192.0.2.10:50051", capabilities=[])
         self.config["targets"].setdefault("local", board)
         if flag:
-            self.config["disposable_device"] = True
+            self.config.update(disposable_device=True, model_health_url=HEALTH_URL)
         self.scenarios.write_text(json.dumps([dict(MINIMAL, environments=["local" if flag else "physical"])]))
         ok = {"removed": [], "failed": [], "list_error": None}
         results = iter(sweeps or [])
@@ -1215,7 +1216,7 @@ class ExecuteTests(unittest.TestCase):
         self.config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
         self.config["budget_usd"] = 100
         if flag:
-            self.config["disposable_device"] = True
+            self.config.update(disposable_device=True, model_health_url=HEALTH_URL)
         if agent_command is not None:
             self.config["agents"]["fake"] = {"adapter": adapter, "model": "fixture", "command": agent_command}
         path = self.root / "config.json"
@@ -1295,7 +1296,7 @@ class ExecuteTests(unittest.TestCase):
                     "success": False, "cleanup_ok": True, "task_seconds": 0, "workspace": str(self.root),
                     "metrics": {"estimated_cost_usd": 0}, "stages": {}}
         self.config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
-        self.config["disposable_device"] = True
+        self.config.update(disposable_device=True, model_health_url=HEALTH_URL)
         self.config["budget_usd"] = 100
         path = self.root / "config.json"
         path.write_text(json.dumps(self.config))
@@ -1322,7 +1323,7 @@ class ExecuteTests(unittest.TestCase):
         nohook.write_text("#!/bin/sh\n")
         nohook.chmod(0o755)
         self.config["targets"]["local"] = dict(LOCAL_TARGET, capabilities=[])
-        self.config["disposable_device"] = True
+        self.config.update(disposable_device=True, model_health_url=HEALTH_URL)
         path = self.root / "config.json"
         path.write_text(json.dumps(self.config))
         err = io.StringIO()

@@ -1057,7 +1057,7 @@ def calibrate(config, tasks, targets, args):
     return 0 if len(rows) == len(plan) and all(r["passed"] for r in rows) else 1
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=HERE / "config.example.json")
     parser.add_argument("--tasks", type=Path, default=HERE / "tasks.json")
@@ -1080,7 +1080,7 @@ def main():
     parser.add_argument("--resume", type=Path, metavar="DIR",
                         help="Continue the pass saved in DIR (created when absent): finished attempts are skipped, the first manifest and baseline apps are kept. Replaces --output.")
     parser.add_argument("--rescore", type=Path, metavar="DIR", help="Regrade a saved results directory from its logs; no model or device calls.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     import scenarios as sc  # imported here: scenarios.py imports this module
     scenario_file = args.scenarios or HERE / "scenarios.json"
 
@@ -1167,6 +1167,9 @@ def main():
     if not args.execute:
         print(f"Plan only: {len(plan)} trials. Add --execute to run.")
         return 0
+    if disposable(config) and not config.get("model_health_url"):
+        parser.error('a disposable device needs "model_health_url" in the config: without it a dead model server '
+                     "would be scored as the model's failure")
     # A board's capabilities (null, as for --device) are read only under --execute; until then its
     # hardware scenarios wait.
     detect = [name for name in targets if config["targets"][name]["kind"] in ("physical", "cloud", "local")
