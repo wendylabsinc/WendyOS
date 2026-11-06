@@ -54,5 +54,4 @@ SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
     "wendy/system/v1/notifications.proto"
     "wendylite/v1/sensorlink.proto"
 )
-# Directory or Buf Git input for local validation before the pin is published.
-SHARED_GRPC_API_CONTRACTS_INPUT="${SHARED_GRPC_API_CONTRACTS_INPUT:-https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF}"
+SHARED_GRPC_API_CONTRACTS_INPUT="https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF"
