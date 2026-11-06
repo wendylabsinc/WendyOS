@@ -1,9 +1,9 @@
-package backend
+package twinrobot
 
 import (
 	"context"
 	"errors"
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	"math"
 	"time"
 )

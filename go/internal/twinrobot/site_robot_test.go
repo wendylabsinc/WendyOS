@@ -1,4 +1,4 @@
-package backend
+package twinrobot
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"math"

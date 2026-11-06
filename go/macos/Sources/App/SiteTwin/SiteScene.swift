@@ -7,6 +7,9 @@ import SwiftUI
 public struct SiteScene: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let modelURL: URL
+    let points: [SitePoint]
+    let floorTiles: [SitePoint]
+    let revision: UInt64
     let site: Site
     let cameraGeometry: [UUID: SiteCameraGeometry]
     let cameraCandidates: [UUID: SiteCameraGeometry]
@@ -26,6 +29,9 @@ public struct SiteScene: View {
 
     public init(
         modelURL: URL,
+        points: [SitePoint] = [],
+        floorTiles: [SitePoint] = [],
+        revision: UInt64 = 0,
         site: Site,
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
         cameraCandidates: [UUID: SiteCameraGeometry] = [:],
@@ -44,6 +50,7 @@ public struct SiteScene: View {
         fogSummary: @escaping (SiteFogSummary) -> Void = { _ in }
     ) {
         self.modelURL = modelURL
+        self.points = points; self.floorTiles = floorTiles; self.revision = revision
         self.site = site
         self.cameraGeometry = cameraGeometry
         self.cameraCandidates = cameraCandidates
@@ -66,6 +73,7 @@ public struct SiteScene: View {
         TimelineView(.animation(minimumInterval: 0.25, paused: robot == nil && !fog.enabled && colorSources.isEmpty && people.isEmpty && cameraCandidates.isEmpty)) { context in
             SceneSurface(
                 modelURL: modelURL,
+                points: points, floorTiles: floorTiles, revision: revision,
                 site: site,
                 cameraGeometry: cameraGeometry,
                 cameraCandidates: cameraCandidates,
@@ -99,6 +107,9 @@ public struct SiteScene: View {
 
 private struct SceneSurface {
     var modelURL: URL
+    var points: [SitePoint]
+    var floorTiles: [SitePoint]
+    var revision: UInt64
     var site: Site
     var cameraGeometry: [UUID: SiteCameraGeometry]
     var cameraCandidates: [UUID: SiteCameraGeometry]
@@ -126,6 +137,9 @@ private struct SceneSurface {
         var peopleRoot = SCNNode()
         var personMarkers: [UUID: SitePersonMarker] = [:]
         var model = SCNNode()
+        var contributionNode = SCNNode()
+        var contributionRevision: UInt64?
+        var hadContribution = false
         weak var view: SCNView?
         var needsFraming = true
         var robotRoot = SCNNode()
@@ -160,6 +174,9 @@ private struct SceneSurface {
                     )
                     let scene = SCNScene()
                     model = imported.rootNode.clone()
+                    contributionNode = SCNNode()
+                    contributionRevision = nil; hadContribution = false
+                    model.addChildNode(contributionNode)
                     scene.rootNode.addChildNode(model)
                     markers = SCNNode()
                     scene.rootNode.addChildNode(markers)
@@ -201,8 +218,34 @@ private struct SceneSurface {
                     return
                 }
             }
+            if contributionRevision != parent.revision {
+                if !hadContribution && !parent.points.isEmpty && parent.modelURL.pathExtension == "scn" { needsFraming = true }
+                hadContribution = !parent.points.isEmpty
+                contributionNode.childNodes.forEach { $0.removeFromParentNode() }
+                let vertices = parent.points.map { SCNVector3(Float($0.x), Float($0.y), Float($0.z)) }
+                if !vertices.isEmpty {
+                    let source = SCNGeometrySource(vertices: vertices)
+                    let element = SCNGeometryElement(indices: Array(0..<UInt32(vertices.count)), primitiveType: .point)
+                    element.pointSize = 4; element.minimumPointScreenSpaceRadius = 2; element.maximumPointScreenSpaceRadius = 6
+                    let geometry = SCNGeometry(sources: [source], elements: [element])
+                    geometry.firstMaterial?.diffuse.contents = platformAccent
+                    contributionNode.addChildNode(SCNNode(geometry: geometry))
+                }
+                if !parent.floorTiles.isEmpty {
+                    let vertices = parent.floorTiles.map { SCNVector3(Float($0.x), Float($0.y), Float($0.z)) }
+                    let source = SCNGeometrySource(vertices: vertices)
+                    let element = SCNGeometryElement(indices: Array(0..<UInt32(vertices.count)), primitiveType: .triangles)
+                    let geometry = SCNGeometry(sources: [source], elements: [element])
+                    geometry.firstMaterial?.diffuse.contents = platformAccent
+                    geometry.firstMaterial?.transparency = 0.25
+                    geometry.firstMaterial?.isDoubleSided = true
+                    contributionNode.addChildNode(SCNNode(geometry: geometry))
+                }
+                contributionRevision = parent.revision
+            }
             let scale = Float(parent.site.metresPerModelUnit)
             model.scale = SCNVector3(scale, scale, scale)
+            contributionNode.scale = SCNVector3(1/scale, 1/scale, 1/scale)
             frameOverviewIfNeeded()
             updateRobot()
             updatePeople()

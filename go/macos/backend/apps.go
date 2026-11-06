@@ -52,7 +52,7 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 			return appDial(ctx, uint16(port))
 		}
 	}
-	if dial == nil && !managedModel {
+	if dial == nil && !managedModel && app != TwinAppID {
 		host := strings.Trim(conn.Host, "[]")
 		if host == "" || strings.HasPrefix(host, "unix:") {
 			return "", fmt.Errorf("device has no browser-accessible address")

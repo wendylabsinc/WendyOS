@@ -1,7 +1,7 @@
-package backend
+package twinrobot
 
 import (
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"math"
 	"testing"

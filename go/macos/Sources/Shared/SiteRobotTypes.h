@@ -38,6 +38,7 @@ void WDSiteRobotCandidatesFree(WDSiteRobotCandidates *value);
 WDStatus *WDSiteRobotConfirmLocalization(uint64_t handle, uint64_t sequence, uint64_t match_sequence, char *frame, int32_t candidate);
 typedef struct { WDStatus status; char *json; } WDSiteRobotFusionResult;
 WDSiteRobotFusionResult *WDSiteRobotFuse(uint64_t handle, uint64_t sequence, char *request);
+WDSiteRobotFusionResult *WDSiteRobotRequest(uint64_t handle, char *request);
 void WDSiteRobotFusionFree(WDSiteRobotFusionResult *value);
 void WDSiteRobotClose(uint64_t handle);
 #endif

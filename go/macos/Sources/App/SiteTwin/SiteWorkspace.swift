@@ -86,6 +86,13 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var setupPreviewID: String?
     @State private var placingCamera: UUID?
     @State private var importing = false
+    @State private var contributionTarget: Site?
+    @State private var registeringContribution = false
+    @State private var contributionUsesLiDAR = false
+    @State private var contributionX = "0"
+    @State private var contributionY = "0"
+    @State private var contributionZ = "0"
+    @State private var contributionYaw = "0"
     @State private var exporting = false
     @State private var document: SiteFileDocument?
     @State private var scanning = false
@@ -197,8 +204,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 colorCapture(current.site.cameras.filter { onGateway($0) }.map(\.sourceID))
             }
             if peopleEnabled, !selectingPeopleFloor, placingCamera == nil,
-               let floorY = peopleFloorY, let current {
-                SitePeopleCapture(site: current.site, sources: videoSources(current.site),
+               let floorY = peopleFloorY, let current, let store {
+                SitePeopleCapture(site: current.site, store: store, sources: videoSources(current.site),
                     geometry: cameraGeometry(current.site), floorY: floorY) { tracks, statuses in
                         people = tracks; peopleStatuses = statuses
                     }
@@ -317,6 +324,19 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 }
             }
         }
+        .alert("Register scan in room", isPresented: $registeringContribution) {
+            TextField("Origin X in metres", text: $contributionX)
+            TextField("Origin height in metres", text: $contributionY)
+            TextField("Origin Z in metres", text: $contributionZ)
+            TextField("Heading in degrees", text: $contributionYaw)
+            Button("Continue") {
+                if contributionUsesLiDAR { scanning = true }
+                else { importing = true }
+            }
+            Button("Cancel", role: .cancel) { contributionTarget = nil }
+        } message: {
+            Text("Enter this scan's origin and heading in the shared room. Only use zero when both scans share the same origin. The Linux service combines the registered geometry.")
+        }
         .fileExporter(
             isPresented: $exporting,
             document: document,
@@ -351,7 +371,17 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 )
             }
         }
-        .task { await load() }
+        .task(id: robotSession) {
+            await load()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { break }
+                if !busy, let store {
+                    do { sites = try await store.list() }
+                    catch { report(error, message: "The Linux digital twin is unavailable.") }
+                }
+            }
+        }
         .task { await actions.run() }
         .sheet(isPresented: $reconstructing) {
             SitePhotoReconstruction { result in
@@ -421,14 +451,33 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
             Divider()
             Button("Import Model or Site", systemImage: "square.and.arrow.down") {
-                importing = true
+                contributionTarget = nil; importing = true
             }
+            Button("New robot space", systemImage: "plus") {
+                    actions.submit {
+                        guard let store else { return }
+                        do {
+                            let created = try await store.createSpace(name: "Robot space")
+                            sites.append(created); selectedSite = created.id
+                        } catch { report(error, message: "The space could not be created on Linux.") }
+                    }
+                }
             if SitePhotoReconstruction.isSupported {
                 Button("Reconstruct from Photos", systemImage: "photo.stack") {
                     reconstructing = true
                 }
             }
             if let current {
+                Button("Contribute model to this room") {
+                    contributionTarget = current.site; contributionUsesLiDAR = false; registeringContribution = true
+                }
+                #if os(iOS)
+                if SiteRoomCapture.isSupported {
+                    Button("Contribute LiDAR to this room") {
+                        contributionTarget = current.site; contributionUsesLiDAR = true; registeringContribution = true
+                    }
+                }
+                #endif
                 if let store {
                     ShareLink(
                         item: SiteShare(store: store, id: current.id, name: current.site.name) { cause in
@@ -448,7 +497,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
             #if os(iOS)
                 if SiteRoomCapture.isSupported {
-                    Button("Scan Room", systemImage: "viewfinder") { alignmentScanCamera = nil; scanning = true }
+                    Button("Scan Room", systemImage: "viewfinder") { contributionTarget = nil; alignmentScanCamera = nil; scanning = true }
                 }
             #endif
             if !removedSites.isEmpty {
@@ -465,10 +514,17 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private var importButtons: some View {
         HStack {
-            Button("Import Model") { importing = true }.buttonStyle(.borderedProminent)
+            Button("New robot space") {
+                actions.submit {
+                    guard let store else { return }
+                    do { let created = try await store.createSpace(name: "Robot space"); sites.append(created); selectedSite = created.id }
+                    catch { report(error, message: "The space could not be created on Linux.") }
+                }
+            }
+            Button("Import Model") { contributionTarget = nil; importing = true }.buttonStyle(.borderedProminent)
             #if os(iOS)
                 if SiteRoomCapture.isSupported {
-                    Button("Scan Room") { alignmentScanCamera = nil; scanning = true }.buttonStyle(.bordered)
+                    Button("Scan Room") { contributionTarget = nil; alignmentScanCamera = nil; scanning = true }.buttonStyle(.bordered)
                 }
             #endif
         }
@@ -499,6 +555,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             SiteRobotRenderHost(model: robots) { robotRender in
                 SiteScene(
                     modelURL: current.modelURL,
+                    points: current.points, floorTiles: current.floorTiles, revision: current.revision,
                     site: current.site,
                     cameraGeometry: cameraGeometry(current.site),
                     cameraCandidates: cameraCandidates(current),
@@ -915,7 +972,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         loadError = false
         defer { loading = false }
         do {
-            let opened = try SiteStore.applicationStore()
+            let opened = try await SiteStore.remoteStore(session: robotSession)
+            try await opened.migrateLocalCaptures()
             sites = try await opened.list()
             removedSites = try await opened.removed()
             store = opened
@@ -939,6 +997,16 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             busy = false
         }
         do {
+            if let target = contributionTarget {
+                defer { contributionTarget = nil }
+                guard let x = Double(contributionX), let y = Double(contributionY), let z = Double(contributionZ),
+                      let yaw = Double(contributionYaw), [x,y,z,yaw].allSatisfy({ $0.isFinite }) else {
+                    throw WendyError(message: "Enter a finite position and heading for the scan.")
+                }
+                try await store.contribute(model: url, to: target, transform: [x,y,z,yaw * .pi / 180])
+                sites = try await store.list()
+                return
+            }
             var created: StoredSite
             if url.pathExtension.lowercased() == "wendysite" {
                 let values = try url.resourceValues(forKeys: [

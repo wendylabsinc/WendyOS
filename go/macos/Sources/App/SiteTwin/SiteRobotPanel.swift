@@ -33,11 +33,14 @@ struct SiteRobotCameraHost: View {
 final class SiteRobotMapModel: ObservableObject {
     private let observationClient: any SiteRobotObserving
     private let turningClient: any SiteRobotTurning
+    private let searchClient: any SiteRobotSearching
 
     init(observationClient: any SiteRobotObserving = SiteRobotClient.shared,
-         turningClient: any SiteRobotTurning = SiteRobotClient.shared) {
+         turningClient: any SiteRobotTurning = SiteRobotClient.shared,
+         searchClient: any SiteRobotSearching = SiteRobotClient.shared) {
         self.observationClient = observationClient
         self.turningClient = turningClient
+        self.searchClient = searchClient
     }
 
     @Published var robots: [UnitreeRobot] = []
@@ -85,6 +88,8 @@ final class SiteRobotMapModel: ObservableObject {
     @Published var anchor: SitePoint?
     @Published var destination: SitePoint?
     @Published private(set) var handle: UInt64 = 0
+    private var remoteSearching = false
+    private var remoteSearchSequence: UInt64 = 0
     private var frame = ""
     private var generation = 0
     private var actionGeneration: UInt64 = 0
@@ -197,7 +202,7 @@ final class SiteRobotMapModel: ObservableObject {
         explorationEpoch = UUID()
         let epoch = generation
         telemetry.reading = nil; reading = nil; anchor = nil; lastPosition = nil; lastYaw = 0; destination = nil; placing = false; error = nil
-        handle = 0; connecting = false
+        handle = 0; connecting = false; remoteSearching = false
         searchConclusion = nil; searchTurns = 0
         rotationState = .idle; rotationStartPending = false
         showRotationPrompt = false; rotationOffer = RobotRotationOffer()
@@ -219,8 +224,6 @@ final class SiteRobotMapModel: ObservableObject {
             }
             handle = owned; connecting = false
             while !Task.isCancelled {
-                let polledAction = actionGeneration
-                let pollWasAwaitingLook = awaitingLook
                 let result = try await observationClient.poll(owned)
                 guard epoch == generation, !Task.isCancelled else { break }
                 accept(result)
@@ -230,43 +233,22 @@ final class SiteRobotMapModel: ObservableObject {
                     retry = true
                     break
                 }
-                if awaitingLook && pollWasAwaitingLook && polledAction == actionGeneration && !result.moving && result.lookState != 1 {
-                    awaitingLook = false
-                    if result.lookState == 2 {
-                        rotationState = .matching(searchTurns)
-                        positionSearch.recordDirection(result.lookDirection)
-                        rematchAfterLook = true
-                        nextAutomaticAttempt = Date.now.addingTimeInterval(1)
-                        automaticAttempts = 0; automaticPaused = false
+                if remoteSearching {
+                    let progress = try await searchClient.searchStatus(owned)
+                    guard epoch == generation, !Task.isCancelled else { break }
+                    searchTurns = progress.SearchTurns
+                    if progress.SearchState == "searching" {
+                        rotationState = result.moving ? .turning(searchTurns) : .matching(searchTurns)
                     } else {
-                        positionSearch.cancel(); automaticPaused = true
-                        rotationState = .stopped(result.message)
-                        error = result.message
+                        remoteSearching = false; positionSearch.cancel(); localizing = false
+                        if let report = progress.Fusion, progress.SearchState == "complete" {
+                            fusionReport = report
+                            candidates = (report.candidates ?? []).map { SiteRobotCandidate(position: SitePoint(x: $0.X, y: $0.FloorY, z: $0.Z), yaw: $0.Yaw, rms: $0.RMS, coverage: $0.Coverage) }
+                            matchSequence = remoteSearchSequence; candidateIndex = 0
+                            rotationState = .idle
+                        } else { error = progress.SearchMessage; rotationState = .stopped(progress.SearchMessage) }
                     }
                 }
-                if result.observationRevision != lastEvidence {
-                    lastEvidence = result.observationRevision
-                    automaticAttempts = 0
-                }
-                if !automaticPaused && !localizing && !candidates.isEmpty,
-                   suggestionFreshness?.shouldRefresh(observationRevision: result.observationRevision, now: .now) == true {
-                    candidates = []
-                    suggestionFreshness = nil
-                    automaticAttempts = 0
-                }
-                let retryLocalization = positionSearch.shouldRetryLocalization(
-                    pose: result.pose, scanReady: result.scanReady, measurementsReady: result.measurementsReady, aligned: result.aligned,
-                    rematchAfterLook: rematchAfterLook, attempts: automaticAttempts, now: .now,
-                    calibrating: lensCalibrating || showLensCalibration)
-                if positionSearch.outcome != nil && searchConclusion == nil { finishUnmatchedSearch() }
-                if retryLocalization && !result.moving && !awaitingLook && !placing && !localizing && candidates.isEmpty &&
-                    !automaticPaused && !lensCalibrating && !showRotationPrompt && Date.now >= nextAutomaticAttempt {
-                    automaticAttempts += 1
-                    nextAutomaticAttempt = Date.now.addingTimeInterval(5)
-                    if rotationStartPending { lookAutomatically() }
-                    else { locate() }
-                }
-                offerRotationIfNeeded()
                 try await Task.sleep(for: .milliseconds(100))
             }
         } catch {
@@ -349,6 +331,19 @@ final class SiteRobotMapModel: ObservableObject {
     func beginAlignment() {
         guard !lensCalibrating else { return }
         stop()
+        if geometryURL?.pathExtension == "scn", let url = geometryURL,
+           let bytes = try? Data(contentsOf: url.deletingLastPathComponent().appendingPathComponent("points.json")),
+           let points = try? JSONDecoder().decode([SitePoint].self, from: bytes), points.isEmpty {
+            actionGeneration += 1
+            let request = actionGeneration, h = handle, f = frame, epoch = generation
+            actions.submit {
+                do {
+                    try await SiteRobotClient.shared.align(h, sequence: request, frame: f, position: SitePoint(x: 0, y: 0, z: 0), yaw: 0)
+                    if epoch == self.generation { self.selected = true; self.placing = false }
+                } catch { if epoch == self.generation { self.error = error.localizedDescription } }
+            }
+            return
+        }
         candidates = []
         selected = true; anchor = nil; lastPosition = nil; destination = nil; placing = true
     }
@@ -391,41 +386,10 @@ final class SiteRobotMapModel: ObservableObject {
             } catch { if request == self.actionGeneration, epoch == self.generation { self.error = error.localizedDescription } }
         }
     }
-    private func lookAutomatically() {
-        guard handle != 0, !lensCalibrating, reading?.moving != true else { return }
-        guard reading?.measurementsReady == true else {
-            rotationState = .waitingForMeasurements
-            waitForLocalizationMeasurements()
-            return
-        }
-        guard positionSearch.takeTurn(now: .now) else {
-            finishUnmatchedSearch()
-            return
-        }
-        searchTurns = 12 - positionSearch.remainingTurns
-        rotationStartPending = false
-        rotationState = .checking(searchTurns)
-        actionGeneration += 1
-        let request = actionGeneration, h = handle, epoch = generation
-        automaticPaused = true; candidates = []; localizing = false; placing = false; destination = nil; error = nil
-        actions.submit {
-            guard request == self.actionGeneration, epoch == self.generation else { return }
-            do {
-                try await self.turningClient.look(h, sequence: request, direction: self.positionSearch.direction)
-                guard request == self.actionGeneration, epoch == self.generation else { return }
-                self.awaitingLook = true
-                self.rotationState = .turning(self.searchTurns)
-            } catch {
-                if request == self.actionGeneration, epoch == self.generation {
-                    self.positionSearch.cancel(); self.error = error.localizedDescription
-                    self.rotationState = .stopped(error.localizedDescription)
-                }
-            }
-        }
-    }
 
     func stop() {
         actionGeneration += 1
+        remoteSearching = false
         error = nil
         automaticPaused = true; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel()
         candidates = []; localizing = false
@@ -445,7 +409,7 @@ final class SiteRobotMapModel: ObservableObject {
 
     private func waitForLocalizationMeasurements() {
         if positionSearch.active { rotationState = .waitingForMeasurements }
-        error = "Waiting for fresh LiDAR and odometry. The position search will resume automatically."
+        error = "Waiting for fresh LiDAR and odometry. Try locating again when measurements are ready."
         scheduleAutomaticLocalization()
     }
 
@@ -468,28 +432,27 @@ final class SiteRobotMapModel: ObservableObject {
     }
 
     func startRotationSearch() {
-        guard canStartRotationSearch else {
-            dismissRotationPrompt()
-            let reason = "Go2 is not ready to turn. Wait for a live, stationary robot and finish any placement or calibration first."
-            error = reason
-            if !positionSearch.active { rotationState = .stopped(reason) }
-            return
-        }
+        guard handle != 0, let url = geometryURL, !remoteSearching else { return }
         dismissRotationPrompt()
-        searchConclusion = nil; searchTurns = 0
-        positionSearch.start(now: .now)
-        rotationStartPending = true
-        scheduleAutomaticLocalization()
-        lookAutomatically()
+        actionGeneration += 1
+        let request = actionGeneration, h = handle, epoch = generation, f = frame, scale = geometryScale
+        remoteSearchSequence = request; remoteSearching = false; localizing = true
+        searchConclusion = nil; searchTurns = 0; rotationState = .matching(0)
+        actions.submit {
+            do {
+                let mesh = try await SiteRobotGeometry.semantic(url, scale: scale)
+                guard epoch == self.generation, request == self.actionGeneration else { return }
+                try await self.searchClient.search(h, sequence: request,
+                    request: RobotFusionRequest(frame: f, architecture: mesh.architecture, furniture: mesh.furniture, visual: nil, reference: []))
+                if epoch == self.generation, request == self.actionGeneration { self.remoteSearching = true }
+            } catch {
+                guard epoch == self.generation, request == self.actionGeneration else { return }
+                self.remoteSearching = false; self.localizing = false
+                self.error = error.localizedDescription; self.rotationState = .stopped(error.localizedDescription)
+            }
+        }
     }
 
-    private func finishUnmatchedSearch() {
-        let timedOut = positionSearch.outcome == .timedOut
-        stop()
-        searchConclusion = timedOut
-            ? "The search reached its time limit without a reliable position match."
-            : "Go2 completed a full rotation, but the observations still do not identify a reliable position."
-    }
 
     func offerRotationRetry() {
         guard canStartRotationSearch else { return }
@@ -513,14 +476,8 @@ final class SiteRobotMapModel: ObservableObject {
             }
             do {
                 let mesh = try await SiteRobotGeometry.semantic(url, scale: scale)
-                var stored = try await BlockingWork.run(on: .global(qos: .userInitiated)) {
-                    var map = try RobotReferenceStore.read(model: url, robot: robot, frame: f)
-                    let exclusions = try SiteRobotGeometry.referenceExclusions(url, scale: scale)
-                    map.surfaces.removeAll { surface in
-                        exclusions.contains(x: surface.position.X, y: surface.position.Z, z: -surface.position.Y)
-                    }
-                    return map
-                }
+                // The Linux service supplies and persists room references.
+                var stored = RobotSavedMap(frame: f, modelDigest: "", robot: robot)
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 self.savedMap = stored; self.referenceCount = stored.surfaces.count
                 var hint: RobotVisualHint?
@@ -574,10 +531,6 @@ final class SiteRobotMapModel: ObservableObject {
                     self.waitForLocalizationMeasurements()
                     return
                 }
-                if self.positionSearch.active && self.reading?.scanReady != true {
-                    self.lookAutomatically()
-                    return
-                }
                 let input = RobotFusionRequest(frame: f, architecture: mesh.architecture, furniture: mesh.furniture, visual: hint, reference: stored.surfaces)
                 let report = try await SiteRobotClient.shared.fuse(h, sequence: request, request: input)
                 guard request == self.actionGeneration, epoch == self.generation else { return }
@@ -592,13 +545,10 @@ final class SiteRobotMapModel: ObservableObject {
                 self.candidateIndex = 0; self.matchSequence = request
                 self.suggestionFreshness = self.candidates.isEmpty ? nil : RobotSuggestionFreshness(observationRevision: report.observationRevision, received: .now)
                 if self.candidates.isEmpty { self.error = report.message }
-                if stored.lens?.measured == true {
-                    let value = stored
-                    try await BlockingWork.run(on: .global(qos: .utility)) { try RobotReferenceStore.save(value, model: url) }
-                }
+
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 if !self.candidates.isEmpty { self.positionSearch.cancel(); self.rotationState = .idle }
-                else if self.positionSearch.active { self.lookAutomatically() }
+
             } catch {
                 if request == self.actionGeneration, epoch == self.generation {
                     if self.positionSearch.active { self.rotationState = .stopped(error.localizedDescription) }
@@ -619,15 +569,7 @@ final class SiteRobotMapModel: ObservableObject {
                 guard epoch == self.generation, request == self.actionGeneration else { return }
                 self.explorationEpoch = UUID()
                 self.candidates = []; self.error = nil
-                if let stored = self.savedMap, let observations = self.fusionReport?.reference, let url = self.geometryURL {
-                    let value = RobotReferenceStore.merging(observations, into: stored)
-                    do {
-                        try await BlockingWork.run(on: .global(qos: .utility)) { try RobotReferenceStore.save(value, model: url) }
-                        if epoch == self.generation { self.savedMap = value; self.referenceCount = value.surfaces.count }
-                    } catch {
-                        if epoch == self.generation { self.error = "Position confirmed, but the reference map could not be saved: \(error.localizedDescription)" }
-                    }
-                }
+
             } catch {
                 if epoch == self.generation {
                     self.error = error.localizedDescription; self.candidates = []
