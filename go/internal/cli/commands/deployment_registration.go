@@ -28,6 +28,11 @@ func registerCloudApps(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		cliLogln("Cloud app registration skipped (--skip-cloud-registration).")
 		return nil
 	}
+	if conn != nil && strings.HasPrefix(conn.Host, "unix:") {
+		// The agent socket carries no verified device identity to register with.
+		cliLogln("Cloud app registration skipped (the deploy goes through the local agent socket).")
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := registerDeviceApps(ctx, deploymentProvisioningService{conn}, appIDs, config.Load, registerAppsWithCloud); err != nil {

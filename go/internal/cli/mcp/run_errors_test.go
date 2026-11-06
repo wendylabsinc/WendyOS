@@ -567,3 +567,18 @@ func TestRunFailureThatMentionsARefusalIsNotOne(t *testing.T) {
 		}
 	}
 }
+
+func TestRunInsideDeviceContainerDoesNotSayNotConnected(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+	s := New(&config.Config{}, nil)
+	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+		return "ok", false, nil
+	}
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "wait_ready": false}))
+	if err != nil || r.IsError {
+		t.Fatalf("got %v %v", r, err)
+	}
+	if next := fmt.Sprint(structuredMap(t, r)["suggested_next_step"]); strings.Contains(strings.ToLower(next), "not connected") {
+		t.Fatalf("next step wrongly says not connected: %s", next)
+	}
+}
