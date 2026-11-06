@@ -2,12 +2,6 @@ name: Swift E2E Tests
 
 on:
   pull_request:
-    paths:
-      - 'swift/**'
-      - 'Proto/**'
-      - '.github/actions/swift-e2e-run/**'
-      - '.github/workflows/swift-e2e-tests.yml'
-      - '.github/scripts/restore-trusted-build-cache.sh'
   push:
     branches:
       - main
@@ -52,8 +46,9 @@ on:
         required: false
 
 concurrency:
-  group: swift-e2e-tests-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep every main run, including pending runs. Main's Ubuntu job queues below.
+  group: swift-e2e-tests-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -64,7 +59,8 @@ permissions:
 jobs:
   swift-e2e-local-macos:
     name: 'Local: macOS 26'
-    if: ${{ inputs.target_group == '' || inputs.target_group == 'all' || inputs.target_group == 'local' }}
+    # Re-enable once Joannis sets up self-hosted Mac runners.
+    if: false
     runs-on: macos-26
     concurrency:
       group: device-local-macos-hosted
@@ -135,7 +131,9 @@ jobs:
     if: ${{ inputs.target_group == '' || inputs.target_group == 'all' || inputs.target_group == 'local' }}
     runs-on: ubuntu-24.04
     concurrency:
-      group: device-local-ubuntu-hosted
+      # A hosted runner is a fresh VM with no shared device, so PR runs need no
+      # queue. Main keeps one so its runs finish one at a time.
+      group: device-local-ubuntu-hosted-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
       cancel-in-progress: false
       queue: max
     timeout-minutes: 120
