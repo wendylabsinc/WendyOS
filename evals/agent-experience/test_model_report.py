@@ -291,5 +291,106 @@ class Rendering(unittest.TestCase):
         self.assertIn("boom", err.getvalue())
 
 
+def start(ident, tool, args=None):
+    return {"type": "tool_start", "id": ident, "tool": tool, "arguments": args or {}}
+
+
+def finish(ident):
+    return {"type": "tool_result", "id": ident}
+
+
+class FixRound1(unittest.TestCase):
+    def real_trace(self, events, proxy_records):
+        return tt.build_trace("wendy", events, proxy_records=proxy_records, cli_records=[])
+
+    def test_alternating_calls_through_build_trace_are_not_repeated(self):
+        p = Pass(self)
+        events, records = [], []
+        for i in range(3):
+            events += [start(f"a{i}", "container_list"), start(f"b{i}", "workspace_exec", {"command": "make"})]
+            records.append({"tool": "container_list", "arguments": {}, "is_error": False, "reply_text": "ok"})
+        trace = self.real_trace(events, records)
+        p.attempt(outcome="right", trace=trace, events=events)
+        self.assertEqual(p.classify(), [])
+
+    def test_truly_consecutive_calls_through_build_trace_are_repeated(self):
+        p = Pass(self)
+        events = [start(f"a{i}", "container_list") for i in range(3)]
+        records = [{"tool": "container_list", "arguments": {}, "is_error": False, "reply_text": "ok"}] * 3
+        p.attempt(outcome="right", trace=self.real_trace(events, records), events=events)
+        self.assertEqual(labels(p.classify()), [("model", "Repeated call")])
+
+    def test_excerpt_follows_transcript_order(self):
+        p = Pass(self)
+        events = [start("2", "telemetry_logs"), start("1", "workspace_exec", {"command": "make"})]
+        records = [{"tool": "telemetry_logs", "arguments": {}, "is_error": True,
+                    "reply_text": "[DEVICE_UNREACHABLE] gone"}]
+        p.attempt(outcome="right", trace=self.real_trace(events, records), events=events)
+        excerpt = p.classify()[0]["excerpt"].splitlines()
+        # The workspace_exec ran after the failing call, so it is not part of the excerpt.
+        self.assertEqual(len(excerpt), 1)
+        self.assertIn("DEVICE_UNREACHABLE", excerpt[0])
+
+    def test_restart_found_across_a_row_without_markers(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("run")], markers={"uptime": "5000.0", "socket_inode": 7})
+        p.attempt(status="interrupted")
+        p.attempt(outcome="right", trace=[call("run")], markers={"uptime": "12.0", "socket_inode": 9})
+        found = mr.load_run(p.dir)["findings"]
+        self.assertEqual(labels(found), [("tool", "Agent or device restart")])
+
+    def test_halted_pass_lists_ready_entries_not_reached(self):
+        p = Pass(self)
+        (p.dir / "coverage.json").write_text(json.dumps([
+            {"task": "deploy", "target": "thor", "status": "ready", "reason": None,
+             "agents": {"chat": {"not_run": 2}}}]))
+        text = mr.render_markdown([mr.load_run(p.dir)])
+        self.assertNotIn("Everything configured was run", text)
+        self.assertIn("not reached", text.split("## Not run")[1])
+        self.assertIn("deploy", text.split("## Not run")[1])
+        (p.dir / "coverage.json").write_text(json.dumps([
+            {"task": "deploy", "target": "thor", "status": "ready", "reason": None,
+             "agents": {"chat": {"not_run": 0}}}]))
+        self.assertIn("Everything configured was run", mr.render_markdown([mr.load_run(p.dir)]))
+
+    def test_unverified_or_failed_agent_goes_to_undetermined(self):
+        p = Pass(self)
+        p.attempt(status="mcp_unverified", outcome="missed", trace=[])
+        self.assertEqual(labels(p.classify()), [("undetermined", "Undetermined")])
+        self.assertIn("mcp_unverified", p.classify()[0]["detail"])
+        p.attempt(outcome="missed", verified=False, trace=[call("device_info")])
+        p.rows[-1]["metrics"]["agent_errors"] = ["HTTP 500"]
+        self.assertEqual(labels(p.classify()), [("undetermined", "Undetermined")])
+        self.assertIn("HTTP 500", p.classify()[0]["detail"])
+        p.attempt(outcome="missed", trace=[call("device_info")])
+        p.rows[-1]["metrics"]["agent_completed"] = False
+        self.assertEqual(labels(p.classify()), [("undetermined", "Undetermined")])
+
+    def test_timeout_hang_comes_from_unanswered_transcript_calls(self):
+        p = Pass(self)
+        events = [start("1", "device_info"), finish("1"), start("2", "telemetry_logs")]
+        p.attempt(status="timeout", outcome="missed", trace=[], events=events)
+        found = p.classify()
+        self.assertEqual(labels(found), [("tool", "Hang")])
+        self.assertIn("telemetry_logs", found[0]["detail"])
+        q = Pass(self)
+        q.attempt(status="failed", outcome="missed", trace=[call("device_info")], events=events)
+        self.assertNotIn(("tool", "Hang"), labels(q.classify()))
+
+    def test_notes_render_after_the_header(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("run")])
+        (p.dir / "on_device.json").write_text(json.dumps({"notes": ["chat sends all 79 tools", "second note"]}))
+        text = mr.render_markdown([mr.load_run(p.dir)])
+        self.assertIn("## Notes", text)
+        self.assertIn("- chat sends all 79 tools", text)
+        self.assertLess(text.index("| Scored"), text.index("## Notes"))
+        self.assertLess(text.index("## Notes"), text.index("## Model deviations"))
+        (p.dir / "on_device.json").write_text(json.dumps({"notes": "just a string"}))
+        self.assertNotIn("## Notes", mr.render_markdown([mr.load_run(p.dir)]))
+        (p.dir / "on_device.json").write_text(json.dumps({}))
+        self.assertNotIn("## Notes", mr.render_markdown([mr.load_run(p.dir)]))
+
+
 if __name__ == "__main__":
     unittest.main()

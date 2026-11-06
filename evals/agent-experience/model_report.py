@@ -110,6 +110,36 @@ def _errored(entry, cli_records):
     return None
 
 
+def _chronological(trace, events):
+    """The trace in the order the model made the calls. build_trace lists transcript entries first, then
+    every proxy entry, then CLI entries, so it is not chronological; the transcript is. Each transcript
+    MCP call takes the proxy entry with the same name and arguments, to show its reply."""
+    if not any(e.get("type") == "tool_start" for e in events):
+        return trace
+    unused = [e for e in trace if e.get("channel") == "mcp" and e.get("source") == "proxy"]
+    ordered = []
+    for group in tt.wendy_entries(events):
+        for e in group:
+            if e["channel"] == "mcp":
+                match = next((u for u in unused if _key(u) == _key(e)), None)
+                if match is not None:
+                    unused.remove(match)
+                    e = match
+            ordered.append(e)
+    return ordered + unused
+
+
+def _unanswered(events):
+    """Names of tools the transcript started and never saw a result for."""
+    answered = {(e.get("agent_id", ""), e.get("id")) for e in events if e.get("type") == "tool_result"}
+    names = []
+    for index, e in enumerate(events):
+        if e.get("type") == "tool_start" and (e.get("agent_id", ""), e.get("id", f"#{index}")) not in answered:
+            if e.get("tool") not in names:
+                names.append(e.get("tool"))
+    return names
+
+
 def _restarted(row, previous):
     now, before = _dict(row.get("device_markers")), _dict(previous and previous.get("device_markers"))
     if not now or not before:
@@ -145,10 +175,15 @@ def classify(row, directory, tool_names, guards, previous=None):
     metrics = _dict(row.get("metrics"))
     trace = [e for e in (metrics.get("tool_trace") or []) if isinstance(e, dict)]
     cli_records = [r for r in _records(adir / "cli.jsonl")]
+    path = adir / "agent.stdout"
+    events = b.read_events(path)[0] if path.exists() else []
+    ordered = _chronological(trace, events)
     findings = []
 
     def add(section, item, detail, index=None):
-        window = trace[:index + 1] if index is not None else trace
+        # `index` is a position in `trace`; the excerpt is cut at that entry in transcript order.
+        at = next((i for i, e in enumerate(ordered) if index is not None and e is trace[index]), None)
+        window = ordered[:at + 1] if at is not None else ordered
         findings.append({"section": section, "item": item, "task": task, "expected": _expected(expect),
                          "detail": detail, "excerpt": "\n".join(_line(e) for e in window[-6:]),
                          "trace_path": str(adir)})
@@ -158,20 +193,41 @@ def classify(row, directory, tool_names, guards, previous=None):
     if _restarted(row, previous):
         add("tool", "Agent or device restart", "the agent socket or the device uptime changed since the previous attempt")
     counted = b.scored(row)
+    timed_out = row.get("status") == "timeout" or bool(_dict(_dict(row.get("stages")).get("agent")).get("timed_out"))
     if not counted and row.get("status") != "timeout":
         return findings
+    hung = set()
     for i, e in enumerate(trace):
         if e.get("channel") == "mcp" and e.get("source") == "proxy" and not e.get("canned") and e.get("is_error") is None:
             add("tool", "Hang", f"{e.get('name')} never answered", i)
+            hung.add(e.get("name"))
+    if timed_out:
+        # The proxy logs unanswered calls only when it exits cleanly, and a timeout kills it first.
+        for name in _unanswered(events):
+            if name not in hung:
+                add("tool", "Hang", f"{name} never answered", None)
     if not counted:
         return findings
 
     adapter = row.get("adapter")
     outcome = _dict(row.get("tool_choice")).get("outcome")
     final_text = metrics.get("final_text") or ""
+    metrics_errors = metrics.get("agent_errors")
+    unjudged = None
+    if row.get("status") == "mcp_unverified":
+        unjudged = "status mcp_unverified: the model's tool calls never reached the proxy"
+    elif metrics_errors:
+        unjudged = f"the agent reported an error: {_clip(metrics_errors[0] if isinstance(metrics_errors, list) else metrics_errors, 100)}"
+    elif metrics.get("agent_completed") is False and row.get("status") != "timeout":
+        unjudged = "the agent did not finish its turn"
+    if unjudged:
+        add("undetermined", "Undetermined", unjudged)
     asked = outcome == "missed" and "?" in final_text and not expect.get("ask")
     verifier_failed = row.get("kind", "task") == "task" and row.get("outcome_verified") is False
 
+    blame = unjudged is None
+    if not blame:
+        outcome = None
     if outcome == "wrong":
         entry = _dict(row.get("tool_choice")).get("entry")
         e = trace[entry] if isinstance(entry, int) and 0 <= entry < len(trace) else {}
@@ -185,23 +241,22 @@ def classify(row, directory, tool_names, guards, previous=None):
         add("model", "Missing tool", f"never called {_expected(expect)}")
 
     known = set(tool_names) | tt.CHAT_BUILTINS | {"workspace_exec"}
-    path = adir / "agent.stdout"
-    events = b.read_events(path)[0] if path.exists() else []
     made_up = []
     for group in tt.wendy_entries(events):
         for e in group:
             if e["channel"] == "mcp" and e["name"] not in known and e["name"] not in made_up:
                 made_up.append(e["name"])
-    for name in made_up:
+    for name in made_up if blame else []:
         add("model", "Made-up tool", name)
 
     for i, e in enumerate(trace):
-        if e.get("canned") and any(grading.matches(m, e, adapter) for m in guards):
+        if e.get("canned") and blame and any(grading.matches(m, e, adapter) for m in guards):
             add("model", "Touched the benchmark", f"{e.get('name')} would have ended the run", i)
         elif e.get("channel") == "mcp" and not e.get("canned") and e.get("is_error") is True:
             text = e.get("reply_text") or ""
             if "INVALID_ARGUMENT" in text:
-                add("model", "Bad arguments", f"{e.get('name')} [INVALID_ARGUMENT]", i)
+                if blame:
+                    add("model", "Bad arguments", f"{e.get('name')} [INVALID_ARGUMENT]", i)
             else:
                 add("tool", "Tool error", f"{e.get('name')} [{_error_code(text)}]", i)
     for record in cli_records:
@@ -210,15 +265,16 @@ def classify(row, directory, tool_names, guards, previous=None):
             add("tool", "Tool error", f"wendy {' '.join(tt.cli_path(argv))} [exit {record['exit_code']}]")
 
     start = 0
-    while start < len(trace):
+    while blame and start < len(ordered):
         end = start
-        while end + 1 < len(trace) and _key(trace[end + 1]) == _key(trace[start]):
+        while end + 1 < len(ordered) and _key(ordered[end + 1]) == _key(ordered[start]):
             end += 1
         if end - start + 1 >= 3:
-            add("model", "Repeated call", f"{trace[start].get('name')} x{end - start + 1} with the same arguments", end)
+            add("model", "Repeated call", f"{ordered[start].get('name')} x{end - start + 1} with the same arguments",
+                trace.index(ordered[end]) if any(e is ordered[end] for e in trace) else None)
         start = end + 1
 
-    if verifier_failed and outcome not in ("wrong", "went_around") and not asked:
+    if blame and verifier_failed and outcome not in ("wrong", "went_around") and not asked:
         rights = [m for m in expect.get("right", []) if isinstance(m, dict)]
         if not rights:
             add("undetermined", "Undetermined", "the verifier failed and the task lists no expected tool")
@@ -271,7 +327,8 @@ def load_run(directory):
             findings.append({"section": "undetermined", "item": "Undetermined", "task": str(row.get("task")),
                              "expected": "", "detail": f"could not classify this attempt: {error!r}",
                              "excerpt": "", "trace_path": str(attempt_dir(directory, row))})
-        previous = row
+        if row.get("device_markers"):  # a row without markers (an interrupted attempt) is no baseline
+            previous = row
     manifest = _dict(_read_json(directory / "manifest.json", {}))
     halt = _read_json(directory / "halt.json", None)
     model = info.get("model") or next((r.get("model_requested") for r in rows if r.get("model_requested")), None)
@@ -331,6 +388,13 @@ def render_markdown(runs):
         lines.append(f"| {headers[0][i][0]} | " + " | ".join(_fmt(h[i][1]) for h in headers) + " |")
     lines += ["", "Model deviations are the model's own mistakes. Unexpected tool behavior is Wendy's tools, the agent "
               "or the device, and is never blamed on the model. Limits are listed separately and count for nothing.", ""]
+    notes = []
+    for run in runs:
+        found = run["info"].get("notes")
+        notes += [f"{(run['name'] + ': ') if len(runs) > 1 else ''}{n}"
+                  for n in (found if isinstance(found, list) else []) if isinstance(n, str)]
+    if notes:
+        lines += ["## Notes", ""] + [f"- {n}" for n in notes] + [""]
     for section, title in SECTIONS:
         lines += [f"## {title}", ""]
         keys = {}
@@ -365,11 +429,18 @@ def render_markdown(runs):
     lines += ["## Not run", ""]
     shown = False
     for run in runs:
+        who = (run["name"] + ": ") if len(runs) > 1 else ""
         for e in run["coverage"] if isinstance(run["coverage"], list) else []:
-            if isinstance(e, dict) and e.get("status") != "ready":
+            if not isinstance(e, dict):
+                continue
+            if e.get("status") != "ready":
                 shown = True
-                lines.append(f"- {(run['name'] + ': ') if len(runs) > 1 else ''}{e.get('task')} on {e.get('target')}: "
-                             f"{e.get('reason') or e.get('status')}")
+                lines.append(f"- {who}{e.get('task')} on {e.get('target')}: {e.get('reason') or e.get('status')}")
+                continue
+            left = sum(a.get("not_run", 0) for a in _dict(e.get("agents")).values() if isinstance(a, dict))
+            if left:
+                shown = True
+                lines.append(f"- {who}{e.get('task')} on {e.get('target')}: {left} attempts not reached")
     lines += [""] if shown else ["Everything configured was run.", ""]
     return "\n".join(lines).rstrip("\n") + "\n"
 
