@@ -17,6 +17,7 @@ struct MobileRootView: View {
     @State private var setupSignInAfterDismiss = false
     @State private var recognizing = false
     @State private var accounts = false
+    @State private var pendingAccountSignIn: Bool?
     @State private var details: String?
     private var devices: [Device] {
         (source == "nearby" ? model.nearby : model.cloud).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
@@ -128,14 +129,24 @@ struct MobileRootView: View {
                 await model.refreshNearby()
             }
         }) { NearbySetupView { setupSignInAfterDismiss = true } }
-        .sheet(isPresented: $accounts) {
-            MobileAccountsView(model: model) { development in
-                accounts = false
+        .sheet(isPresented: $accounts, onDismiss: {
+            if let development = pendingAccountSignIn {
+                pendingAccountSignIn = nil
                 actions.submit { await model.signIn(development: development) }
+            }
+        }) {
+            MobileAccountsView(model: model) { development in
+                pendingAccountSignIn = development
+                accounts = false
             }
         }
         .sheet(isPresented: Binding(get: { model.loginURL != nil }, set: { if !$0 { actions.submit { await model.cancelLogin() } } })) {
-            if let url = model.loginURL { BrowserSheet(url: url).ignoresSafeArea() }
+            if let url = model.loginURL {
+                BrowserSheet(url: url).ignoresSafeArea()
+                    #if targetEnvironment(simulator) && DEBUG
+                    .safeAreaInset(edge: .bottom) { SimulatorSignInLink(url: url) }
+                    #endif
+            }
         }
         .sheet(isPresented: Binding(get: { model.webpageURL != nil }, set: { if !$0 { model.webpageURL = nil } })) {
             if let url = model.webpageURL { BrowserSheet(url: url).ignoresSafeArea() }
@@ -331,7 +342,7 @@ private struct MobileAccountsView: View {
         NavigationStack {
             List {
                 Section {
-                    NavigationLink { CloudManagementView().navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
+                    NavigationLink { CloudManagementView(requestSignIn: { signIn(false) }).navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
                     NavigationLink { MobileVPNView(model: model, vpn: model.vpn) } label: { Label("Connection settings", systemImage: "network") }
                 }
                 if accounts.isEmpty && model.account?.signedIn != true {
