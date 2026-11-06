@@ -1393,6 +1393,10 @@ def main():
         rows.append(row)
     total, plan = len(plan), remaining_plan(plan, rows)
     ran = []
+    if args.resume:
+        # Recovered rows may have emptied the plan, so the loop below would never refresh these.
+        report(rows, output)
+        dump(output / "coverage.json", coverage_results(coverage, rows, agents, args.repetitions))
     if on_disposable and not first:
         # The interrupted attempt may have left an app or a held port; clear them before the first attempt
         # so that failure isn't scored against the model.

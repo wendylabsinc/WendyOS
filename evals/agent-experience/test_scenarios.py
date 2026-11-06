@@ -1496,6 +1496,17 @@ class ExecuteTests(unittest.TestCase):
         for line in (output / "results.jsonl").read_text().splitlines():
             self.addCleanup(shutil.rmtree, json.loads(line)["workspace"], True)
 
+    def test_resume_with_nothing_left_to_run_refreshes_the_summary_and_coverage(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        (directory / "results.jsonl").write_text("")  # the row was lost; its result.json was saved
+        code, text, rows = self.resume_main(directory, "--repetitions", "1")
+        self.assertEqual((code, len(rows)), (0, 1), text)
+        summary = json.loads((directory / "summary.json").read_text())
+        self.assertEqual((summary[0]["attempts"], summary[0]["successes"]), (1, 1))
+        agents = json.loads((directory / "coverage.json").read_text())[0]["agents"]["fake"]
+        self.assertEqual((agents["attempts"], agents["not_run"]), (1, 0))
+
     def test_unreadable_capabilities_halt_a_disposable_pass_with_a_reason(self):
         self.config["targets"]["local"] = dict(LOCAL_TARGET)  # capabilities None: read under --execute
         code, text, output = self.disposable_main("--repetitions", "1", capabilities=None)
