@@ -46,6 +46,15 @@ device deployment; it does not fan deployment out to every fleet member.
 - `after_trigger` must be positive and at most `24h`. `drain` accepts `0s`
   through `30s`, defaults to `2s`, and accepts late app results after sensor
   capture stops. It extends episode lifetime, not sensor recording duration.
+- `extend: true` keeps an episode recording while its condition is active:
+  matching events, manual triggers, and inference detections until
+  `clear_after` clears them. It ends `after_trigger` after the last activity.
+  `max_duration`, only with `extend`, from `after_trigger` through `24h` and
+  `1m` by default, seals a part and opens a linked follow-up while the event
+  continues. Follow-ups overlap about 2 s instead of repeating `buffer` and
+  omit `notify`. The manifest's `extension` has `part`, `previous_episode`,
+  `next_episode`, and `end_reason` (`event_cleared`, `max_duration`,
+  `manual_stop`).
 - Camera `continuous` and `snapshot` modes are implemented. Snapshot requires
   `interval`, for example `2s`, and a transport that delivers whole access
   units. Byte-chunk streams record continuously and explain this in the
@@ -67,7 +76,8 @@ device deployment; it does not fan deployment out to every fleet member.
   availability before reporting that a campaign can collect its sources.
 
 Each campaign has at most one active capture. A trigger during that capture is
-dropped; different campaigns can record concurrently. A trigger during the
+dropped, or extends it with `extend: true`; different campaigns can record
+concurrently. A trigger during the
 post-capture drain can start the next episode after the previous drain finishes.
 
 ## Deploy and verify
