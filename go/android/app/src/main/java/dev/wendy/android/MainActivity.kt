@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
         model = ViewModelProvider(this)[WendyModel::class.java]
         setContent {
             WendyTheme {
-                WendyApp(model) { url ->
+                WendyApp(model, intent?.action == WendyVpnService.OPEN) { url ->
                     try {
                         val uri = Uri.parse(url)
                         require(uri.scheme in setOf("https", "http")) { "Unsupported link" }
@@ -50,12 +50,12 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WendyApp(model: WendyModel, openURL: (String) -> Unit) {
+fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> Unit) {
     var tab by rememberSaveableState("Devices")
     var accounts by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf(false) }
     var addDevice by remember { mutableStateOf(false) }
-    var setup by rememberSaveableState("")
+    var setup by rememberSaveableState(if (openVpn) "vpn" else "")
     LaunchedEffect(model.browserURL) { model.browserURL?.let { model.browserURL = null; openURL(it) } }
     BackHandler(model.selected != null || setup.isNotBlank()) { if (setup.isNotBlank()) setup = "" else model.disconnect() }
     Scaffold(

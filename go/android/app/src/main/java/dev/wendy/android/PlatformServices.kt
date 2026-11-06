@@ -9,6 +9,10 @@ import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.ConnectivityManager
+import android.net.DnsResolver
+import android.net.NetworkCapabilities
+import android.os.CancellationSignal
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -52,6 +56,25 @@ class PlatformServices(private val context: Context) {
     }
     private fun dispatch(method: String, args: JSONObject): Any? {
         when (method) {
+            "dns.query" -> {
+                // Wendy is excluded from its VPN, so its default network is the
+                // physical uplink. Never send fallback queries into another VPN.
+                val connectivity = context.getSystemService(ConnectivityManager::class.java)
+                val network = connectivity.activeNetwork ?: error("No network for DNS")
+                check(connectivity.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true) { "No underlying network for DNS" }
+                val packet = Base64.decode(args.getString("packet"), Base64.DEFAULT)
+                require(packet.size in 12..4096) { "Invalid DNS packet" }
+                val result = CompletableFuture<ByteArray>()
+                val cancellation = CancellationSignal()
+                try {
+                    DnsResolver.getInstance().rawQuery(network, packet, DnsResolver.FLAG_EMPTY, Executor { it.run() }, cancellation,
+                        object : DnsResolver.Callback<ByteArray> {
+                            override fun onAnswer(answer: ByteArray, rcode: Int) { result.complete(answer) }
+                            override fun onError(error: DnsResolver.DnsException) { result.completeExceptionally(error) }
+                        })
+                    return Base64.encodeToString(result.get(args.optLong("timeoutMs", 10000).coerceIn(1, 10000), TimeUnit.MILLISECONDS), Base64.NO_WRAP)
+                } finally { cancellation.cancel() }
+            }
             "ble.check" -> { checkBluetooth(scanning = true); return true }
             "ble.scanStart" -> {
                 checkBluetooth(scanning = true); check(scans.size < 16) { "Too many Bluetooth scans" }
