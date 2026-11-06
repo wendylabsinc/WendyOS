@@ -243,6 +243,23 @@ class Capture(unittest.TestCase):
         self.assertIn("profile_skill", tool_trace.CHAT_BUILTINS)
 
 
+class DeviceFacts(unittest.TestCase):
+    def test_reads_what_device_info_json_emits(self):
+        info = {"cliVersion": "dev", "deviceType": "jetson-agx-thor", "osVersion": "WendyOS-0.20.1",
+                "version": "0.20.1-agent", "cudaVersion": "13.2", "memTotalBytes": 131857190912}
+        with mock.patch.object(od.subprocess, "run", return_value=mock.Mock(stdout=json.dumps(info))) as run:
+            facts = od.device_facts("/w", {})
+        self.assertEqual(facts, {"agent_version": "0.20.1-agent", "os_version": "WendyOS-0.20.1",
+                                 "device": "jetson-agx-thor"})
+        self.assertIn("info", run.call_args.args[0])
+
+    def test_unreadable_output_leaves_the_fields_empty(self):
+        with mock.patch.object(od.subprocess, "run", return_value=mock.Mock(stdout="not json")), \
+                mock.patch.object(od, "DEVICE_TREE_MODEL_PATHS", ()):
+            facts = od.device_facts("/w", {})
+        self.assertEqual(facts, {"agent_version": None, "os_version": None, "device": None})
+
+
 class Baseline(unittest.TestCase):
     def serve(self, reply):
         from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -281,6 +298,16 @@ class Baseline(unittest.TestCase):
         url, _ = self.serve({"choices": []})
         with self.assertRaises(ValueError):
             od.measure_baseline(url, {"messages": []})
+
+
+class FakeProcess:
+    """What subprocess.Popen returns for the benchmark: stderr lines, then an exit code."""
+
+    def __init__(self, returncode=0, stderr=()):
+        self.returncode, self.stderr = returncode, iter(stderr)
+
+    def wait(self):
+        return self.returncode
 
 
 class RunPass(unittest.TestCase):
@@ -331,7 +358,7 @@ class RunPass(unittest.TestCase):
             self.assertNotEqual(self.quiet(self.env), 0)
         self.assertIn("disk gone", self.last_error())
 
-    def healthy_pass(self, exit_code=0, notes_tools=79, baseline=17000):
+    def healthy_pass(self, exit_code=0, notes_tools=79, baseline=17000, stderr=()):
         """Patch the heavy parts: the download, the server, the capture and the baseline."""
         server = mock.Mock()
         server.wait_healthy.return_value = True
@@ -344,7 +371,7 @@ class RunPass(unittest.TestCase):
             mock.patch.object(od, "measure_baseline", return_value={
                 "baseline_prompt_tokens": baseline, "prompt_per_second": 400.0, "predicted_per_second": 20.0}),
             mock.patch.object(od, "device_facts", return_value={"agent_version": "1.2", "os_version": "0.20", "device": "thor"}),
-            mock.patch.object(od.subprocess, "run", return_value=mock.Mock(returncode=exit_code)),
+            mock.patch.object(od.subprocess, "Popen", return_value=FakeProcess(exit_code, stderr)),
         ]
         mocks = [p.start() for p in patches]
         for p in patches:
@@ -425,6 +452,35 @@ class RunPass(unittest.TestCase):
         self.assertIn("healthy", self.last_error())
         run.assert_not_called()
         server.stop.assert_called()
+
+    def test_latest_points_at_the_pass_while_the_benchmark_runs(self):
+        seen = []
+
+        def popen(argv, **kwargs):
+            seen.append(os.path.realpath(self.results / "latest"))
+            return FakeProcess(0)
+
+        _, run = self.healthy_pass()
+        run.side_effect = popen
+        self.quiet(self.env)
+        self.assertEqual(seen, [os.path.realpath(self.pdir())])
+
+    def test_a_benchmark_crash_leaves_its_reason_and_still_reaches_the_container_log(self):
+        self.healthy_pass(exit_code=2, stderr=["usage: benchmark.py\n", "benchmark.py: error: bad flag\n"])
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            self.assertEqual(od.run_pass(self.env), 2)
+        text = self.last_error()
+        self.assertIn("exit code 2", text)
+        self.assertIn("error: bad flag", text)
+        self.assertIn("error: bad flag", err.getvalue())
+
+    def test_a_halt_keeps_its_own_reason_in_halt_json(self):
+        _, run = self.healthy_pass(exit_code=3, stderr=["noise\n"])
+        pdir = self.pdir()
+        run.side_effect = lambda argv, **kw: (pdir.joinpath("halt.json").write_text('{"reason": "r"}'), FakeProcess(3, ["noise\n"]))[1]
+        self.quiet(self.env)
+        self.assertFalse((self.results / "last-error.txt").exists())
 
     def test_eval_limit_and_repetitions_reach_the_benchmark(self):
         _, run = self.healthy_pass()

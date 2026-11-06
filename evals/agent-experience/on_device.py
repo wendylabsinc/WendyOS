@@ -2,6 +2,7 @@
 check what `wendy chat` sends it, run benchmark.py, and leave the report on the device.
 Python standard library only."""
 
+import collections
 import json
 import os
 import re
@@ -281,37 +282,25 @@ def mcp_tool_names(wendy, env):
     return {t["name"] for t in benchmark.list_all_tools(wendy, dict(env))}
 
 
-def _find(value, keys):
-    if isinstance(value, dict):
-        for key in keys:
-            if isinstance(value.get(key), (str, int, float)) and value[key] != "":
-                return str(value[key])
-        for child in value.values():
-            found = _find(child, keys)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = _find(child, keys)
-            if found:
-                return found
-    return None
+DEVICE_TREE_MODEL_PATHS = ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model")
 
 
 def device_facts(wendy, env):
-    """Best-effort device description for the report header; a field that can't be read stays None."""
+    """Best-effort device description for the report header, from `device info --json` (`version` is the
+    agent's); a field that can't be read stays None."""
     facts = {"agent_version": None, "os_version": None, "device": None}
     try:
         done = subprocess.run([wendy, "--json", "--device", "local", "device", "info"], env=env,
                               capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
         data = json.loads(done.stdout)
-        facts["agent_version"] = _find(data, ("agent_version", "agentVersion"))
-        facts["os_version"] = _find(data, ("os_version", "osVersion", "os_release"))
-        facts["device"] = _find(data, ("device_type", "deviceType", "model", "board"))
+        if isinstance(data, dict):
+            for fact, key in (("agent_version", "version"), ("os_version", "osVersion"), ("device", "deviceType")):
+                if data.get(key) not in (None, ""):
+                    facts[fact] = str(data[key])
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     if not facts["device"]:
-        for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+        for path in DEVICE_TREE_MODEL_PATHS:
             try:
                 facts["device"] = Path(path).read_bytes().rstrip(b"\0").decode(errors="replace") or None
                 break
@@ -347,6 +336,18 @@ def _print_header(pdir):
         header.append(line)
     print("\n".join(header[:40]))
     print(f"\nFull report: {pdir / 'report.md'}")
+
+
+def run_benchmark(argv, cwd, env, tail_lines=40):
+    """Run benchmark.py with stderr passed through to the container log and its tail kept. Returns
+    (exit code, tail)."""
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stderr=subprocess.PIPE, text=True, errors="replace")
+    tail = collections.deque(maxlen=tail_lines)
+    for line in process.stderr:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+        tail.append(line.rstrip("\n"))
+    return process.wait(), "\n".join(tail)
 
 
 def run_pass(environ):
@@ -440,14 +441,17 @@ def run_pass(environ):
         _write_json(config_path, config)
         task_ids = [t["id"] for t in json.loads((harness / "tasks.json").read_text())]
         _write_json(pdir / "pass.json", {"status": "running", "model": model_id, "label": label})
-        done = subprocess.run(
+        _point_latest(results, pdir)  # readable from the first attempt on, and never another model's report
+        returncode, tail = run_benchmark(
             [sys.executable, str(harness / "benchmark.py"),
-             *benchmark_argv(config_path, task_ids, repetitions, wendy, treatment, pdir, limit)], cwd=harness, env=env)
-        _write_json(pdir / "pass.json", {"status": "finished" if done.returncode == 0 else "halted",
-                                         "exit_code": done.returncode, "model": model_id, "label": label})
-        _point_latest(results, pdir)
+             *benchmark_argv(config_path, task_ids, repetitions, wendy, treatment, pdir, limit)], harness, env)
+        _write_json(pdir / "pass.json", {"status": "finished" if returncode == 0 else "halted",
+                                         "exit_code": returncode, "model": model_id, "label": label})
+        if returncode != 0 and not (pdir / "halt.json").exists():  # a halt explains itself; a crash must too
+            (results / "last-error.txt").write_text(
+                f"benchmark.py exited with exit code {returncode} and no halt reason. Last stderr:\n{tail}\n")
         _print_header(pdir)
-        return done.returncode
+        return returncode
     except Exception as error:  # a pass must leave a reason, not a traceback in a container that then idles
         return fail(f"{type(error).__name__}: {error}")
     finally:

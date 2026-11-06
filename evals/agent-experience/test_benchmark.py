@@ -485,6 +485,26 @@ class MetricsTests(unittest.TestCase):
 class DisposableDeviceTests(unittest.TestCase):
     SOCKET = {"WENDY_AGENT_SOCKET": "/run/wendy.sock"}
 
+    def test_wait_for_model_returns_once_the_server_recovers(self):
+        answers, sleeps = iter([False, False, True]), []
+        self.assertTrue(b.wait_for_model({"model_health_url": "u"}, timeout=900, poll=5,
+                                         health=lambda: next(answers), sleep=sleeps.append, clock=lambda: 0))
+        self.assertEqual(sleeps, [5, 5])
+
+    def test_wait_for_model_gives_up_after_the_timeout(self):
+        now, sleeps = [0], []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            now[0] += seconds
+
+        self.assertFalse(b.wait_for_model({"model_health_url": "u"}, timeout=20, poll=5,
+                                          health=lambda: False, sleep=sleep, clock=lambda: now[0]))
+        self.assertEqual(sum(sleeps), 20)
+
+    def test_wait_for_model_does_not_wait_when_health_is_unknown(self):
+        self.assertTrue(b.wait_for_model({}, health=lambda: None, sleep=lambda s: self.fail("slept")))
+
     def test_disposable_needs_both_the_flag_and_the_socket(self):
         for flag in (True, False, None):
             for socket in (True, False):

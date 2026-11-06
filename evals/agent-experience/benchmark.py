@@ -588,6 +588,22 @@ def model_server_healthy(config, timeout=5):
         return False
 
 
+MODEL_WAIT_SECONDS = 900
+
+
+def wait_for_model(config, timeout=MODEL_WAIT_SECONDS, poll=5, health=None, sleep=time.sleep, clock=time.monotonic):
+    """Wait for the model server to answer its health URL, so a restart after a crash isn't scored as the
+    next attempt's failure. True when it is healthy or its health is unknown; False when it never recovers."""
+    check = health if health is not None else (lambda: model_server_healthy(config))
+    deadline = clock() + timeout
+    while True:
+        if check() is not False:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(poll)
+
+
 def infra_status(events, config, health=None):
     """An unscored status when the agent's error came from the model server's limits, else None. Called
     after the agent phase on a disposable device only. `health()` says whether the model server answers."""
@@ -1426,6 +1442,11 @@ def main(argv=None):
             reserve = config.get("scenario_reserve_usd", .5) if kind == "scenario" else config.get("trial_reserve_usd", 15)
             if spend + reserve > config.get("budget_usd", 100):
                 print("Stopping at the configured budget reserve.")
+                break
+            if on_disposable and not wait_for_model(config):
+                halt = (f"The model server did not become healthy within {MODEL_WAIT_SECONDS} s; "
+                        "stopping before an attempt is scored against a dead server.")
+                print(halt)
                 break
             print(f"[{i}/{total}] {agent} / {target} / {task['id']} "
                   f"({'scenario, ' if kind == 'scenario' else ''}agent limit {agent_timeout(config, task):g}s)", flush=True)

@@ -1094,6 +1094,9 @@ class MainTests(unittest.TestCase):
 
 class ExecuteTests(unittest.TestCase):
     def setUp(self):
+        wait = mock.patch.object(b, "wait_for_model", return_value=True)  # nothing listens on HEALTH_URL
+        wait.start()
+        self.addCleanup(wait.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
@@ -1353,6 +1356,19 @@ class ExecuteTests(unittest.TestCase):
         reason = json.loads((output / "halt.json").read_text())["reason"]
         self.assertIn("sweep failed twice", reason)
         self.assertIn(reason, text)
+
+    def test_a_model_server_that_never_recovers_halts_before_the_attempt(self):
+        with mock.patch.object(b, "wait_for_model", return_value=False):
+            code, text, output = self.disposable_main("--repetitions", "2")
+        self.assertEqual(code, 3)
+        reason = json.loads((output / "halt.json").read_text())["reason"]
+        self.assertIn("model server", reason)
+        self.assertFalse((output / "results.jsonl").exists())
+
+    def test_the_model_is_awaited_before_every_attempt(self):
+        with mock.patch.object(b, "wait_for_model", return_value=True) as wait:
+            self.disposable_main("--repetitions", "3")
+        self.assertEqual(wait.call_count, 3)
 
     def test_a_failed_sweep_then_a_clean_one_resets_the_count(self):
         bad = {"removed": [], "failed": ["stuck"], "list_error": None}

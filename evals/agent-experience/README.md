@@ -469,22 +469,28 @@ Deploy from this directory on a spare Thor (the device is expected to break):
 ```sh
 sh evals/agent-experience/stage-on-device.sh   # from the repo root: wendy for linux/arm64 + the skills
 cd evals/agent-experience
-EVAL_MODEL=qwen3.8-flash-next wendy run --device <thor>
+wendy run --device <thor> --detach --env EVAL_MODEL=qwen3.8-flash-next
 ```
+
+Use `--detach`: Ctrl-C on an attached run stops the container, which counts as an explicit stop
+and the app is not restarted. `wendy run` passes the container only the `wendy.json` environment
+and `--env` values, so shell variables such as `EVAL_MODEL=... wendy run` never reach it; give
+each setting as its own `--env KEY=VALUE`.
 
 `stage-on-device.sh` needs Docker, stops under 6 GiB of free disk, and keeps the Go
 module cache in the `wendy-evals-gomod` volume. It prunes nothing.
 
 The first start downloads the model into the `/models` volume, checking each file's
 SHA-256 (Flash is 102 GB, so a slow link takes hours; the download resumes).
-Settings are environment variables: `EVAL_MODEL` (default `qwen3.8-flash-next`),
+Settings are environment variables, passed with `--env`: `EVAL_MODEL` (default `qwen3.8-flash-next`),
 `EVAL_REPETITIONS` (1), `EVAL_PASS` (1), `EVAL_CONTEXT` (overrides the pin's context)
 and `EVAL_LIMIT` (run only the first N attempts). A pass refuses to start, and leaves
 the reason in `/results/last-error.txt`, when memory is short, the download fails,
 `wendy chat` sends a tool nobody can explain, or its baseline prompt takes more than
 half the context.
 
-Read the report once an attempt has finished; it is rewritten after every attempt:
+`/results/latest` points at the running pass from its first attempt on. The report is rewritten
+after every attempt:
 
 ```sh
 wendy device attach sh.wendy.evals.model-tool-report -- cat /results/latest/report.md
@@ -496,8 +502,9 @@ GPU back. Starting it again, or a reboot, resumes a pass that was halted or cut 
 A pass whose `pass.json` says `finished` is not rerun. A new model, a new CLI commit
 or a new `EVAL_PASS` starts a new pass directory under `/results`.
 
-Switch models by setting `EVAL_MODEL` to a key in `models.json` (`qwen3.8-flash-next`
-or `qwen3-coder-30b-a3b`) and redeploying. Adding a model means adding a pin with its
+Switch models by redeploying with `--env EVAL_MODEL=<key>`, a key in `models.json`
+(`qwen3.8-flash-next` or `qwen3-coder-30b-a3b`), for example
+`wendy run --device <thor> --detach --env EVAL_MODEL=qwen3-coder-30b-a3b`. Adding a model means adding a pin with its
 repo, revision, file sizes and SHA-256s.
 
 Accepted risks: the device is disposable, and a reflash loses the report. The
