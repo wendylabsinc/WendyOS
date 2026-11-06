@@ -10,6 +10,7 @@
 		00038EEF3EBF0704734DA832 /* ThermalCameraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F8A73277DE33706D2B45EA /* ThermalCameraTests.swift */; };
 		000A6AEFAE84BB8282468B4E /* DataVisualVideoController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */; };
 		00E042DD50846DC379789994 /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DDA1A07827F3064598323B /* ActivityView.swift */; };
+		01A3D68A9446E4C6532B8C27 /* DevicesLensUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9DD586337A858C401C64055 /* DevicesLensUITests.swift */; };
 		0241B66CD1765EBCC8719BE3 /* SitePhotoReconstruction.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2B8E82B3B1B4139C89D7CAF /* SitePhotoReconstruction.swift */; };
 		029B7B146468C1CD6FCCC18B /* InstallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0EBD1A032792BDF75E472D /* InstallView.swift */; };
 		02D7725C91B17BB9DA8CC191 /* SiteFogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86688E5547A234D7615F2455 /* SiteFogTests.swift */; };
@@ -315,6 +316,13 @@
 			remoteGlobalIDString = ACDB653814C81DAD375DF0E3;
 			remoteInfo = WendyMobileNetwork;
 		};
+		715D8E7648DCE3CE65C6C158 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C5243DACF2D4DAE0E7489603 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4660FE6CC78F07FE7C2A1CD9;
+			remoteInfo = WendyMobile;
+		};
 		72D25EA97182AF311BE60C1E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C5243DACF2D4DAE0E7489603 /* Project object */;
@@ -361,6 +369,7 @@
 		02EB82B6FACB20593A314081 /* SiteRobotClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotClient.swift; sourceTree = "<group>"; };
 		034293D95F249B1C1F01C7EB /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		06B7248B98936E44D52F71A1 /* SiteCameraAlignment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteCameraAlignment.swift; sourceTree = "<group>"; };
+		06D8E9CB459FB57B0D61D73D /* WendyMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WendyMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0735D8E8691C826856A65809 /* CloudManagementModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudManagementModel.swift; sourceTree = "<group>"; };
 		08EBBD001E30821573005D77 /* SiteFogRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteFogRenderer.swift; sourceTree = "<group>"; };
 		0A4D2D6DE0D1E37980887965 /* SiteScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteScene.swift; sourceTree = "<group>"; };
@@ -480,6 +489,7 @@
 		B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerTimeline.swift; sourceTree = "<group>"; };
 		B5EEDDF6B4AA3E5169763239 /* InstallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSession.swift; sourceTree = "<group>"; };
 		B709AF3886D5AA315D17DFD6 /* GoClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoClient.swift; sourceTree = "<group>"; };
+		B9DD586337A858C401C64055 /* DevicesLensUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesLensUITests.swift; sourceTree = "<group>"; };
 		BA23B0D7727ED3129258D1B9 /* MobileVPNController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileVPNController.swift; sourceTree = "<group>"; };
 		BBC0B11A4A7AAAF5F0758714 /* LiteTemperatureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteTemperatureView.swift; sourceTree = "<group>"; };
 		BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualVideoController.swift; sourceTree = "<group>"; };
@@ -595,6 +605,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0ABEDC79CF607FC61800D7A7 /* UITests-iOS */ = {
+			isa = PBXGroup;
+			children = (
+				B9DD586337A858C401C64055 /* DevicesLensUITests.swift */,
+			);
+			path = "UITests-iOS";
+			sourceTree = "<group>";
+		};
 		0DB8417C2A50FE33FE87A72C /* go */ = {
 			isa = PBXGroup;
 			children = (
@@ -694,6 +712,7 @@
 				5EDCD13DC5A01C0586B8D8FA /* Sources */,
 				444F0C4441C02DF2AA6E16F1 /* Tests */,
 				4FE7BDE560CB2771FA9DF7F8 /* Tests-iOS */,
+				0ABEDC79CF607FC61800D7A7 /* UITests-iOS */,
 				EFDF8EDA35420C85F2E30E12 /* Frameworks */,
 				45F39591A87CEA48A518A2D2 /* Products */,
 			);
@@ -748,6 +767,7 @@
 				1E8FB9DB028D1128312D0D2B /* WendyMobile.app */,
 				56198895936025F0A68D94CF /* WendyMobileNetwork.appex */,
 				70C401F859DE05580E5140F4 /* WendyMobileTests.xctest */,
+				06D8E9CB459FB57B0D61D73D /* WendyMobileUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -966,6 +986,24 @@
 			productReference = 1E8FB9DB028D1128312D0D2B /* WendyMobile.app */;
 			productType = "com.apple.product-type.application";
 		};
+		5198757F852AB57452928A68 /* WendyMobileUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 321078DE2414EF76E3B3CDFE /* Build configuration list for PBXNativeTarget "WendyMobileUITests" */;
+			buildPhases = (
+				F414FA5A73FF665BE7584B24 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4CBAB303F1405D0CDFAB0570 /* PBXTargetDependency */,
+			);
+			name = WendyMobileUITests;
+			packageProductDependencies = (
+			);
+			productName = WendyMobileUITests;
+			productReference = 06D8E9CB459FB57B0D61D73D /* WendyMobileUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		66549B7B32DEF8896208E2C0 /* WendyDesktopTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DF22430FFA26BB0FE437F64E /* Build configuration list for PBXNativeTarget "WendyDesktopTests" */;
@@ -1058,6 +1096,11 @@
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
+					5198757F852AB57452928A68 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = 4660FE6CC78F07FE7C2A1CD9;
+					};
 					66549B7B32DEF8896208E2C0 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -1094,11 +1137,12 @@
 			projectRoot = "";
 			targets = (
 				061A3B38F40254E591224986 /* WendyDesktop */,
+				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 				66549B7B32DEF8896208E2C0 /* WendyDesktopTests */,
 				4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */,
 				ACDB653814C81DAD375DF0E3 /* WendyMobileNetwork */,
 				9F296B433343571747FBC234 /* WendyMobileTests */,
-				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
+				5198757F852AB57452928A68 /* WendyMobileUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -1616,6 +1660,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F414FA5A73FF665BE7584B24 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01A3D68A9446E4C6532B8C27 /* DevicesLensUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1623,6 +1675,11 @@
 			isa = PBXTargetDependency;
 			target = C6BA34DDD78D5B0FE18B873F /* WendyNetwork */;
 			targetProxy = A0C4F249B16273194059F759 /* PBXContainerItemProxy */;
+		};
+		4CBAB303F1405D0CDFAB0570 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */;
+			targetProxy = 715D8E7648DCE3CE65C6C158 /* PBXContainerItemProxy */;
 		};
 		73CBBDD5121D3ED029B819C2 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -2107,6 +2164,25 @@
 			};
 			name = Debug;
 		};
+		D42A528AD576889A0F1D8094 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WendyMobile;
+			};
+			name = Release;
+		};
 		DB2BB4DD586FB0351F002FC6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2152,6 +2228,25 @@
 			};
 			name = Release;
 		};
+		F049EB009E6B8D83693FF24A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = WendyMobile;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2160,6 +2255,15 @@
 			buildConfigurations = (
 				C03A7CFC0598F2D7EA239DB0 /* Debug */,
 				546F11F9CE01EFE41DAB622B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		321078DE2414EF76E3B3CDFE /* Build configuration list for PBXNativeTarget "WendyMobileUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F049EB009E6B8D83693FF24A /* Debug */,
+				D42A528AD576889A0F1D8094 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

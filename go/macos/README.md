@@ -402,6 +402,56 @@ establish Bluetooth interoperability.
 
 The test scheme sets `WENDY_MOBILE_TEST_HOST=1`, keeping ordinary UI startup from
 competing with tests for backend lifecycle and account ownership.
+The Devices lens UI tests launch the normal app separately. They cover both
+inventory tiles, navigation history and returning from the background. To run
+the logs journey, set `TEST_RUNNER_WENDY_UI_DEVICE` to the displayed name of an
+authorized device that emits telemetry and `TEST_RUNNER_WENDY_UI_SOURCE` to
+`local` or `cloud` before running the command above. For the cloud path, sign
+in and select the device’s organization in the test iPhone first. Use
+`-parallel-testing-enabled NO` to run on that simulator with its saved account.
+The journey checks for an actual log record and returns to the filtered list.
+
+To check the iPhone sign-in presentation, run
+`testManageOrganizationPresentsSignInBrowser` on a signed-out debug simulator
+with `TEST_RUNNER_WENDY_UI_SIGNED_OUT_LOGIN=1`. It opens Accounts, selects
+Manage organization, and verifies that Sign in opens the browser sheet.
+
+For the app lifecycle UI test, start `go run ./go/macos/UITestSupport/appfixture`
+from the repository root and set `TEST_RUNNER_WENDY_UI_APPS_FIXTURE=1` for
+the test command. This loopback-only fixture advertises **Devices UI QA** to
+the simulator. The test starts its web app, opens its filtered logs, loads
+the actual HTTP dashboard, then stops the app and checks that Open is disabled.
+Its controls are restricted to the named fixture.
+
+To exercise connection recovery, start the same fixture with `-recovery`.
+Pass the printed loopback URL as `TEST_RUNNER_WENDY_UI_RECOVERY_URL` and run
+`testAppAndLogsRecoverAfterDeviceDisconnects` on an iOS simulator. The test
+disconnects the fixture on the app screen and again on the logs screen.
+It checks that stale controls disappear and new records arrive on the same
+screen when the fixture returns.
+
+For the hardware check, install the Node `simple-api` template as
+`test-node-simple-api` with an HTTP entitlement matching the server port.
+Deploy it stopped. Run `testInstalledSimpleAPILifecycleOverLAN` with
+`TEST_RUNNER_WENDY_UI_TEMPLATE_DEVICE` set to the board's displayed LAN name
+and `TEST_RUNNER_WENDY_UI_TEMPLATE_URL` set to its HTTP URL. The test starts
+only this idle template, sends a GET while its log viewer is subscribed, opens
+its JSON response in WendyMobile, and stops it. Allow local network access on
+the test iPhone if iOS prompts.
+
+For a read-only Cloud check, run `testRunningHelloPythonDashboardOverCloud`
+with `TEST_RUNNER_WENDY_UI_HELLO_DEVICE` set to a signed-in Cloud device
+already running `sh.wendy.examples.hellopython`. The test checks the actual
+page and the app's request log.
+
+Run `testSwitchingDevicesIsolatesControlsLogsAndWebTunnel` on a signed-in
+iOS simulator with `TEST_RUNNER_WENDY_UI_SWITCH_LAN` and
+`TEST_RUNNER_WENDY_UI_SWITCH_CLOUD` set to the displayed device names. Both
+boards need `test-node-simple-api`, running on LAN and stopped on Cloud. The
+Cloud board also needs a running Hello Python example. The check reads each
+app's controls and logs, switches back to the LAN app, and verifies that the
+previous Cloud tunnel refuses a new request.
+
 The optional `testLiveMeshDiscoveryManagementAndResume` uses the normal app's
 saved account, discovers a mesh target, connects and reads device info (and lists
 applications on WendyOS), then pauses/resumes the embedded participant and repeats

@@ -195,8 +195,9 @@ final class DesktopTests: XCTestCase {
         let next = Device(id: "next", name: "Next", selector: "next", transport: .lan, address: "next")
         let started = expectation(description: "Connection started")
         var pending: CheckedContinuation<DeviceConnection, Error>?
-        let model = AppModel { _, _, _ in
-            try await withCheckedThrowingContinuation { continuation in
+        let model = AppModel { device, _, _ in
+            if device.id == old.id { return DeviceConnection(session: 3, lite: false) }
+            return try await withCheckedThrowingContinuation { continuation in
                 pending = continuation
                 started.fulfill()
             }
