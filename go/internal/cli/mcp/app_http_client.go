@@ -125,8 +125,10 @@ func (c *appHTTPClient) callContext(ctx context.Context) (context.Context, func(
 func (c *appHTTPClient) Close() error {
 	c.once.Do(func() {
 		c.cancel()
-		// The SDK bounds its session termination request. Keep the proxy alive
-		// until it completes, then join all proxy streams.
+		// The SDK bounds its session termination request, which only reaches the
+		// app while the lifetime context is live. The manager cancels that first,
+		// so the app sees the connection drop instead. Close the proxy last to
+		// join all of its streams.
 		c.closeErr = c.session.Close()
 		c.closeProxy()
 		c.transport.CloseIdleConnections()
