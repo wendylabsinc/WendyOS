@@ -14,11 +14,12 @@ struct RecordingEpisodePicker: View {
     @State private var files: MobileRecordingExport?
     @State private var exportError: String?
 
-    init(library: MobileRecordingLibrary, trigger: String?, issue: String? = nil, retry: @escaping () -> Void = {}) {
+    init(library: MobileRecordingLibrary, trigger: String?, selectedID: String? = nil, issue: String? = nil, retry: @escaping () -> Void = {}) {
         self.library = library
         self.issue = issue
         self.retry = retry
         _trigger = State(initialValue: trigger)
+        _selection = State(initialValue: selectedID)
     }
 
     private var filtered: [MobileRecordingEpisode] {
@@ -52,28 +53,32 @@ struct RecordingEpisodePicker: View {
                     ForEach(library.labels, id: \.name) { item in filterChip(item.name, count: item.count) }
                 }.padding(.horizontal, 16)
             }.scrollIndicators(.hidden)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(groups, id: \.date) { group in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(dayTitle(group.date)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                            LazyVStack(spacing: 0) {
-                                ForEach(group.episodes) { episode in
-                                    episodeRow(episode)
-                                    if episode.id != group.episodes.last?.id { Divider().padding(.leading, 108) }
-                                }
-                            }.background(RecordingAppearance.card, in: .rect(cornerRadius: 20)).clipShape(.rect(cornerRadius: 20))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(groups, id: \.date) { group in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(dayTitle(group.date)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6)
+                                LazyVStack(spacing: 0) {
+                                    ForEach(group.episodes) { episode in
+                                        episodeRow(episode).id(episode.id)
+                                        if episode.id != group.episodes.last?.id { Divider().padding(.leading, 108) }
+                                    }
+                                }.background(RecordingAppearance.card, in: .rect(cornerRadius: 20)).clipShape(.rect(cornerRadius: 20))
+                            }
                         }
-                    }
-                    if filtered.isEmpty {
-                        ContentUnavailableView("No saved episodes", systemImage: "cylinder.split.1x2")
-                    }
-                    if let warning = issue ?? library.warning {
-                        Text(PresentedFailure(warning).details).font(.footnote).foregroundStyle(.secondary)
-                        Button("Try again", action: retry)
-                    }
-                }.padding(.horizontal, 16).padding(.vertical, 8)
+                        if filtered.isEmpty {
+                            ContentUnavailableView("No saved episodes", systemImage: "cylinder.split.1x2")
+                        }
+                        if let warning = issue ?? library.warning {
+                            Text(PresentedFailure(warning).details).font(.footnote).foregroundStyle(.secondary)
+                            Button("Try again", action: retry)
+                        }
+                    }.padding(.horizontal, 16).padding(.vertical, 8)
+                }.onAppear {
+                    if let selection { proxy.scrollTo(selection, anchor: .center) }
+                }
             }
             Divider()
             if exportItems != nil {

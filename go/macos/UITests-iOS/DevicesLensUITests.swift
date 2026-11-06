@@ -18,6 +18,34 @@ final class DevicesLensUITests: XCTestCase {
         devices.tap()
     }
 
+    // Run with UITestSupport/appfixture and TEST_RUNNER_WENDY_UI_ACTIVITY_FIXTURE=1.
+    func testActivityClipSelectionArchiveAndRestore() throws {
+        guard ProcessInfo.processInfo.environment["WENDY_UI_ACTIVITY_FIXTURE"] == "1" else {
+            throw XCTSkip("Requires the local Activity fixture.")
+        }
+        launch()
+        app.buttons["lens.tab.Activity"].tap()
+        let preview = app.buttons["Play QA doorway"].firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 60))
+        preview.tap()
+        XCTAssertTrue(app.buttons["data.play"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["data.play"].isEnabled)
+        XCTAssertTrue(app.buttons["data.episode.test-person"].isSelected)
+        app.buttons["Close recordings"].tap()
+        preview.swipeLeft()
+        let archive = app.buttons["Archive"].firstMatch
+        if archive.waitForExistence(timeout: 2) { archive.tap() }
+        let archived = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Archived")).firstMatch
+        archived.tap()
+        let restore = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "activity.restore.", ":clip.test-person")).firstMatch
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        restore.tap()
+        app.buttons["Events"].tap()
+        app.buttons["Alerts"].tap()
+        XCTAssertTrue(preview.waitForExistence(timeout: 8))
+        capture("Device Activity")
+    }
+
     func testHomeOpensBothInventoriesAndReturnsAfterBackgrounding() {
         launch()
         for source in ["local", "cloud"] {

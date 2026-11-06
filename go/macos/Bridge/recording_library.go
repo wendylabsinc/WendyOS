@@ -45,6 +45,9 @@ func recordingLibraryResult(lib backend.RecordingLibrary, err error) *C.WDRecord
 	for i, r := range lib.Episodes {
 		row := &unsafe.Slice(p.items, len(lib.Episodes))[i]
 		*row = C.WDRecordingEpisode{id: C.CString(r.ID), title: C.CString(r.Title), trigger: C.CString(r.Trigger), kind: C.CString(r.Kind), upload_state: C.CString(r.UploadState), topics: C.CString(strings.Join(r.Topics, "\n")), started_ns: C.int64_t(r.Started), size_bytes: C.int64_t(r.Bytes), duration_seconds: C.double(r.Duration)}
+		if r.Campaign != "" {
+			row.campaign = C.CString(r.Campaign)
+		}
 		if r.PreviewFile != nil {
 			descriptor, _ := json.Marshal(r.PreviewFile)
 			row.preview_file = C.CString(string(descriptor))
@@ -77,6 +80,7 @@ func WDRecordingLibraryFree(p *C.WDRecordingLibraryResult) {
 		free(r.topics)
 		free(r.preview_counts)
 		free(r.preview_file)
+		free(r.campaign)
 	}
 	free(p.warning)
 	free(p.model)

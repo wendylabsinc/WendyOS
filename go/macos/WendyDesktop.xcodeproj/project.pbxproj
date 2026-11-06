@@ -263,6 +263,7 @@
 		E0A29452C11060654C08FD00 /* MobileDataView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */; };
 		E132AE2A0B26D8C6C4878796 /* SitesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56DEDD8877094ACCAD62B7D6 /* SitesView.swift */; };
 		E29173B899C80C6895AF7BE3 /* Go2ModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E6F80B62D0A9F10FC7A6702 /* Go2ModelTests.swift */; };
+		E380BE80056EF7BB3912DBE9 /* MobileDeviceActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B4C81072A80F34E80568B /* MobileDeviceActivity.swift */; };
 		E3A0BD21E2437238113545E0 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E16E0AECED1D3AFC9D949296 /* CoreMedia.framework */; };
 		E54F34FCA4D2C425D1D646CE /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
 		E5567126A684A2624D1EEDDB /* MobileVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */; };
@@ -491,6 +492,7 @@
 		A19B0A13014E2020EF1D3397 /* installation */ = {isa = PBXFileReference; lastKnownFileType = folder; name = installation; path = ../internal/cli/assets/docs/videos/installation; sourceTree = SOURCE_ROOT; };
 		A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignRecordingsView.swift; sourceTree = "<group>"; };
 		A2D3B6424879FD4924BE05FA /* ConcurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConcurrencyTests.swift; sourceTree = "<group>"; };
+		A42B4C81072A80F34E80568B /* MobileDeviceActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDeviceActivity.swift; sourceTree = "<group>"; };
 		A49EBADB69E0A1992F50EDC0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A59A57EA9A8FAF4CB85087DB /* NearbySetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySetupView.swift; sourceTree = "<group>"; };
 		A9761EA07F9458FA5531A891 /* DeviceExperienceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceExperienceTests.swift; sourceTree = "<group>"; };
@@ -856,6 +858,7 @@
 				6601B40FC3BD51AE9C42CB5B /* DeviceViewfinderController.swift */,
 				26F8B5DECBBAC2EAA7EB1130 /* MobileAppBrowser.swift */,
 				FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */,
+				A42B4C81072A80F34E80568B /* MobileDeviceActivity.swift */,
 				414F5BCA328D3D1A4C0A5537 /* MobileDeviceApps.swift */,
 				C6B6B33D3974FD8B957B585C /* MobileLensContent.swift */,
 				11989D9F81DE33926C6744D5 /* MobileLensData.swift */,
@@ -1471,6 +1474,7 @@
 				5AB57DEAEE38F64FA12A8E29 /* MeshGraphView.swift in Sources */,
 				946DD3354B835B1C67FB270E /* MobileAppBrowser.swift in Sources */,
 				E0A29452C11060654C08FD00 /* MobileDataView.swift in Sources */,
+				E380BE80056EF7BB3912DBE9 /* MobileDeviceActivity.swift in Sources */,
 				9BD1857BEA9C23C5DD3B5D17 /* MobileDeviceApps.swift in Sources */,
 				8AB110A3F0E8F4DFD2411AC1 /* MobileLensContent.swift in Sources */,
 				E022926994D8FA6445C54B5F /* MobileLensData.swift in Sources */,

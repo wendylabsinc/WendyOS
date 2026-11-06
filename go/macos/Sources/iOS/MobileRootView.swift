@@ -21,7 +21,7 @@ struct MobileRootView: View {
     @State private var homeTab = MobileHome.home
     @State private var recordingPicker: MobileEpisodeRoute?
     @State private var showingChat = false
-    @State private var showingNotifications = false
+    @State private var activitySegment = MobileActivitySegment.alerts
     @State private var showMesh = false
     @State private var homePath: [MobileDestination] = []
     @State private var preferredColumn = NavigationSplitViewColumn.sidebar
@@ -78,7 +78,7 @@ struct MobileRootView: View {
     private var tabs: some View {
         TabView(selection: $homeTab) {
             NavigationStack(path: $homePath) {
-                MobileDevicesHome(model: model, launcher: { lens = nil }, notifications: { showingNotifications = true },
+                MobileDevicesHome(model: model, launcher: { lens = nil }, notifications: { openActivity() },
                                   setup: { showingNearbySetup = true })
                     .navigationDestination(for: MobileDestination.self) { route in
                         switch route {
@@ -96,7 +96,8 @@ struct MobileRootView: View {
                     .toolbar { launcherButton }
             }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.data)
             NavigationStack {
-                ExperienceActivityView(model: model) { select($0) }
+                MobileDeviceActivity(model: model, isVisible: homeTab == .activity, segment: $activitySegment, select: select)
+                    .id(model.mobileCloudSelectionKey)
                     .background(MobileLensStyle.background)
                     .toolbar { launcherButton }
             }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.activity)
@@ -120,7 +121,7 @@ struct MobileRootView: View {
             MobileLensPreference(initial: .devices) { primaryLens = $0.rawValue }
         } else if let lens {
             switch lens {
-            case .devices: tabs
+            case .devices: MobileRecordingScope { tabs }.id(model.mobileCloudSelectionKey)
             case .sites:
                 NavigationStack { SitesView { select($0) }.navigationTitle("Sites").toolbar { launcherButton } }
             case .robots:
@@ -130,7 +131,7 @@ struct MobileRootView: View {
         } else {
             NavigationStack {
                 MobileGeneralHome(model: model, primary: MobileLens(rawValue: primaryLens) ?? .devices,
-                                  open: enter, accounts: { accounts = true }, notifications: { showingNotifications = true },
+                                  open: enter, accounts: { accounts = true }, notifications: { openActivity() },
                                   setup: { showingNearbySetup = true }, recordings: { enter(.devices); homeTab = .data })
                     .safeAreaInset(edge: .bottom, alignment: .trailing) {
                         Button("Ask Wendy", systemImage: "sparkles") { showingChat = true }
@@ -139,6 +140,12 @@ struct MobileRootView: View {
                     }
             }
         }
+    }
+
+    private func openActivity() {
+        enter(.devices)
+        activitySegment = .alerts
+        homeTab = .activity
     }
 
     private func openRecordings(for device: Device) {
@@ -218,12 +225,6 @@ struct MobileRootView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-        }
-        .sheet(isPresented: $showingNotifications) {
-            NavigationStack {
-                MobileNotifications(model: model) { device in showingNotifications = false; select(device) }
-                    .toolbar { Button("Done") { showingNotifications = false } }
-            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { model.hideCameraWall() }
@@ -315,6 +316,7 @@ enum MobileLensStyle {
 }
 
 private struct MobileDevicesHome: View {
+    @EnvironmentObject private var catalog: RecordingCatalog
     @ObservedObject var model: AppModel
     let launcher: () -> Void
     let notifications: () -> Void
@@ -387,7 +389,7 @@ private struct MobileDevicesHome: View {
                 Button("General Home", systemImage: "chevron.left", action: launcher)
                     .accessibilityIdentifier("lens.back")
             }
-            ToolbarItem(placement: .topBarTrailing) { Button("Notifications", systemImage: "bell", action: notifications) }
+            ToolbarItem(placement: .topBarTrailing) { Button("Notifications", systemImage: "bell", action: notifications).badge(catalog.unreadAlerts) }
         }
         .refreshable {
             await model.refreshNearby()

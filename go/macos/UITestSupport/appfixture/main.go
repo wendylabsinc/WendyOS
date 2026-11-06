@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -17,7 +18,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	v2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	collector "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	common "go.opentelemetry.io/proto/otlp/common/v1"
 	logs "go.opentelemetry.io/proto/otlp/logs/v1"
@@ -27,6 +30,26 @@ import (
 )
 
 const webApp = "people-counter"
+
+// A campaign clip for the Activity → episode picker UI check.
+type activityService struct {
+	v2.UnimplementedDataServiceServer
+}
+
+func (activityService) Episodes(context.Context, *v2.DataEpisodesRequest) (*v2.DataEpisodesResponse, error) {
+	return &v2.DataEpisodesResponse{Episodes: []*v2.DataEpisode{{Id: "test-person", Name: "QA doorway", StartedUnixNanos: 1793995200000000000}}}, nil
+}
+
+func (activityService) Inspect(_ context.Context, req *v2.DataInspectRequest) (*v2.DataInspectResponse, error) {
+	if req.Episode != "test-person" {
+		return nil, status.Error(codes.NotFound, "unknown episode")
+	}
+	manifest := data.Manifest{ID: req.Episode, State: "complete", CanonicalClock: "CLOCK_BOOTTIME", StoppedEpisodeNS: 10e9,
+		Trigger: data.EpisodeTrigger{CampaignName: "QA doorway", Reason: "event:person"},
+		Sources: []data.SourceStats{{Source: data.Source{Kind: "telemetry", ID: "telemetry"}, Count: 4}}}
+	raw, err := json.Marshal(manifest)
+	return &v2.DataInspectResponse{ManifestJson: raw}, err
+}
 
 type deviceService struct {
 	pb.UnimplementedWendyAgentServiceServer
@@ -134,6 +157,7 @@ func (d *fixtureDevice) setOnline(online bool) (int, error) {
 		d.address = listener.Addr().String()
 		d.generation++
 		server := grpc.NewServer()
+		v2.RegisterDataServiceServer(server, activityService{})
 		pb.RegisterWendyContainerServiceServer(server, d.apps)
 		pb.RegisterWendyAgentServiceServer(server, deviceService{})
 		pb.RegisterWendyTelemetryServiceServer(server, telemetry{generation: d.generation})

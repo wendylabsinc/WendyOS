@@ -22,7 +22,7 @@ struct MobileRecordingTarget: Hashable {
     var routes: [Device]
 }
 
-private struct RecordingSources: Hashable {
+struct RecordingSources: Hashable {
     var targets: [MobileRecordingTarget] = []
     var unavailable = 0
 
@@ -53,7 +53,7 @@ private struct RecordingSources: Hashable {
     }
 }
 
-private struct RecordingRead: Sendable {
+struct RecordingRead: Sendable {
     let target: MobileRecordingTarget
     var library: MobileRecordingLibrary?
     var problem: String?
@@ -72,9 +72,10 @@ private struct RecordingRead: Sendable {
     }
 }
 
-@MainActor private final class RecordingCatalog: ObservableObject {
+@MainActor final class RecordingCatalog: ObservableObject {
     @Published var reads: [String: RecordingRead] = [:]
     @Published var loading = false
+    @Published var unreadAlerts = 0
     @Published var detailProblems: [String: String] = [:]
     private var generation = 0
     private var lastRefresh: Int?
@@ -88,7 +89,11 @@ private struct RecordingRead: Sendable {
         let force = lastRefresh != refresh
         if force { attempted = [:]; detailProblems = [:] }
         lastRefresh = refresh
-        let ordered = targets.filter { $0.id == priority } + targets.filter { $0.id != priority }
+        let remaining = targets.filter { $0.id != priority }
+        // Check nearby routes first so a cloud fleet cannot delay a local device.
+        let ordered = targets.filter { $0.id == priority }
+            + remaining.filter { $0.routes.first?.transport != .cloud }
+            + remaining.filter { $0.routes.first?.transport == .cloud }
         let pending = ordered.filter { force || reads[$0.id] == nil }
         loading = !pending.isEmpty
         defer { if generation == run { loading = false } }
@@ -165,7 +170,7 @@ struct MobileLensData: View {
     let isVisible: Bool
     @Binding var picker: MobileEpisodeRoute?
     @Environment(\.scenePhase) private var phase
-    @StateObject private var catalog = RecordingCatalog()
+    @EnvironmentObject private var catalog: RecordingCatalog
     @State private var posters = RecordingPosters()
     @State private var refresh = 0
     @State private var showingProblems = false

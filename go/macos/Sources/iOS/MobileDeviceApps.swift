@@ -240,7 +240,7 @@ private struct MobileAppsList: View {
     }
 }
 
-private struct MobileAppDetail: View {
+struct MobileAppDetail: View {
     @ObservedObject var model: AppModel
     let device: Device
     let name: String

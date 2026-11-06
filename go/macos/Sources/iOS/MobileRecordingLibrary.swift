@@ -25,6 +25,7 @@ struct MobileRecordingEpisode: Identifiable, Equatable {
     let synced: Bool?
     let topics: [String]
     var detailsLoaded = false
+    var campaign: String?
     var previewFile: String?
     var previewCounts: [UInt64] = []
     static let detailBatchLimit = 64
@@ -183,7 +184,7 @@ extension GoClient {
             trigger: MobileRecordingEpisode.triggerLabel(string(row.trigger)),
             kind: MobileRecordingKind(agentKind: string(row.kind)), synced: synced,
             topics: string(row.topics).split(separator: "\n").map(String.init), detailsLoaded: row.details_loaded != 0,
-            previewFile: row.preview_file.map { String(cString: $0) },
+            campaign: row.campaign.map { String(cString: $0) }, previewFile: row.preview_file.map { String(cString: $0) },
             previewCounts: Array(UnsafeBufferPointer(start: row.preview_counts, count: row.preview_count)))
     }
 

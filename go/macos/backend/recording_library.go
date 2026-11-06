@@ -93,13 +93,13 @@ func (b *Backend) recordingConnection(id uint64, selector string, secure bool, l
 }
 
 type RecordingEpisode struct {
-	ID, Title, Trigger, Kind, UploadState string
-	Topics                                []string
-	PreviewCounts                         []uint64
-	PreviewFile                           *data.File
-	Started, Bytes                        int64
-	Duration                              float64 // -1 when unavailable
-	DetailsLoaded                         bool
+	ID, Title, Trigger, Kind, UploadState, Campaign string
+	Topics                                          []string
+	PreviewCounts                                   []uint64
+	PreviewFile                                     *data.File
+	Started, Bytes                                  int64
+	Duration                                        float64 // -1 when unavailable
+	DetailsLoaded                                   bool
 }
 type RecordingLibrary struct {
 	Episodes       []RecordingEpisode
@@ -214,6 +214,7 @@ func summarizeRecording(e *pb.DataEpisode, m *data.Manifest) RecordingEpisode {
 	row := RecordingEpisode{ID: e.GetId(), Title: e.GetName(), Started: e.GetStartedUnixNanos(), Bytes: e.GetSizeBytes(), Duration: -1}
 	if m != nil {
 		row.DetailsLoaded = true
+		row.Campaign = m.Trigger.CampaignName
 		row.Trigger, row.Duration, row.UploadState = m.Trigger.Reason, savedDuration(m), m.Upload.State
 		row.Kind, row.Topics = recordingKind(m)
 		row.PreviewCounts, row.PreviewFile = recordingPreview(m, row.Kind)

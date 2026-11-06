@@ -38,7 +38,7 @@ void WDVisualEpisodesFree(WDVisualEpisodesResult *value);
 WDVisualSnapshotResult *WDVisualEpisodeLoad(uint64_t session, char *episode);
 void WDVisualSnapshotFree(WDVisualSnapshotResult *value);
 typedef struct {
-    char *id, *title, *trigger, *kind, *upload_state, *topics, *preview_file;
+    char *id, *title, *trigger, *kind, *upload_state, *topics, *preview_file, *campaign;
     uint64_t *preview_counts; size_t preview_count;
     int64_t started_ns, size_bytes;
     double duration_seconds;
