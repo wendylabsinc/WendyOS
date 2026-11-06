@@ -141,6 +141,33 @@ public actor SiteStore {
             let archive = try await legacy.archive(id: capture.id)
             _ = try await putRemote(RemoteRoom(site: archive.site, revision: 0, model: archive.model, visualMap: archive.visualMap, removed: false))
         }
+        // Existing migrated rooms also need their confirmed LiDAR anchors.
+        // Validate through the legacy reader before contributing them to Linux.
+        struct ReferenceImport: Encodable {
+            var modelRevision: UUID
+            var modelDigest, robot: String
+            var savedAt: Date
+            var surfaces: [RobotObservedSurface]
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        for capture in try await legacy.list() where !removed.contains(where: { $0.id == capture.id }) {
+            let frame = "\(capture.id.uuidString)/\(capture.site.modelRevision.uuidString)"
+            let files = try FileManager.default.contentsOfDirectory(at: capture.modelURL.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+            for file in files where file.lastPathComponent.hasPrefix("robot-") && file.lastPathComponent.hasSuffix("-references.json") {
+                let info = try file.resourceValues(forKeys: [.fileSizeKey, .isSymbolicLinkKey])
+                guard info.isSymbolicLink != true, (info.fileSize ?? Int.max) <= 3_000_000 else { continue }
+                let identity = try JSONDecoder().decode(RobotSavedMap.self, from: Data(contentsOf: file))
+                let stored = try RobotReferenceStore.read(model: capture.modelURL, robot: identity.robot, frame: frame)
+                guard !stored.surfaces.isEmpty else { continue }
+                let exclusions = try SiteRobotGeometry.referenceExclusions(capture.modelURL, scale: capture.site.metresPerModelUnit)
+                let surfaces = stored.surfaces.filter { !exclusions.contains(x: $0.position.X, y: $0.position.Z, z: -$0.position.Y) }
+                guard !surfaces.isEmpty else { continue }
+                let input = ReferenceImport(modelRevision: capture.site.modelRevision, modelDigest: stored.modelDigest,
+                                            robot: stored.robot, savedAt: stored.savedAt, surfaces: surfaces)
+                _ = try await request("v1/rooms/" + capture.id.uuidString.lowercased() + "/references/import", method: "POST", body: encoder.encode(input))
+            }
+        }
     }
 
     func updatePeople(site: Site, detections: [SitePersonDetection]) async throws -> [SitePersonTrack] {
