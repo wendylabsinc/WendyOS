@@ -1,22 +1,18 @@
+#if os(macOS)
 import SwiftUI
 
+/// Settings → Accounts: one entry per person, with their signed-in
+/// organizations under it. Each organization can be used or signed out of,
+/// and each person can be signed out of as a whole.
 struct AccountsSettingsView: View {
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
-    @State private var accounts: [SavedAccount] = []
-    @State private var error: String?
-    @State private var loading = true
-    #if os(macOS)
     @StateObject private var picker = AccountPickerModel()
     @State private var switchingContext: String?
-    #endif
-    private var busy: Bool {
-        #if os(macOS)
-        return loading || picker.switching || model.signingIn
-        #else
-        return loading || model.signingIn
-        #endif
-    }
+    @State private var pendingSignOut: AccountSignOut?
+    @State private var error: String?
+    @State private var loading = true
+    private var busy: Bool { loading || picker.switching || model.signingIn || model.signingOut }
 
     var body: some View {
         actionContent.task { await actions.run() }
@@ -28,32 +24,28 @@ struct AccountsSettingsView: View {
                 HStack {
                     Text("Accounts").font(.title2.weight(.semibold))
                     Spacer()
+                    if model.signingOut { ProgressView().controlSize(.small); Text("Signing out…").font(.caption).foregroundStyle(.secondary) }
                     Button("Refresh", systemImage: "arrow.clockwise") { actions.submit { await refresh() } }.disabled(busy)
                 }
-                if loading && accounts.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
-                else if let error, accounts.isEmpty {
+                if loading && picker.choices.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+                else if let error, picker.choices.isEmpty {
                     FailureView(title: "Could not load accounts", error: error) { actions.submit { await refresh() } }
-                } else if accounts.isEmpty {
+                } else if picker.choices.isEmpty {
                     ContentUnavailableView("No Accounts", systemImage: "person.crop.circle", description: Text("Sign in to add your Wendy Cloud account."))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     if let error { FailureNote(message: error) }
-                    List(accounts) { entry in
-                        Group {
-                            #if os(macOS)
-                            Button { actions.submit { await select(entry) } } label: {
-                                accountRow(entry)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(busy || entry.active)
-                            .accessibilityLabel("Use account " + accountTitle(entry) + ", " + (organizationTitle(entry) ?? "Saved organization"))
-                            .accessibilityAddTraits(entry.active ? [.isSelected] : [])
-                            #else
-                            accountRow(entry)
-                            #endif
+                    List {
+                        ForEach(picker.groups, id: \.first!.accountKey) { group in
+                            let person = AccountPickerModel.person(group)
+                            Section {
+                                ForEach(group) { choice in
+                                    organizationRow(choice, person: person)
+                                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                                        .alignmentGuide(.listRowSeparatorTrailing) { dimensions in dimensions.width }
+                                }
+                            } header: { personHeader(person) }
                         }
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
-                        .alignmentGuide(.listRowSeparatorTrailing) { dimensions in dimensions.width }
                     }.listStyle(.inset)
                 }
                 HStack {
@@ -61,6 +53,7 @@ struct AccountsSettingsView: View {
                         Button("Wendy Cloud") { actions.submit { await model.signIn() } }
                         Button("Development Cloud") { actions.submit { await model.signIn(development: true) } }
                     }.disabled(busy)
+                        .help("Sign in to another account or organization")
                     if model.signingIn {
                         ProgressView().controlSize(.small)
                         Text("Complete sign-in in your browser.").font(.caption).foregroundStyle(.secondary)
@@ -70,72 +63,83 @@ struct AccountsSettingsView: View {
             }.padding(24)
                 .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
         }.desktopFrame(width: 620, height: 450)
-            .task(id: "\(model.account?.context ?? ""):\(model.signingIn)") {
+            .task(id: "\(model.account?.context ?? ""):\(model.signingIn):\(model.accountsRevision)") {
                 if !model.signingIn { await refresh() }
             }
+            .accountSignOutConfirmation($pendingSignOut, app: model)
     }
-    private func accountRow(_ entry: SavedAccount) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+
+    private func personHeader(_ person: AccountPerson) -> some View {
+        HStack(spacing: 10) {
             Image(systemName: "person.crop.circle").font(.title2).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(accountTitle(entry)).font(.headline)
-                if let organization = organizationTitle(entry) {
-                    Text(organization).font(.callout)
-                }
-                Text(entry.account.cloud).font(.callout).foregroundStyle(.secondary)
-                Text(entry.account.title).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(person.title).font(.headline).foregroundStyle(.primary)
+                Text(person.cloud).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if entry.active {
-                Label("Active", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
-            }
-            #if os(macOS)
-            if !entry.active {
-                if switchingContext == entry.id {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Use account").font(.caption).foregroundStyle(Color.accentColor)
-                }
-            }
-            #endif
+            Button("Sign Out…") { pendingSignOut = AccountSignOut.person(person) }
+                .disabled(busy)
+                .help("Sign out of every organization of \(person.title) on this Mac")
+                .accessibilityLabel("Sign out of " + person.title)
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)
+        .contextMenu {
+            Button("Sign Out of \(person.title)…") { pendingSignOut = AccountSignOut.person(person) }.disabled(busy)
+        }
+    }
+
+    private func organizationRow(_ choice: AccountChoice, person: AccountPerson) -> some View {
+        HStack(spacing: 12) {
+            Button { actions.submit { await select(choice) } } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "building.2").foregroundStyle(choice.active ? Color.accentColor : .secondary).frame(width: 18)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(choice.organizationTitle).font(.body.weight(choice.active ? .semibold : .regular))
+                        Text(choice.saved.account.title).font(.caption).foregroundStyle(choice.state == WD_ACCOUNT_SIGNED_IN ? .secondary : Color.orange)
+                    }
+                    Spacer()
+                    if choice.active {
+                        Label("Active", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+                    } else if switchingContext == choice.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Use").font(.caption).foregroundStyle(Color.accentColor)
+                    }
+                }.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(busy || choice.active)
+            .accessibilityLabel("Use organization " + choice.organizationTitle + ", " + person.title)
+            .accessibilityAddTraits(choice.active ? [.isSelected] : [])
+            Button("Sign Out…") { pendingSignOut = AccountSignOut.organization(choice.saved, person: person) }
+                .disabled(busy)
+                .help("Sign out of \(choice.organizationTitle) on this Mac")
+                .accessibilityLabel("Sign out of " + choice.organizationTitle)
+        }
+        .padding(.vertical, 8).padding(.leading, 28)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        .contextMenu {
+            if !choice.active { Button("Use \(choice.organizationTitle)") { actions.submit { await select(choice) } }.disabled(busy) }
+            Button("Sign Out of \(choice.organizationTitle)…") { pendingSignOut = AccountSignOut.organization(choice.saved, person: person) }.disabled(busy)
+        }
     }
-    private func accountTitle(_ entry: SavedAccount) -> String {
-        entry.account.email.isEmpty ? "Saved account" : entry.account.email
-    }
-    private func organizationTitle(_ entry: SavedAccount) -> String? {
-        #if os(macOS)
-        return picker.choices.first { $0.id == entry.id }?.organizationTitle
-        #else
-        return nil
-        #endif
-    }
-    #if os(macOS)
-    private func select(_ entry: SavedAccount) async {
-        guard !busy, !entry.active else { return }
-        switchingContext = entry.id
+
+    private func select(_ choice: AccountChoice) async {
+        guard !busy, !choice.active else { return }
+        switchingContext = choice.id
         error = nil
         defer { switchingContext = nil }
-        if await picker.select(context: entry.account.context, app: model) {
+        if await picker.select(context: choice.id, app: model) {
             await refresh()
         } else {
             error = picker.error
         }
     }
-    #endif
     private func refresh() async {
         loading = true
         defer { loading = false }
-        do {
-            accounts = try await model.client.accounts()
-            error = nil
-            #if os(macOS)
-            await picker.load()
-            #endif
-        }
-        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        await picker.load()
+        error = picker.error
     }
 }
+#endif

@@ -1,4 +1,7 @@
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 
 struct WendyError: LocalizedError {
     let message: String
@@ -44,7 +47,9 @@ final class GoClient: Sendable {
             guard let pointer = WDAccount() else { throw WendyError(message: "Missing account result.") }
             defer { WDAccountFree(pointer) }
             try Self.check(pointer.pointee.status)
-            return CloudAccount(state: pointer.pointee.state, context: Self.string(pointer.pointee.context), cloud: Self.string(pointer.pointee.cloud), email: Self.string(pointer.pointee.email))
+            let value = pointer.pointee
+            return CloudAccount(state: value.state, context: Self.string(value.context), cloud: Self.string(value.cloud), email: Self.string(value.email),
+                                person: Self.string(value.person), organizationID: Self.string(value.organization_id), organizationName: Self.string(value.organization_name))
         }
     }
 
@@ -54,8 +59,21 @@ final class GoClient: Sendable {
             defer { WDAccountsFree(p) }
             try Self.check(p.pointee.status)
             return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map {
-                SavedAccount(account: CloudAccount(state: $0.state, context: Self.string($0.context), cloud: Self.string($0.cloud), email: Self.string($0.email)), active: $0.active != 0)
+                SavedAccount(account: CloudAccount(state: $0.state, context: Self.string($0.context), cloud: Self.string($0.cloud), email: Self.string($0.email),
+                                                   person: Self.string($0.person), organizationID: Self.string($0.organization_id), organizationName: Self.string($0.organization_name)),
+                             active: $0.active != 0)
             }
+        }
+    }
+
+    /// Removes saved sign-ins from this device. Not cancellable: a sign-out
+    /// that has started must finish, or the account would be half removed.
+    func signOut(contexts: [String]) async throws {
+        try await perform(unlessCancelled: false) {
+            let strings = CStringStorage()
+            defer { withExtendedLifetime(strings) {} }
+            var names: [UnsafeMutablePointer<CChar>?] = contexts.map { strings.add($0) }
+            try names.withUnsafeMutableBufferPointer { try Self.finish(WDSignOut($0.baseAddress, $0.count)) }
         }
     }
 
@@ -344,6 +362,10 @@ struct CloudAccount: Equatable {
     let context: String
     let cloud: String
     let email: String
+    /// Shared by every saved sign-in of one person on one Cloud (from Go).
+    var person = ""
+    var organizationID = ""
+    var organizationName = ""
     var signedIn: Bool { state == WD_ACCOUNT_SIGNED_IN }
     var title: String {
         if state == WD_ACCOUNT_NEEDS_LOGIN { return "Sign in again" }
@@ -355,4 +377,78 @@ struct SavedAccount: Identifiable {
     let account: CloudAccount
     let active: Bool
     var id: String { account.context }
+    /// The organization's Cloud name, else the saved sign-in's own name.
+    func organizationTitle(_ known: [CloudOrganization] = []) -> String {
+        let name = account.organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
+        if let match = known.first(where: { $0.id == account.organizationID && !$0.name.isEmpty }) { return match.name }
+        return account.context
+    }
+}
+
+/// One person on one Cloud, with one saved sign-in per organization.
+struct AccountPerson: Identifiable {
+    let id: String
+    let accounts: [SavedAccount]
+    var email: String { accounts.first { !$0.account.email.isEmpty }?.account.email ?? "" }
+    var cloud: String { accounts.first?.account.cloud ?? "" }
+    var title: String { email.isEmpty ? "Saved account" : email }
+    var active: Bool { accounts.contains { $0.active } }
+    /// Sign in to another organization on the same Cloud.
+    var development: Bool { cloud == "https://cloud.dev.wendy.sh" }
+
+    /// Groups saved sign-ins by person in their saved order, so rows do not
+    /// move when another organization is chosen.
+    static func group(_ accounts: [SavedAccount]) -> [AccountPerson] {
+        var order: [String] = []
+        var members: [String: [SavedAccount]] = [:]
+        for entry in accounts {
+            let key = entry.account.person.isEmpty ? "context:" + entry.id : entry.account.person
+            if members[key] == nil { order.append(key) }
+            members[key, default: []].append(entry)
+        }
+        return order.map { AccountPerson(id: $0, accounts: members[$0] ?? []) }
+    }
+}
+
+/// A sign-out the person has asked for and must confirm first.
+struct AccountSignOut: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let accounts: [SavedAccount]
+    var contexts: [String] { accounts.map(\.id) }
+
+    @MainActor private static var device: String {
+        #if os(macOS)
+        return "this Mac"
+        #else
+        return UIDevice.current.userInterfaceIdiom == .pad ? "this iPad" : "this iPhone"
+        #endif
+    }
+    private static func consequences(active: Bool) -> String {
+        var text = ""
+        #if os(macOS)
+        text += " The wendy CLI on this Mac is signed out too, because they share sign-ins."
+        #endif
+        if active { text += " The connected device disconnects." }
+        return text
+    }
+
+    @MainActor static func organization(_ entry: SavedAccount, person: AccountPerson, known: [CloudOrganization] = []) -> AccountSignOut {
+        let organization = entry.organizationTitle(known)
+        return AccountSignOut(
+            title: "Sign out of \(organization)?",
+            message: "This removes \(person.title)'s sign-in to \(organization) from \(device)." + consequences(active: entry.active),
+            accounts: [entry])
+    }
+
+    @MainActor static func person(_ person: AccountPerson, known: [CloudOrganization] = []) -> AccountSignOut {
+        let names = person.accounts.map { $0.organizationTitle(known) }
+        let scope = names.count == 1 ? "the sign-in to \(names[0])" : "the sign-ins to \(names.count) organizations (\(names.joined(separator: ", ")))"
+        return AccountSignOut(
+            title: "Sign out of \(person.title)?",
+            message: "This removes \(scope) from \(device)." + consequences(active: person.active),
+            accounts: person.accounts)
+    }
 }

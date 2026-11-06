@@ -17,7 +17,6 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 	"github.com/spf13/cobra"
-	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
@@ -479,36 +478,35 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 
 func newAuthLogoutCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "logout",
+		Use:   "logout [context]",
 		Short: "Log out from Wendy Cloud",
+		Long: "Without an argument, removes every saved sign-in on this machine. With a context name (see 'wendy auth status'), removes only that sign-in; " +
+			"if it was the current context, another sign-in of the same person becomes current, else any other. " +
+			"Only local credentials are deleted: Wendy Cloud is not contacted, so issued certificates and tokens stay valid until they expire.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
+			// The shared removal saves the config FIRST, then deletes the
+			// Keychain items the removed sign-ins pointed at, and severs any
+			// prepared session broker. A failed save leaves both untouched.
+			if len(args) == 0 {
+				if _, err := removeAuthContexts(cmd.Context(), nil, false); err != nil {
+					return err
+				}
+				fmt.Println(tui.SuccessMessage("Logged out. All authentication credentials removed."))
+				return nil
+			}
+			name := strings.TrimSpace(args[0])
+			if name == "" {
+				return fmt.Errorf("context name must not be empty")
+			}
+			result, err := removeAuthContexts(cmd.Context(), []string{name}, true)
 			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
+				return err
 			}
-
-			// Drop the references and save FIRST, then delete the Keychain
-			// items they pointed at. A failed Save here leaves config.json
-			// and the Keychain items both untouched, so a retry (or a
-			// manual fix) can still recover; deleting the items first would
-			// instead risk leaving config.json referencing Keychain items
-			// that no longer exist, breaking every command until the user
-			// re-logs in.
-			entries := cfg.Auth
-			cfg.Auth = nil
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("saving config: %w", err)
+			fmt.Println(tui.SuccessMessage(fmt.Sprintf("Logged out of context %q. Its credentials were removed.", name)))
+			if result.Current != "" {
+				fmt.Println(tui.InfoMessage(fmt.Sprintf("Current context: %s", result.Current)))
 			}
-			config.DeleteStoredSecrets(&config.Config{Auth: entries})
-
-			// A prepared session broker retains an authenticated device
-			// transport; logging out must sever that too, not just future
-			// dials. Best-effort: the credentials above are already gone, and
-			// a broker that survives unpublication only lasts until its next
-			// liveness check.
-			_ = sessionbroker.InvalidateAll()
-
-			fmt.Println(tui.SuccessMessage("Logged out. All authentication credentials removed."))
 			return nil
 		},
 	}

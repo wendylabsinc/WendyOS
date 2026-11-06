@@ -77,8 +77,8 @@ typedef struct {
 } WDEvent;
 
 typedef enum { WD_ACCOUNT_SIGNED_OUT, WD_ACCOUNT_SIGNED_IN, WD_ACCOUNT_NEEDS_LOGIN } WDAccountState;
-typedef struct { WDStatus status; WDAccountState state; char *context, *cloud, *email; } WDAccountResult;
-typedef struct { WDAccountState state; char *context, *cloud, *email; int32_t active; } WDAccountEntry;
+typedef struct { WDStatus status; WDAccountState state; char *context, *cloud, *email, *person, *organization_id, *organization_name; } WDAccountResult;
+typedef struct { WDAccountState state; char *context, *cloud, *email, *person, *organization_id, *organization_name; int32_t active; } WDAccountEntry;
 typedef struct { WDStatus status; WDAccountEntry *items; size_t count; } WDAccountsResult;
 typedef struct { WDStatus status; WDDevice *items; size_t count; } WDDevicesResult;
 typedef struct { WDStatus status; WDApp *items; size_t count; } WDAppsResult;

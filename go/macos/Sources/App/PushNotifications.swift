@@ -35,7 +35,30 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
     private var registration: AsyncCallback<Data>?
     private var preferenceKey: String? {
         guard let account, account.signedIn else { return nil }
-        return "pushNotifications." + account.cloud + "." + account.context + "." + account.email
+        return Self.preferenceKey(account)
+    }
+    private static func preferenceKey(_ account: CloudAccount) -> String {
+        "pushNotifications." + account.cloud + "." + account.context + "." + account.email
+    }
+
+    /// Best-effort: turn off Cloud notifications for sign-ins about to be
+    /// removed. Telling Cloud needs the sign-in, so call this before deleting
+    /// it. Offline or unregistered, only the local preference is cleared.
+    func signOut(_ accounts: [CloudAccount]) async {
+        for account in accounts {
+            let key = Self.preferenceKey(account)
+            guard UserDefaults.standard.bool(forKey: key) else { continue }
+            if let token, let topic = Bundle.main.bundleIdentifier, let environment = try? Self.pushEnvironment() {
+                try? await GoClient.shared.pushRegistration(account: account.context, token: token, topic: topic, environment: environment, enabled: false)
+            }
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        guard let current = account, accounts.contains(where: { $0.context == current.context }) else { return }
+        generation += 1
+        registration?.finish(.failure(CancellationError())); registration = nil
+        account = nil
+        enabled = false; busy = false; failure = nil
+        status = "Sign in to receive Cloud notifications."
     }
 
     override init() {

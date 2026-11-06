@@ -164,9 +164,9 @@ struct ContentView: View {
                 SitesView { device in
                     showingSites = false; showingOrganization = false
                     actions.submit { await model.connect(device) }
-                }.id(model.account?.context)
+                }.id("\(model.account?.context ?? "")#\(model.accountsRevision)")
             } else if showingOrganization {
-                CloudManagementView().id(model.account?.context)
+                CloudManagementView().id("\(model.account?.context ?? "")#\(model.accountsRevision)")
             } else if let device = model.selection {
                 deviceDetail(device)
             } else {

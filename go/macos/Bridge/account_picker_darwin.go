@@ -28,6 +28,7 @@ func WDAccountChoices() *C.WDAccountChoicesResult {
 		v.cloud = C.CString(e.Cloud)
 		v.organization_id = C.CString(e.OrganizationID)
 		v.organization_name = C.CString(e.OrganizationName)
+		v.person = C.CString(e.Person)
 		v.state = C.WDAccountState(e.State)
 		if e.Active {
 			v.active = 1
@@ -47,6 +48,7 @@ func WDAccountChoicesFree(p *C.WDAccountChoicesResult) {
 		free(e.cloud)
 		free(e.organization_id)
 		free(e.organization_name)
+		free(e.person)
 	}
 	free(p.status.message)
 	free(p.items)

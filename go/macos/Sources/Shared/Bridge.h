@@ -13,6 +13,7 @@ WDAccountResult *WDAccount(void);
 WDAccountsResult *WDAccounts(void);
 void WDAccountsFree(WDAccountsResult *value);
 void WDAccountFree(WDAccountResult *value);
+WDStatus *WDSignOut(char **contexts, size_t count);
 WDStatus *WDInitializeMobile(char *directory);
 WDStatus *WDSetMobileState(int32_t active, char *account, char *organization);
 WDMeshSummary *WDMobileMeshSummary(void);

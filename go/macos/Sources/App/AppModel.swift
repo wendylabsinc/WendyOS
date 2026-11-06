@@ -62,6 +62,11 @@ final class AppModel: ObservableObject {
     }
     @Published var discovering = false
     @Published var signingIn = false
+    @Published private(set) var signingOut = false
+    /// Bumped whenever saved sign-ins are removed. Views that list accounts or
+    /// organizations reload on it, because removing an account that is not the
+    /// active one leaves `account` unchanged.
+    @Published private(set) var accountsRevision = 0
     @Published var account: CloudAccount?
     @Published var accountError: String?
     @Published var initialized = false
@@ -578,6 +583,65 @@ final class AppModel: ObservableObject {
     func cancelLogin() async {
         do { try await client.cancelLogin(); signingIn = false; loginURL = nil }
         catch { if !Task.isCancelled { alert = error.localizedDescription } }
+    }
+
+    /// Removes saved sign-ins from this device, like `wendy auth logout`. Only
+    /// local data is deleted; Cloud is not told. When the active sign-in goes,
+    /// device streams, the connection and the VPN stop first, while their
+    /// credentials still exist. Afterwards Go has chosen another organization
+    /// of the same person, else another person, else the signed-out state.
+    /// Nearby discovery keeps working without a sign-in.
+    func signOut(_ request: AccountSignOut) async {
+        guard initialized, !signingOut, !request.contexts.isEmpty else { return }
+        signingOut = true
+        defer { signingOut = false }
+        var removesActive = request.accounts.contains { $0.active } || request.contexts.contains(account?.context ?? "")
+        #if os(iOS)
+        removesActive = removesActive || request.contexts.contains(mobileCloudAccount)
+        #endif
+        await PushNotifications.shared.signOut(request.accounts.map(\.account))
+        if removesActive {
+            deviceChat.stop()
+            hideCameraWall()
+            connectionAttempt = client.beginConnection()
+            logStream &+= 1
+            connected = nil; connectedLite = false; connectingDevice = nil; selection = nil
+            failedConnection = nil; detailError = nil; canForgetIdentity = false
+            apps = []; cameras = []; cameraFeeds = []; logs = []; logApp = ""; cloud = []
+            #if os(iOS)
+            // The VPN extension is a separate process sharing these sign-ins.
+            // It must be stopped before they are deleted, or it could write a
+            // renewed token for a removed sign-in back.
+            do { try await vpn.stop() } catch {
+                alert = "Turn off the VPN in Connection settings, then sign out again. " + error.localizedDescription
+                await refreshMobileCloudSelection()
+                return
+            }
+            try? await client.stopVPN()
+            mobileCloudAccount = ""
+            mobileCloudOrganization = ""
+            mobileCloudOrganizations = []
+            do { try await client.setMobileState(active: false, account: "", organization: "") } catch {
+                alert = error.localizedDescription
+                await refreshMobileCloudSelection()
+                return
+            }
+            #else
+            try? await vpn.stop()
+            try? await client.stopVPN()
+            #endif
+        }
+        do { try await client.signOut(contexts: request.contexts) }
+        catch { alert = error.localizedDescription }
+        accountsRevision &+= 1
+        await refreshAccount()
+        #if os(iOS)
+        await refreshMobileCloudSelection()
+        #endif
+        if removesActive {
+            await refreshNearby()
+            if account?.signedIn == true { await refreshCloud() }
+        }
     }
 
     func enableVPN() async {
