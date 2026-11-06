@@ -50,9 +50,12 @@ macOS or Linux.
   sensor/IP camera pairing, Unitree pairing, cloud enrollment and OS updates.
 - Nearby setup through Android Bluetooth GATT. The native Bluetooth adapter also
   supplies scanning and L2CAP to the shared authenticated mesh implementation.
-- An opt-in Android VPN service for selected Cloud devices. The service uses the
-  shared split-tunnel engine and asks Android for VPN consent. Only selected
-  routes and Wendy DNS enter the tunnel. The foreground notification stops it.
+- One mesh VPN switch, matching iOS. Open Private network and turn VPN on.
+  Android asks for VPN consent the first time. All mesh devices join automatically,
+  including devices discovered after connecting. The shared automatic controller
+  uses an available mesh uplink if normal internet fails and switches back when
+  it recovers. Public DNS uses Android's resolver while normal internet is active.
+  The foreground notification opens or stops the VPN.
 - Wendy's existing geometric app mark, with adaptive and monochrome launcher icons.
 
 Device and Cloud operations are wired to real backend methods. Successful
@@ -69,7 +72,7 @@ This is not full Mac/iOS feature parity. The following need further implementati
 | Remote campaign push notifications | Not implemented. The existing registration API targets APNs; Android needs an FCM backend contract and application configuration. |
 | Recorded audio playback, ROS point-cloud rendering, timeline pinch/pan | Not implemented. These original files remain in verified recording exports. |
 | Full organization editing, role management, access revocation and invite sharing UI | Partial. Metadata, member addition, invite creation and access grants are available. |
-| Automatic internet gateway VPN and local mesh route picker | Not implemented. The current VPN picker selects Cloud device routes. |
+| Android always-on VPN | Not implemented. Mesh is enabled explicitly in the app. |
 | USB flashing and host simulator management | Desktop workflows, also absent from the iOS app. |
 
 Physical-device checks are still required for BLE GATT/L2CAP, cloud sign-in,
@@ -130,7 +133,11 @@ go test ./go/android/mobile ./go/macos/backend
 ```
 
 Unit tests cover bridge rejection of malformed calls, stale initialization,
-Unicode, errors, device parsing, and H.264 framing across transport boundaries.
+Unicode, errors, device parsing, automatic VPN route updates and cancellation, private/public DNS isolation,
+and H.264 framing across transport boundaries.
 Instrumentation tests exercise the actual JNI library, native NSD discovery,
-stale session rejection and Activity recreation. They require a running emulator
-or connected Android device. They do not sign in or modify discovered devices.
+stale session rejection, Activity recreation, native private/public DNS, and idle
+VPN packet-pump cancellation. The VPN lifecycle test also connects, disconnects
+and reconnects a system tunnel when VPN consent has already been granted; otherwise
+it skips. These tests require a running emulator or connected Android device.
+They do not sign in or modify discovered devices.
