@@ -61,7 +61,7 @@ type DesktopDevice struct {
 
 // InitializeDesktop must run once, before any other desktop operation.
 func InitializeDesktop(cliPath string) error {
-	if runtime.GOOS == "ios" {
+	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
 		sessionbroker.EnableEmbeddedHost()
 		jsonOutput = true
 		return nil
@@ -101,7 +101,7 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		defer wg.Done()
 		options := cliLANStreamOptions(ctx)
 		options.Supplemental = meshDiscoveryStream
-		if runtime.GOOS == "ios" {
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
 			options.Supplemental = mobileMeshDiscoveryStream
 		}
 		devices, err = discovery.CollectLAN(ctx, options, 5*time.Second)
