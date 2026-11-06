@@ -5,7 +5,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/twin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +16,17 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--proxy" {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:8791", 5*time.Second)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer conn.Close()
+		go func() { io.Copy(conn, os.Stdin); conn.(*net.TCPConn).CloseWrite() }()
+		io.Copy(os.Stdout, conn)
+		return
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	directory := os.Getenv("WENDY_TWIN_DATA")
