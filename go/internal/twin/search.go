@@ -44,6 +44,8 @@ func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
 func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session *robotSession, root uint64, input twinrobot.SiteFusionRequest) {
 	defer cancel()
 	sequence := root
+	direction := 0
+	settledAfter := time.Time{}
 	var lastReport *twinrobot.SiteFusionReport
 	lastReason := "No reliable position match"
 	finish := func(state, message string, report *twinrobot.SiteFusionReport) {
@@ -78,7 +80,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 				fail(state.Message)
 				return
 			}
-			if state.MeasurementsReady && !state.Moving {
+			if state.MeasurementsReady && !state.Moving && !time.Now().Before(settledAfter) {
 				break
 			}
 		}
@@ -120,7 +122,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			return
 		}
 		sequence++
-		if err = session.robot.Look(sequence, 0); err != nil {
+		if err = session.robot.Look(sequence, direction); err != nil {
 			fail(err.Error())
 			return
 		}
@@ -141,6 +143,10 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 				return
 			}
 			if state.LookState == 2 && !state.Moving {
+				if direction == 0 && (state.LookDirection == 1 || state.LookDirection == -1) {
+					direction = state.LookDirection
+				}
+				settledAfter = time.Now().Add(time.Second)
 				break
 			}
 		}

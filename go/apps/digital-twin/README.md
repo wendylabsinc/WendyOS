@@ -36,7 +36,9 @@ run in their existing robot environment and send observations to the twin API.
 
 Open Sites on the same gateway in Wendy for macOS or iOS. On first connection,
 existing local captures are copied into the Linux store, preserving IDs and
-retaining the originals. Already present captures are not overwritten. Removed
+retaining the originals. Valid saved LiDAR reference maps migrate too, including
+for previously migrated rooms, only when the frame and model digest match and
+Linux has no references for that robot. Already present captures are not overwritten. Removed
 captures stay removed. The client keeps only disposable render assets and node
 calibration locally. A service outage is shown as an error, not a new empty room.
 

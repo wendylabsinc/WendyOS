@@ -71,6 +71,13 @@ func (s *Server) Handler() http.Handler {
 		}
 		respond(w, struct{}{}, s.Store.Contribute(r.PathValue("id"), v))
 	})
+	mux.HandleFunc("POST /v1/rooms/{id}/references/import", func(w http.ResponseWriter, r *http.Request) {
+		var input ReferenceImport
+		if !decode(w, r, &input, 3<<20) {
+			return
+		}
+		respond(w, struct{}{}, s.Store.ImportReferences(r.PathValue("id"), input))
+	})
 	mux.HandleFunc("POST /v1/rooms/{id}/people", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			ModelRevision string              `json:"modelRevision"`
