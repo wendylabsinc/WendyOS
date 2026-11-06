@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -14,7 +13,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/assets"
 	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
-	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -32,7 +30,9 @@ var toolReferenceAllowlist = map[string]string{
 	"deploy_app":              "MCP prompt (prompts.go), not a tool",
 	"cloud_deskewed":          "part of the example ROS topic /utlidar/cloud_deskewed",
 	"read_export":             "the wendy-data example script read_export.py",
-	"stop_requested":          "a detection gateway status field in the wendy-data skill",
+	"device_campaign_sources": "native Wendy chat tool from the macOS app backend, named by the wendy-data skill",
+	"device_campaign_list":    "native Wendy chat tool from the macOS app backend, named by the wendy-data skill",
+	"job_dir":                 "a {job_dir} step placeholder in the wendy-training skill",
 	"app_id":                  "the Cloud app ID field in wendy.json.md",
 }
 
@@ -83,8 +83,7 @@ type toolCatalog struct {
 }
 
 // realToolCatalog lists the tools an agent can discover: every built-in tool
-// tools/list shows with all groups enabled, plus the robot gateway's tools.
-// A registered handler that is never advertised (container_attach) is not a
+// tools/list shows with all groups enabled. A registered handler that is never advertised (container_attach) is not a
 // tool an agent should be told to call.
 func realToolCatalog(t *testing.T) toolCatalog {
 	t.Helper()
@@ -96,21 +95,12 @@ func realToolCatalog(t *testing.T) toolCatalog {
 	if err := s.SetToolGroups([]string{"all"}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := gatewayTestConfig()
-	cfg.StateDirectory = t.TempDir()
-	g, err := NewRobotGateway(cfg, func(context.Context, string) (*grpcclient.AgentConnection, error) { return nil, fmt.Errorf("offline") })
-	if err != nil {
-		t.Fatal(err)
-	}
 	c := toolCatalog{tools: map[string]bool{}, params: map[string]bool{}, prefixes: map[string]bool{}}
 	var builtin []mcpgo.Tool
 	for _, entry := range srv.ListTools() {
 		builtin = append(builtin, entry.Tool)
 	}
 	advertised := s.filterTools(context.Background(), builtin)
-	for _, entry := range g.protocol.ListTools() {
-		advertised = append(advertised, entry.Tool)
-	}
 	for _, tool := range advertised {
 		c.tools[tool.Name] = true
 		if prefix, _, found := strings.Cut(tool.Name, "_"); found {
