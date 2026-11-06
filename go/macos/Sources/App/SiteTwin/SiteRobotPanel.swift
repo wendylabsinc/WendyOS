@@ -237,6 +237,7 @@ final class SiteRobotMapModel: ObservableObject {
                     let progress = try await searchClient.searchStatus(owned)
                     guard epoch == generation, !Task.isCancelled else { break }
                     searchTurns = progress.SearchTurns
+                    if let report = progress.Fusion { fusionReport = report }
                     if progress.SearchState == "searching" {
                         rotationState = result.moving ? .turning(searchTurns) : .matching(searchTurns)
                     } else {
@@ -697,7 +698,7 @@ struct SiteRobotPanel: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(model.selected ? Color.green.opacity(0.5) : Color.white.opacity(0.1)))
         .onChange(of: expanded) { _, visible in
-            if !visible { model.stop() }
+            if !visible && (model.localizing || model.reading?.moving == true) { model.stop() }
         }
         .onChange(of: model.selected) { _, selected in
             if selected { expanded = true }

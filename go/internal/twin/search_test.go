@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ func (r *searchRobot) FuseLocalization(sequence uint64, input twinrobot.SiteFusi
 	if r.matchAfter >= 0 && r.turns >= r.matchAfter {
 		return twinrobot.SiteFusionReport{Candidates: []twinrobot.SiteRobotCandidate{{X: 1}}}, nil
 	}
-	return twinrobot.SiteFusionReport{}, nil
+	return twinrobot.SiteFusionReport{Message: "Several room positions still fit.", Accepted: 42}, nil
 }
 func (r *searchRobot) Look(sequence uint64, direction int) error {
 	r.turns++
@@ -72,7 +73,7 @@ func TestLinuxSearchHasBoundedFullRotation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	(&Server{}).search(ctx, cancel, session, 1000000, twinrobot.SiteFusionRequest{})
-	if robot.turns != 12 || session.searchState != "failed" {
+	if robot.turns != 12 || session.searchState != "failed" || !strings.Contains(session.searchMessage, "Several room positions") || !strings.Contains(string(session.searchReport), `"Accepted":42`) {
 		t.Fatalf("unbounded search: %d %s", robot.turns, session.searchState)
 	}
 }

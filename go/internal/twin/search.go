@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
+	"log"
 	"time"
 )
 
@@ -43,6 +44,8 @@ func (s *Server) startSearch(session *robotSession, q twinrobot.Request) error {
 func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session *robotSession, root uint64, input twinrobot.SiteFusionRequest) {
 	defer cancel()
 	sequence := root
+	var lastReport *twinrobot.SiteFusionReport
+	lastReason := "No reliable position match"
 	finish := func(state, message string, report *twinrobot.SiteFusionReport) {
 		session.searchMu.Lock()
 		defer session.searchMu.Unlock()
@@ -63,7 +66,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			return true
 		}
 	}
-	fail := func(message string) { session.robot.Stop(root + 999999); finish("failed", message, nil) }
+	fail := func(message string) { session.robot.Stop(root + 999999); finish("failed", message, lastReport) }
 	for turn := 0; turn <= 12; turn++ {
 		for {
 			if !wait() {
@@ -81,6 +84,23 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 		}
 		sequence++
 		report, err := session.robot.FuseLocalization(sequence, input)
+		if err != nil {
+			lastReason = err.Error()
+		} else {
+			lastReport = &report
+			if report.Message != "" {
+				lastReason = report.Message
+			}
+		}
+		log.Printf("localization turn=%d candidates=%d accepted=%d rejected=%d reason=%q", turn, len(report.Candidates), report.Accepted, report.Rejected, lastReason)
+		session.searchMu.Lock()
+		if session.searchRoot == root {
+			session.searchMessage = lastReason
+			if lastReport != nil {
+				session.searchReport, _ = json.Marshal(lastReport)
+			}
+		}
+		session.searchMu.Unlock()
 		if err == nil && len(report.Candidates) > 0 {
 			session.pendingMu.Lock()
 			session.pending = report
@@ -92,7 +112,7 @@ func (s *Server) search(ctx context.Context, cancel context.CancelFunc, session 
 			return
 		}
 		if turn == 12 {
-			fail("No reliable position match after a full rotation")
+			fail("No reliable position match after a full rotation. " + lastReason)
 			return
 		}
 		if ctx.Err() != nil {
