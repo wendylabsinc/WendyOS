@@ -1,5 +1,6 @@
-// Package devicepin persists and verifies SPKI fingerprints for known Wendy
-// devices, providing TOFU (trust-on-first-use) protection against MITM.
+// Package devicepin records the latest certificate key for verified Wendy
+// device identities. Callers authenticate the certificate chain and expected
+// device identity before updating the store.
 package devicepin
 
 import (
@@ -32,11 +33,9 @@ type PinnedDevice struct {
 	NotAfter        string `json:"notAfter,omitempty"` // RFC3339; pinned leaf's expiry
 }
 
-// PinMismatchError reports that a device identity presented a different public
-// key than the one pinned for it, while the pinned certificate was still valid.
-// A rotation that happens after the pinned cert expires is not an error — it is
-// renewal — so this only fires inside the pinned cert's validity window, where
-// a new key is unexplained.
+// PinMismatchError represents a public-key pin rejection. It remains available
+// to callers that report pin failures, but Store.CheckAndUpdate no longer emits
+// it: a verified device identity can rotate keys before its certificate expires.
 type PinMismatchError struct {
 	Key         string
 	DisplayName string
@@ -49,17 +48,9 @@ func (e *PinMismatchError) Error() string {
 		e.DisplayName, e.Key, e.Want, e.Got)
 }
 
-// BlockingPinRejection marks this as the one CheckAndUpdate failure the TLS
-// verifier must drop a connection over: it says the PEER is not the one we
-// pinned. Every other way CheckAndUpdate can fail is a write to local
-// bookkeeping, which cannot make a verified device untrustworthy. See
-// certs.BlockingPinError.
+// BlockingPinRejection distinguishes a peer rejection from a local write error.
 func (e *PinMismatchError) BlockingPinRejection() {}
 
-// Compile-time proof that the marker above really does satisfy the interface
-// the verifier tests for. Without it, dropping or renaming the method would
-// silently downgrade every key-change rejection to best-effort — the verifier
-// would just stop failing, and nothing in this package would notice.
 var _ certs.BlockingPinError = (*PinMismatchError)(nil)
 
 // Store is a file-backed map from device identity key to PinnedDevice.
@@ -109,30 +100,20 @@ func readPinFile(path string) (devices map[string]PinnedDevice, parsed bool, err
 	return devices, true, nil
 }
 
-// CheckAndUpdate checks the stored pin for the device identified by leaf's
-// Wendy identity, creating or updating it as needed.
+// CheckAndUpdate records the latest certificate for leaf's Wendy asset identity.
+// The caller must first verify the certificate chain and any expected device
+// identity. A matching display name or hostname alone does not authenticate a
+// device; those bindings belong to the caller's identity checks.
 //
-//   - Not an asset cert: skip (user certs and certs with no identity are not pinned)
-//   - Not previously pinned: store pin, return nil
-//   - Pinned, SPKI match: refresh LastSeen in memory, return nil
-//   - Pinned, SPKI differs, pinned cert still valid: hard fail with PinMismatchError
-//   - Pinned, SPKI differs, pinned cert expired (or predates NotAfter tracking):
-//     rotation by definition — update pin, return nil
+// Key changes for an authenticated identity are accepted even while the previous
+// certificate is valid. Renewals normally overlap the previous validity window,
+// and certificate rotation may also replace the key. The fingerprint and expiry
+// remain diagnostic metadata, not an additional trust anchor.
 //
-// Only the PinMismatchError is a rejection of the device. A returned write
-// failure means the verdict above stands but could not be recorded; it is
-// reported so a caller may log it, and deliberately does NOT implement
-// certs.BlockingPinError, so the TLS verifier lets the connection through. The
-// alternative — every mTLS connection failing because ~/.wendy is read-only —
-// is an outage with no security question behind it.
-//
-// The write is skipped entirely when the entry would come back identical apart
-// from LastSeen, which is the common path: a device whose key and expiry are
-// unchanged is every connection after the first. Nothing reads LastSeen (it is
-// there for a human reading known_devices.json), so it is refreshed in memory
-// and rides along on the next write that has a real reason to happen. NotAfter
-// is a different matter — CheckAndUpdate itself reads it to tell rotation from
-// mismatch — so any change to it still forces the write through.
+// Non-asset certificates are skipped. Write errors do not implement
+// certs.BlockingPinError and must not reject an otherwise verified connection.
+// Unchanged entries refresh LastSeen in memory without writing the file; changes
+// to the key, expiry, or display name are persisted.
 func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error {
 	identity, ok, err := certs.IdentityFromCert(leaf)
 	if err != nil || !ok || identity.EntityType != certs.EntityAsset {
@@ -140,12 +121,8 @@ func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 	}
 
 	key := identity.IdentityKey()
-	// A device that moves onto a pki-core chain keeps its pin. Its leaf is filed
-	// under the SPIFFE principal now, but the entry recorded before the cutover
-	// is filed under the urn:wendy URN — and a transitional leaf carries both, so
-	// this is the one moment the two names are provably the same device. Carry
-	// the entry over under the new name instead of silently starting a fresh
-	// TOFU, which is what an attacker substituting the device would look like.
+	// A verified transitional leaf carries both the legacy URN and the SPIFFE
+	// principal. Move the record to the principal so an unpin still removes it.
 	renamed := false
 	if legacy := identity.LegacyURN(); key != legacy && legacy != "" {
 		if _, pinnedNow := s.devices[key]; !pinnedNow {
@@ -161,15 +138,6 @@ func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 	notAfter := leaf.NotAfter.UTC().Format(time.RFC3339)
 
 	existing, pinned := s.devices[key]
-	if pinned && existing.SPKIFingerprint != fingerprint {
-		// A key change while the pinned cert is still valid is unexplained: a
-		// renewal replaces an expiring cert, it does not race a live one.
-		if existing.NotAfter != "" {
-			if exp, parseErr := time.Parse(time.RFC3339, existing.NotAfter); parseErr == nil && time.Now().Before(exp) {
-				return &PinMismatchError{Key: key, DisplayName: displayName, Want: existing.SPKIFingerprint, Got: fingerprint}
-			}
-		}
-	}
 
 	unchanged := pinned && !renamed &&
 		existing.SPKIFingerprint == fingerprint &&

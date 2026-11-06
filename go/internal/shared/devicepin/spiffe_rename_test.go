@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"errors"
 	"math/big"
 	"net/url"
 	"testing"
@@ -94,20 +93,14 @@ func TestCheckAndUpdate_AdoptsLegacyPinUnderPrincipal(t *testing.T) {
 		t.Error("rename was not flushed to disk")
 	}
 
-	// And the carried-over fingerprint must still be enforced: a different key
-	// under the new name, while the pinned cert is live, is a mismatch — not a
-	// silent first use.
+	// Renewal under the principal can also rotate the device key.
 	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	imposter := certWithKey(t, otherKey, renamePrincipal)
-	var mismatch *devicepin.PinMismatchError
-	err = reopened.CheckAndUpdate(imposter, "My Device")
-	if err == nil {
-		t.Error("a key change under the carried-over pin was accepted")
-	} else if !errors.As(err, &mismatch) {
-		t.Errorf("want PinMismatchError, got %T: %v", err, err)
+	renewed := certWithKey(t, otherKey, renamePrincipal)
+	if err := reopened.CheckAndUpdate(renewed, "My Device"); err != nil {
+		t.Fatalf("rotation after principal migration: %v", err)
 	}
 }
 
