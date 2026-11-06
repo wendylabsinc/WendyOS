@@ -1,4 +1,4 @@
-package backend
+package twinrobot
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 )
 
 type SiteFusionRequest struct {
@@ -220,4 +220,18 @@ func (r *SiteRobot) FuseLocalizationJSON(sequence uint64, data []byte) ([]byte, 
 		return nil, err
 	}
 	return json.Marshal(report)
+}
+
+// ValidateSearchGeometry rejects unusable maps before any autonomous turn.
+func ValidateSearchGeometry(request SiteFusionRequest) error {
+	architecture, err := fusionTriangles(request.Architecture)
+	if err != nil {
+		return err
+	}
+	furniture, err := fusionTriangles(request.Furniture)
+	if err != nil {
+		return err
+	}
+	_, err = sitenav.NewLayeredRoom(architecture, furniture)
+	return err
 }
