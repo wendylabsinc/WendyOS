@@ -57,6 +57,10 @@ struct DeviceConnectionView: View {
             Text(device.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
             if let error = model.detailError, !ConnectionRecovery.canRetry(error) {
                 Text(PresentedFailure(error).message).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                if PresentedFailure(error).offersDeviceSignIn {
+                    Button("Sign in to Wendy Cloud") { actions.submit { await model.signIn() } }
+                        .disabled(model.signingIn)
+                }
                 if model.canForgetIdentity {
                     Button("Forget saved identity and reconnect") { actions.submit { await model.connect(device, forgetIdentity: true) } }
                 } else {

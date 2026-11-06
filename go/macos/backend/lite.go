@@ -136,12 +136,6 @@ func (b *Backend) startLiteLogs(app string, streamID uint64) error {
 	if app != "" {
 		return errors.New("Wendy Lite exposes one device console; clear the app filter")
 	}
-	if b.logsStop != nil {
-		b.logsStop()
-	}
-	if b.logsDone != nil {
-		<-b.logsDone
-	}
 	chunks, detach, err := b.lite.ConsoleAttach(true, false)
 	if err != nil {
 		return err

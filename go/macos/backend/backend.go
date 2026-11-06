@@ -72,6 +72,7 @@ type Backend struct {
 	stop                context.CancelFunc
 	logsStop, loginStop context.CancelFunc
 	logsDone            <-chan struct{}
+	logStream           uint64
 	cameraDevices       map[uint32]*pb.VideoDevice
 	videoStops          map[uint32]cameraSubscription
 	session             uint64
@@ -131,6 +132,7 @@ func (b *Backend) stopCameras() {
 }
 func (b *Backend) disconnect() {
 	b.cameraDevices = nil
+	b.logStream = 0
 	if b.chatEnvironment != nil {
 		b.chatEnvironment.close()
 		b.chatEnvironment = nil
@@ -269,6 +271,9 @@ func (b *Backend) Connect(selector string, forgetIdentity bool) (uint64, error) 
 	return b.ConnectRequest(selector, forgetIdentity, b.ReserveConnection())
 }
 func (b *Backend) ConnectRequest(selector string, forgetIdentity bool, request uint64) (uint64, error) {
+	return b.ConnectTargetRequest(selector, forgetIdentity, request, false)
+}
+func (b *Backend) ConnectTargetRequest(selector string, forgetIdentity bool, request uint64, requiresMTLS bool) (uint64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	defer cancel()
 	b.connectMu.Lock()
@@ -316,7 +321,9 @@ func (b *Backend) ConnectRequest(selector string, forgetIdentity bool, request u
 	var conn *grpcclient.AgentConnection
 	var lite liteConnection
 	var err error
-	if b.connectDevice != nil {
+	if requiresMTLS {
+		conn, err = commands.DesktopConnectSecureLAN(targetCtx, selector)
+	} else if b.connectDevice != nil {
 		conn, err = b.connectDevice(targetCtx, selector)
 	} else {
 		conn, lite, err = b.connectTarget(targetCtx, selector)
@@ -527,14 +534,14 @@ func (b *Backend) Cameras() ([]*pb.VideoDevice, error) {
 	}
 	return v.Devices, nil
 }
-func (b *Backend) StopLogs() error {
+func (b *Backend) StopLogs(streamID, sessionID uint64) error {
 	_, done := b.begin()
 	defer done()
-	err := b.validSession(0)
+	err := b.validSession(sessionID)
 	if err != nil {
 		return err
 	}
-	if b.logsStop != nil {
+	if b.logsStop != nil && b.logStream == streamID && sessionID != 0 {
 		b.logsStop()
 	}
 	return nil
@@ -565,18 +572,29 @@ func (b *Backend) StopCameras(sessionID uint64) error {
 	b.stopCameras()
 	return nil
 }
-func (b *Backend) StartLogs(app string, streamID uint64) error {
+func (b *Backend) StartLogs(app string, streamID, sessionID uint64) error {
 	_, done := b.begin()
 	defer done()
-	if b.lite != nil {
-		return b.startLiteLogs(app, streamID)
-	}
-	conn, err := b.connection(0)
-	if err != nil {
+	if err := b.validSession(sessionID); err != nil {
 		return err
+	}
+	if sessionID == 0 || streamID == 0 || streamID <= b.logStream {
+		return errors.New("log subscription changed")
 	}
 	if b.logsStop != nil {
 		b.logsStop()
+	}
+	if b.logsDone != nil {
+		<-b.logsDone
+		b.logsDone = nil
+	}
+	b.logStream = streamID
+	if b.lite != nil {
+		return b.startLiteLogs(app, streamID)
+	}
+	conn, err := b.connection(sessionID)
+	if err != nil {
+		return err
 	}
 	streamCtx, stop := context.WithCancel(b.life)
 	b.logsStop = stop

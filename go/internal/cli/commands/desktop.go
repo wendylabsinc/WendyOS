@@ -51,12 +51,13 @@ func DesktopUnpin(target string) error {
 }
 
 type DesktopDevice struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Selector  string `json:"selector"`
-	Transport string `json:"transport"`
-	Address   string `json:"address"`
-	Lite      bool   `json:"lite"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Selector     string `json:"selector"`
+	Transport    string `json:"transport"`
+	Address      string `json:"address"`
+	Lite         bool   `json:"lite"`
+	RequiresMTLS bool   `json:"requiresMTLS,omitempty"`
 }
 
 // InitializeDesktop must run once, before any other desktop operation.
@@ -95,11 +96,13 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 	var devices []models.LANDevice
 	var lite []models.ExternalDevice
 	var err, liteErr error
+	var browse lanBrowseErrors
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		options := cliLANStreamOptions(ctx)
+		options.OnBackendError = browse.record
 		options.Supplemental = meshDiscoveryStream
 		if runtime.GOOS == "ios" {
 			options.Supplemental = mobileMeshDiscoveryStream
@@ -139,9 +142,10 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		}
 	}
 	if len(result) == 0 {
-		return mergeDesktopDevices(result), errors.Join(err, liteErr)
+		return mergeDesktopDevices(result), errors.Join(browse.first(), err, liteErr)
 	}
-	return mergeDesktopDevices(result), nil
+	// USB or mesh peers remain usable when Bonjour is unavailable.
+	return mergeDesktopDevices(result), browse.first()
 }
 
 func DesktopCloud(ctx context.Context) ([]DesktopDevice, error) {
@@ -280,7 +284,38 @@ func desktopNearbyDevice(d models.LANDevice) DesktopDevice {
 	if d.PrincipalURI != "" {
 		id = d.PrincipalURI
 	}
-	return DesktopDevice{ID: id, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress, Lite: d.WendyLite}
+	return DesktopDevice{ID: id, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress, Lite: d.WendyLite,
+		RequiresMTLS: d.IsMTLS && !d.Mesh && !d.WendyLite}
+}
+
+// DesktopConnectSecureLAN dials an advertised enrolled agent using only the
+// current app account. An mDNS advertisement can require stronger transport,
+// but never establishes trust in the peer or overrides the saved pin.
+func DesktopConnectSecureLAN(ctx context.Context, selector string) (*grpcclient.AgentConnection, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Auth) == 0 {
+		return nil, errors.New("sign in to Wendy Cloud to connect to this enrolled device")
+	}
+	auth, ok := cfg.ContextByName(cfg.CurrentContext)
+	if !ok && len(cfg.Auth) == 1 {
+		auth = &cfg.Auth[0]
+	}
+	if auth == nil {
+		return nil, errors.New("choose the account for this enrolled device before connecting")
+	}
+	if len(auth.Certificates) == 0 {
+		if desktopAccountInfo(*auth).State != 1 {
+			return nil, errors.New("sign in to Wendy Cloud to connect to this enrolled device")
+		}
+		return nil, errors.New("this account has no device connection certificate; sign in again with an account in the device's organization")
+	}
+	target := newDialTargetCandidates(pinKeyForAddr(selector), resolveAddrCandidates(ctx, selector))
+	target.RequiresMTLS = true
+	conn, _, err := dialAgentLadderWithCerts(ctx, target, auth.Certificates)
+	return conn, err
 }
 
 // Addresses and transports may change while the enrolled identity stays the same.

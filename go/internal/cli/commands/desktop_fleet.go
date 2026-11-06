@@ -8,7 +8,7 @@ import (
 
 type DesktopFleetDevice struct {
 	ID, Name, Selector, SiteID, Site, Hardware, Address string
-	Online                                              bool
+	Online, Lite                                        bool
 	LastSeen                                            int64
 }
 type DesktopFleet struct {
@@ -44,7 +44,7 @@ func DesktopFleetOverview(ctx context.Context, account, org string) (DesktopFlee
 		if name == "" {
 			name = a.GetName()
 		}
-		item := DesktopFleetDevice{ID: a.GetId(), Name: name, Selector: selector, SiteID: a.GetSiteId(), Site: a.GetSite(), Hardware: a.GetDeviceType(), Address: a.GetIpAddress(), Online: present[a.GetId()]}
+		item := DesktopFleetDevice{ID: a.GetId(), Name: name, Selector: selector, SiteID: a.GetSiteId(), Site: a.GetSite(), Hardware: a.GetDeviceType(), Address: a.GetIpAddress(), Online: present[a.GetId()], Lite: isLiteCloudAsset(a)}
 		if stamp := a.GetLastHeartbeat(); stamp != nil && stamp.IsValid() && stamp.AsTime().Before(time.Now().Add(time.Minute)) {
 			item.LastSeen = stamp.GetSeconds()
 		}

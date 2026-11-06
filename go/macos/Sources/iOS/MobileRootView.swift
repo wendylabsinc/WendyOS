@@ -1,15 +1,29 @@
 import SwiftUI
 
-private enum MobileHome: Hashable { case devices, sites, activity }
-private enum MobileDestination: Hashable { case organization, sites, device(String) }
+enum MobileHome: String, CaseIterable { case home = "Home", devices = "Devices", data = "Data", activity = "Activity" }
+enum MobileDestination: Hashable { case inventory(MobileInventorySource), device(Device) }
+
+enum MobileInventorySource: CaseIterable, Hashable {
+    case local, cloud
+
+    var title: String { self == .local ? "Local devices" : "Cloud devices" }
+    var tileLabel: String { self == .local ? "Local · nearby" : "Cloud" }
+    var symbol: String { self == .local ? "antenna.radiowaves.left.and.right" : "globe" }
+}
+
 struct MobileRootView: View {
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var destination: MobileDestination?
-    @State private var homeTab = MobileHome.devices
+    @AppStorage("wendy.primaryLens") private var primaryLens = ""
+    @State private var lens: MobileLens?
+    @State private var homeTab = MobileHome.home
+    @State private var showingChat = false
+    @State private var showingNotifications = false
+    @State private var showMesh = false
+    @State private var homePath: [MobileDestination] = []
     @State private var preferredColumn = NavigationSplitViewColumn.sidebar
-    @State private var source = "nearby"
     @State private var search = ""
     @State private var address = ""
     @State private var adding = false
@@ -19,19 +33,18 @@ struct MobileRootView: View {
     @State private var accounts = false
     @State private var pendingAccountSignIn: Bool?
     @State private var details: String?
-    private var devices: [Device] {
-        (source == "nearby" ? model.nearby : model.cloud).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
+    private var selectedRouteDevice: Device? {
+        guard lens == .devices, model.mobileScopeIsCurrent else { return nil }
+        let route: MobileDestination? = switch homeTab {
+        case .home: homePath.last
+        case .devices: destination
+        case .data, .activity: nil
+        }
+        if case .device(let device) = route { return device }
+        return nil
     }
     var body: some View {
-        TabView(selection: $homeTab) {
-            deviceBrowser.tabItem { Label("Devices", systemImage: "square.grid.2x2") }.tag(MobileHome.devices)
-            NavigationStack {
-                SitesView { select($0) }.navigationTitle("Sites").navigationBarTitleDisplayMode(.inline)
-            }.tabItem { Label("Sites", systemImage: "building.2") }.tag(MobileHome.sites)
-            NavigationStack {
-                ExperienceActivityView(model: model) { select($0) }
-            }.tabItem { Label("Activity", systemImage: "clock") }.tag(MobileHome.activity)
-        }
+        presentedTabs
         .task { await model.start() }
         .task(id: model.account) { await model.refreshMobileCloudSelection() }
         .task(
@@ -46,41 +59,122 @@ struct MobileRootView: View {
         .onChange(of: model.requestedDevice) { _, device in
             if let device { select(device); model.requestedDevice = nil }
         }
+        .task(id: selectedRouteDevice) {
+            if let device = selectedRouteDevice { await model.connect(device) }
+        }
+        .onChange(of: model.mobileCloudSelectionKey) { _, _ in
+            // A source list can reload in the new organization; a device or log route cannot.
+            if let first = homePath.first, case .inventory = first { homePath = [first] }
+            else { homePath = [] }
+            destination = nil
+            preferredColumn = .sidebar
+            search = ""
+        }
         .modifier(NearbySetupPrompt())
+    }
+
+    private var tabs: some View {
+        TabView(selection: $homeTab) {
+            NavigationStack(path: $homePath) {
+                MobileDevicesHome(model: model, launcher: { lens = nil }, notifications: { showingNotifications = true },
+                                  setup: { showingNearbySetup = true })
+                    .navigationDestination(for: MobileDestination.self) { route in
+                        switch route {
+                        case .inventory(let inventory):
+                            MobileInventoryList(model: model, source: inventory, showAccounts: { accounts = true })
+                        case .device(let device):
+                            MobileDeviceView(device: device, openRecordings: { homeTab = .data }).id(device.id)
+                        }
+                    }
+            }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.home)
+            deviceBrowser.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.devices)
+            NavigationStack {
+                MobileLensData(model: model, chooseDevice: { homeTab = .devices })
+                    .toolbar { launcherButton }
+            }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.data)
+            NavigationStack {
+                ExperienceActivityView(model: model) { select($0) }
+                    .background(MobileLensStyle.background)
+                    .toolbar { launcherButton }
+            }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.activity)
+        }
+        .toolbarVisibility(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            MobileLensBar(tab: $homeTab, chat: { showingChat = true })
+        }
+        .tint(MobileLensStyle.accent)
+    }
+
+    private var launcherButton: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button("General Home", systemImage: "chevron.left") { lens = nil }
+                .accessibilityIdentifier("lens.back")
+        }
+    }
+
+    @ViewBuilder private var surface: some View {
+        if MobileLens(rawValue: primaryLens) == nil {
+            MobileLensPreference(initial: .devices) { primaryLens = $0.rawValue }
+        } else if let lens {
+            switch lens {
+            case .devices: tabs
+            case .sites:
+                NavigationStack { SitesView { select($0) }.navigationTitle("Sites").toolbar { launcherButton } }
+            case .robots:
+                NavigationStack { MobileRobotInventory(model: model, chooseDevice: { enter(.devices); homeTab = .devices })
+                    .toolbar { launcherButton } }
+            }
+        } else {
+            NavigationStack {
+                MobileGeneralHome(model: model, primary: MobileLens(rawValue: primaryLens) ?? .devices,
+                                  open: enter, accounts: { accounts = true }, notifications: { showingNotifications = true },
+                                  setup: { showingNearbySetup = true }, recordings: { enter(.devices); homeTab = .data })
+                    .safeAreaInset(edge: .bottom, alignment: .trailing) {
+                        Button("Ask Wendy", systemImage: "sparkles") { showingChat = true }
+                            .labelStyle(.iconOnly).font(.title3).foregroundStyle(.white).frame(width: 52, height: 52)
+                            .background(MobileLensStyle.green, in: .circle).padding(.trailing, 16)
+                    }
+            }
+        }
+    }
+
+    private func enter(_ next: MobileLens) {
+        lens = next
     }
 
     @ViewBuilder private var deviceBrowser: some View {
         NavigationSplitView(preferredCompactColumn: $preferredColumn) {
             List(selection: $destination) {
-                Section {
-                    ForEach(devices) { device in
-                        NavigationLink(value: MobileDestination.device(device.id)) {
-                            DeviceIdentityRow(device: device, connected: model.connected?.id == device.id,
-                                              connecting: model.connectingDevice?.id == device.id)
-                        }
+                if showMesh {
+                    MobileMeshSection(model: model)
+                } else {
+                    Section {
+                        Button("Set up a new device", systemImage: "plus.circle.fill") { showingNearbySetup = true }
                     }
-                    if devices.isEmpty && !model.discovering {
-                        if source == "cloud" && model.account?.signedIn != true {
-                            Button("Sign in to Wendy Cloud") { actions.submit { await model.signIn() } }
-                        } else { Text("No devices found").foregroundStyle(.secondary) }
+                    ForEach(MobileInventorySource.allCases, id: \.self) { inventory in
+                        MobileInventorySection(model: model, source: inventory, search: search, showAccounts: { accounts = true })
                     }
-                    if let error = source == "nearby" ? model.nearbyError : model.cloudError { FailureNote(message: error) }
                 }
             }
+            .scrollContentBackground(.hidden).background(MobileLensStyle.background)
             .safeAreaInset(edge: .top, spacing: 0) {
-                Picker("Device source", selection: $source) {
-                    Text("Nearby").tag("nearby")
-                    Text("Cloud").tag("cloud")
-                }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.vertical, 8)
-                    .background(.bar)
+                Picker("Device view", selection: $showMesh) {
+                    Text("List").tag(false)
+                    Text("Mesh").tag(true)
+                }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(MobileLensStyle.background)
             }
             .navigationTitle("Devices").navigationBarTitleDisplayMode(.inline)
             .contentMargins(.top, 8, for: .scrollContent)
             .listSectionSpacing(12)
-            .searchable(text: $search, prompt: "Find a device")
-            .refreshable { await refresh() }
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a device")
+            .refreshable {
+                async let local: Void = MobileInventorySource.local.refresh(model)
+                async let cloud: Void = MobileInventorySource.cloud.refresh(model)
+                _ = await (local, cloud)
+            }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button { accounts = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Accounts") }
+                launcherButton
                 ToolbarItem(placement: .topBarTrailing) { Button { recognizing = true } label: { Image(systemName: "viewfinder") }.accessibilityLabel("Recognize a device") }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -92,32 +186,39 @@ struct MobileRootView: View {
         } detail: {
             NavigationStack {
                 switch destination {
-                case .organization: CloudManagementView().navigationTitle("Organization").navigationBarTitleDisplayMode(.inline)
-                case .sites: SitesView { select($0) }.navigationTitle("Sites").navigationBarTitleDisplayMode(.inline)
-                case .device:
-                    if let device = model.selection { MobileDeviceView(device: device).id(device.id) }
-                    else { ContentUnavailableView("Choose a device", systemImage: "network") }
-                case nil: ContentUnavailableView("Your devices", systemImage: "network", description: Text("Choose a nearby or cloud device."))
+                case .device(let device): MobileDeviceView(device: device, openRecordings: { homeTab = .data }).id(device.id)
+                default: ContentUnavailableView("Your devices", systemImage: "network", description: Text("Choose a nearby or cloud device."))
                 }
-            }
+            }.id(destination)
         }
-        .onChange(of: model.account?.signedIn) { _, signedIn in
-            if signedIn != true, destination == .organization || destination == .sites {
-                destination = nil
-                preferredColumn = .sidebar
-            }
+        .task(id: model.mobileCloudSelectionKey) {
+            async let local: Void = MobileInventorySource.local.refresh(model)
+            async let cloud: Void = MobileInventorySource.cloud.refresh(model)
+            _ = await (local, cloud)
         }
-        .task(id: source) { await refresh() }
-        .task(id: destination) {
-            if case .device(let id) = destination, let device = (model.nearby + model.cloud + [model.selection].compactMap { $0 }).first(where: { $0.id == id }) {
-                model.selection = device
-                preferredColumn = .detail
-                await model.connect(device)
+        .onChange(of: showMesh) { _, _ in destination = nil; preferredColumn = .sidebar }
+
+        .onChange(of: destination) { _, route in
+            if case .device = route { preferredColumn = .detail }
+        }
+    }
+
+    private var presentedTabs: some View {
+        surface
+        .sheet(isPresented: $showingChat) {
+            MobileLensChat(model: model, chooseDevice: { showingChat = false; enter(.devices); homeTab = .devices })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        }
+        .sheet(isPresented: $showingNotifications) {
+            NavigationStack {
+                MobileNotifications(model: model) { device in showingNotifications = false; select(device) }
+                    .toolbar { Button("Done") { showingNotifications = false } }
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { model.hideCameraWall() }
-
         }
         .task(id: scenePhase) {
             if scenePhase == .active { await model.refreshAccount() }
@@ -148,9 +249,7 @@ struct MobileRootView: View {
                     #endif
             }
         }
-        .sheet(isPresented: Binding(get: { model.webpageURL != nil }, set: { if !$0 { model.webpageURL = nil } })) {
-            if let url = model.webpageURL { BrowserSheet(url: url).ignoresSafeArea() }
-        }
+        .sheet(item: $model.webpage) { target in MobileAppBrowser(target: target) }
         .alert("Connect to device", isPresented: $adding) {
             TextField("hostname:50051", text: $address).textInputAutocapitalization(.never).autocorrectionDisabled()
             Button("Cancel", role: .cancel) {}
@@ -172,91 +271,201 @@ struct MobileRootView: View {
         } message: { Text("The app will be removed from the device.") }
     }
     private func select(_ device: Device) {
+        lens = .devices
         homeTab = .devices
-        model.selection = device
-        destination = .device(device.id)
+        showMesh = false
+        destination = .device(device)
         preferredColumn = .detail
     }
-    private func refresh() async {
-        if source == "nearby" { await model.refreshNearby() } else { await model.refreshCloud() }
+}
+
+enum MobileLensStyle {
+    static let background = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemBackground : UIColor(red: 241/255, green: 238/255, blue: 231/255, alpha: 1) })
+    static let card = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .secondarySystemBackground : UIColor(red: 230/255, green: 226/255, blue: 216/255, alpha: 1) })
+    static let green = Color(red: 42/255, green: 112/255, blue: 80/255)
+    static let accent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 159/255, green: 226/255, blue: 191/255, alpha: 1) : UIColor(red: 42/255, green: 112/255, blue: 80/255, alpha: 1) })
+}
+
+@MainActor private extension MobileInventorySource {
+    func devices(_ model: AppModel) -> [Device] {
+        guard model.mobileScopeIsCurrent else { return [] }
+        return self == .local ? model.nearby : model.cloud
+    }
+    func error(_ model: AppModel) -> String? {
+        guard model.mobileScopeIsCurrent else { return nil }
+        return self == .local ? model.nearbyError : model.cloudError
+    }
+    func count(_ model: AppModel) -> Int? {
+        guard model.mobileScopeIsCurrent else { return nil }
+        if self == .cloud && (model.mobileCloudOrganization.isEmpty || model.mobileCloudSelectionError != nil) { return nil }
+        guard (self == .local ? model.nearbyLoaded : model.cloudLoaded), error(model) == nil else { return nil }
+        return devices(model).count
+    }
+    func refresh(_ model: AppModel) async {
+        if self == .local { await model.refreshNearby() } else { await model.refreshCloud() }
     }
 }
 
-private enum MobilePane: String, CaseIterable, Identifiable {
-    case overview = "Overview", apps = "Apps", cameras = "Cameras", siteModel = "Digital Twin", campaigns = "Campaigns", chat = "Chat"
-    var id: String { rawValue }
-}
-private struct MobileDeviceView: View {
-    @State private var actions = AsyncActions()
-    @EnvironmentObject private var model: AppModel
-    let device: Device
-    @State private var pane = MobilePane.overview
-    @State private var showingEventLog = false
+private struct MobileDevicesHome: View {
+    @ObservedObject var model: AppModel
+    let launcher: () -> Void
+    let notifications: () -> Void
+    let setup: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicType
+    @ScaledMetric(relativeTo: .largeTitle) private var countSize = 44.0
+    private var organization: String? { model.mobileCloudOrganizations.first { $0.id == model.mobileCloudOrganization }?.name }
+
     var body: some View {
-        actionContent.task { await actions.run() }
-    }
-
-    @ViewBuilder private var actionContent: some View {
-        VStack(spacing: 0) {
-            if !model.connectedLite {
-                HStack(spacing: 12) {
-                    Picker("Device", selection: $pane) {
-                        ForEach([MobilePane.overview, .cameras, .apps]) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.segmented)
-                    Menu {
-                        ForEach([MobilePane.siteModel, .campaigns, .chat]) { item in
-                            Button(item.rawValue) { pane = item }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Your hardware at a glance").foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 14) {
+                    let total = (organization == nil ? MobileInventorySource.local : .cloud).count(model)
+                    HStack(alignment: .bottom) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(total?.formatted() ?? "—").font(.system(size: countSize, weight: .bold))
+                        .monospacedDigit().accessibilityLabel(total.map { String($0) } ?? "Count unavailable")
+                    Text(organization.map { "devices in \($0)" } ?? "devices nearby")
+                                .font(.subheadline).foregroundStyle(.secondary)
                         }
-                    } label: { Image(systemName: "ellipsis.circle").font(.title3) }
-                    .accessibilityLabel("More device tools")
-                }.padding(.horizontal).padding(.vertical, 10)
-            }
-            Divider()
-            if model.connectingDevice != nil || model.detailError != nil {
-                DeviceConnectionView(model: model, device: device)
-            }
-            else if model.selectedDeviceReady {
-                if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) }
-                else { content.id(model.deviceSession) }
-            }
+                        Spacer()
+                        MobilePresenceLegend(model: model)
+                    }
+                    MobilePresenceBar(model: model)
+                    let layout = dynamicType.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+                    layout {
+                        ForEach(MobileInventorySource.allCases, id: \.self) { source in
+                            NavigationLink(value: MobileDestination.inventory(source)) {
+                                HStack(spacing: 9) {
+                                    Image(systemName: source.symbol).foregroundStyle(.white).frame(width: 34, height: 34)
+                                        .background(MobileLensStyle.green, in: RoundedRectangle(cornerRadius: 10))
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(source.count(model)?.formatted() ?? "—").font(.title3.bold()).monospacedDigit()
+                                        Text(source.tileLabel).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                                }.padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                                    .background(MobileLensStyle.background, in: RoundedRectangle(cornerRadius: 16))
+                            }.buttonStyle(.plain)
+                                .accessibilityLabel(source.title)
+                                .accessibilityValue(source.count(model).map { "\($0) devices" } ?? "Count unavailable")
+                                .accessibilityIdentifier(source == .local ? "devices.home.local" : "devices.home.cloud")
+                        }
+                    }
+                }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(MobileLensStyle.card, in: RoundedRectangle(cornerRadius: 26))
+                Button(action: setup) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus").font(.headline).foregroundStyle(.white)
+                            .frame(width: 36, height: 36).background(MobileLensStyle.green, in: Circle())
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Set up a new device").font(.headline).foregroundStyle(MobileLensStyle.accent)
+                            Text("Nearby over Bluetooth").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(MobileLensStyle.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 22))
+                        .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(MobileLensStyle.accent.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])) }
+                }.buttonStyle(.plain).accessibilityIdentifier("devices.home.setup")
+                MobileHomeAttention(model: model, openDevices: notifications)
+                MobileRecordingSection(model: model, recent: true)
+            }.padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: 700)
+                .frame(maxWidth: .infinity)
         }
-        .onChange(of: model.deviceSession) { _, _ in showingEventLog = false }
-        .navigationTitle(device.title).navigationBarTitleDisplayMode(.inline)
+        .background(MobileLensStyle.background)
+        .navigationTitle("Devices")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                if model.selectedDeviceReady && !model.connectedLite {
-                    CampaignEventButton(session: model.deviceSession, deviceID: device.id, deviceName: device.title, showingLog: $showingEventLog)
-                        .id(model.deviceSession)
+            ToolbarItem(placement: .topBarLeading) {
+                Button("General Home", systemImage: "chevron.left", action: launcher)
+                    .accessibilityIdentifier("lens.back")
+            }
+            ToolbarItem(placement: .topBarTrailing) { Button("Notifications", systemImage: "bell", action: notifications) }
+        }
+        .refreshable {
+            await model.refreshNearby()
+            if !model.mobileCloudOrganization.isEmpty { await model.refreshCloud() }
+        }
+    }
+}
+
+private struct MobileInventoryList: View {
+    @ObservedObject var model: AppModel
+    let source: MobileInventorySource
+    let showAccounts: () -> Void
+    @State private var search = ""
+    var body: some View {
+        List {
+            MobileInventorySection(model: model, source: source, search: search, showAccounts: showAccounts)
+        }
+        .accessibilityIdentifier("devices.inventory")
+        .scrollContentBackground(.hidden).background(MobileLensStyle.background)
+        .navigationTitle(source.title)
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a device")
+        .refreshable { await source.refresh(model) }
+        .task { await source.refresh(model) }
+    }
+}
+
+private struct MobileInventorySection: View {
+    @ObservedObject var model: AppModel
+    let source: MobileInventorySource
+    let search: String
+    let showAccounts: () -> Void
+    @State private var actions = AsyncActions()
+    @Environment(\.openURL) private var openURL
+    private var matching: [Device] {
+        source.devices(model).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
+    }
+    private var error: String? { source.error(model) ?? (source == .cloud ? model.mobileCloudSelectionError : nil) }
+    private var loading: Bool {
+        !model.initialized || (source == .local ? model.nearbyLoading : model.cloudLoading || model.mobileCloudSelectionLoading)
+    }
+    var body: some View {
+        Section {
+            if source == .cloud && model.mobileCloudOrganization.isEmpty && !loading && error == nil {
+                if model.mobileCloudAccounts.isEmpty && model.account?.signedIn != true {
+                    Button("Sign in to Wendy Cloud") { actions.submit { await model.signIn() } }
+                        .disabled(model.signingIn)
+                } else { Button("Choose an organization", action: showAccounts) }
+            } else {
+                ForEach(matching) { device in
+                    NavigationLink(value: MobileDestination.device(device)) {
+                        DeviceIdentityRow(device: device, connected: model.connected?.id == device.id,
+                                          connecting: model.connectingDevice?.id == device.id)
+                    }.accessibilityIdentifier("devices.inventory.row." + device.id)
+                }
+                if let error {
+                    FailureNote(message: error)
+                    retry
+                    if source == .cloud { Button("Accounts", action: showAccounts) }
+                    else if PresentedFailure(error).title == "Allow local network access" { openSettings }
+                } else if matching.isEmpty {
+                    if loading || source.count(model) == nil { ProgressView("Loading devices…") }
+                    else if !search.isEmpty { ContentUnavailableView.search(text: search) }
+                    else {
+                        ContentUnavailableView(source == .local ? "No nearby devices" : "No cloud devices",
+                            systemImage: source.symbol, description: Text(source == .local
+                                ? "Connect to the device’s network. Check that Local Network is enabled for Wendy in Settings."
+                                : "Devices enrolled in this organization will appear here."))
+                        if source == .local { retry; openSettings }
+                    }
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    DeviceSettingsView(session: model.deviceSession, deviceName: device.title)
-                        .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
-                } label: { Image(systemName: "gearshape") }
-                .accessibilityLabel("Device settings")
-                .disabled(!model.selectedDeviceReady || model.connectedLite)
-            }
-        }
-
+        } header: { Text(source == .local ? "Local · nearby now" : "Wendy Cloud") }
+        .task { await actions.run() }
     }
-    @ViewBuilder private var content: some View {
-        switch pane {
-        case .overview: DeviceOverview(model: model, device: device) { page in
-            switch page {
-            case "apps": pane = .apps
-            case "cameras": pane = .cameras
-            case "siteModel": pane = .siteModel
-            case "chat": pane = .chat
-            default: pane = .overview
-            }
-        }
-        case .apps: ActivityView(model: model)
-        case .cameras: CameraWallView(model: model)
-        case .siteModel: NativeSiteView(model: model)
-        case .campaigns: CampaignsView(session: model.deviceSession, deviceName: device.title, openClip: { _ in }, showEventLog: { showingEventLog = true })
-        case .chat: DeviceChatView(deviceName: device.title, chat: model.deviceChat)
-        }
+
+    private var retry: some View {
+        Button("Try again") { actions.submit {
+            if source == .cloud && model.mobileCloudSelectionError != nil { await model.refreshMobileCloudSelection() }
+            await source.refresh(model)
+        } }.accessibilityIdentifier("devices.inventory.retry")
+    }
+
+    private var openSettings: some View {
+        Button("Open Settings") {
+            if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+        }.accessibilityIdentifier("devices.inventory.settings")
     }
 }
 
@@ -329,6 +538,7 @@ private struct MobileCameraTile: View {
 }
 
 private struct MobileAccountsView: View {
+    @AppStorage("wendy.primaryLens") private var primaryLens = MobileLens.devices.rawValue
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     let signIn: (Bool) -> Void
@@ -342,6 +552,9 @@ private struct MobileAccountsView: View {
         NavigationStack {
             List {
                 Section {
+                    Picker("Primary lens", selection: $primaryLens) {
+                        ForEach(MobileLens.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                    }
                     NavigationLink { CloudManagementView(requestSignIn: { signIn(false) }).navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
                     NavigationLink { MobileVPNView(model: model, vpn: model.vpn) } label: { Label("Connection settings", systemImage: "network") }
                 }
