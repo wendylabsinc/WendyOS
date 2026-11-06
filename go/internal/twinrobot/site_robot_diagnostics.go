@@ -1,8 +1,8 @@
-package backend
+package twinrobot
 
 import (
 	"encoding/json"
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	"math"
 	"os"
 	"path/filepath"

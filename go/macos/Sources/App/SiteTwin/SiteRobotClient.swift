@@ -43,11 +43,40 @@ protocol SiteRobotTurning: Sendable {
     func stop(_ handle: UInt64, sequence: UInt64) async
 }
 
-final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning {
+protocol SiteRobotSearching: Sendable {
+    func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws
+    func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply
+}
+
+final class SiteRobotClient: SiteRobotObserving, SiteRobotTurning, SiteRobotSearching {
     static let shared = SiteRobotClient()
     private let queue = DispatchQueue(label: "dev.wendy.site-robot", attributes: .concurrent)
     private func perform<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
         try await BlockingWork.run(on: queue, unlessCancelled: false, body)
+    }
+    struct RemoteReply: Decodable, Sendable {
+        var SearchState: String
+        var SearchMessage: String
+        var SearchTurns: Int
+        var Fusion: RobotFusionReport?
+    }
+    func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws {
+        struct Command: Encodable { var Operation = "search"; var Sequence: UInt64; var Fusion: RobotFusionRequest }
+        _ = try await remoteRequest(handle, data: JSONEncoder().encode(Command(Sequence: sequence, Fusion: request)))
+    }
+    func searchStatus(_ handle: UInt64) async throws -> RemoteReply {
+        try await remoteRequest(handle, data: Data(#"{"Operation":"search-poll"}"#.utf8))
+    }
+    private func remoteRequest(_ handle: UInt64, data: Data) async throws -> RemoteReply {
+        let json = String(decoding: data, as: UTF8.self)
+        return try await perform {
+            try GoClient.withCString(json) {
+                guard let p = WDSiteRobotRequest(handle, $0) else { throw WendyError(message: "Missing Linux twin response.") }
+                defer { WDSiteRobotFusionFree(p) }
+                try GoClient.check(p.pointee.status)
+                return try JSONDecoder().decode(RemoteReply.self, from: Data(GoClient.string(p.pointee.json).utf8))
+            }
+        }
     }
     func open(session: UInt64, serial: String) async throws -> UInt64 {
         try await perform {

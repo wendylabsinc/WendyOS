@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// USB identity is available even when this platform cannot open the device.
+const VendorQualcomm = 0x05c6
+const ProductEDL = 0x9008
+
 // Platforms without a USB transport cannot flash EDL devices.
 var errUnsupported = errors.New("flashing a device in EDL mode is not supported on this platform")
 

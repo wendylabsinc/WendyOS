@@ -311,39 +311,36 @@ private func measuredRobotLens() -> SiteCameraLens {
         rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(22)) }())
 }
 
-private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning {
+private actor RotationTestRobot: SiteRobotObserving, SiteRobotTurning, SiteRobotSearching {
     var measurements: Bool
     let rejectTurns: Bool
+    var searches: [UInt64] = []
     var turns: [UInt64] = []
     var stops: [UInt64] = []
-    private var lookState = 0
-
-    init(measurements: Bool, rejectTurns: Bool) {
-        self.measurements = measurements
-        self.rejectTurns = rejectTurns
-    }
+    var progress = SiteRobotClient.RemoteReply(SearchState: "searching", SearchMessage: "Waiting for measurements", SearchTurns: 0)
+    init(measurements: Bool, rejectTurns: Bool) { self.measurements = measurements; self.rejectTurns = rejectTurns }
     func open(session: UInt64, serial: String) async throws -> UInt64 { 42 }
     func close(_ handle: UInt64) async {}
     func poll(_ handle: UInt64) async throws -> SiteRobotReading {
-        SiteRobotReading(message: "Live LiDAR and odometry.", pose: true, ready: false, aligned: false, moving: lookState == 1,
+        SiteRobotReading(message: "Live LiDAR and odometry.", pose: true, ready: false, aligned: false, moving: progress.SearchTurns > 0,
             arrivalTiming: true, usingArrivalTiming: true, timingUnavailable: false, scanReady: false, measurementsReady: measurements,
-            underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, lookState: lookState, lookDirection: 1, route: [], joints: [])
+            underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, route: [], joints: [])
     }
-    func look(_ handle: UInt64, sequence: UInt64, direction: Int32) async throws {
-        turns.append(sequence)
+    func look(_ handle: UInt64, sequence: UInt64, direction: Int32) async throws { turns.append(sequence) }
+    func stop(_ handle: UInt64, sequence: UInt64) async { stops.append(sequence) }
+    func search(_ handle: UInt64, sequence: UInt64, request: RobotFusionRequest) async throws {
+        searches.append(sequence)
         if rejectTurns { throw WendyError(message: "An obstacle or drop overlaps Go2's body during this turn.") }
-        lookState = 1
     }
-    func stop(_ handle: UInt64, sequence: UInt64) async { stops.append(sequence); lookState = 0 }
-    func finishTurn() { lookState = 2 }
-    func setMeasurements(_ ready: Bool) { measurements = ready }
+    func searchStatus(_ handle: UInt64) async throws -> SiteRobotClient.RemoteReply { progress }
+    func publish(turns: Int) { progress.SearchTurns = turns }
 }
 
 @MainActor
 private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = false,
                                _ body: @MainActor (SiteRobotMapModel, RotationTestRobot) async throws -> Void) async throws {
     let robot = RotationTestRobot(measurements: measurements, rejectTurns: rejectTurns)
-    let model = SiteRobotMapModel(observationClient: robot, turningClient: robot)
+    let model = SiteRobotMapModel(observationClient: robot, turningClient: robot, searchClient: robot)
     model.serial = "rotation-test-\(UUID())"
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -365,57 +362,47 @@ private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = fa
     }
 }
 
-@MainActor @Test func rotationStartsAndContinuesWithoutCameraOrLensCalibration() async throws {
-    for uncalibratedCamera in [false, true] {
-        try await withRotationModel { model, robot in
-            #expect(await robot.turns.isEmpty) // Passive observation never arms motion.
-            model.startRotationSearch()
-            #expect(model.rotationState == .checking(1))
+@MainActor @Test func rotationRendersLinuxProgressWithoutIssuingLocalTurns() async throws {
+    try await withRotationModel { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 {
+            if await robot.searches.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
+        for turn in [1, 2] {
+            await robot.publish(turns: turn)
             for _ in 0..<100 {
-                if model.rotationState == .turning(1) { break }
+                if model.rotationState == .turning(turn) { break }
                 try await Task.sleep(for: .milliseconds(10))
             }
-            #expect(model.rotationState == .turning(1))
-            #expect(await robot.turns.count == 1)
-            #expect(!model.showLensCalibration)
-            if uncalibratedCamera {
-                model.acceptCameraFrame(CameraCalibrationFrame(gray: Data(repeating: 128, count: 64*48), width: 64, height: 48,
-                    received: .now, sequence: 1, codec: "H264"))
-            }
-            await robot.finishTurn()
-            for _ in 0..<300 {
-                if model.rotationState == .turning(2) { break }
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            #expect(model.rotationState == .turning(2))
-            #expect(await robot.turns.count == 2)
-            #expect(!model.showLensCalibration)
-            #expect(model.measuredLens == nil)
-            model.stop()
-            #expect(model.rotationState == .idle)
+            #expect(model.rotationState == .turning(turn))
         }
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
+        model.stop()
+        #expect(model.rotationState == .idle)
     }
 }
 
-@MainActor @Test func rotationWaitsForMeasurementsAndCanBeCancelledBeforeStarting() async throws {
-    for cancel in [false, true] {
-        try await withRotationModel(measurements: false) { model, robot in
-            model.startRotationSearch()
-            #expect(model.rotationState == .waitingForMeasurements)
-            #expect(await robot.turns.isEmpty)
-            if cancel {
-                model.stop()
-                #expect(model.error == nil)
-            }
-            await robot.setMeasurements(true)
-            try await Task.sleep(for: .milliseconds(1300))
-            #expect(await robot.turns.count == (cancel ? 0 : 1))
-            #expect(model.rotationState == (cancel ? .idle : .turning(1)))
+@MainActor @Test func cancellingLinuxSearchDoesNotResumeFromLateProgress() async throws {
+    try await withRotationModel(measurements: false) { model, robot in
+        model.startRotationSearch()
+        for _ in 0..<100 {
+            if await robot.searches.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
         }
+        model.stop()
+        await robot.publish(turns: 1)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(model.rotationState == .idle)
+        #expect(await robot.turns.isEmpty)
+        #expect(await robot.stops.count == 1)
     }
 }
 
-@MainActor @Test func rejectedRotationShowsReasonAndRequiresExplicitRetry() async throws {
+@MainActor @Test func rejectedLinuxSearchShowsReasonAndRequiresExplicitRetry() async throws {
     try await withRotationModel(rejectTurns: true) { model, robot in
         model.startRotationSearch()
         for _ in 0..<100 {
@@ -424,24 +411,31 @@ private func withRotationModel(measurements: Bool = true, rejectTurns: Bool = fa
         }
         #expect(model.rotationState.title == "Rotation stopped")
         #expect(model.rotationState.detail?.contains("obstacle") == true)
-        let renderer = ImageRenderer(content: SiteRobotStatus(model: model, showsDetails: false)
-            .padding(16).frame(width: 286).background(Color(nsColor: .windowBackgroundColor)))
-        let rendered = try #require(renderer.nsImage)
-        let tiff = try #require(rendered.tiffRepresentation)
-        let bitmap = try #require(NSBitmapImageRep(data: tiff))
-        let png = try #require(bitmap.representation(using: .png, properties: [:]))
-        try png.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("wendy-rotation-feedback.png"))
-        #expect(rendered.size.height > 150 && rendered.size.height < 400)
         #expect(model.canStartRotationSearch)
-        try await Task.sleep(for: .milliseconds(1100))
-        #expect(await robot.turns.count == 1)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await robot.searches.count == 1)
+        #expect(await robot.turns.isEmpty)
         model.offerRotationRetry()
-        #expect(model.showRotationPrompt)
-        model.startRotationSearch()
+        #expect(!model.showRotationPrompt)
         for _ in 0..<100 {
-            if await robot.turns.count == 2 { break }
+            if await robot.searches.count == 2 { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(await robot.turns.count == 2)
+        #expect(await robot.searches.count == 2)
+    }
+}
+
+@MainActor @Test func liveRobotAutomaticallyStartsOneLinuxSearchWithoutPrompt() async throws {
+    try await withRotationModel { model, robot in
+        for _ in 0..<200 {
+            if await robot.searches.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await robot.searches.count == 1)
+        #expect(!model.showRotationPrompt)
+        #expect(await robot.turns.isEmpty)
+        model.stop()
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await robot.searches.count == 1)
     }
 }

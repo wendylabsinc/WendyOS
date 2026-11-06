@@ -1,11 +1,11 @@
-package backend
+package twinrobot
 
 import (
 	"math"
 	"testing"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 )
 
 func TestSiteRobotHazardsUseConfirmedAlignmentAndFreshNavigationData(t *testing.T) {

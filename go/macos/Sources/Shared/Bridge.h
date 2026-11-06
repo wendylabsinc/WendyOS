@@ -27,6 +27,7 @@ WDConnectionResult *WDConnect(char *selector, uint64_t request);
 WDConnectionResult *WDForgetIdentityAndReconnect(char *selector, uint64_t request);
 WDStatus *WDDisconnect(void);
 WDAppsResult *WDApps(void);
+WDOpenAppResult *WDOpenTwin(uint64_t session, char *directory);
 WDOpenAppResult *WDOpenApp(char *app, uint64_t session);
 void WDOpenAppFree(WDOpenAppResult *value);
 WDStatus *WDStartApp(char *app, uint64_t session);

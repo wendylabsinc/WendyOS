@@ -7,6 +7,9 @@ import SwiftUI
 public struct SiteScene: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let modelURL: URL
+    let points: [SitePoint]
+    let floorTiles: [SitePoint]
+    let revision: UInt64
     let site: Site
     let cameraGeometry: [UUID: SiteCameraGeometry]
     let cameraCandidates: [UUID: SiteCameraGeometry]
@@ -23,9 +26,14 @@ public struct SiteScene: View {
     let selectRobot: () -> Void
     let fog: SiteFogConfiguration
     let fogSummary: (SiteFogSummary) -> Void
+    let robotConfirmation: (() -> AnyView)?
+    @State private var robotProjection = SiteRobotScreenProjection()
 
     public init(
         modelURL: URL,
+        points: [SitePoint] = [],
+        floorTiles: [SitePoint] = [],
+        revision: UInt64 = 0,
         site: Site,
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
         cameraCandidates: [UUID: SiteCameraGeometry] = [:],
@@ -40,10 +48,12 @@ public struct SiteScene: View {
         robot: SiteRobotRenderState? = nil,
         robotPoint: @escaping (SitePoint, Bool) -> Void = { _, _ in },
         selectRobot: @escaping () -> Void = {},
+        robotConfirmation: (() -> AnyView)? = nil,
         fog: SiteFogConfiguration = .init(),
         fogSummary: @escaping (SiteFogSummary) -> Void = { _ in }
     ) {
         self.modelURL = modelURL
+        self.points = points; self.floorTiles = floorTiles; self.revision = revision
         self.site = site
         self.cameraGeometry = cameraGeometry
         self.cameraCandidates = cameraCandidates
@@ -58,6 +68,7 @@ public struct SiteScene: View {
         self.robot = robot
         self.robotPoint = robotPoint
         self.selectRobot = selectRobot
+        self.robotConfirmation = robotConfirmation
         self.fog = fog
         self.fogSummary = fogSummary
     }
@@ -66,6 +77,7 @@ public struct SiteScene: View {
         TimelineView(.animation(minimumInterval: 0.25, paused: robot == nil && !fog.enabled && colorSources.isEmpty && people.isEmpty && cameraCandidates.isEmpty)) { context in
             SceneSurface(
                 modelURL: modelURL,
+                points: points, floorTiles: floorTiles, revision: revision,
                 site: site,
                 cameraGeometry: cameraGeometry,
                 cameraCandidates: cameraCandidates,
@@ -81,11 +93,28 @@ public struct SiteScene: View {
                 robot: robot,
                 robotPoint: robotPoint,
                 selectRobot: selectRobot,
+                robotScreenPosition: { point in
+                    robotProjection.point = point
+                },
                 fog: fog,
                 fogSummary: fogSummary,
                 refreshDate: context.date
             )
             .accessibilityLabel("3D model of \(site.name)")
+        .overlay {
+            GeometryReader { geometry in
+                if let point = robotProjection.point, let robotConfirmation {
+                    robotConfirmation()
+                        .frame(width: 250)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.secondary.opacity(0.3)))
+                        .shadow(radius: 8, y: 3)
+                        .position(x: min(max(point.x, 145), max(145, geometry.size.width - 145)),
+                                  y: min(max(point.y - 110, 90), max(90, geometry.size.height - 90)))
+                }
+            }
+        }
         }
         .task(id: colorSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString }) {
             let leases = colorSources.values.map { ($0, $0.acquire()) }
@@ -97,8 +126,15 @@ public struct SiteScene: View {
     }
 }
 
+@MainActor private final class SiteRobotScreenProjection {
+    var point: CGPoint?
+}
+
 private struct SceneSurface {
     var modelURL: URL
+    var points: [SitePoint]
+    var floorTiles: [SitePoint]
+    var revision: UInt64
     var site: Site
     var cameraGeometry: [UUID: SiteCameraGeometry]
     var cameraCandidates: [UUID: SiteCameraGeometry]
@@ -114,6 +150,7 @@ private struct SceneSurface {
     var robot: SiteRobotRenderState?
     var robotPoint: (SitePoint, Bool) -> Void
     var selectRobot: () -> Void
+    var robotScreenPosition: (CGPoint?) -> Void
     var fog: SiteFogConfiguration
     var fogSummary: (SiteFogSummary) -> Void
     // Forces a native-view update even when telemetry stops arriving.
@@ -126,6 +163,9 @@ private struct SceneSurface {
         var peopleRoot = SCNNode()
         var personMarkers: [UUID: SitePersonMarker] = [:]
         var model = SCNNode()
+        var contributionNode = SCNNode()
+        var contributionRevision: UInt64?
+        var hadContribution = false
         weak var view: SCNView?
         var needsFraming = true
         var robotRoot = SCNNode()
@@ -160,6 +200,9 @@ private struct SceneSurface {
                     )
                     let scene = SCNScene()
                     model = imported.rootNode.clone()
+                    contributionNode = SCNNode()
+                    contributionRevision = nil; hadContribution = false
+                    model.addChildNode(contributionNode)
                     scene.rootNode.addChildNode(model)
                     markers = SCNNode()
                     scene.rootNode.addChildNode(markers)
@@ -201,8 +244,34 @@ private struct SceneSurface {
                     return
                 }
             }
+            if contributionRevision != parent.revision {
+                if !hadContribution && !parent.points.isEmpty && parent.modelURL.pathExtension == "scn" { needsFraming = true }
+                hadContribution = !parent.points.isEmpty
+                contributionNode.childNodes.forEach { $0.removeFromParentNode() }
+                let vertices = parent.points.map { SCNVector3(Float($0.x), Float($0.y), Float($0.z)) }
+                if !vertices.isEmpty {
+                    let source = SCNGeometrySource(vertices: vertices)
+                    let element = SCNGeometryElement(indices: Array(0..<UInt32(vertices.count)), primitiveType: .point)
+                    element.pointSize = 4; element.minimumPointScreenSpaceRadius = 2; element.maximumPointScreenSpaceRadius = 6
+                    let geometry = SCNGeometry(sources: [source], elements: [element])
+                    geometry.firstMaterial?.diffuse.contents = platformAccent
+                    contributionNode.addChildNode(SCNNode(geometry: geometry))
+                }
+                if !parent.floorTiles.isEmpty {
+                    let vertices = parent.floorTiles.map { SCNVector3(Float($0.x), Float($0.y), Float($0.z)) }
+                    let source = SCNGeometrySource(vertices: vertices)
+                    let element = SCNGeometryElement(indices: Array(0..<UInt32(vertices.count)), primitiveType: .triangles)
+                    let geometry = SCNGeometry(sources: [source], elements: [element])
+                    geometry.firstMaterial?.diffuse.contents = platformAccent
+                    geometry.firstMaterial?.transparency = 0.25
+                    geometry.firstMaterial?.isDoubleSided = true
+                    contributionNode.addChildNode(SCNNode(geometry: geometry))
+                }
+                contributionRevision = parent.revision
+            }
             let scale = Float(parent.site.metresPerModelUnit)
             model.scale = SCNVector3(scale, scale, scale)
+            contributionNode.scale = SCNVector3(1/scale, 1/scale, 1/scale)
             frameOverviewIfNeeded()
             updateRobot()
             updatePeople()
@@ -344,7 +413,7 @@ private struct SceneSurface {
         private func updateRobot() {
             guard let state = parent.robot else { robotRoot.isHidden = true; orders.isHidden = true; scanRoot.isHidden = true; hazardsRoot.isHidden = true; return }
             hazardsRoot.isHidden = state.hazards.isEmpty || !state.fresh || state.placing ||
-                !(0...0.75).contains(parent.refreshDate.timeIntervalSince(state.receivedAt))
+                !SiteRobotHazardRenderer.isFresh(receivedAt: state.receivedAt, now: .now)
             if lastRobot?.hazards != state.hazards {
                 SiteRobotHazardRenderer.update(hazardsRoot, hazards: state.hazards)
             }
@@ -385,6 +454,15 @@ private struct SceneSurface {
                 Go2Model.pose(robotModel, joints: state.joints)
                 SCNTransaction.commit()
             }
+            if let view, let position = state.position {
+                let projected = view.projectPoint(SCNVector3(position.x, position.y + 0.4, position.z))
+                #if os(macOS)
+                let screenY = view.bounds.height - CGFloat(projected.y)
+                #else
+                let screenY = CGFloat(projected.y)
+                #endif
+                parent.robotScreenPosition((0...1).contains(projected.z) ? CGPoint(x: CGFloat(projected.x), y: screenY) : nil)
+            } else { parent.robotScreenPosition(nil) }
             selection.isHidden = !state.selected
             selection.geometry?.firstMaterial?.diffuse.contents = state.fresh ? platformAccent : platformEstimated
             selection.geometry?.firstMaterial?.emission.contents = state.fresh ? platformAccent : platformEstimated
@@ -467,8 +545,13 @@ private struct SceneSurface {
             {
                 parent.select(id)
             } else if parent.robot?.selected == true,
-                      let hit = hits.first(where: { isDescendant($0.node, of: model) }),
-                      abs(hit.worldNormal.y) > 0.85 {
+                      let floor = parent.robot?.position?.y,
+                      let hit = hits.first(where: {
+                          isDescendant($0.node, of: model) &&
+                          $0.node.geometry?.elements.contains(where: { $0.primitiveType == .triangles }) == true &&
+                          abs($0.worldNormal.y) > 0.85 &&
+                          abs(Double($0.worldCoordinates.y) - floor) < 0.15
+                      }) {
                 let p = hit.worldCoordinates
                 parent.robotPoint(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)), immediate)
             }

@@ -922,6 +922,7 @@
 				209D21119114C7AA7E05231F /* Resources */,
 				6D7121C93D71657CC7F87022 /* Frameworks */,
 				909500749C5D68A886F0DA6E /* Embed System Extensions */,
+				AB47633B92BDCC06CA96E26C /* Bundle Linux Digital Twin */,
 				DB3261F0211CC6D0CC288FB1 /* Embed CLI worker */,
 			);
 			buildRules = (
@@ -948,6 +949,7 @@
 				EBBB8D69F4EFBAB44E8201CB /* Resources */,
 				0336A322467CA6A7F3A5A69E /* Frameworks */,
 				368C6EA5B37C33FBC0D9C7B6 /* Embed Foundation Extensions */,
+				E51B3D360151867262632E83 /* Bundle Linux Digital Twin */,
 			);
 			buildRules = (
 			);
@@ -1258,6 +1260,25 @@
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nAPP_ROOT=\"${SRCROOT:-$(cd \"$(dirname \"$0\")/..\" && pwd)}\"\nREPO_ROOT=\"$(cd \"$APP_ROOT/../..\" && pwd)\"\nmkdir -p \"$APP_ROOT/Build\"\n# Xcode can invoke both targets concurrently. Serialize archive replacement.\nexec /usr/bin/perl -MFcntl=:flock -e 'open(my $lock, \">>\", $ARGV[0]) or die $!; flock($lock, LOCK_EX) or die $!; shift @ARGV; system(@ARGV); exit($? >> 8)' \"$APP_ROOT/Build/.lock\" /bin/bash \"$APP_ROOT/Scripts/build-go-locked.sh\" \"$APP_ROOT\" \"$REPO_ROOT\"\n";
 		};
+		AB47633B92BDCC06CA96E26C /* Bundle Linux Digital Twin */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Linux Digital Twin";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/Scripts/bundle-twin.py\"";
+		};
 		B90D43C111DAB8334E2A4D12 /* Build visual recognition */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -1295,6 +1316,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\nmkdir -p \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH\"\nFRAMEWORKS=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$FRAMEWORKS\"\n# Sign new inodes before replacing the installed files. Overwriting a running\n# executable/library in place can invalidate macOS's cached code signature.\nCLI=\"$(mktemp \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/.wendy.XXXXXX\")\"\nUSB=\"$(mktemp \"$FRAMEWORKS/.libusb.XXXXXX\")\"\ntrap 'rm -f \"$CLI\" \"$USB\"' EXIT\ninstall -m 755 \"$SRCROOT/Build/wendy\" \"$CLI\"\ninstall -m 755 \"$SRCROOT/Build/libusb-1.0.dylib\" \"$USB\"\nUSB_DEPENDENCY=\"$(otool -L \"$CLI\" | awk '/libusb.*dylib/{print $1; exit}')\"\nif [[ -n \"$USB_DEPENDENCY\" ]]; then\n  install_name_tool -change \"$USB_DEPENDENCY\" '@executable_path/../Frameworks/libusb-1.0.dylib' \"$CLI\"\nfi\nif [[ \"${CODE_SIGNING_ALLOWED:-NO}\" == YES && -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]]; then\n  codesign --force --options runtime --timestamp=none --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$USB\"\n  codesign --force --options runtime --timestamp=none --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$CLI\"\nelse\n  codesign --force --sign - \"$USB\"\n  codesign --force --sign - \"$CLI\"\nfi\nmv -f \"$USB\" \"$FRAMEWORKS/libusb-1.0.dylib\"\nmv -f \"$CLI\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/wendy\"\n";
+		};
+		E51B3D360151867262632E83 /* Bundle Linux Digital Twin */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Linux Digital Twin";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/Scripts/bundle-twin.py\"";
 		};
 		F5F4DB3247A8B8885274DDD4 /* Build mobile VPN backend */ = {
 			isa = PBXShellScriptBuildPhase;

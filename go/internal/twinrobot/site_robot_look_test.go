@@ -1,11 +1,12 @@
-package backend
+package twinrobot
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -239,4 +240,37 @@ func TestLookTurnFasterRateReachesBoundedTarget(t *testing.T) {
 			t.Fatal("turn exceeded target by more than one controller tick", overshoot)
 		}
 	}
+}
+
+func TestDelayedControlTickUsesCurrentTimeForFreshOdometry(t *testing.T) {
+	r, f := readySiteRobot()
+	r.ctx, r.cancel = context.WithCancel(context.Background())
+	r.done = make(chan struct{})
+	defer func() { r.cancel(); <-r.done }()
+	if err := r.Look(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	go r.run()
+	// Simulate scan processing holding the lock across queued control ticks.
+	time.Sleep(300 * time.Millisecond)
+	now := time.Now()
+	r.observed.Pose.Received, r.observed.Pose.Captured, r.observed.CloudAt = now, now, now
+	r.heartbeat, r.lastPosePacket = now, now
+	r.mu.Unlock()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		count := len(f.commands)
+		moving, message := r.moving, r.message
+		r.mu.Unlock()
+		if count > 0 {
+			if !moving {
+				t.Fatalf("fresh odometry rejected after delayed tick: %s", message)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("no control tick")
 }

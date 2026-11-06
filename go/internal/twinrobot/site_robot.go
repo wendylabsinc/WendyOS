@@ -1,14 +1,15 @@
-package backend
+package twinrobot
 
 import (
 	"context"
 	"errors"
+	"google.golang.org/grpc"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -97,36 +98,32 @@ func newSiteRobot(ctx context.Context, cancel context.CancelFunc, client pb.Wend
 	return r
 }
 
-func (b *Backend) OpenSiteRobot(session uint64, serial string) (*SiteRobot, error) {
+// Open uses the Linux agent's local, entitlement-protected connection.
+func Open(ctx context.Context, conn grpc.ClientConnInterface, serial string) (*SiteRobot, error) {
 	if !unitree.ValidSerial(serial) {
-		return nil, errors.New("Choose a paired Go2.")
+		return nil, errors.New("Invalid robot serial")
 	}
-	ctx, done := b.begin()
+	client := pb.NewWendyUnitreeServiceClient(conn)
+	setup, done := context.WithTimeout(ctx, 10*time.Second)
 	defer done()
-	conn, err := b.connection(session)
-	if err != nil {
-		return nil, err
-	}
-	if !conn.IsMTLS && !conn.IsSessionProxy {
-		return nil, errors.New("Connect to the gateway using its authenticated device connection.")
-	}
-	listed, err := conn.UnitreeService.ListUnitreePairings(ctx, &pb.ListUnitreePairingsRequest{})
+	listed, err := client.ListUnitreePairings(setup, &pb.ListUnitreePairingsRequest{})
 	if err != nil {
 		return nil, err
 	}
 	paired := false
-	for _, r := range listed.GetRobots() {
-		if r.Serial == serial && r.Paired && r.Connected {
+	for _, robot := range listed.GetRobots() {
+		if robot.Serial == serial && robot.Paired && robot.Connected {
 			paired = true
 		}
 	}
 	if !paired {
-		return nil, errors.New("Pair and connect this Go2 on the selected gateway first.")
+		return nil, errors.New("Pair and connect the robot on this Linux gateway first")
 	}
-	life, cancel := context.WithCancel(b.life)
-	r := newSiteRobot(life, cancel, pb.NewWendyUnitreeRobotServiceClient(conn.Conn), serial)
-	r.prepareDirectMovement(ctx)
-	r.observed.ClockOffset = measureRobotClock(life, pb.NewWendyTimeSyncServiceClient(conn.Conn))
+
+	life, cancel := context.WithCancel(ctx)
+	r := newSiteRobot(life, cancel, pb.NewWendyUnitreeRobotServiceClient(conn), serial)
+	r.prepareDirectMovement(setup)
+	r.observed.ClockOffset = measureRobotClock(life, pb.NewWendyTimeSyncServiceClient(conn))
 	stream, err := r.client.Stream(life, &pb.UnitreeStreamRequest{Serial: serial, Topics: []string{sitenav.PoseTopic, sitenav.CloudTopic, sitenav.JointTopic}})
 	if err != nil {
 		cancel()
@@ -297,8 +294,12 @@ func (r *SiteRobot) run() {
 			}
 			r.mu.Unlock()
 			return
-		case now := <-ticker.C:
+		case <-ticker.C:
 			r.mu.Lock()
+			// Scan processing can delay this lock beyond the queued tick.
+			// Compare observations with the current time, not that old tick:
+			// otherwise a newly accepted pose looks spuriously future-dated.
+			now := time.Now()
 			r.checkObservationStreamLocked(now)
 			if r.moving {
 				r.stepLocked(now)
@@ -625,11 +626,17 @@ func (r *SiteRobot) SetArrivalTiming(sequence uint64, enabled bool) error {
 	return nil
 }
 
-func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
+func (r *SiteRobot) Snapshot() SiteRobotSnapshot { return r.snapshot(true) }
+
+// Status is for Linux jobs and never renews the operator lease.
+func (r *SiteRobot) Status() SiteRobotSnapshot { return r.snapshot(false) }
+func (r *SiteRobot) snapshot(renew bool) SiteRobotSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
-	r.heartbeat = now
+	if renew {
+		r.heartbeat = now
+	}
 	s := SiteRobotSnapshot{Message: r.message, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
 	s.ControlWarning = r.controlWarning
 	if r.stopUnconfirmed {
