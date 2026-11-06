@@ -218,18 +218,64 @@ func TestRunTimeoutKeepsTailAndWarnsContainerMayExist(t *testing.T) {
 	}
 }
 
-// Review focus: an MCP server running inside a device container (admin
-// entitlement, WENDY_AGENT_SOCKET) must not spawn a host-style deploy.
-func TestRunRefusesInsideDeviceContainer(t *testing.T) {
-	t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
-	s := New(&config.Config{}, nil)
-	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
-		t.Fatal("run must not spawn a child inside a device container")
-		return "", false, nil
+// Inside a device container (admin entitlement, WENDY_AGENT_SOCKET) the
+// agent socket is the deployment target, so run deploys to the local device.
+func TestRunInsideDeviceContainerDeploysLocally(t *testing.T) {
+	for _, device := range []string{"", "local", "localhost"} {
+		t.Run("device="+device, func(t *testing.T) {
+			t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+			s := New(&config.Config{}, nil)
+			var got []string
+			s.runCommandFn = func(_ context.Context, args []string, _ commandTarget, _ int) (string, bool, error) {
+				got = args
+				return "ok", false, nil
+			}
+			args := map[string]any{"project_path": runProject(t), "wait_ready": false}
+			if device != "" {
+				args["device"] = device
+			}
+			r, err := s.handleRun(context.Background(), callToolReq("run", args))
+			if err != nil || r.IsError {
+				t.Fatalf("got %v %v", r, err)
+			}
+			if !slices.Contains(got, "--device") || !slices.Contains(got, "local") {
+				t.Fatalf("args missing --device local: %v", got)
+			}
+		})
 	}
-	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "vm:test"}))
-	if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != string(errCodeUnsupported) {
-		t.Fatalf("got %v %v", r, err)
+}
+
+// The socket silently overrides any --device, so another target is refused.
+func TestRunInsideDeviceContainerRefusesOtherTargets(t *testing.T) {
+	for _, extra := range []map[string]any{
+		{"device": "other-device"},
+		{"device_name": "x"},
+		{"device": "local", "broker_url": "b"},
+	} {
+		t.Run(fmt.Sprint(extra), func(t *testing.T) {
+			t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+			s := New(&config.Config{}, nil)
+			s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+				t.Fatal("run must not spawn a child for a non-local target")
+				return "", false, nil
+			}
+			args := map[string]any{"project_path": runProject(t)}
+			for k, v := range extra {
+				args[k] = v
+			}
+			r, err := s.handleRun(context.Background(), callToolReq("run", args))
+			if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != string(errCodeUnsupported) {
+				t.Fatalf("got %v %v", r, err)
+			}
+		})
+	}
+}
+
+func TestRunChildEnvironmentKeepsSocketForLocalTarget(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+	env := runChildEnvironment(os.Environ(), commandTarget{Device: "local", Transport: "socket"})
+	if !slices.Contains(env, "WENDY_AGENT_SOCKET=/run/wendy/agent.sock") {
+		t.Fatalf("socket missing from child environment")
 	}
 }
 
