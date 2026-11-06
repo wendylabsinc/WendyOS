@@ -16,19 +16,10 @@ LOCAL_PROTO_DIR="$(cd "$SWIFT_DIR/../Proto" && pwd)"
 source "$LOCAL_PROTO_DIR/shared-grpc-api-contracts.sh"
 
 # Reject maintained copies before export or any change to committed outputs.
+check_shared_grpc_api_contracts_sources "$LOCAL_PROTO_DIR"
 PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}" "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
-  if [ -e "$LOCAL_PROTO_DIR/$proto" ] || [ -L "$LOCAL_PROTO_DIR/$proto" ]; then
-    echo "error: remove Proto/$proto; it is generated from service-protos" >&2
-    exit 1
-  fi
   PATH_ARGS+=(--path "$proto")
-done
-for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
-  if [ -e "$LOCAL_PROTO_DIR/cloud/$proto" ] || [ -L "$LOCAL_PROTO_DIR/cloud/$proto" ]; then
-    echo "error: remove Proto/cloud/$proto; it is generated from service-protos" >&2
-    exit 1
-  fi
 done
 if [ "$(buf --version)" != "1.75.0" ] || [ "$(protoc --version)" != "libprotoc 34.0" ]; then
   echo "error: install buf 1.75.0 and protoc 34.0 (same versions as Go generation)" >&2

@@ -92,3 +92,5 @@ Discover cloud-enrolled devices:
 ```sh
 wendy cloud discover
 ```
+
+Shared gRPC changes follow the [saasdocs contract convention](https://github.com/wendylabsinc/saasdocs/blob/main/security-invariants/shared-grpc-api-contracts.md); the Agent local API remains in this repository with its own breaking check.
