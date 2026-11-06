@@ -9,8 +9,8 @@ package main
 import "C"
 import (
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
 	"sync"
 	"unsafe"
 )
@@ -333,4 +333,22 @@ func WDSiteRobotLook(handle, sequence C.uint64_t, direction C.int32_t) *C.WDStat
 		err = r.Look(uint64(sequence), int(direction))
 	}
 	return statusResult(err)
+}
+
+//export WDSiteRobotRequest
+func WDSiteRobotRequest(handle C.uint64_t, request *C.char) *C.WDSiteRobotFusionResult {
+	p := alloc[C.WDSiteRobotFusionResult](1)
+	r, err := siteRobot(handle)
+	if request == nil {
+		err = errors.New("Missing twin request")
+	}
+	if err == nil {
+		var data []byte
+		data, err = r.RequestJSON([]byte(C.GoString(request)))
+		if err == nil {
+			p.json = C.CString(string(data))
+		}
+	}
+	p.status = status(err)
+	return p
 }

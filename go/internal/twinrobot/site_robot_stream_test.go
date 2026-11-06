@@ -1,4 +1,4 @@
-package backend
+package twinrobot
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"github.com/wendylabsinc/wendy/go/internal/twinrobot/sitenav"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 

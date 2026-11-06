@@ -51,6 +51,14 @@ The setup sheet remains open when advertisements disappear and automatically ope
 
 ## Site models on macOS and iOS
 
+Sites now use the Linux `dev.wendy.digital-twin` app on the selected gateway.
+Deploy it using [the digital twin service guide](../apps/digital-twin/README.md).
+Linux owns persisted room state, robot navigation and rotation searches. Apple
+clients contribute scans and camera measurements, render state and send commands.
+Go2 can start a room without an Apple app; G1 and Go2 ROS nodes can contribute
+registered PointCloud2 observations. An unavailable service is reported rather
+than replaced by a local controller.
+
 On macOS, the **Cameras** list, camera alignment details and **Go2** controls open
 in popovers. Opening a menu keeps the camera preview and bottom controls in place.
 Long lists and robot details scroll inside the popover. Go2's Stop button remains
@@ -161,9 +169,10 @@ and visual references as a `.wendysite` file through the system share sheet.
 On the receiving device, use **Sites > Import Model or Site** to open it.
 **Sites > Export Site** saves the same archive to a folder.
 Import that file on the other platform while connected to the same Cloud gateway.
-The file contains no credentials, and importing it creates a separate local copy.
-There is no automatic cross-device site sync. Sites live in Application Support's
-`WendySites` directory, inside the application sandbox on iOS.
+The file contains no credentials, and importing it creates a separate room in the
+Linux service. Clients on the same twin gateway share room state. Existing local
+`WendySites` captures are copied to Linux on first connection without deleting
+the originals. Point-only robot rooms do not have a USDZ archive to export.
 
 On iPhone, the twin fills the workspace. The Cameras button opens a sheet for
 previews, alignment status and camera management. The settings menu holds
