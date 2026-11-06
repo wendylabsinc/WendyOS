@@ -188,7 +188,7 @@ class MetricsTests(unittest.TestCase):
                     "stages": {"agent": {"seconds": seconds}},
                     "metrics": {"usage_complete": True, "tokens": {"input_tokens": tokens, "output_tokens": 10}}}
         result = b.summary([row("right", 90, 5), row("wrong", 190, 9), row(None, 290, 7)])[0]
-        self.assertEqual(result["tool_choice"], {"right": 1, "wrong": 1, "missed": 0, "asked": 0, "ungraded": 1})
+        self.assertEqual(result["tool_choice"], {"right": 1, "wrong": 1, "missed": 0, "asked": 0, "went_around": 0, "ungraded": 1})
         self.assertEqual(result["median_tokens_per_attempt"], 200)
         self.assertEqual(result["median_agent_seconds"], 7)
 
@@ -536,6 +536,134 @@ class DisposableDeviceTests(unittest.TestCase):
         self.assertIsNotNone(b.stop_reason(self.row(status="mcp_unverified", metrics={}), config, env))
         self.assertIsNotNone(b.stop_reason(self.row(status="mcp_contaminated"), config, env))
         self.assertIsNotNone(b.stop_reason(self.row(stages={"agent": {"interrupted": True}}), config, env))
+
+
+class UnscoredAndResumeTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def test_went_around_is_not_success(self):
+        result = {"interrupted": False, "timed_out": False}
+        choice = {"outcome": "went_around"}
+        self.assertEqual(b.scenario_verdict("wendy", {"mcp_servers_observed": []}, result, choice), ("failed", False))
+        self.assertEqual(b.scenario_verdict("wendy", {"mcp_servers_observed": []}, result, {"outcome": "right"}),
+                         ("passed", True))
+
+    def test_unscored_statuses(self):
+        self.assertEqual(b.UNSCORED_STATUSES, frozenset(
+            {"context_exceeded", "model_server_down", "interrupted", "timeout", "setup_error"}))
+
+    def test_context_overflow_is_unscored(self):
+        for text in ("request (9000 tokens) exceed_context_size_error", "the prompt exceeds the available context size"):
+            events = [{"type": "usage"}, {"type": "error", "text": text}]
+            self.assertEqual(b.infra_status(events, {}), "context_exceeded", text)
+        self.assertIsNone(b.infra_status([{"type": "done", "text": "exceed_context_size_error"}], {}))
+        self.assertIsNone(b.infra_status([{"type": "error", "text": "round limit"}], {}))
+
+    def test_dead_model_server_is_unscored(self):
+        events = [{"type": "error", "text": "connection refused"}]
+        self.assertEqual(b.infra_status(events, {}, health=lambda: False), "model_server_down")
+        self.assertIsNone(b.infra_status(events, {}, health=lambda: True))
+        calls = []
+        self.assertIsNone(b.infra_status([{"type": "done"}], {}, health=lambda: calls.append(1) or False))
+        self.assertEqual(calls, [])  # no error, so the server isn't asked
+        # context overflow wins over a dead server
+        overflow = [{"type": "error", "text": "exceed_context_size_error"}]
+        self.assertEqual(b.infra_status(overflow, {}, health=lambda: False), "context_exceeded")
+
+    def test_load_rows_ignores_a_truncated_last_line(self):
+        path = self.root / "results.jsonl"
+        self.assertEqual(b.load_rows(path), [])
+        path.write_text(json.dumps({"a": 1}) + "\n" + json.dumps({"a": 2}) + "\n" + '{"a": 3, "tru')
+        self.assertEqual(b.load_rows(path), [{"a": 1}, {"a": 2}])
+
+    @staticmethod
+    def item(task="deploy-http", kind="task", agent="a", target="local"):
+        return (kind, agent, target, {"id": task})
+
+    @staticmethod
+    def saved(task="deploy-http", status="passed", kind="task", agent="a", target="local"):
+        return {"kind": kind, "agent": agent, "target": target, "task": task, "status": status}
+
+    def test_remaining_plan_counts_completed_repetitions(self):
+        plan = [self.item(), self.item(), self.item("stop-app"), self.item("deploy-http", kind="scenario")]
+        left = b.remaining_plan(plan, [self.saved()])
+        self.assertEqual([(k, t["id"]) for k, _, _, t in left],
+                         [("task", "deploy-http"), ("task", "stop-app"), ("scenario", "deploy-http")])
+        self.assertEqual(b.remaining_plan(plan, []), plan)
+        # an unscored row still counts as done
+        self.assertEqual(len(b.remaining_plan(plan, [self.saved(status="context_exceeded")] * 2)), 2)
+
+    def test_interrupted_attempt_is_retried_once(self):
+        attempt = self.root / "a-local-deploy-http-0123456789ab"
+        attempt.mkdir()
+        (attempt / "task.json").write_text(json.dumps({"id": "deploy-http", "agent": "a", "target": "local"}))
+        done = self.root / "a-local-deploy-http-ba9876543210"
+        done.mkdir()
+        (done / "task.json").write_text("{}")
+        (done / "result.json").write_text("{}")
+        (self.root / "bin").mkdir()  # not an attempt
+        made = b.interrupted_rows(self.root, [])
+        self.assertEqual([(r["agent"], r["target"], r["task"], r["kind"], r["status"], r["success"], r["id"])
+                          for r in made],
+                         [("a", "local", "deploy-http", "task", "interrupted", False, "0123456789ab")])
+        plan = [self.item(), self.item()]
+        self.assertEqual(len(b.remaining_plan(plan, made)), 2)  # the first interruption is retried
+        self.assertEqual(b.interrupted_rows(self.root, made), [])  # a row for it exists already
+        second = dict(made[0], id="x")
+        self.assertEqual(len(b.remaining_plan(plan, made + [second])), 1)  # the second removes it
+        self.assertEqual(len(b.remaining_plan([self.item()], made + [second])), 0)
+
+    def test_interrupted_scenario_attempt_keeps_its_kind(self):
+        attempt = self.root / "a-local-probe-0123456789ab"
+        attempt.mkdir()
+        (attempt / "task.json").write_text(json.dumps({"id": "probe", "group": "core", "agent": "a", "target": "local"}))
+        self.assertEqual(b.interrupted_rows(self.root, [])[0]["kind"], "scenario")
+
+    def test_summary_keeps_unscored_attempts_out_of_the_denominator(self):
+        def row(status, success=False, outcome=None):
+            return {"agent": "a", "target": "local", "task": "t", "status": status, "success": success,
+                    "task_seconds": 1, "tool_choice": {"outcome": outcome} if outcome else None,
+                    "metrics": {"usage_complete": False, "tokens": None}}
+        rows = [row("passed", True, "right"), row("failed", outcome="went_around"), row("context_exceeded"),
+                row("model_server_down"), row("interrupted"), row("timeout"), row("setup_error")]
+        result = b.summary(rows)[0]
+        self.assertEqual((result["attempts"], result["successes"], result["setup_errors"], result["unscored"]),
+                         (2, 1, 1, 5))
+        self.assertEqual(result["tool_choice"]["went_around"], 1)
+        self.assertEqual(result["timeouts"], 1)
+        self.assertEqual(b.choice_cell(result["tool_choice"]), "1/0/0/0/1")
+
+    def test_attempt_records_device_markers(self):
+        uptime = self.root / "uptime"
+        uptime.write_text("12345.67 8901.23\n")
+        sock = self.root / "agent.sock"
+        sock.write_text("")
+        env = {"WENDY_AGENT_SOCKET": str(sock)}
+        self.assertEqual(b.device_markers(env, uptime), {"uptime": "12345.67", "socket_inode": sock.stat().st_ino})
+        self.assertEqual(b.device_markers({}, self.root / "missing"), {"uptime": None, "socket_inode": None})
+
+    def test_rescore_reads_went_around_from_the_rows_target_config(self):
+        path = self.root / "pass"
+        path.mkdir()
+        (path / "manifest.json").write_text(json.dumps({"config": {"agents": {"w": {"adapter": "wendy"}}}}))
+        tasks = [{"id": "usb", "expect": {"right": [{"tool": "device_os_logs"}]}}]
+        events = [{"type": "tool_start", "id": "1", "tool": "workspace_exec", "arguments": {"command": "lsusb"}},
+                  {"type": "done", "text": "ok"}]
+        for name, kind in (("on-device", "local"), ("laptop", "simulator")):
+            d = path / name
+            d.mkdir()
+            (d / "agent.stdout").write_text("\n".join(json.dumps(e) for e in events) + "\n")
+            (d / "result.json").write_text(json.dumps({
+                "id": name, "task": "usb", "agent": "w", "target": "t", "target_config": {"kind": kind},
+                "metrics": {"tokens": None, "usage_complete": False}, "status": "failed", "success": False,
+                "task_seconds": 1.0, "tool_choice": None}))
+        out = b.rescore(path, tasks, [])
+        rows = {r["id"]: r for r in map(json.loads, (out / "results.jsonl").read_text().splitlines())}
+        self.assertEqual(rows["on-device"]["tool_choice"]["outcome"], "went_around")
+        self.assertEqual(rows["laptop"]["tool_choice"]["outcome"], "missed")
 
 
 if __name__ == "__main__":

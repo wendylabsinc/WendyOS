@@ -824,6 +824,48 @@ class LocalTaskTests(unittest.TestCase):
         self.assertEqual(scenario["block"], sc.guard_matchers(sc.BENCHMARK_APP))
         self.assertEqual(row["status"], "passed" if row["success"] else row["status"])
 
+    def run_agent_trial(self, code, expect, local=True, disposable=True):
+        """b.trial with a one-line agent; a task with an expect block, so the grade is what the row carries."""
+        task = {"id": "usb-task", "prompt": "Why is my USB device missing?", "expect": expect,
+                "prepare": [FAKE, "--version"], "verify": [FAKE, "--version"], "cleanup": [FAKE, "--version"]}
+        target = dict(LOCAL_TARGET, capabilities=[]) if local else {"kind": "simulator", "device": "vm:x"}
+        config = {"agents": {"fake": {"adapter": "wendy", "model": "fixture", "command": [sys.executable, "-c", code]}},
+                  "targets": {"t": target}, "isolate_device_state": False}
+        if disposable:
+            config["disposable_device"] = True
+        kwargs = {"shim": str(self.shim), "tools_path": self.root / "tools.json"} if local else {}
+        with mock.patch.dict(os.environ, {"WENDY_AGENT_SOCKET": "/run/wendy.sock"} if disposable else {}):
+            row = b.trial(config, "fake", "t", task, self.out, FAKE, **kwargs)
+        self.addCleanup(shutil.rmtree, row["workspace"], True)
+        return row
+
+    def test_trial_grades_the_proxy_records_on_a_local_target(self):
+        # The transcript shows no tool call; only the recording proxy saw write_thing, so grading
+        # must run on the rebuilt trace.
+        code = ("import sys, json\nsys.path.insert(0, %r)\nfrom mcp_client import StdioMCP\n"
+                "with StdioMCP(['wendy', 'mcp', 'serve'], timeout=20) as mcp:\n"
+                "    mcp.initialize()\n    mcp.call('write_thing', {'path': 'x'})\n"
+                "print(json.dumps({'type': 'done', 'text': 'ok'}))\n") % str(HERE)
+        row = self.run_agent_trial(code, {"right": [{"tool": "write_thing"}]})
+        self.assertEqual((row["metrics"]["transcript_mcp_calls"], row["metrics"]["proxy_calls"]), (0, 1))
+        self.assertEqual(row["tool_choice"]["outcome"], "right")
+
+    def test_trial_grades_went_around_only_on_a_local_target(self):
+        code = ("import json\nprint(json.dumps({'type': 'tool_start', 'id': '1', 'tool': 'workspace_exec', "
+                "'arguments': {'command': 'lsusb'}}))\nprint(json.dumps({'type': 'done', 'text': 'ok'}))\n")
+        expect = {"right": [{"tool": "device_os_logs"}]}
+        self.assertEqual(self.run_agent_trial(code, expect)["tool_choice"]["outcome"], "went_around")
+        self.assertEqual(self.run_agent_trial(code, expect, local=False)["tool_choice"]["outcome"], "missed")
+
+    def test_trial_keeps_a_context_overflow_out_of_the_score_on_a_disposable_device(self):
+        code = "import json\nprint(json.dumps({'type': 'error', 'text': 'exceed_context_size_error'}))\n"
+        row = self.run_agent_trial(code, {"right": [{"tool": "device_os_logs"}]})
+        self.assertEqual((row["status"], row["success"]), ("context_exceeded", False))
+        self.assertEqual(sorted(row["device_markers"]), ["socket_inode", "uptime"])
+        row = self.run_agent_trial(code, {"right": [{"tool": "device_os_logs"}]}, local=False, disposable=False)
+        self.assertEqual(row["status"], "failed")
+        self.assertNotIn("device_markers", row)
+
     def test_wendy_in_prompt_and_context_templates_names_the_shim(self):
         row = self.trial(shim=str(self.shim), tools_path=self.root / "tools.json",
                          prompt="Run {wendy} device list on {device}.", context="Also try {wendy} info.")
@@ -1324,6 +1366,63 @@ class ExecuteTests(unittest.TestCase):
         reason = json.loads((output / "halt.json").read_text())["reason"]
         self.assertIn("agent unreachable", reason)
         self.assertFalse((output / "results.jsonl").exists())
+
+    def resume_main(self, directory, *argv, **kwargs):
+        code, text, _ = self.disposable_main(*argv, "--resume", str(directory), **kwargs)
+        path = Path(directory) / "results.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        for row in rows:
+            if row.get("workspace"):
+                self.addCleanup(shutil.rmtree, row["workspace"], True)
+        return code, text, rows
+
+    def test_resume_creates_the_directory_and_keeps_the_first_manifest(self):
+        directory = self.root / "deeper" / "pass"
+        code, text, rows = self.resume_main(directory, "--repetitions", "1")
+        self.assertEqual((code, len(rows)), (0, 1), text)
+        self.assertFalse((self.root / "results").exists())
+        (directory / "manifest.json").write_text(json.dumps({"first": True}))
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual((code, len(rows)), (0, 2), text)  # only the missing repetition ran
+        self.assertEqual(json.loads((directory / "manifest.json").read_text()), {"first": True})
+
+    def test_resume_keeps_the_saved_baseline_apps(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1", baseline=("old",))
+        self.assertEqual(json.loads((directory / "baseline_apps.json").read_text()), ["old"])
+        code, text, rows = self.resume_main(directory, "--repetitions", "2", baseline=("old", "leftover"))
+        self.assertEqual(len(rows), 2, text)
+        self.assertEqual(json.loads((directory / "baseline_apps.json").read_text()), ["old"])
+        self.assertEqual(self.sweep_calls, [(["old"], sc.BENCHMARK_APP)])  # the leftover is still swept
+
+    def test_resume_removes_a_stale_halt_reason(self):
+        directory = self.root / "pass"
+        bad = {"removed": [], "failed": [], "list_error": "no route"}
+        code, text, rows = self.resume_main(directory, "--repetitions", "4", sweeps=[bad, bad])
+        self.assertEqual((code, len(rows)), (3, 2))
+        self.assertIn("sweep failed twice", json.loads((directory / "halt.json").read_text())["reason"])
+        code, text, rows = self.resume_main(directory, "--repetitions", "4")
+        self.assertEqual((code, len(rows)), (0, 4), text)
+        self.assertFalse((directory / "halt.json").exists())
+        # a pass that halts again names the new reason
+        halted = self.root / "again"
+        self.resume_main(halted, "--repetitions", "4", sweeps=[bad, bad])
+        code, _, rows = self.resume_main(halted, "--repetitions", "4", sweeps=[bad, bad])
+        self.assertEqual((code, len(rows)), (3, 4))
+        self.assertTrue((halted / "halt.json").exists())
+
+    def test_resume_records_an_interrupted_attempt_and_retries_it(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        attempt = directory / "fake-local-probe-0123456789ab"
+        attempt.mkdir()
+        (attempt / "task.json").write_text(json.dumps({"id": "probe", "group": "core", "agent": "fake", "target": "local"}))
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual([r["status"] for r in rows], ["passed", "interrupted", "passed"], text)
+        self.assertEqual(json.loads((attempt / "result.json").read_text())["status"], "interrupted")
+        # the next start doesn't record it again
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual(len(rows), 3)
 
     def test_unreadable_capabilities_halt_a_disposable_pass_with_a_reason(self):
         self.config["targets"]["local"] = dict(LOCAL_TARGET)  # capabilities None: read under --execute

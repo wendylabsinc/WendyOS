@@ -1,6 +1,7 @@
 import unittest
 
 import grading as g
+from tool_trace import build_trace
 
 
 def mcp(name, **arguments):
@@ -18,6 +19,48 @@ def shell(command):
 
 WIFI = {"right": [{"tool": "wifi_connect", "args": {"ssid": "Lab5G"}}],
         "wrong": [{"tool": "container_exec", "args_regex": "nmcli"}]}
+
+
+THOR_TRACE = [shell("dmesg | grep -i usb"), shell("lsusb"), shell("cat /proc/bus/usb/devices")]
+USB_LOGS = {"right": [{"tool": "device_os_logs"}], "wrong": [{"tool": "container_exec"}], "ask": True}
+
+
+class WentAroundTests(unittest.TestCase):
+    def test_plain_shell_is_went_around_when_enabled(self):
+        trace = [shell("dmesg | tail")]
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True)["outcome"], "missed")
+        self.assertIn("went_around", g.OUTCOMES)
+
+    def test_right_and_wrong_beat_went_around(self):
+        # The Thor attempt ran plain commands and also called the right tool: right wins.
+        right = THOR_TRACE + [mcp("device_os_logs")]
+        self.assertEqual(g.grade(right, USB_LOGS, "", True, went_around=True)["outcome"], "right")
+        wrong = THOR_TRACE + [mcp("container_exec", command=["lsusb"])]
+        self.assertEqual(g.grade(wrong, USB_LOGS, "", True, went_around=True)["outcome"], "wrong")
+        self.assertEqual(g.grade(THOR_TRACE, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
+
+    def test_went_around_beats_asked(self):
+        r = g.grade(THOR_TRACE, USB_LOGS, "Which one do you want?", True, went_around=True)
+        self.assertEqual(r["outcome"], "went_around")
+        self.assertEqual(g.grade([], USB_LOGS, "Which one?", True, went_around=True)["outcome"], "asked")
+
+    def test_shell_running_only_wendy_is_not_went_around(self):
+        trace = [shell("wendy device os-logs"), shell("sudo wendy --device local device info | head")]
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "missed")
+        mixed = [shell("wendy device info; lsusb")]
+        self.assertEqual(g.grade(mixed, USB_LOGS, "", True, went_around=True)["outcome"], "missed")
+
+    def test_chat_workspace_browsing_is_builtin_and_workspace_exec_is_shell(self):
+        events = [{"type": "tool_start", "id": "1", "tool": "workspace_list", "arguments": {"path": "."}},
+                  {"type": "tool_start", "id": "2", "tool": "workspace_read", "arguments": {"path": "a"}}]
+        trace = build_trace("wendy", events)
+        self.assertEqual([e["channel"] for e in trace], ["builtin", "builtin"])
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "missed")
+        events.append({"type": "tool_start", "id": "3", "tool": "workspace_exec", "arguments": {"command": "lsusb"}})
+        trace = build_trace("wendy", events)
+        self.assertEqual([e["channel"] for e in trace], ["builtin", "builtin", "shell"])
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
 
 
 class GradeTests(unittest.TestCase):

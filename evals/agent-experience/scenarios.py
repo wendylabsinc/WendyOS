@@ -605,6 +605,8 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
     device = run_vm["device"] if run_vm is not None else target["device"]
     scenario_config = directory / "scenario.json"
     row = dict(_row(config, agent_name, target_name, scenario, ident), workspace=str(workspace), device_selector=device)
+    if b.disposable(config):
+        row["device_markers"] = b.device_markers()
     state = logs = before = None
     try:
         # Everything that holds credentials or evidence is created in here, so the finally always
@@ -635,7 +637,7 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
         prompt += (f"\nWendy device/cloud configuration and its VM store are isolated at {state} "
                    "through WENDY_CONFIG_DIR. Preserve that environment setting. Do not change the host's ~/.wendy configuration or identity pins.")
         variables["prompt"] = prompt
-        b.dump(directory / "task.json", {**scenario, "prompt": prompt})
+        b.dump(directory / "task.json", {**scenario, "prompt": prompt, "agent": agent_name, "target": target_name})
         (directory / "prompt.txt").write_text(prompt + "\n")
         expect = scenario["expect"]
         block = [m for m in expect.get("right", []) + expect.get("wrong", []) if m.get("block") is True]
@@ -672,8 +674,11 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
         trace = b.rebuild_trace(row["metrics"], adapter, events, proxy_log, cli_log)
         row["task_seconds"] = result["seconds"]
         row["tool_choice"] = grade(trace, expect, row["metrics"]["final_text"], row["metrics"]["agent_completed"],
-                                   group=scenario["group"], adapter=adapter)
+                                   group=scenario["group"], adapter=adapter, went_around=is_local(target))
         row["status"], row["success"] = b.scenario_verdict(adapter, row["metrics"], result, row["tool_choice"])
+        infra = b.infra_status(events, config) if b.disposable(config) else None
+        if infra:
+            row["status"], row["success"] = infra, False
     finally:
         if before is not None:
             # The shared VM or board must be back in its prepared state; anything else stops the run.

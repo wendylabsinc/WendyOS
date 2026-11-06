@@ -2,9 +2,9 @@
 import json
 import re
 
-from tool_trace import cli_path, command_words
+from tool_trace import cli_path, command_words, parse_wendy_invocations
 
-OUTCOMES = ("right", "wrong", "missed", "asked")
+OUTCOMES = ("right", "wrong", "missed", "asked", "went_around")
 EXPECT_KEYS = {"right", "wrong", "ask"}
 MATCHER_KEYS = {"tool", "cli", "shell", "args", "args_regex", "agents", "block"}
 KINDS = ("tool", "cli", "shell")
@@ -94,13 +94,26 @@ def _first(matchers, trace, adapter):
     return None
 
 
-def grade(trace, expect, final_text, agent_completed, group=None, adapter=None):
+def _plain_shell(entry):
+    """A shell command that runs no wendy at all: the model answered with Linux commands."""
+    command = entry.get("arguments")
+    return (entry.get("channel") == "shell" and isinstance(command, str)
+            and not parse_wendy_invocations(command))
+
+
+def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, went_around=False):
+    """Order: wrong, right, went around, asked, missed. `went_around` is set only where the model shares
+    the device (the local target), so a laptop's grades don't change."""
     result = {"outcome": "missed", "rule": None, "entry": None, "hidden_group": False}
     for side in ("wrong", "right"):
         hit = _first(expect.get(side, []), trace, adapter)
         if hit:
             result.update(outcome=side, rule=f"{side}[{hit[0]}]", entry=hit[1])
             return result
+    plain = next((i for i, e in enumerate(trace) if _plain_shell(e)), None) if went_around else None
+    if plain is not None:
+        result.update(outcome="went_around", entry=plain)
+        return result
     if expect.get("ask") and agent_completed and "?" in (final_text or ""):
         result["outcome"] = "asked"
         return result

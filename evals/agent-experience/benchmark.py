@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import random
+import re
 import shutil
 import signal
 import socket
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 import uuid
 
 from retry_guard import RetryGuard
@@ -233,7 +235,7 @@ def summary(rows):
         groups[(row["agent"], row["target"], row["task"], row.get("kind", "task"))].append(row)
     output = []
     for (agent, target, task, kind), trials in sorted(groups.items()):
-        eligible = [r for r in trials if r["status"] != "setup_error"]
+        eligible = [r for r in trials if r["status"] not in UNSCORED_STATUSES]
         passed = [r for r in eligible if r["success"]]
         times = sorted(r["task_seconds"] for r in passed)
         token_values = [r["metrics"]["tokens"]["input_tokens"] + r["metrics"]["tokens"]["output_tokens"]
@@ -246,7 +248,8 @@ def summary(rows):
         choice["ungraded"] = sum(not r.get("tool_choice") for r in eligible)
         agent_seconds = [r["stages"]["agent"]["seconds"] for r in eligible if "seconds" in r.get("stages", {}).get("agent", {})]
         output.append({"agent": agent, "target": target, "task": task, "kind": kind,
-                       "attempts": len(eligible), "setup_errors": len(trials) - len(eligible),
+                       "attempts": len(eligible), "unscored": len(trials) - len(eligible),
+                       "setup_errors": sum(r["status"] == "setup_error" for r in trials),
                        "successes": len(passed), "unassisted_success_rate": len(passed) / len(eligible) if eligible else None,
                        "median_success_seconds": statistics.median(times) if times else None,
                        "p90_success_seconds": times[math.ceil(.9 * len(times)) - 1] if times else None,
@@ -258,20 +261,20 @@ def summary(rows):
                        "median_tokens_per_attempt": statistics.median(token_values) if all_usage else None,
                        "median_agent_seconds": statistics.median(agent_seconds) if agent_seconds else None,
                        "usage_complete_attempts": len(token_values),
-                       "timeouts": sum(r["status"] == "timeout" for r in eligible),
+                       "timeouts": sum(r["status"] == "timeout" for r in trials),
                        "cleanup_errors": sum(not r.get("cleanup_ok", True) for r in trials)})
     return output
 
 
 def choice_cell(choice):
-    cell = "/".join(str(choice[k]) for k in ("right", "wrong", "missed", "asked"))
+    cell = "/".join(str(choice[k]) for k in OUTCOMES)
     return cell + (f" (+{choice['ungraded']} ungraded)" if choice["ungraded"] else "")
 
 
 def report(rows, output):
     data = summary(rows)
     dump(output / "summary.json", data)
-    lines = ["| Agent | Target | Task | Unassisted passes | Median seconds | Tokens / attempt | Tokens / success incl. failures | Estimated $ / success | Tool choice R/W/M/A |",
+    lines = ["| Agent | Target | Task | Unassisted passes | Median seconds | Tokens / attempt | Tokens / success incl. failures | Estimated $ / success | Tool choice R/W/M/A/WA |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     def fmt(value):
         return "unknown" if value is None else f"{value:,.1f}"
@@ -288,6 +291,7 @@ def rescore(results_dir, tasks, scenarios):
     # Regrade saved attempts from their logs; originals are never modified and nothing is executed.
     # metrics.tool_trace and tool_choice change; a scenario row also gets its status and success again,
     # by the live run's rule. Saved accounting (tokens, usage_complete, cost) is kept.
+    import scenarios as sc  # imported here: scenarios.py imports this module
     agents = json.loads((results_dir / "manifest.json").read_text())["config"]["agents"]
     expects = {False: {t["id"]: t for t in tasks}, True: {s["id"]: s for s in scenarios}}
     out = results_dir / ("rescored-" + time.strftime("%Y%m%d-%H%M%S"))
@@ -311,7 +315,8 @@ def rescore(results_dir, tasks, scenarios):
                 row["metrics"][key] = live[key]
         item = expects[scenario].get(row.get("task"), {})
         row["tool_choice"] = (grade(trace, item["expect"], live["final_text"], live["agent_completed"],
-                                    group=row.get("group") if scenario else None, adapter=adapter)
+                                    group=row.get("group") if scenario else None, adapter=adapter,
+                                    went_around=sc.is_local(row.get("target_config") or {}))
                               if item.get("expect") else None)
         agent = row.get("stages", {}).get("agent")
         # A setup_error attempt never reached a verdict (it may have aborted after the agent ran).
@@ -528,9 +533,10 @@ def coverage_results(coverage, rows, agents, repetitions):
         for agent in agents:
             matching = [r for r in rows if (r["agent"], r["target"], r["task"], r.get("kind", "task")) ==
                         (agent, entry["target"], entry["task"], entry.get("kind", "task"))]
-            attempts = [r for r in matching if r["status"] != "setup_error"]
+            attempts = [r for r in matching if r["status"] not in UNSCORED_STATUSES]
             entry["agents"][agent] = {"attempts": len(attempts), "passed": sum(r["success"] for r in attempts),
-                                      "setup_errors": len(matching) - len(attempts),
+                                      "unscored": len(matching) - len(attempts),
+                                      "setup_errors": sum(r["status"] == "setup_error" for r in matching),
                                       "not_run": max(0, repetitions - len(matching))}
         result.append(entry)
     return result
@@ -539,6 +545,119 @@ def coverage_results(coverage, rows, agents, repetitions):
 def disposable(config, env=os.environ):
     """True only for a device that is allowed to break: the config says so and the agent socket is set."""
     return config.get("disposable_device") is True and bool(env.get("WENDY_AGENT_SOCKET"))
+
+
+# Attempts that ended on a limit the model didn't cause stay out of its score.
+UNSCORED_STATUSES = frozenset({"context_exceeded", "model_server_down", "interrupted", "timeout", "setup_error"})
+CONTEXT_OVERFLOW = re.compile(r"exceed_context_size|exceeds? the available context", re.I)
+ERROR_EVENTS = ("error", "turn.failed")
+
+
+def model_server_healthy(config, timeout=5):
+    """True or False when the config names a health URL for the model server, else None (unknown)."""
+    url = config.get("model_health_url")
+    if not url:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return 200 <= response.status < 300
+    except (OSError, ValueError):
+        return False
+
+
+def infra_status(events, config, health=None):
+    """An unscored status when the agent's error came from the model server's limits, else None. Called
+    after the agent phase on a disposable device only. `health()` says whether the model server answers."""
+    errors = [e for e in events if e.get("type") in ERROR_EVENTS or (e.get("type") == "result" and e.get("is_error"))]
+    if not errors:
+        return None
+    if any(CONTEXT_OVERFLOW.search(json.dumps(e)) for e in errors):
+        return "context_exceeded"
+    check = health if health is not None else (lambda: model_server_healthy(config))
+    return "model_server_down" if check() is False else None
+
+
+def device_markers(env=os.environ, uptime_path="/proc/uptime"):
+    """What identifies this boot of the device and its agent socket, so a reboot or an agent restart
+    between attempts shows in the rows."""
+    try:
+        uptime = Path(uptime_path).read_text().split()[0]
+    except (OSError, IndexError):
+        uptime = None
+    try:
+        inode = os.stat(env["WENDY_AGENT_SOCKET"]).st_ino
+    except (KeyError, OSError):
+        inode = None
+    return {"uptime": uptime, "socket_inode": inode}
+
+
+def load_rows(path):
+    """The rows a pass saved. A last line cut short by a crash is ignored."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(errors="replace").splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
+
+
+def remaining_plan(plan, rows):
+    """The plan items still to run. Each saved row completes one item of its (kind, agent, target, task);
+    the first `interrupted` row per key doesn't count, so that attempt is retried once."""
+    done, interrupted_seen = collections.Counter(), set()
+    for row in rows:
+        key = (row.get("kind", "task"), row.get("agent"), row.get("target"), row.get("task"))
+        if row.get("status") == "interrupted" and key not in interrupted_seen:
+            interrupted_seen.add(key)
+            continue
+        done[key] += 1
+    left = []
+    for kind, agent, target, task in plan:
+        key = (kind, agent, target, task["id"])
+        if done[key] > 0:
+            done[key] -= 1
+        else:
+            left.append((kind, agent, target, task))
+    return left
+
+
+def interrupted_rows(output, rows):
+    """A row for every attempt directory that started (it has task.json) but never saved result.json,
+    unless a row for that attempt exists. The caller records them."""
+    known = {row.get("id") for row in rows}
+    made = []
+    for directory in sorted(Path(output).iterdir()):
+        task_file = directory / "task.json"
+        if not directory.is_dir() or not task_file.exists() or (directory / "result.json").exists():
+            continue
+        ident = directory.name.rsplit("-", 1)[-1]
+        if ident in known:
+            continue
+        try:
+            task = json.loads(task_file.read_text())
+            target_config = json.loads((directory / "target.json").read_text()) if (directory / "target.json").exists() else None
+        except ValueError:
+            continue
+        if not isinstance(task, dict) or not task.get("id"):
+            continue
+        head = directory.name[:-len(ident) - 1]
+        if not head.endswith("-" + task["id"]):
+            continue
+        agent, target = task.get("agent"), task.get("target")
+        if not agent or not target:  # an attempt from before task.json named them: split at the first hyphen
+            agent, _, target = head[:-len(task["id"]) - 1].partition("-")
+        made.append({"id": ident, "kind": "scenario" if "group" in task else "task", "agent": agent,
+                     "target": target, "task": task["id"], "target_config": target_config,
+                     "status": "interrupted", "success": False, "cleanup_ok": True, "task_seconds": 0,
+                     "workspace": None, "metrics": {}, "stages": {}, "tool_choice": None,
+                     "note": "the attempt started and saved no result"})
+    return made
 
 
 def agent_timeout(config, task):
@@ -727,7 +846,9 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
            "agent_timeout_seconds": agent_timeout(config, task),
            "human_messages_after_start": 0, "human_approvals": 0, "success": False,
            "status": "setup_error", "task_seconds": 0, "metrics": {}, "stages": {}}
-    dump(directory / "task.json", resolved)
+    if disposable(config):
+        row["device_markers"] = device_markers()
+    dump(directory / "task.json", dict(resolved, agent=agent_name, target=target_name))
     (directory / "prompt.txt").write_text(resolved["prompt"] + "\n")
     env = dict(os.environ, WENDY_ANALYTICS="false")
     if state_dir is not None:
@@ -740,6 +861,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                          PATH=str(Path(agent_wendy).parent) + os.pathsep + env["PATH"])
     guard = host_pin_guard()
     retry_guard = RetryGuard(directory / "agent.stdout", config.get("syntax_error_limit", 3))
+    infra = None
     try:
         if private_vm:
             row["stages"], ready = fixture_vm(config, variables, workspace, directory, env)
@@ -770,9 +892,12 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                     rebuild_trace(row["metrics"], agent["adapter"], events, proxy_log, cli_log)
                 row["task_seconds"] = result["seconds"]
                 row["tool_choice"] = (grade(row["metrics"]["tool_trace"], task["expect"], row["metrics"]["final_text"],
-                                            row["metrics"]["agent_completed"], adapter=agent["adapter"])
+                                            row["metrics"]["agent_completed"], adapter=agent["adapter"],
+                                            went_around=local)
                                       if task.get("expect") else None)
                 row["status"] = mcp_status(agent["adapter"], row["metrics"]) or attempt_status(result)
+                infra = infra_status(events, config) if disposable(config) else None
+                row["status"] = infra or row["status"]
             if phase == "verify":
                 row["task_seconds"] += result["seconds"]
                 row["outcome_verified"] = result["exit_code"] == 0
@@ -781,7 +906,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                                   and row["metrics"]["invalid_json_lines"] == 0
                                   and not row["stages"]["agent"].get("no_progress")
                                   and not row["stages"]["agent"].get("host_state_changed"))
-                if row["status"] in ("mcp_contaminated", "mcp_unverified"):
+                if row["status"] in ("mcp_contaminated", "mcp_unverified") or infra:
                     row["success"] = False
                 if row["success"]:
                     row["status"] = "passed"
@@ -893,6 +1018,8 @@ def main():
     parser.add_argument("--wendy", help="Wendy binary; overrides config \"wendy\".")
     parser.add_argument("--execute", action="store_true", help="Run the plan. Without this flag, make no model or device calls.")
     parser.add_argument("--calibrate", action="store_true", help="Check built-in fixtures with reference solutions; no model calls.")
+    parser.add_argument("--resume", type=Path, metavar="DIR",
+                        help="Continue the pass saved in DIR (created when absent): finished attempts are skipped, the first manifest and baseline apps are kept. Replaces --output.")
     parser.add_argument("--rescore", type=Path, metavar="DIR", help="Regrade a saved results directory from its logs; no model or device calls.")
     args = parser.parse_args()
     import scenarios as sc  # imported here: scenarios.py imports this module
@@ -1050,9 +1177,16 @@ def main():
         parser.error("--treatment-root has no plugins/wendy-agentic-coding/skills directory")
     if config.get("isolate_device_state", True) or selected_scenarios:
         require_state_isolation(wendy)  # scenarios always use private state
-    output = args.output.resolve() / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6])
-    output.mkdir(parents=True)
-    dump(output / "coverage.json", coverage_results(coverage, [], agents, args.repetitions))
+    if args.resume:
+        output = args.resume.resolve()
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "halt.json").unlink(missing_ok=True)  # a pass that finishes mustn't carry the old reason
+    else:
+        output = args.output.resolve() / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6])
+        output.mkdir(parents=True)
+    first = not (output / "manifest.json").exists()  # a resumed pass keeps the manifest it started with
+    saved = load_rows(output / "results.jsonl") if args.resume else []
+    dump(output / "coverage.json", coverage_results(coverage, saved, agents, args.repetitions))
     snapshot = {"config": config, "tasks": tasks, "seed": args.seed,
                 "config_sha256": hashlib.sha256(args.config.read_bytes()).hexdigest(),
                 "task_sha256": hashlib.sha256(args.tasks.read_bytes()).hexdigest()}
@@ -1063,20 +1197,19 @@ def main():
     snapshot["scenarios"] = scenarios
     snapshot["scenarios_sha256"] = hashlib.sha256(scenario_file.read_bytes()).hexdigest() if args.scenario else None
     source = output / "source"
-    source.mkdir()
-    for file in HERE.glob("*.py"):
-        shutil.copy2(file, source / file.name)
-    if (HERE / "fixture_apps").exists():
-        shutil.copytree(HERE / "fixture_apps", source / "fixture_apps", ignore=shutil.ignore_patterns("__pycache__"))
+    if first:
+        source.mkdir(exist_ok=True)
+        for file in HERE.glob("*.py"):
+            shutil.copy2(file, source / file.name)
+        if (HERE / "fixture_apps").exists():
+            shutil.copytree(HERE / "fixture_apps", source / "fixture_apps", ignore=shutil.ignore_patterns("__pycache__"),
+                            dirs_exist_ok=True)
     treatment_root = args.treatment_root.resolve()
-    chat_source = source / "chat"
-    chat_source.mkdir()
-    for file in (treatment_root / "go/internal/cli/chat").glob("*.go"):
-        shutil.copy2(file, chat_source / file.name)
-    config_source = source / "config"
-    config_source.mkdir()
-    for file in (treatment_root / "go/internal/shared/config").glob("*.go"):
-        shutil.copy2(file, config_source / file.name)
+    if first:
+        for name, origin in (("chat", "go/internal/cli/chat"), ("config", "go/internal/shared/config")):
+            (source / name).mkdir(exist_ok=True)
+            for file in (treatment_root / origin).glob("*.go"):
+                shutil.copy2(file, source / name / file.name)
     run_process(["git", "diff", "--", "go/internal/cli/chat", "go/internal/shared/config"],
                 treatment_root, output / "candidate-diff", 15)
     # "revision" identifies the runner checkout; snapshot["treatment"]["revision"] identifies the treatment.
@@ -1086,7 +1219,8 @@ def main():
         argv = expand(config["agents"][name]["command"], {"wendy": wendy})
         snapshot[name + "_version"] = run_process([argv[0], "--version"], ROOT, output / (name + "-version"), 15)
     tools = list_all_tools(wendy, dict(os.environ))
-    dump(output / "tools.json", tools)
+    if first or not (output / "tools.json").exists():
+        dump(output / "tools.json", tools)
     snapshot["tools_sha256"] = hashlib.sha256((output / "tools.json").read_bytes()).hexdigest()
     revision, diff_sha256 = treatment_git(treatment_root)
     snapshot["argv"], snapshot["cwd"] = sys.argv, os.getcwd()
@@ -1096,6 +1230,10 @@ def main():
     spend = config.get("prior_spend_usd", 0)
     if not isinstance(spend, (int, float)) or not math.isfinite(spend) or spend < 0:
         parser.error("prior_spend_usd must be a finite nonnegative number")
+    if not disposable(config):
+        for row in saved:
+            if row.get("status") != "setup_error":
+                spend, _ = charge(spend, row, config, quiet=True)
     run_vms, removed_vms, unprepared, shim = {}, {}, {}, None
     on_disposable = disposable(config)
     baseline, sweep_failures, halt = None, 0, None
@@ -1190,15 +1328,24 @@ def main():
             return 3
     snapshot["run_vms"] = {p: {"name": v["name"], "device": v["device"]} for p, v in run_vms.items()}
     snapshot["unprepared_run_vms"] = unprepared
-    dump(output / "manifest.json", snapshot)
-    rows = []
+    if first:
+        dump(output / "manifest.json", snapshot)
+    rows = list(saved)
+    for row in interrupted_rows(output, rows) if args.resume else []:
+        # An attempt that started and saved nothing: record it now, so the next start doesn't find it again.
+        next(output.glob(f"*-{row['id']}")).joinpath("result.json").write_text(json.dumps(row, indent=2) + "\n")
+        with (output / "results.jsonl").open("a") as f:
+            f.write(json.dumps(row) + "\n")
+        rows.append(row)
+    total, plan = len(plan), remaining_plan(plan, rows)
+    ran = []
     try:
-        for i, (kind, agent, target, task) in enumerate(plan, 1):
+        for i, (kind, agent, target, task) in enumerate(plan, total - len(plan) + 1):
             reserve = config.get("scenario_reserve_usd", .5) if kind == "scenario" else config.get("trial_reserve_usd", 15)
             if spend + reserve > config.get("budget_usd", 100):
                 print("Stopping at the configured budget reserve.")
                 break
-            print(f"[{i}/{len(plan)}] {agent} / {target} / {task['id']} "
+            print(f"[{i}/{total}] {agent} / {target} / {task['id']} "
                   f"({'scenario, ' if kind == 'scenario' else ''}agent limit {agent_timeout(config, task):g}s)", flush=True)
             on_vm = kind == "scenario" and config["targets"][target]["kind"] == "simulator"
             if on_vm and task["vm_profile"] in unprepared:
@@ -1218,6 +1365,7 @@ def main():
                 row["cleanup_ok"] &= swept_ok
                 sweep_failures = 0 if swept_ok else sweep_failures + 1
             rows.append(row)
+            ran.append(row)
             with (output / "results.jsonl").open("a") as f:
                 f.write(json.dumps(row) + "\n")
             report(rows, output)
@@ -1242,7 +1390,7 @@ def main():
     if halt:
         return 3
     configured = all(entry["status"] == "ready" for entry in coverage)
-    return 0 if configured and len(rows) == len(plan) and all(r["success"] and r["cleanup_ok"] for r in rows) else 1
+    return 0 if configured and len(ran) == len(plan) and all(r["success"] and r["cleanup_ok"] for r in ran) else 1
 
 
 if __name__ == "__main__":
