@@ -545,8 +545,13 @@ private struct SceneSurface {
             {
                 parent.select(id)
             } else if parent.robot?.selected == true,
-                      let hit = hits.first(where: { isDescendant($0.node, of: model) }),
-                      abs(hit.worldNormal.y) > 0.85 {
+                      let floor = parent.robot?.position?.y,
+                      let hit = hits.first(where: {
+                          isDescendant($0.node, of: model) &&
+                          $0.node.geometry?.elements.contains(where: { $0.primitiveType == .triangles }) == true &&
+                          abs($0.worldNormal.y) > 0.85 &&
+                          abs(Double($0.worldCoordinates.y) - floor) < 0.15
+                      }) {
                 let p = hit.worldCoordinates
                 parent.robotPoint(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)), immediate)
             }
