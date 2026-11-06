@@ -585,3 +585,33 @@ func TestAppHTTPClosesIdleConnections(t *testing.T) {
 	}
 	waitContainerMCP(t, func() bool { return open.Load() == 0 })
 }
+
+func TestAppHTTPConnectReportsAppResponse(t *testing.T) {
+	conn, ctx, _ := appHTTPFixture(t, http.NotFoundHandler())
+	client, err := connectAppMCP(ctx, ctx, conn, "app")
+	if client != nil {
+		_ = client.Close()
+	}
+	if err == nil {
+		t.Fatal("connect succeeded")
+	}
+	if !strings.Contains(err.Error(), "Not Found") {
+		t.Fatalf("error = %q, want the app's Not Found response", err)
+	}
+}
+
+func TestAppHTTPConnectReportsProxyFailure(t *testing.T) {
+	httpServer := httptest.NewServer(http.NotFoundHandler())
+	conn, ctx, _ := appHTTPServerFixture(t, httpServer)
+	httpServer.Close() // The agent now fails to dial the app's MCP port.
+	client, err := connectAppMCP(ctx, ctx, conn, "app")
+	if client != nil {
+		_ = client.Close()
+	}
+	if err == nil {
+		t.Fatal("connect succeeded")
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("error = %q, want the proxy's dial failure", err)
+	}
+}

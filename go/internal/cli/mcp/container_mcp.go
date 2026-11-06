@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -12,6 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -360,6 +363,11 @@ func listContainerMCPApps(ctx context.Context, conn *grpcclient.AgentConnection)
 func connectAppMCP(lifetimeCtx, initCtx context.Context, conn *grpcclient.AgentConnection, appName string) (appMCPClient, error) {
 	proxyErrors := make(chan error, 1)
 	addr, closeProxy, err := startMCPProxy(lifetimeCtx, conn, appName, func(err error) {
+		// Closing the proxy cancels its streams. That is not a transport failure
+		// and must not replace the app's actual response.
+		if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+			return
+		}
 		select {
 		case proxyErrors <- err:
 		default:
