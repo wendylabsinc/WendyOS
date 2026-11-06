@@ -294,8 +294,12 @@ func (r *SiteRobot) run() {
 			}
 			r.mu.Unlock()
 			return
-		case now := <-ticker.C:
+		case <-ticker.C:
 			r.mu.Lock()
+			// Scan processing can delay this lock beyond the queued tick.
+			// Compare observations with the current time, not that old tick:
+			// otherwise a newly accepted pose looks spuriously future-dated.
+			now := time.Now()
 			r.checkObservationStreamLocked(now)
 			if r.moving {
 				r.stepLocked(now)
