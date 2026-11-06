@@ -179,7 +179,9 @@ func TestConnectionRecoveryRetainsClientAuthRejection(t *testing.T) {
 			}
 			var rejections atomic.Int32
 			srv := grpc.NewServer(
-				grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAnyClientCert})),
+				// This fixture diagnoses a full handshake, not session resumption.
+				// Avoid async ticket persistence racing the temporary config cleanup.
+				grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAnyClientCert, SessionTicketsDisabled: true})),
 				grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 					if err := interceptor.CheckMTLS(ctx, zap.NewNop(), certs.Scope{}, interceptor.OrgModeOff); err != nil {
 						rejections.Add(1)

@@ -25,6 +25,11 @@ Follow the CLI's recovery hint. If the device clock may be wrong, run `wendy dev
 
 Simulator startup stops retrying when authentication is rejected. It reports the authentication error without the boot-console tail. See [simulator startup and authentication failures](/docs/advanced/clients/wendy-cli/device-selection#simulator-startup-and-authentication-failures).
 
+For OIDC sign-ins, automatic certificate re-issuance through the sign-in session
+runs at most once per CLI invocation. If another target needs re-issuance in the
+same command, run `wendy auth refresh-certs` explicitly and retry. See
+[certificate renewal](/docs/advanced/clients/wendy-cli/commands/auth/refresh-certs).
+
 ## Image build fails
 
 Read the first build error above the deployment failure. For the HTTP quickstart, confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
