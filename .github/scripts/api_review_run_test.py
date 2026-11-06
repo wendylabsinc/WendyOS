@@ -137,7 +137,7 @@ class FullRunTests(unittest.TestCase):
                 self.assertFalse(published)
                 self.assertIn(comments.WARNING_START, body)
                 self.assertEqual(body.count("- [x]"), 11)
-                risk_names = {label["name"] for label in comments.RISK_LABELS.values()}
+                risk_names = {"risk: low", "risk: mid", "risk: medium", "risk: high"}
                 for _, path, payload in github.mutations():
                     if "/labels" in path:
                         self.assertFalse(any(name in path for name in risk_names))

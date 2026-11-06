@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 import zlib
 
-from api_review import illustrative_excerpt, prior_state_digest, validate_prior_state
+from api_review import RISKS, illustrative_excerpt, prior_state_digest, validate_prior_state
 from review_diff import diff_lines
 
 COMMENT_MARKER = "<!-- ai-api-review:v1 -->"
@@ -48,11 +48,6 @@ API_LABEL = {
     "name": "api-review",
     "color": "B60205",
     "description": "Durable API decisions need review: network, protobuf, storage, config, or CLI",
-}
-RISK_LABELS = {
-    "low": {"name": "risk: low", "color": "0E8A16", "description": "Low estimated risk; focused testing is sufficient"},
-    "mid": {"name": "risk: mid", "color": "FBCA04", "description": "Medium estimated risk; test changes and adjacent workflows"},
-    "high": {"name": "risk: high", "color": "B60205", "description": "High estimated risk; thoroughly test compatibility and affected workflows"},
 }
 
 
@@ -94,7 +89,7 @@ def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
     for field in ("changed_files", "diff_bytes"):
         if type(result.get(field)) is not int or result[field] <= 0:
             raise ValueError(f"API review result has invalid {field}")
-    if result.get("risk") not in RISK_LABELS or not isinstance(result.get("decisions"), list):
+    if result.get("risk") not in RISKS or not isinstance(result.get("decisions"), list):
         raise ValueError("API review result has invalid decisions or testing risk")
     matched_prior_ids: dict[str, bool] = {}
     for decision in result["decisions"]:
@@ -389,7 +384,8 @@ def review_intro(result: dict, repo: str) -> list[str]:
         ("Check a box to accept a pending or changed decision. Acceptance follows materially unchanged decisions across commits; "
          + "these checkboxes do not block merging automatically."),
         "",
-        f"**Testing risk:** {result['risk']}. Compatibility impact is listed separately for each decision.",
+        f"**Recommended risk:** {'medium' if result['risk'] == 'mid' else result['risk']}. "
+        "The author owns the risk label. Compatibility impact is listed separately for each decision.",
         "",
     ]
 
@@ -798,18 +794,14 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         github.request("POST", f"{issue}/labels", {"labels": [API_LABEL["name"]]})
         return False
 
-    risk = RISK_LABELS[result["risk"]]
-    ensure_label(risk)
-    for level, label in RISK_LABELS.items():
-        if level != result["risk"]:
-            remove_label(label["name"])
-    labels = [risk["name"]]
+    labels = []
     if result["decisions"]:
         ensure_label(API_LABEL)
         labels.append(API_LABEL["name"])
     else:
         remove_label(API_LABEL["name"])
-    github.request("POST", f"{issue}/labels", {"labels": labels})
+    if labels:
+        github.request("POST", f"{issue}/labels", {"labels": labels})
     reviewer = "joannis"
     if (result["decisions"] and pull["user"]["login"].lower() != reviewer
             and not any(user["login"].lower() == reviewer for user in pull["requested_reviewers"])):
