@@ -37,4 +37,24 @@ WDVisualEpisodesResult *WDVisualEpisodes(uint64_t session);
 void WDVisualEpisodesFree(WDVisualEpisodesResult *value);
 WDVisualSnapshotResult *WDVisualEpisodeLoad(uint64_t session, char *episode);
 void WDVisualSnapshotFree(WDVisualSnapshotResult *value);
+typedef struct {
+    char *id, *title, *trigger, *kind, *upload_state, *topics;
+    int64_t started_ns, size_bytes;
+    double duration_seconds;
+    int32_t details_loaded;
+} WDRecordingEpisode;
+typedef struct {
+    WDStatus status;
+    WDRecordingEpisode *items; size_t count;
+    char *warning, *model;
+} WDRecordingLibraryResult;
+typedef struct { WDStatus status; char **paths; size_t count; } WDRecordingExportsResult;
+uint64_t WDBeginRecordingRead(void);
+void WDEndRecordingRead(uint64_t request);
+WDRecordingLibraryResult *WDRecordingLibrary(uint64_t request, char *selector, int32_t secure);
+WDRecordingLibraryResult *WDRecordingDetails(uint64_t request, char *selector, int32_t secure, char **episodes, size_t count);
+void WDRecordingLibraryFree(WDRecordingLibraryResult *value);
+WDVisualSnapshotResult *WDRecordingPlay(uint64_t request, char *selector, int32_t secure, char *episode);
+WDRecordingExportsResult *WDRecordingExport(uint64_t request, char *selector, int32_t secure, char **episodes, size_t count);
+void WDRecordingExportsFree(WDRecordingExportsResult *value);
 #endif

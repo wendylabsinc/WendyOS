@@ -19,6 +19,7 @@ struct MobileRootView: View {
     @AppStorage("wendy.primaryLens") private var primaryLens = ""
     @State private var lens: MobileLens?
     @State private var homeTab = MobileHome.home
+    @State private var recordingPicker: MobileEpisodeRoute?
     @State private var showingChat = false
     @State private var showingNotifications = false
     @State private var showMesh = false
@@ -67,6 +68,7 @@ struct MobileRootView: View {
             if let first = homePath.first, case .inventory = first { homePath = [first] }
             else { homePath = [] }
             destination = nil
+            recordingPicker = nil
             preferredColumn = .sidebar
             search = ""
         }
@@ -83,13 +85,14 @@ struct MobileRootView: View {
                         case .inventory(let inventory):
                             MobileInventoryList(model: model, source: inventory, showAccounts: { accounts = true })
                         case .device(let device):
-                            MobileDeviceView(device: device, openRecordings: { homeTab = .data }).id(device.id)
+                            MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
                         }
                     }
             }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.home)
             deviceBrowser.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.devices)
             NavigationStack {
-                MobileLensData(model: model, chooseDevice: { homeTab = .devices })
+                MobileLensData(model: model, isVisible: homeTab == .data, picker: $recordingPicker)
+                    .id(model.mobileCloudSelectionKey)
                     .toolbar { launcherButton }
             }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.data)
             NavigationStack {
@@ -136,6 +139,11 @@ struct MobileRootView: View {
                     }
             }
         }
+    }
+
+    private func openRecordings(for device: Device) {
+        recordingPicker = MobileEpisodeRoute(device: device)
+        homeTab = .data
     }
 
     private func enter(_ next: MobileLens) {
@@ -186,7 +194,7 @@ struct MobileRootView: View {
         } detail: {
             NavigationStack {
                 switch destination {
-                case .device(let device): MobileDeviceView(device: device, openRecordings: { homeTab = .data }).id(device.id)
+                case .device(let device): MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
                 default: ContentUnavailableView("Your devices", systemImage: "network", description: Text("Choose a nearby or cloud device."))
                 }
             }.id(destination)

@@ -179,6 +179,50 @@ func DesktopConnect(ctx context.Context, selector string) (*grpcclient.AgentConn
 	return connectMCPDevice(ctx, selector)
 }
 
+// DesktopRecordingConnect uses only the mobile app's current Cloud identity.
+// A background library scan must not select a different saved login or start
+// certificate recovery simply because its selector names the same tenant.
+func DesktopRecordingConnect(ctx context.Context, selector string, secureLAN bool) (*grpcclient.AgentConnection, error) {
+	if _, simulator, _ := simulatorName(selector); simulator {
+		return nil, errors.New("choose a reachable WendyOS device")
+	}
+	if secureLAN {
+		return DesktopConnectSecureLAN(ctx, selector)
+	}
+	target, cloud, err := parseCloudDeviceSelector(selector)
+	if err != nil {
+		return nil, err
+	}
+	if !cloud {
+		return DesktopConnect(ctx, selector)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	auth, err := config.ResolveAuth(cfg, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	if !target.matches(auth) {
+		return nil, errors.New("this recording device is outside the current Cloud organization")
+	}
+	devices, err := listCloudDiscoveryDevices(ctx, auth, true)
+	if err != nil {
+		return nil, err
+	}
+	id := target.AssetUUID
+	if id == "" {
+		id = strconv.FormatInt(int64(target.AssetID), 10)
+	}
+	for _, device := range devices {
+		if device.key == id {
+			return device.connect(ctx, auth, os.Getenv("WENDY_BROKER_URL"))
+		}
+	}
+	return nil, errors.New("this recording device is offline or unavailable")
+}
+
 type desktopLoginURLKey struct{}
 
 // DesktopLogin uses the CLI's OIDC/PKCE login, reporting the browser URL to UI.

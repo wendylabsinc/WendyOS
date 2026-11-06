@@ -40,6 +40,7 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	recordings              recordingReads
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
@@ -468,6 +469,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.recordings.setActive(false)
 	b.cancelOperation()
 	b.ReserveConnection()
 	b.NearbyClose(0)

@@ -1,31 +1,5 @@
 import SwiftUI
 
-struct MobileLensData: View {
-    @ObservedObject var model: AppModel
-    let chooseDevice: () -> Void
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Device recordings").foregroundStyle(.secondary)
-                if model.mobileScopeIsCurrent, model.selectedDeviceReady, let device = model.connected {
-                    Button(action: chooseDevice) {
-                        Label(device.title, systemImage: "cpu").font(.subheadline.bold())
-                            .padding(.horizontal, 12).padding(.vertical, 7)
-                            .background(MobileLensStyle.green.opacity(0.12), in: .capsule)
-                    }
-                    MobileRecordingSection(model: model)
-                } else {
-                    ContentUnavailableView {
-                        Label("Choose a device", systemImage: "cylinder.split.1x2")
-                    } description: { Text("Open a device to browse its recordings.") } actions: {
-                        Button("Choose device", action: chooseDevice)
-                    }
-                }
-            }.padding(16).frame(maxWidth: 700).frame(maxWidth: .infinity)
-        }.background(MobileLensStyle.background).navigationTitle("Data")
-    }
-}
-
 struct MobileRecordingSection: View {
     @ObservedObject var model: AppModel
     var recent = false
