@@ -638,6 +638,35 @@ def stop_reason(row, config, env=os.environ):
     return None
 
 
+def start_attempt_logs():
+    """Fresh empty proxy and CLI logs outside the results tree: Codex's sandboxed shell may write only to
+    its workspace, its added dirs and /tmp, and the shim logs from inside that shell. Empty logs mean no
+    calls, so transcript MCP and CLI entries never stand in for them. Returns (directory, proxy, cli)."""
+    import scenarios as sc  # imported here: scenarios.py imports this module
+    logs = Path(tempfile.mkdtemp(prefix="we-log-", dir=sc._tmp_root()))
+    proxy_log, cli_log = logs / "proxy.jsonl", logs / "cli.jsonl"
+    proxy_log.touch()
+    cli_log.touch()
+    return logs, proxy_log, cli_log
+
+
+def rebuild_trace(metric, adapter, events, proxy_log, cli_log):
+    """Replace the transcript's tool trace with the recorded one, counting routing first (it reads the
+    transcript's MCP calls). Grading must run after this."""
+    proxy_records = read_jsonl(proxy_log)
+    mcp_routing(metric, proxy_records)
+    metric["tool_trace"] = build_trace(adapter, events, proxy_records=proxy_records, cli_records=read_jsonl(cli_log))
+    return metric["tool_trace"]
+
+
+def keep_attempt_logs(logs, directory):
+    """Move the logs into the attempt directory and drop the temporary one."""
+    for path in (logs / "proxy.jsonl", logs / "cli.jsonl"):
+        if path.exists():
+            shutil.move(str(path), str(directory / path.name))
+    shutil.rmtree(logs, ignore_errors=True)
+
+
 def trial(config, agent_name, target_name, task, output, wendy, treatment_root=ROOT, shim=None, tools_path=None):
     """One end-to-end attempt. On the local target the agent runs through the recording shim in pass-through
     mode (only the guarded actions are faked); fixtures and cleanup keep using the real binary."""
@@ -671,10 +700,11 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                       "target_config": directory / "target.json"})
     dump(directory / "target.json", target)
     resolved = expand(task, variables)
-    resolved["prompt"] = expand(task["prompt"], prompt_variables(variables, target))
+    prompt_vars = prompt_variables(dict(variables, wendy=agent_wendy), target)  # the model is told the shim
+    resolved["prompt"] = expand(task["prompt"], prompt_vars)
     resolved["prompt"] += f"\nThe Wendy executable for this environment is {agent_wendy}. Use that absolute path for Wendy CLI commands."
     if config.get("environment_context"):
-        resolved["prompt"] += "\n" + expand(config["environment_context"], prompt_variables(variables, target))
+        resolved["prompt"] += "\n" + expand(config["environment_context"], prompt_vars)
     if state_dir is not None:
         resolved["prompt"] += (f"\nWendy device/cloud configuration and its VM store are isolated at {state_dir} "
                                "through WENDY_CONFIG_DIR. Preserve that environment setting. Do not change the host's ~/.wendy configuration or identity pins.")
@@ -683,11 +713,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
     if local:
         scenario_config = directory / "scenario.json"
         variables["scenario_config"] = scenario_config
-        # Outside the results tree, as for scenarios: a sandboxed agent shell may write only to /tmp.
-        logs = Path(tempfile.mkdtemp(prefix="we-log-", dir=sc._tmp_root()))
-        proxy_log, cli_log = logs / "proxy.jsonl", logs / "cli.jsonl"
-        proxy_log.touch()
-        cli_log.touch()
+        logs, proxy_log, cli_log = start_attempt_logs()
         sc.write_scenario_config(
             scenario_config, real_wendy=os.path.abspath(wendy), shim=agent_wendy, tools_path=tools_path,
             canned_dir=sc.canned_dir_for(target), canned_set=task.get("canned_set", "tasks"), canned=[], allow_real=[],
@@ -741,10 +767,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                                                        agent.get("prices_per_million"))
                 if local:
                     # Grading must see what the proxy and shim recorded, not what the transcript shows.
-                    proxy_records = read_jsonl(proxy_log)
-                    mcp_routing(row["metrics"], proxy_records)
-                    row["metrics"]["tool_trace"] = build_trace(agent["adapter"], events, proxy_records=proxy_records,
-                                                               cli_records=read_jsonl(cli_log))
+                    rebuild_trace(row["metrics"], agent["adapter"], events, proxy_log, cli_log)
                 row["task_seconds"] = result["seconds"]
                 row["tool_choice"] = (grade(row["metrics"]["tool_trace"], task["expect"], row["metrics"]["final_text"],
                                             row["metrics"]["agent_completed"], adapter=agent["adapter"])
@@ -774,10 +797,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
             if not row["cleanup_ok"]:
                 row["device_state_retained"] = str(state_dir)
         if logs is not None:
-            for path in (logs / "proxy.jsonl", logs / "cli.jsonl"):
-                if path.exists():
-                    shutil.move(str(path), str(directory / path.name))
-            shutil.rmtree(logs, ignore_errors=True)
+            keep_attempt_logs(logs, directory)
         dump(directory / "result.json", row)
         # Keep the workspace for diagnosis; it contains only this run's fixtures.
     return row
@@ -969,6 +989,13 @@ def main():
                       for s in scenarios if s["id"] in selected_scenarios)]
     if not plan and not detect:
         parser.error("no runnable trials; configure the fixtures reported above")
+    if any(config["targets"][name]["kind"] == "local"
+           for name in {target for _, _, target, _ in plan} | set(detect)) and not disposable(config):
+        parser.error('the local target runs the agent on the device under test: it needs "disposable_device": true '
+                     "in the config and WENDY_AGENT_SOCKET set in the environment")
+    # A task on the local target runs its agent through the shim too, so it gets the same command checks
+    # and the chat hook check as a scenario.
+    local_tasks = any(kind == "task" and config["targets"][target]["kind"] == "local" for kind, _, target, _ in plan)
     for name in agents:
         agent = config["agents"][name]
         if not agent.get("model") or "SET_" in agent["model"]:
@@ -979,9 +1006,10 @@ def main():
         pairs = list(zip(command, command[1:]))
         if agent["adapter"] == "claude" and ("--plugin-dir", "{plugin_dir}") not in pairs:
             parser.error('Claude must load the staged plugin: use "--plugin-dir", "{plugin_dir}"')
-        if not selected_scenarios:
+        if not (selected_scenarios or local_tasks):
             continue
-        # In a scenario run, {wendy} is the shim, and only a Wendy MCP server or chat started through it is recorded.
+        # In a scenario or local-task run, {wendy} is the shim, and only a Wendy MCP server or chat started
+        # through it is recorded.
         if agent["adapter"] == "claude" and ("--strict-mcp-config" not in command
                                              or ("--mcp-config", "{workspace}/mcp.json") not in pairs):
             parser.error(f"{name} must load only the runner's MCP config: add \"--strict-mcp-config\", "
@@ -1013,8 +1041,6 @@ def main():
         parser.error("Wendy executable not found")
     wendy = os.path.abspath(wendy)
     chats = [name for name in agents if config["agents"][name]["adapter"] == "wendy"]
-    # A task on the local target runs its agent through the shim too, so it needs the same chat hook.
-    local_tasks = any(kind == "task" and config["targets"][target]["kind"] == "local" for kind, _, target, _ in plan)
     if (selected_scenarios or local_tasks) and chats:
         import eval_wendy
         if not eval_wendy.has_chat_hook(wendy):  # the shim refuses it too; fail before any attempt

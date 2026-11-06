@@ -532,18 +532,25 @@ def _target_snapshot(wendy, device, target, run_vm):
 
 
 GUARDED_TOOLS = ("os_update", "device_update_agent", "wifi_connect", "wifi_disconnect", "provisioning_start",
-                 "cloud_enroll_device", "os_install_start")
-GUARDED_CLI = ("device update", "device wifi connect", "device wifi disconnect")
+                 "cloud_enroll_device", "os_install_start", "os_install_resume")
+# Every CLI verb that changes the OS, the agent, the network connection or enrolment. `wendy cloud device`
+# mirrors `wendy device`, so each device verb is guarded under both. Reads (status, list, scan) stay open.
+GUARDED_DEVICE_CLI = ("update", "push-agent", "setup", "enroll", "unenroll", "wifi connect", "wifi disconnect",
+                      "wifi forget", "wifi rank", "wifi regulatory set-country")
+GUARDED_OTHER_CLI = ("os update", "os install", "install", "cloud enroll-device", "net configure")
+GUARDED_APP_VERBS = ("start", "stop", "remove")
+GUARDED_CLI = tuple(f"{prefix}{verb}" for prefix in ("device ", "cloud device ") for verb in GUARDED_DEVICE_CLI
+                    ) + GUARDED_OTHER_CLI
 
 
 def guard_matchers(app_id):
-    """Block matchers for actions that would end a pass on the device it runs on: stopping or removing
-    the benchmark's own app, and changing the OS, agent, network or enrolment."""
+    """Block matchers for actions that would end a pass on the device it runs on: starting, stopping or
+    removing the benchmark's own app, and changing the OS, agent, network or enrolment."""
     own = {"args": {"app_name": app_id}, "block": True}
     matchers = [{"tool": tool, **own} for tool in ("container_stop", "container_delete", "container_start")]
     matchers += [{"tool": tool, "block": True} for tool in GUARDED_TOOLS]
-    matchers += [{"cli": cli, "args_regex": re.escape(app_id), "block": True}
-                 for cli in ("device apps stop", "device apps remove")]
+    matchers += [{"cli": f"{prefix}apps {verb}", "args_regex": re.escape(app_id), "block": True}
+                 for prefix in ("device ", "cloud device ") for verb in GUARDED_APP_VERBS]
     matchers += [{"cli": cli, "block": True} for cli in GUARDED_CLI]
     return matchers
 
@@ -604,10 +611,7 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
         # discards the state (and any copied Cloud auth) and keeps the logs.
         # The logs start outside the results tree: Codex's sandboxed shell may write only to its
         # workspace, its added dirs and /tmp, and the wrapper logs from inside that shell.
-        logs = Path(tempfile.mkdtemp(prefix="we-log-", dir=_tmp_root()))
-        proxy_log, cli_log = logs / "proxy.jsonl", logs / "cli.jsonl"
-        proxy_log.touch()
-        cli_log.touch()  # empty logs mean no calls, so transcript MCP and CLI entries never stand in for them
+        logs, proxy_log, cli_log = b.start_attempt_logs()
         state = attempt_state(target, run_vm)
         row["agent_timeout_seconds"] = b.agent_timeout(config, scenario)
         variables = {"root": b.ROOT, "here": HERE, "treatment_root": treatment_root,
@@ -665,10 +669,7 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
         row["stages"]["agent"] = result
         row["metrics"], events = b.agent_metrics(adapter, directory / "agent.stdout", result,
                                                  agent.get("prices_per_million"))
-        proxy_records = read_jsonl(proxy_log)
-        b.mcp_routing(row["metrics"], proxy_records)  # before the proxy's records replace the transcript's
-        trace = build_trace(adapter, events, proxy_records=proxy_records, cli_records=read_jsonl(cli_log))
-        row["metrics"]["tool_trace"] = trace
+        trace = b.rebuild_trace(row["metrics"], adapter, events, proxy_log, cli_log)
         row["task_seconds"] = result["seconds"]
         row["tool_choice"] = grade(trace, expect, row["metrics"]["final_text"], row["metrics"]["agent_completed"],
                                    group=scenario["group"], adapter=adapter)
@@ -692,10 +693,7 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
             if state.exists():
                 row["device_state_retained"] = str(state)
         if logs is not None:
-            for path in (logs / "proxy.jsonl", logs / "cli.jsonl"):
-                if path.exists():
-                    shutil.move(str(path), str(directory / path.name))
-            shutil.rmtree(logs, ignore_errors=True)
+            b.keep_attempt_logs(logs, directory)
         b.dump(directory / "result.json", row)
         # Keep the workspace for diagnosis; it contains only this attempt's files.
     return row
