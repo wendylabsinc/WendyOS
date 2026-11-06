@@ -276,6 +276,9 @@ final class SiteRobotMapModel: ObservableObject {
         telemetry.reading = result
         if reading?.hasSameControls(as: result) != true { reading = result }
         if showRotationPrompt && (!result.pose || result.aligned || result.moving) { showRotationPrompt = false }
+        if !automaticPaused, Date.now >= nextAutomaticAttempt, canStartRotationSearch {
+            startRotationSearch()
+        }
     }
 
     func acceptCameraDecoder(_ decoder: H264AnnexBDecoder) {
@@ -422,7 +425,7 @@ final class SiteRobotMapModel: ObservableObject {
         let eligible = canStartRotationSearch && !automaticPaused && !positionSearch.active
         if rotationOffer.shouldPresent(eligible: eligible, scanReady: reading?.scanReady == true,
                                        failedMatch: failedMatch, now: .now) {
-            showRotationPrompt = true
+            startRotationSearch()
         }
     }
 
@@ -432,7 +435,8 @@ final class SiteRobotMapModel: ObservableObject {
     }
 
     func startRotationSearch() {
-        guard handle != 0, let url = geometryURL, !remoteSearching else { return }
+        guard canStartRotationSearch, let url = geometryURL, !remoteSearching else { return }
+        automaticPaused = true
         dismissRotationPrompt()
         actionGeneration += 1
         let request = actionGeneration, h = handle, epoch = generation, f = frame, scale = geometryScale
@@ -456,7 +460,7 @@ final class SiteRobotMapModel: ObservableObject {
 
     func offerRotationRetry() {
         guard canStartRotationSearch else { return }
-        showRotationPrompt = true
+        startRotationSearch()
     }
 
     func locate(recalibrate: Bool = false) {
