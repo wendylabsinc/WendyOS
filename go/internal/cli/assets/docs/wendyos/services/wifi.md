@@ -75,6 +75,13 @@ wendy device wifi rank --ssid "Home" --priority 10
 wendy device wifi rank --order "Home,Office,Cafe"
 ```
 
+Disconnecting WiFi can remove the connection carrying the command before its
+final reply arrives. If the CLI cannot confirm completion, reconnect through
+another working path and check WiFi status. A received request alone does not
+mean the device disconnected. After accepting the request, the device still
+attempts it if contact with the CLI is lost. CLI JSON distinguishes receipt from completion; see
+[WiFi disconnect outcomes](../../clients/wendy-cli/commands/device/wifi.md#wendy-device-wifi-disconnect).
+
 ## Using `nmcli` directly on the device
 
 SSH into the device and run `nmcli`:

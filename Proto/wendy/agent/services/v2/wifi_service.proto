@@ -2,11 +2,21 @@ syntax = "proto3";
 package wendy.agent.services.v2;
 option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
 
+import "google/protobuf/empty.proto";
+
 service WendyWiFiService {
     rpc ListWiFiNetworks(ListWiFiNetworksRequest) returns (ListWiFiNetworksResponse);
     rpc ConnectToWiFi(ConnectToWiFiRequest) returns (ConnectToWiFiResponse);
     rpc GetWiFiStatus(GetWiFiStatusRequest) returns (GetWiFiStatusResponse);
     rpc DisconnectWiFi(DisconnectWiFiRequest) returns (DisconnectWiFiResponse);
+
+    // Send begin, receive ready, then send confirm. A valid begin commits the
+    // device to attempting the disconnect. Ready acknowledges that commitment;
+    // confirm permits immediate execution. If confirmation is missing or the
+    // stream is lost, the device still proceeds within a bounded grace period.
+    // Only completed confirms the outcome; losing its reply leaves it unknown.
+    // The legacy unary RPC is unchanged.
+    rpc DisconnectWiFiAcknowledged(stream DisconnectWiFiControl) returns (stream DisconnectWiFiEvent);
     rpc ListKnownWiFiNetworks(ListKnownWiFiNetworksRequest) returns (ListKnownWiFiNetworksResponse);
     rpc SetWiFiNetworkPriority(SetWiFiNetworkPriorityRequest) returns (SetWiFiNetworkPriorityResponse);
     rpc ReorderKnownWiFiNetworks(ReorderKnownWiFiNetworksRequest) returns (ReorderKnownWiFiNetworksResponse);
@@ -66,6 +76,20 @@ message DisconnectWiFiRequest {}
 message DisconnectWiFiResponse {
     bool success = 1;
     optional string error_message = 2;
+}
+
+message DisconnectWiFiControl {
+    oneof control {
+        google.protobuf.Empty begin = 1;
+        google.protobuf.Empty confirm = 2;
+    }
+}
+
+message DisconnectWiFiEvent {
+    oneof event {
+        google.protobuf.Empty ready = 1;
+        DisconnectWiFiResponse completed = 2;
+    }
 }
 
 message ListKnownWiFiNetworksRequest {}

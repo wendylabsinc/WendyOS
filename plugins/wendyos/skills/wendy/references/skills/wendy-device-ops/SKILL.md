@@ -87,6 +87,18 @@ wendy device wifi rank --ssid "<ssid>" --priority 10 --device <hostname>
 wendy device wifi rank --order "Home,Office,Cafe" --device <hostname>
 ```
 
+Disconnecting WiFi can remove the connection carrying the command. For CLI JSON
+and MCP `wifi_disconnect`, report the device as disconnected only when
+`completion_confirmed` and `success` are both true. `state: "requested"` with
+`acknowledged: true` means the device committed to attempting the disconnect,
+even if confirmation or the reply is lost. It does not confirm completion. On tool errors, inspect the nested `result` too;
+cancellation does not revoke an acknowledged request. A successful tool call or
+CLI exit alone is not proof that WiFi disconnected. If completion is unknown,
+reconnect over another working path and check `wifi_status` or
+`wendy device wifi status`. Do not infer success or repeatedly disconnect a
+device whose current state is unknown. Older agents may lose contact without
+confirming receipt; explain that uncertainty too.
+
 Do not echo or store WiFi passwords in issues, PRs, reusable docs, or final summaries. If a password was passed on the command line, avoid copying the full command into shared output.
 
 ## SensorLink pairing
