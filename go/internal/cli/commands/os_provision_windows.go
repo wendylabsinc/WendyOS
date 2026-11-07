@@ -29,7 +29,7 @@ const configPartitionSupported = true
 // On entry the disk is expected to be offline — writeImageToDisk takes it
 // offline at the end of the raw-image phase to suppress auto-mount of every
 // partition Windows finds in the freshly-written table.
-func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) (retErr error) {
+func writeConfigPartition(d drive, agent configAgent, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) (retErr error) {
 	diskNum, err := parseDiskNumber(d.DevicePath)
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 		return err
 	}
 
-	if err := writeConfigFiles(mountPath, agentBinary, creds, deviceName, provisioningJSON); err != nil {
+	if err := writeConfigFiles(mountPath, agent, creds, deviceName, provisioningJSON); err != nil {
 		return err
 	}
 

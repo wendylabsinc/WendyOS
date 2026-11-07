@@ -32,7 +32,7 @@ func TestHW_WriteConfigPartition(t *testing.T) {
 	const deviceName = "brave-dolphin"
 
 	start := time.Now()
-	if err := writeConfigPartition(drive{DevicePath: disk}, agent, creds, deviceName, nil); err != nil {
+	if err := writeConfigPartition(drive{DevicePath: disk}, configAgent{data: agent}, creds, deviceName, nil); err != nil {
 		t.Fatalf("writeConfigPartition: %v", err)
 	}
 	t.Logf("provisioned in %s", time.Since(start).Round(time.Millisecond))

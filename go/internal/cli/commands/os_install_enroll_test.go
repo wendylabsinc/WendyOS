@@ -477,7 +477,7 @@ func TestProvisioningJSONBlankNameReservesTheNameItBakes(t *testing.T) {
 
 	// The callers write that same name to the config partition.
 	dir := t.TempDir()
-	if err := writeConfigFiles(dir, nil, nil, name, provJSON); err != nil {
+	if err := writeConfigFiles(dir, configAgent{}, nil, name, provJSON); err != nil {
 		t.Fatal(err)
 	}
 	conf, err := os.ReadFile(filepath.Join(dir, "wendy.conf"))
