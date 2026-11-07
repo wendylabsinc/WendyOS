@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -303,5 +305,36 @@ func TestNewAgentServiceHoldsRebootForAckWait(t *testing.T) {
 	if svc.osUpdateAckWait != osUpdateAckWait || svc.osUpdateReboot == nil || svc.selectOSUpdater == nil {
 		t.Fatalf("UpdateOS hooks not wired: ackWait=%v reboot=%v select=%v",
 			svc.osUpdateAckWait, svc.osUpdateReboot != nil, svc.selectOSUpdater != nil)
+	}
+}
+
+func TestUpdateOS_HoldsTheSupervisorWakeUntilTheReboot(t *testing.T) {
+	superviseForTest(t, nil)
+	dir := t.TempDir()
+	orig := supervisorMarkDir
+	supervisorMarkDir = dir
+	t.Cleanup(func() { supervisorMarkDir = orig })
+	updating := supervisor.UpdatingFunc(dir)
+	held := make(chan bool, 1)
+	install := func(ctx context.Context, onProgress func(string, int32)) error {
+		held <- updating(os.Getpid())
+		return installsCleanly(ctx, onProgress)
+	}
+	h := startOSUpdateHarness(t, install, 400*time.Millisecond, nil)
+	stream, err := h.client.UpdateOS(testCtx(t), &agentpb.UpdateOSRequest{ArtifactUrl: "http://example.invalid/u.wendy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recvUntilCompleted(t, stream)
+	if !<-held {
+		t.Fatal("the supervisor could restart the agent mid-install")
+	}
+	waitForReboot(t, h, 5*time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for updating(os.Getpid()) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if updating(os.Getpid()) {
+		t.Fatal("the mark must go once UpdateOS returns")
 	}
 }

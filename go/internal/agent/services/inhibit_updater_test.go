@@ -23,12 +23,13 @@ func TestInhibitAutoUpdater(t *testing.T) {
 
 	inhibitAutoUpdater(zap.NewNop())()
 
-	if len(calls) != 3 {
-		t.Fatalf("expected cat, stop, start (3 calls), got %d: %v", len(calls), calls)
+	if len(calls) != 4 {
+		t.Fatalf("expected cat, is-enabled, stop, start (4 calls), got %d: %v", len(calls), calls)
 	}
 	if calls[0][0] != "cat" || !strings.Contains(strings.Join(calls[0], " "), "wendyos-agent-updater.timer") {
 		t.Fatalf("first call must probe the updater timer, got %v", calls[0])
 	}
+	calls = calls[1:]
 	stop := strings.Join(calls[1], " ")
 	if calls[1][0] != "stop" ||
 		!strings.Contains(stop, "wendyos-agent-updater.timer") ||
@@ -80,7 +81,31 @@ func TestInhibitAutoUpdater_StopFailureIsBestEffort(t *testing.T) {
 
 	inhibitAutoUpdater(zap.NewNop())() // must not panic
 
-	if len(calls) != 3 || calls[2][0] != "start" {
+	if len(calls) != 4 || calls[3][0] != "start" {
 		t.Fatalf("stop failure must still attempt restore, got %v", calls)
+	}
+}
+
+// Local agent builds mask the updater: nothing to stop, and re-starting a
+// masked timer would only log a failure on every OTA.
+func TestInhibitAutoUpdater_MaskedUpdater(t *testing.T) {
+	orig := systemctlFn
+	t.Cleanup(func() { systemctlFn = orig })
+
+	var calls [][]string
+	systemctlFn = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		if args[0] == "is-enabled" {
+			return []byte("masked\n"), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+
+	inhibitAutoUpdater(zap.NewNop())()
+
+	for _, call := range calls {
+		if call[0] == "stop" || call[0] == "start" {
+			t.Fatalf("a masked updater must not be stopped or started, got %v", calls)
+		}
 	}
 }
