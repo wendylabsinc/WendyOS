@@ -542,10 +542,14 @@ GUARDED_TOOLS = ("os_update", "device_update_agent", "wifi_connect", "wifi_disco
 # mirrors `wendy device`, so each device verb is guarded under both. Reads (status, list, scan) stay open.
 GUARDED_DEVICE_CLI = ("update", "push-agent", "setup", "enroll", "unenroll", "wifi connect", "wifi disconnect",
                       "wifi forget", "wifi rank", "wifi regulatory set-country")
-GUARDED_OTHER_CLI = ("os update", "os install", "install", "update", "cloud enroll-device", "net configure")
+GUARDED_OTHER_CLI = ("os update", "update", "cloud enroll-device", "net configure")
 GUARDED_APP_VERBS = ("start", "stop", "remove")
 GUARDED_CLI = tuple(f"{prefix}{verb}" for prefix in ("device ", "cloud device ") for verb in GUARDED_DEVICE_CLI
                     ) + GUARDED_OTHER_CLI
+# `install` and its `os install` twin flash a drive, but two of their subcommands only read, like MCP's
+# os_install_plan and os_install_status, which stay open: `plan` and `jobs status`.
+GUARDED_INSTALL_CLI = ("os install", "install")
+INSTALL_READS = r"(?:plan|jobs\s+status)"
 
 
 def guard_matchers(app_id):
@@ -557,6 +561,8 @@ def guard_matchers(app_id):
     matchers += [{"cli": f"{prefix}apps {verb}", "args_regex": re.escape(app_id), "block": True}
                  for prefix in ("device ", "cloud device ") for verb in GUARDED_APP_VERBS]
     matchers += [{"cli": cli, "block": True} for cli in GUARDED_CLI]
+    matchers += [{"cli": cli, "args_regex": rf"^(?!.*(?:^|\s){re.escape(cli)}\s+{INSTALL_READS}(?:\s|$))",
+                  "block": True} for cli in GUARDED_INSTALL_CLI]
     return matchers
 
 

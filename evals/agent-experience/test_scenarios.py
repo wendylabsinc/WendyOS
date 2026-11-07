@@ -771,6 +771,20 @@ class LocalTaskTests(unittest.TestCase):
                      ["device", "apps", "list"], ["cloud", "device", "wifi", "list"], ["device", "info"]):
             self.assertFalse(eval_wendy._blocked(argv, block), argv)
 
+    def test_install_reads_stay_open_and_install_writes_stay_blocked(self):
+        # Pass 2 canned `install plan` (on the read-only allowlist) because the `install` guard caught it, and
+        # the report then blamed the model for touching the benchmark. MCP's os_install_plan was open all along.
+        block = sc.guard_matchers(sc.BENCHMARK_APP)
+        for argv in (["install", "plan", "--device-type", "jetson-agx-thor", "--carrier", "developer-kit", "--json"],
+                     ["os", "install", "plan"], ["--json", "install", "plan"], ["install", "jobs", "status", "--id", "j"],
+                     ["os", "install", "jobs", "status"]):
+            self.assertFalse(eval_wendy._blocked(argv, block), argv)
+        for argv in (["install", "--device-type", "jetson-agx-thor", "--version", "0.20.2"],
+                     ["install", "jobs", "start", "--device-type", "jetson-agx-thor"], ["install", "jobs", "resume"],
+                     ["os", "install", "image.img", "/dev/sda"], ["os", "install", "jobs", "start"],
+                     ["install", "--json", "jobs", "start"]):
+            self.assertTrue(eval_wendy._blocked(argv, block), argv)
+
     def test_guard_matchers_can_every_added_tool_in_the_proxy(self):
         import mcp_proxy
         tools = [{"name": n, "annotations": {"readOnlyHint": False}} for n in sc.GUARDED_TOOLS]
