@@ -384,7 +384,7 @@ func TestWriteConfigFiles_AgentBinaryOnly(t *testing.T) {
 	dir := t.TempDir()
 	binary := []byte("fake-agent-binary")
 
-	if err := writeConfigFiles(dir, binary, nil, "", nil); err != nil {
+	if err := writeConfigFiles(dir, configAgent{data: binary}, nil, "", nil); err != nil {
 		t.Fatalf("writeConfigFiles: %v", err)
 	}
 
@@ -409,7 +409,7 @@ func TestWriteConfigFiles_WithWiFiCreds(t *testing.T) {
 		{SSID: "MyNetwork", Password: "secret"},
 	}
 
-	if err := writeConfigFiles(dir, []byte("bin"), creds, "", nil); err != nil {
+	if err := writeConfigFiles(dir, configAgent{data: []byte("bin")}, creds, "", nil); err != nil {
 		t.Fatalf("writeConfigFiles: %v", err)
 	}
 
@@ -425,7 +425,7 @@ func TestWriteConfigFiles_WithWiFiCreds(t *testing.T) {
 func TestWriteConfigFiles_WithDeviceName(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := writeConfigFiles(dir, []byte("bin"), nil, "my-device", nil); err != nil {
+	if err := writeConfigFiles(dir, configAgent{data: []byte("bin")}, nil, "my-device", nil); err != nil {
 		t.Fatalf("writeConfigFiles: %v", err)
 	}
 
@@ -442,7 +442,7 @@ func TestWriteConfigFiles_WithEnrollmentJSON(t *testing.T) {
 	dir := t.TempDir()
 	enrollJSON := []byte(`{"deviceID":"d"}`)
 
-	if err := writeConfigFiles(dir, []byte("bin"), nil, "", enrollJSON); err != nil {
+	if err := writeConfigFiles(dir, configAgent{data: []byte("bin")}, nil, "", enrollJSON); err != nil {
 		t.Fatalf("writeConfigFiles: %v", err)
 	}
 
@@ -463,7 +463,7 @@ func TestWriteConfigFiles_NewlineInSSID(t *testing.T) {
 	dir := t.TempDir()
 	creds := []wendyconf.WifiCredential{{SSID: "bad\nssid", Password: "ok"}}
 
-	err := writeConfigFiles(dir, []byte("bin"), creds, "", nil)
+	err := writeConfigFiles(dir, configAgent{data: []byte("bin")}, creds, "", nil)
 	if err == nil {
 		t.Fatal("expected error for SSID with newline")
 	}
@@ -473,7 +473,7 @@ func TestWriteConfigFiles_NewlineInPassword(t *testing.T) {
 	dir := t.TempDir()
 	creds := []wendyconf.WifiCredential{{SSID: "ok", Password: "bad\npassword"}}
 
-	err := writeConfigFiles(dir, []byte("bin"), creds, "", nil)
+	err := writeConfigFiles(dir, configAgent{data: []byte("bin")}, creds, "", nil)
 	if err == nil {
 		t.Fatal("expected error for password with newline")
 	}
@@ -482,7 +482,7 @@ func TestWriteConfigFiles_NewlineInPassword(t *testing.T) {
 func TestWriteConfigFiles_NewlineInDeviceName(t *testing.T) {
 	dir := t.TempDir()
 
-	err := writeConfigFiles(dir, []byte("bin"), nil, "bad\nname", nil)
+	err := writeConfigFiles(dir, configAgent{data: []byte("bin")}, nil, "bad\nname", nil)
 	if err == nil {
 		t.Fatal("expected error for device name with newline")
 	}
@@ -525,7 +525,7 @@ func withStubbedProvisioning(t *testing.T, provision func(drive, []wendyconf.Wif
 	reconnectTimeout = 0
 
 	calls := 0
-	provisionConfigPartitionFn = func(d drive, c []wendyconf.WifiCredential, name string, j []byte, agent *localInstallAgent) error {
+	provisionConfigPartitionFn = func(d drive, c []wendyconf.WifiCredential, name string, j []byte, _ agentSeed) error {
 		calls++
 		return provision(d, c, name, j)
 	}
@@ -549,7 +549,7 @@ func TestProvisionConfigWithRetry_SuccessFirstTry(t *testing.T) {
 	}, true, nil)
 
 	out, _ := captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true, nil)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true, agentSeed{})
 		return nil
 	})
 
@@ -567,7 +567,7 @@ func TestProvisionConfigWithRetry_FailureIsNotFatalAndExplainsBoot(t *testing.T)
 	}, false, nil) // non-interactive: no retry prompt
 
 	out, _ := captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, []wendyconf.WifiCredential{{SSID: "Home"}}, "", nil, true, nil)
+		provisionConfigWithRetry(context.Background(), drive{}, []wendyconf.WifiCredential{{SSID: "Home"}}, "", nil, true, agentSeed{})
 		return nil
 	})
 
@@ -599,7 +599,7 @@ func TestProvisionConfigWithRetry_InteractiveRetryThenSuccess(t *testing.T) {
 	}, true, []bool{true}) // user agrees to retry once
 
 	_, _ = captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, nil, "device-x", nil, true, nil)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "device-x", nil, true, agentSeed{})
 		return nil
 	})
 
@@ -614,7 +614,7 @@ func TestProvisionConfigWithRetry_InteractiveDeclineStops(t *testing.T) {
 	}, true, []bool{false}) // user declines retry
 
 	_, _ = captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false, nil)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false, agentSeed{})
 		return nil
 	})
 
@@ -646,7 +646,7 @@ func TestProvisionConfigWithRetry_RequestedFailureReturnsError(t *testing.T) {
 
 			var got error
 			_, _ = captureCommandStdout(t, func() error {
-				_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "brave-dolphin", nil, true, nil)
+				_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "brave-dolphin", nil, true, agentSeed{})
 				return nil
 			})
 
@@ -669,11 +669,24 @@ func TestProvisionConfigWithRetry_UnrequestedFailureReturnsNil(t *testing.T) {
 
 	var got error
 	_, _ = captureCommandStdout(t, func() error {
-		_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false, nil)
+		_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false, agentSeed{})
 		return nil
 	})
 
 	if got != nil {
 		t.Errorf("unrequested provisioning failure must not fail the install; got %v", got)
+	}
+}
+
+func TestWriteConfigFilesMarksALocalAgent(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		dir := t.TempDir()
+		if err := writeConfigFiles(dir, configAgent{data: []byte("bin"), local: local}, nil, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		_, err := os.Stat(filepath.Join(dir, "wendy-agent.local"))
+		if marked := err == nil; marked != local {
+			t.Fatalf("local=%v: marker present %v", local, marked)
+		}
 	}
 }

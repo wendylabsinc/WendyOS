@@ -456,7 +456,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	run := &dragonwingFlashRun{
 		plan: plan, dev: dev, board: board,
 		seedDir: seedDir, zerosPath: zerosPath,
-		creds: creds, name: name, provJSON: provJSON, agent: agent,
+		creds: creds, name: name, provJSON: provJSON, agent: agent, nightly: nightly,
 	}
 	failedID, err := runFlashSteps(fmt.Sprintf("Flashing WendyOS %s", plan.version),
 		run.steps(flashCtx), cancelFlash, logW)
@@ -476,6 +476,7 @@ type dragonwingFlashRun struct {
 	name      string
 	provJSON  []byte
 	agent     *localInstallAgent
+	nightly   bool
 
 	bundleDir string
 	flash     *qdl.FlashPlan
@@ -517,7 +518,7 @@ func (r *dragonwingFlashRun) steps(ctx context.Context) []flashStep {
 			// first write command: a failure discovered mid-flash leaves the
 			// board half-written with the GPT still unpatched.
 			flash, err := planDragonwingFlash(r.seedDir, r.bundleDir, r.zerosPath,
-				r.creds, r.name, r.provJSON, out, detail, r.warn, r.agent)
+				r.creds, r.name, r.provJSON, out, detail, r.warn, agentSeed{local: r.agent, nightly: r.nightly, arch: "arm64"})
 			if err != nil {
 				return false, errors.Join(err, errDragonwingNothingWritten)
 			}
@@ -581,8 +582,8 @@ func openDragonwingFlashLog(board dragonwingBoard, version string) (io.Writer, f
 // config image, and the zeros that blank /data. Non-fatal problems go to warn,
 // which the caller surfaces once the steps UI has released the terminal.
 func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte,
-	out io.Writer, detail func(string), warn func(string), local *localInstallAgent) (*qdl.FlashPlan, error) {
-	if err := local.checkArchitecture("arm64"); err != nil {
+	out io.Writer, detail func(string), warn func(string), seed agentSeed) (*qdl.FlashPlan, error) {
+	if err := seed.local.checkArchitecture("arm64"); err != nil {
 		return nil, err
 	}
 	plan, err := qdl.LoadFlashPlan(bundleDir)
@@ -590,7 +591,7 @@ func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf
 		return nil, err
 	}
 
-	agent, agentWarning := resolveSeedAgent(out, detail, local)
+	agent, agentWarning := resolveSeedAgent(out, detail, seed)
 	if agentWarning != "" {
 		warn(agentWarning)
 	}
@@ -602,7 +603,7 @@ func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf
 	// factory reset, and a surviving provisioning.json would re-enrol the fresh
 	// install as the previous device.
 	if err != nil {
-		if local != nil || provisioningRequired(creds, deviceName, provJSON) {
+		if seed.local != nil || provisioningRequired(creds, deviceName, provJSON) {
 			return nil, err
 		}
 		// Worded for both outcomes: the warning is printed whether or not the

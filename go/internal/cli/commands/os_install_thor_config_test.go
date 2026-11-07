@@ -53,7 +53,7 @@ func writeFAT(t *testing.T, img string, agent []byte, creds []wendyconf.WifiCred
 	if err != nil {
 		t.Fatalf("get filesystem: %v", err)
 	}
-	if err := writeConfigFilesTo(fatWriter{fs}, agent, creds, name, provJSON); err != nil {
+	if err := writeConfigFilesTo(fatWriter{fs}, configAgent{data: agent}, creds, name, provJSON); err != nil {
 		t.Fatalf("writeConfigFilesTo: %v", err)
 	}
 	d.Close()

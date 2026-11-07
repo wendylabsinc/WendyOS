@@ -164,7 +164,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			if err != nil {
 				return false, err
 			}
-			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail, opts.Agent); err != nil {
+			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail, agentSeed{local: opts.Agent, nightly: opts.Nightly, arch: "arm64"}); err != nil {
 				return false, err
 			}
 			flashPlan, err = t234.LoadXMLPlan(layoutPath, workspace, fp.Manifest.RootfsDevice)
@@ -368,11 +368,11 @@ func prepareT234Workspace(fp *flashpack.Flashpack) (workspace, layoutPath string
 	return workspace, filepath.Join(workspace, layoutRel), nil
 }
 
-func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
-	if err := agent.checkArchitecture("arm64"); err != nil {
+func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), seed agentSeed) error {
+	if err := seed.local.checkArchitecture("arm64"); err != nil {
 		return err
 	}
-	agentBinary, _ := resolveSeedAgent(out, detail, agent)
+	agentBinary, _ := resolveSeedAgent(out, detail, seed)
 
 	d, err := diskfs.Open(imagePath)
 	if err != nil {
