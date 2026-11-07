@@ -114,12 +114,13 @@ struct DeviceSettingsView: View {
     @State private var joining: WiFiJoinTarget?
     @State private var disconnecting = false
     @State private var showingMeshGraph = false
+    @State private var confirmingMesh = false
     @State private var forgetting: DeviceWiFiNetwork?
     private var dirty: Bool { snapshot.map { $0.meshConfig != draft } ?? false }
     private var participates: Bool { draft & 1 != 0 }
 
     private enum Page: String, Hashable {
-        case info = "Device info", wifi = "Wi-Fi", mesh = "Wendy Mesh", bluetooth = "Bluetooth", audio = "Audio", pairing = "Pairing", logs = "Logs", notifications = "Notifications"
+        case management = "Device management", info = "Device info", wifi = "Wi-Fi", mesh = "Wendy Mesh", bluetooth = "Bluetooth", audio = "Audio", pairing = "Pairing", logs = "Logs", notifications = "Notifications"
     }
     @State private var selectedPage: Page?
 
@@ -158,6 +159,12 @@ struct DeviceSettingsView: View {
                 actions.submit { await refresh() }
             }
         }
+        .confirmationDialog("Change mesh settings on \(deviceName)?", isPresented: $confirmingMesh, titleVisibility: .visible) {
+            Button("Apply changes") { actions.submit { await saveMesh() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Changing participation or transports can disconnect this device. Wendy will read back the configuration after applying it.")
+        }
         .confirmationDialog("Disconnect from Wi-Fi?", isPresented: $disconnecting, titleVisibility: .visible) {
             Button("Disconnect", role: .destructive) { actions.submit { await perform { try await GoClient.shared.disconnectWiFi(session: session) } } }
         } message: { Text("\(deviceName) may become unreachable until it connects through another network.") }
@@ -177,6 +184,7 @@ struct DeviceSettingsView: View {
             }
             Section {
                 settingsLink(.info, symbol: "info.circle")
+                settingsLink(.management, symbol: "gearshape.2")
                 settingsLink(.wifi, symbol: "wifi", value: snapshot.map { $0.wifiConnected ? $0.ssid : $0.wifiError.isEmpty ? "Not connected" : "Unavailable" } ?? "")
                 settingsLink(.bluetooth, symbol: "antenna.radiowaves.left.and.right")
                 settingsLink(.audio, symbol: "speaker.wave.2")
@@ -207,6 +215,7 @@ struct DeviceSettingsView: View {
             Group {
                 switch page {
                 case .notifications: DeviceNotificationsView(session: session)
+                case .management: DeviceManagementView(session: session, deviceName: deviceName)
                 case .info: DeviceInfoView(session: session, deviceName: deviceName)
                 case .wifi: if let snapshot { wifiPage(snapshot) } else { settingsLoading }
                 case .mesh: if let snapshot { meshPage(snapshot) } else { settingsLoading }
@@ -305,6 +314,9 @@ struct DeviceSettingsView: View {
                 Button("Show mesh graph", systemImage: "point.3.connected.trianglepath.dotted") { showingMeshGraph = true }
                 LabeledContent("Runtime", value: snapshot.runtimeAvailable ? (snapshot.meshState.isEmpty ? "Available" : snapshot.meshState.capitalized) : "Unavailable")
                 if snapshot.runtimeAvailable { LabeledContent("Authenticated links", value: snapshot.peers.formatted()) }
+                LabeledContent("Perspective", value: deviceName)
+                LabeledContent("Radio signal", value: "Not reported")
+                Text("This is the device’s mesh, not a map of this phone’s nearby devices. Route cost does not measure radio strength.").font(.caption).foregroundStyle(.secondary)
                 if !snapshot.gateway.isEmpty { LabeledContent("Internet gateway", value: snapshot.gateway) }
                 if !snapshot.meshDetail.isEmpty { Text(snapshot.meshDetail).font(.caption).foregroundStyle(.secondary) }
                 if !snapshot.meshError.isEmpty { FailureNote(message: snapshot.meshError) }
@@ -324,7 +336,7 @@ struct DeviceSettingsView: View {
                 }.disabled(saving || !participates)
                 if dirty || saving {
                     Section {
-                        Button("Save changes") { actions.submit { await saveMesh() } }.disabled(saving || loading)
+                        Button("Save changes") { confirmingMesh = true }.disabled(saving || loading)
                         Button("Discard changes", role: .cancel) { draft = snapshot.meshConfig }.disabled(saving)
                         if saving { ProgressView() }
                     }
@@ -366,17 +378,25 @@ struct DeviceSettingsView: View {
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     private func perform(_ work: () async throws -> Void) async {
-        guard !saving else { return }
+        guard !saving, !Task.isCancelled, model.deviceSession == session else { return }
         saving = true; error = nil; notice = nil
         defer { saving = false }
-        do { try await work(); await refresh() }
-        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        do {
+            try await work()
+            guard !Task.isCancelled, model.deviceSession == session else { return }
+            await refresh()
+        }
+        catch { if !Task.isCancelled, model.deviceSession == session { self.error = error.localizedDescription } }
     }
     private func saveMesh() async {
         guard let snapshot else { return }
         let changed = snapshot.meshConfig ^ draft
         let enabled = draft
         await perform { try await GoClient.shared.configureMesh(session: session, changed: changed, enabled: enabled) }
+        guard !Task.isCancelled, model.deviceSession == session, error == nil else { return }
+        if let current = self.snapshot, current.meshConfig & changed == enabled & changed {
+            notice = "Mesh settings verified on \(deviceName)."
+        } else { notice = "The change was sent, but the device has not confirmed the requested settings. Refresh after it reconnects." }
     }
 }
 
@@ -458,10 +478,13 @@ struct WiFiJoinSheet: View {
         #endif
     }
     private func join() async {
+        guard !saving, !Task.isCancelled else { return }
         saving = true; error = nil; defer { saving = false }
         do {
             try await GoClient.shared.joinWiFi(session: session, ssid: ssid, password: password, security: security, hidden: hidden)
-            password = ""; joined(); dismiss()
+            password = ""
+            guard !Task.isCancelled else { return }
+            joined(); dismiss()
         } catch { password = ""; if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }
