@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ type Agent struct {
 	Credentials         func() (string, string, []byte)
 	Logger              *zap.Logger
 	MTLSPort            int
+	OnRegistered        func() // the device is reachable through the relay again
 	signing, encryption *ecdsa.PrivateKey
 	lease               *pb.IssuePresenceLeaseResponse
 	leaseClaims         claims
@@ -404,6 +406,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 		return fmt.Errorf("invalid presence acceptance")
 	}
 	a.Logger.Info("registered presence with cloud relay", zap.String("endpoint", lease.Broker.Endpoint))
+	if a.OnRegistered != nil {
+		a.OnRegistered()
+	}
 	// Cloud Run closes even active streaming requests at one hour. Rotate
 	// presence deliberately before that deadline, keeping its lease and the
 	// independently owned data sessions rather than treating it as a failure.
@@ -781,11 +786,11 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 		return serveDatagrams(session, d)
 	}
 	port := int(d.Port)
-	if string(d.ServiceDescriptor) == "wendy-agent" && a.MTLSPort > 0 {
+	agentSession := a.isAgentSession(string(d.ServiceDescriptor), port)
+	if agentSession {
 		port = a.MTLSPort
 	}
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	local, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(d.Host, strconv.Itoa(port)))
+	local, err := dialLocalService(ctx, d.Host, strconv.Itoa(port), agentSession)
 	if err != nil {
 		return err
 	}
@@ -868,4 +873,29 @@ func (a *Agent) expireSavedOffers() {
 			_ = os.Remove(filepath.Join(a.StateDir, entry.Name()))
 		}
 	}
+}
+
+// isAgentSession covers an app tunnel aimed at the agent's own port too, so
+// no relay session reaches the agent looking like an on-device caller.
+func (a *Agent) isAgentSession(descriptor string, port int) bool {
+	return a.MTLSPort > 0 && (descriptor == "wendy-agent" || port == a.MTLSPort)
+}
+
+// RelaySourceIP is the loopback address relay sessions to the agent come
+// from, so the agent can tell a cloud session from other loopback callers.
+var RelaySourceIP = net.IPv4(127, 0, 0, 2)
+
+// dialLocalService dials the agent's own sessions from RelaySourceIP so it can
+// tell them apart; app tunnels dial plainly, as their NAT rules match 127.0.0.1.
+func dialLocalService(ctx context.Context, host, port string, agentSession bool) (net.Conn, error) {
+	addr := net.JoinHostPort(host, port)
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	if ip := net.ParseIP(host); agentSession && runtime.GOOS == "linux" && ip != nil && ip.To4() != nil && ip.IsLoopback() {
+		tagged := dialer
+		tagged.LocalAddr = &net.TCPAddr{IP: RelaySourceIP}
+		if c, err := tagged.DialContext(ctx, "tcp", addr); err == nil {
+			return c, nil
+		}
+	}
+	return dialer.DialContext(ctx, "tcp", addr)
 }
