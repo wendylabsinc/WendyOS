@@ -144,43 +144,23 @@ private struct LensMeshArtwork: View {
     }
 }
 
-struct MobileLensBar: View {
-    @Binding var tab: MobileHome
+struct MobileLensChatAccessory: View {
     @ObservedObject var chatModel: DeviceChatModel
     let context: String?
     let chat: () -> Void
     var body: some View {
-        VStack(spacing: 8) {
-            Button(action: chat) {
-                HStack(spacing: 10) {
-                    Image(systemName: "sparkles")
-                    Text("Ask Wendy about \(context ?? "a device")…").lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 0)
-                    if chatModel.unreadReplies > 0 || chatModel.approval != nil {
-                        Text(chatModel.approval != nil ? "Review" : "\(chatModel.unreadReplies)")
-                            .font(.caption.bold()).padding(6).foregroundStyle(.white).background(.red, in: .capsule)
-                    }
-                }.font(.subheadline).padding(.horizontal, 16).frame(minHeight: 44)
-            }.buttonStyle(.plain).glassEffect(.regular, in: .capsule)
-                .accessibilityIdentifier("lens.chat")
-            HStack(spacing: 1) {
-                ForEach(MobileHome.allCases, id: \.self) { item in
-                    Button { tab = item } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: symbol(item)).font(.system(size: 20, weight: .medium))
-                            Text(item.rawValue).font(.caption2.weight(.semibold))
-                        }.frame(maxWidth: .infinity, minHeight: 48)
-                            .foregroundStyle(tab == item ? MobileLensStyle.accent : .primary)
-                            .background(tab == item ? MobileLensStyle.green.opacity(0.12) : .clear, in: .capsule)
-                    }.buttonStyle(.plain).accessibilityAddTraits(tab == item ? .isSelected : [])
-                        .accessibilityIdentifier("lens.tab." + item.rawValue)
+        Button(action: chat) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                Text("Ask Wendy about \(context ?? "a device")…").lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                if chatModel.unreadReplies > 0 || chatModel.approval != nil {
+                    Text(chatModel.approval != nil ? "Review" : "\(chatModel.unreadReplies)")
+                        .font(.caption.bold()).foregroundStyle(MobileLensStyle.green)
                 }
-            }.padding(4).glassEffect(.regular, in: .capsule)
-
-        }.frame(maxWidth: 520).padding(.horizontal, 14).padding(.bottom, 2).frame(maxWidth: .infinity)
-    }
-    private func symbol(_ item: MobileHome) -> String {
-        switch item { case .home: "house"; case .devices: "cpu"; case .data: "cylinder.split.1x2"; case .activity: "clock" }
+            }.font(.subheadline).padding(.horizontal, 16).frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(.rect)
+        }.buttonStyle(.plain).accessibilityIdentifier("lens.chat")
     }
 }
 

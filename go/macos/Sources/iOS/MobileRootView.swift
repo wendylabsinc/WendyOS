@@ -79,17 +79,15 @@ struct MobileRootView: View {
     }
 
     private var tabs: some View {
-        VStack(spacing: 0) {
-            tabContent
-            MobileLensBar(tab: $homeTab, chatModel: model.deviceChat, context: model.selectedDeviceReady ? model.connected?.title : nil, chat: { showingChat = true })
-        }
-        .background(MobileLensStyle.background)
-        .tint(MobileLensStyle.accent)
+        tabContent
+            .tabViewBottomAccessory {
+                MobileLensChatAccessory(chatModel: model.deviceChat,
+                                        context: model.selectedDeviceReady ? model.connected?.title : nil,
+                                        chat: { showingChat = true })
+            }
+            .tint(MobileLensStyle.accent)
     }
 
-    // Reserve the bars’ actual height outside the tab/navigation containers.
-    // An inset on TabView can be lost by its nested NavigationSplitView/Form,
-    // leaving their final rows behind the floating controls.
     private var tabContent: some View {
         TabView(selection: $homeTab) {
             NavigationStack(path: $homePath) {
@@ -103,21 +101,20 @@ struct MobileRootView: View {
                             MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
                         }
                     }
-            }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.home)
-            deviceBrowser.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.devices)
+            }.tabItem { Label("Home", systemImage: "house") }.tag(MobileHome.home)
+            deviceBrowser.tabItem { Label("Devices", systemImage: "cpu") }.tag(MobileHome.devices)
             NavigationStack {
                 MobileLensData(model: model, isVisible: homeTab == .data, picker: $recordingPicker)
                     .id(model.mobileCloudSelectionKey)
                     .toolbar { launcherButton }
-            }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.data)
+            }.tabItem { Label("Data", systemImage: "cylinder.split.1x2") }.tag(MobileHome.data)
             NavigationStack {
                 MobileDeviceActivity(model: model, isVisible: homeTab == .activity, segment: $activitySegment, select: select)
                     .id(model.mobileCloudSelectionKey)
                     .background(MobileLensStyle.background)
                     .toolbar { launcherButton }
-            }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.activity)
+            }.tabItem { Label("Activity", systemImage: "clock") }.tag(MobileHome.activity)
         }
-        .toolbarVisibility(.hidden, for: .tabBar)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

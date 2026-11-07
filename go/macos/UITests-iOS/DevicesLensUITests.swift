@@ -104,15 +104,15 @@ final class DevicesLensUITests: XCTestCase {
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
-        if !app.buttons["lens.tab.Devices"].waitForExistence(timeout: 3) {
+        if !app.tabBars.buttons["Devices"].waitForExistence(timeout: 3) {
             let open = app.buttons["lens.open.Devices"]
             XCTAssertTrue(open.waitForExistence(timeout: 15))
             open.tap()
         }
-        XCTAssertTrue(app.buttons["lens.tab.Devices"].waitForExistence(timeout: 15))
-        app.buttons["lens.tab.Devices"].tap()
+        XCTAssertTrue(app.tabBars.buttons["Devices"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["Devices"].tap()
         _ = selectInventoryRow("Devices UI QA")
-        let settings = app.buttons["device.segment.Settings"]
+        let settings = app.segmentedControls["device.sections"].buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30))
         settings.tap()
         let logs = app.buttons["device.settings.Logs"]
@@ -127,7 +127,7 @@ final class DevicesLensUITests: XCTestCase {
         logs.tap()
         XCTAssertTrue(app.navigationBars["Logs"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.firstMatch.tap()
-        app.buttons["device.segment.Apps"].tap()
+        app.segmentedControls["device.sections"].buttons["Apps"].tap()
         let deploy = app.buttons.containing(.staticText, identifier: "Deploy an app").firstMatch
         for _ in 0..<6 {
             if deploy.exists && deploy.isHittable && deploy.frame.maxY <= chat.frame.minY { break }
@@ -145,7 +145,7 @@ final class DevicesLensUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CLOUD_CHAT_FIXTURE"] == "1", "Requires local device fixture; no cloud API calls")
         launch()
         _ = openDevice("Devices UI QA", source: "local")
-        XCTAssertTrue(app.buttons["device.segment.Cameras"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.segmentedControls["device.sections"].buttons["Cameras"].waitForExistence(timeout: 30))
         app.buttons["lens.chat"].tap()
         XCTAssertTrue(app.buttons["Change device"].waitForExistence(timeout: 5))
         let inference = app.segmentedControls["chat.inference"]
@@ -171,8 +171,8 @@ final class DevicesLensUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CAMERAS_FIXTURE"] == "1", "Requires local Cameras fixture")
         launch()
         _ = openDevice("Devices UI QA", source: "local")
-        XCTAssertTrue(app.buttons["device.segment.Cameras"].waitForExistence(timeout: 30))
-        app.buttons["device.segment.Cameras"].tap()
+        XCTAssertTrue(app.segmentedControls["device.sections"].buttons["Cameras"].waitForExistence(timeout: 30))
+        app.segmentedControls["device.sections"].buttons["Cameras"].tap()
         XCTAssertTrue(app.staticTexts["640 × 480"].firstMatch.waitForExistence(timeout: 30))
         capture("Camera tiles")
         app.buttons["Full screen QA Camera"].tap()
@@ -202,7 +202,7 @@ final class DevicesLensUITests: XCTestCase {
             throw XCTSkip("Requires the local Activity fixture.")
         }
         launch()
-        app.buttons["lens.tab.Activity"].tap()
+        app.tabBars.buttons["Activity"].tap()
         let preview = app.buttons["Play QA doorway"].firstMatch
         XCTAssertTrue(preview.waitForExistence(timeout: 60))
         preview.tap()
@@ -236,8 +236,8 @@ final class DevicesLensUITests: XCTestCase {
                 XCUIDevice.shared.press(.home)
                 app.activate()
                 XCTAssertTrue(inventory.waitForExistence(timeout: 10))
-                app.buttons["lens.tab.Activity"].tap()
-                app.buttons["lens.tab.Home"].tap()
+                app.tabBars.buttons["Activity"].tap()
+                app.tabBars.buttons["Home"].tap()
                 XCTAssertTrue(inventory.waitForExistence(timeout: 10),
                               "Returning to Home should restore the local list.")
             }
@@ -314,16 +314,16 @@ final class DevicesLensUITests: XCTestCase {
     func testDevicesTabsAndGeneralHome() {
         launch(captureLauncher: true)
         for tab in ["Home", "Devices", "Data", "Activity"] {
-            XCTAssertTrue(app.buttons["lens.tab." + tab].exists)
+            XCTAssertTrue(app.tabBars.buttons[tab].exists)
         }
-        XCTAssertFalse(app.buttons["lens.tab.Sites"].exists)
-        XCTAssertFalse(app.tabBars.firstMatch.exists, "The lens should expose only its four-item navigation bar.")
-        app.buttons["lens.tab.Devices"].tap()
+        XCTAssertFalse(app.tabBars.buttons["Sites"].exists)
+        XCTAssertEqual(app.tabBars.count, 1, "The lens should expose one native tab bar.")
+        app.tabBars.buttons["Devices"].tap()
         let picker = app.segmentedControls.firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         picker.buttons["Mesh"].tap()
         picker.buttons["List"].tap()
-        app.buttons["lens.tab.Data"].tap()
+        app.tabBars.buttons["Data"].tap()
         XCTAssertTrue(app.navigationBars["Data"].waitForExistence(timeout: 5))
         app.buttons["lens.chat"].tap()
         XCTAssertTrue(app.buttons["Change device"].waitForExistence(timeout: 5))
@@ -505,7 +505,7 @@ final class DevicesLensUITests: XCTestCase {
         app.buttons["app.logs"].tap()
         try await verifyLiveTemplateLog(at: lanPage)
 
-        app.buttons["lens.tab.Devices"].tap()
+        app.tabBars.buttons["Devices"].tap()
         _ = selectInventoryRow(cloud)
         XCTAssertTrue(app.navigationBars[cloud].waitForExistence(timeout: 30))
         openInstalledApp(template, badge: "STOPPED")
@@ -527,7 +527,7 @@ final class DevicesLensUITests: XCTestCase {
         _ = try await fetch(lanPage)
         XCTAssertFalse(logRecord(containing: "Received request: GET /").waitForExistence(timeout: 3))
 
-        app.buttons["lens.tab.Home"].tap()
+        app.tabBars.buttons["Home"].tap()
         try await verifyLiveTemplateLog(at: lanPage)
         do {
             _ = try await fetch(tunnel)
@@ -553,7 +553,7 @@ final class DevicesLensUITests: XCTestCase {
         }
         for _ in 0..<18 {
             let top = app.navigationBars.firstMatch.frame.maxY
-            let bottom = app.buttons["lens.tab.Home"].frame.minY
+            let bottom = app.tabBars.buttons["Home"].frame.minY
             if row.exists && row.isHittable && row.frame.midY > top && row.frame.midY < bottom { break }
             if row.exists && !row.frame.isEmpty && row.frame.midY < top { scroll.swipeDown() } else { scroll.swipeUp() }
         }

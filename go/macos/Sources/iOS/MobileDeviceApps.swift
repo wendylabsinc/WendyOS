@@ -139,25 +139,16 @@ struct MobileDeviceView: View {
                 Button("Logs", action: openLogs).buttonStyle(LensPillStyle()).accessibilityIdentifier("devices.detail.logs")
                 Button(updateTitle) { tool = .update }.buttonStyle(LensPillStyle(primary: true))
             }
-            ViewThatFits(in: .horizontal) {
-                segments
-                ScrollView(.horizontal) { segments }.scrollIndicators(.hidden)
-            }
+            segments
         }
     }
     private var segments: some View {
-        HStack(spacing: 0) {
+        Picker("Device section", selection: $segment) {
             ForEach(DeviceSegment.allCases, id: \.self) { item in
-                Button { segment = item } label: {
-                    Text(item.rawValue).font(.caption.weight(.semibold)).lineLimit(1).fixedSize()
-                        .padding(.horizontal, 5).frame(maxWidth: .infinity, minHeight: 32)
-                        .foregroundStyle(item == segment ? Color.white : .primary)
-                        .background(item == segment ? MobileLensStyle.green : .clear, in: .capsule)
-                        .frame(minHeight: 44).contentShape(.rect)
-                }.buttonStyle(.plain).accessibilityAddTraits(item == segment ? .isSelected : [])
-                    .accessibilityIdentifier("device.segment." + item.rawValue)
+                Text(item.rawValue).tag(item)
             }
-        }.padding(.horizontal, 2).background { Capsule().fill(.quaternary).frame(height: 36) }
+        }.pickerStyle(.segmented)
+            .accessibilityIdentifier("device.sections")
     }
 }
 
