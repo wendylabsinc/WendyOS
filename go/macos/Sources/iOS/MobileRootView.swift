@@ -482,6 +482,7 @@ private struct MobileInventorySection: View {
 }
 
 private struct MobileAccountsView: View {
+    @AppStorage("wendy.appearance") private var appearance = MobileAppearance.system.rawValue
     @AppStorage("wendy.primaryLens") private var primaryLens = MobileLens.devices.rawValue
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
@@ -490,6 +491,7 @@ private struct MobileAccountsView: View {
 
     var body: some View {
         actionContent.task { await actions.run() }
+            .preferredColorScheme((MobileAppearance(rawValue: appearance) ?? .system).colorScheme)
     }
 
     @ViewBuilder private var actionContent: some View {
@@ -532,6 +534,17 @@ private struct MobileAccountsView: View {
                     }
                     NavigationLink { CloudManagementView(requestSignIn: { signIn(false) }).navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
                     NavigationLink { MobileVPNView(model: model, vpn: model.vpn) } label: { Label("Connection settings", systemImage: "network") }
+                }
+                Section {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(MobileAppearance.allCases, id: \.rawValue) { mode in
+                            Text(mode.rawValue).tag(mode.rawValue)
+                        }
+                    }.pickerStyle(.segmented).accessibilityIdentifier("settings.appearance")
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("System follows your iPhone. Light or Dark keeps Wendy in that appearance.")
                 }
                 if accounts.isEmpty && model.account?.signedIn != true {
                     Text("Add an account to access your fleet and organization.")
