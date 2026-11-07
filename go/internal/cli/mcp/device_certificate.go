@@ -199,14 +199,18 @@ func isSimulatorConnection(conn *grpcclient.AgentConnection, target commandTarge
 // expiredDisconnectedCertificate reports the NotAfter of a direct mTLS
 // connection's certificate when it has expired and the channel is not Ready.
 func expiredDisconnectedCertificate(conn *grpcclient.AgentConnection, now time.Time) (time.Time, bool) {
-	if conn == nil || conn.Conn == nil || !conn.IsMTLS || conn.IsSessionProxy || conn.CertInfo == nil {
+	if conn == nil || !conn.IsMTLS || conn.IsSessionProxy || conn.CertInfo == nil {
+		return time.Time{}, false
+	}
+	state, ok := conn.ChannelState()
+	if !ok {
 		return time.Time{}, false
 	}
 	leaves, _ := certs.ParseCertsFromPEM([]byte(conn.CertInfo.PemCertificate))
 	if len(leaves) == 0 || !now.After(leaves[0].NotAfter) {
 		return time.Time{}, false
 	}
-	if conn.Conn.GetState() == connectivity.Ready {
+	if state == connectivity.Ready {
 		return time.Time{}, false
 	}
 	return leaves[0].NotAfter, true

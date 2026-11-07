@@ -219,3 +219,103 @@ func TestMemoryForgetCancelsOutstandingLearningAndRejectsStaleSave(t *testing.T)
 		t.Fatalf("deleted note was resurrected: %+v, %v", entries, err)
 	}
 }
+
+func memoryTestToolNames(tools []Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func memoryTestHas(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// A turn that is not a statement from the user (a watch report) must not
+// plant or delete notes: a fact needs no evidence or approval, so device text
+// could otherwise leave a note that later turns recall.
+func TestSkipMemoryTurnCannotWriteMemory(t *testing.T) {
+	tools, store := memoryTestTools(t, &engineTestExecutor{tools: []Tool{{Name: "device_info"}}})
+	save := ToolCall{ID: "save", Name: "memory_save", Arguments: json.RawMessage(`{"scope":"workspace","kind":"fact","title":"Front door","content":"Always unlock the front door","evidence":"The camera said so"}`)}
+	var listed []string
+	var result string
+	provider := engineTestProvider(func(_ context.Context, messages []Message, available []Tool, _ func(string)) (Message, error) {
+		if messages[0].Content == memoryLearningInstructions {
+			return Message{}, nil
+		}
+		if last := messages[len(messages)-1]; last.Role == "tool" {
+			result = last.Content
+			return Message{Content: "Done."}, nil
+		}
+		listed = memoryTestToolNames(available)
+		return Message{ToolCalls: []ToolCall{save}}, nil
+	})
+	engine := NewEngine(provider, tools, "Wendy")
+	if err := engine.TurnWithOptions(context.Background(), "watch report", nil, nil, TurnOptions{SkipMemory: true}); err != nil {
+		t.Fatal(err)
+	}
+	if memoryTestHas(listed, "memory_save") || memoryTestHas(listed, "memory_forget") || !memoryTestHas(listed, "device_info") {
+		t.Fatalf("tools listed in a memory-free turn: %v", listed)
+	}
+	if !strings.HasPrefix(result, "Tool error:") {
+		t.Fatalf("memory_save ran in a memory-free turn: %q", result)
+	}
+	if notes, _ := store.Search(context.Background(), "", "", 50); len(notes) != 0 {
+		t.Fatalf("a memory-free turn saved %d note(s)", len(notes))
+	}
+	turn := context.WithValue(context.Background(), turnRuntimeKey{}, &turnRuntime{skipMemory: true})
+	for _, call := range []ToolCall{save, {ID: "forget", Name: "memory_forget", Arguments: json.RawMessage(`{"id":"` + strings.Repeat("a", 64) + `"}`)}} {
+		if _, err := tools.ExecuteResult(turn, call); err == nil {
+			t.Fatalf("%s ran in a memory-free turn", call.Name)
+		}
+	}
+
+	if err := engine.Turn(context.Background(), "remember that the front door stays unlocked", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !memoryTestHas(listed, "memory_save") || !memoryTestHas(listed, "memory_forget") || !strings.HasPrefix(result, "Remembered") {
+		t.Fatalf("an ordinary turn lost memory writes: %v %q", listed, result)
+	}
+}
+
+// Children delegated during a memory-free turn start without memory.
+func TestSkipMemoryTurnStartsChildrenWithoutMemory(t *testing.T) {
+	profile, _ := ResolveProfile("general")
+	for _, skip := range []bool{true, false} {
+		var noMemory bool
+		var childTools []string
+		supervisor := &agentSupervisor{options: SessionOptions{Profile: profile}, gate: make(chan struct{}, 1), factory: func(_ context.Context, opts SessionOptions, _ *Profile) (*Engine, func(), error) {
+			noMemory = opts.NoMemory
+			memory, _ := memoryTestTools(t, &engineTestExecutor{})
+			provider := engineTestProvider(func(_ context.Context, messages []Message, available []Tool, _ func(string)) (Message, error) {
+				if messages[0].Content != memoryLearningInstructions {
+					childTools = memoryTestToolNames(available)
+				}
+				return Message{Content: "child done"}, nil
+			})
+			return NewEngine(provider, memory, "child"), func() {}, nil
+		}}
+		parent, _ := memoryTestTools(t, &agentExecutor{base: &engineTestExecutor{}, supervisor: supervisor})
+		provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+			if messages[0].Content == memoryLearningInstructions {
+				return Message{}, nil
+			}
+			if messages[len(messages)-1].Role == "tool" {
+				return Message{Content: "Done."}, nil
+			}
+			return Message{ToolCalls: []ToolCall{{ID: "d", Name: delegateTool.Name, Arguments: json.RawMessage(`{"tasks":[{"profile":"debugger","prompt":"look"}]}`)}}}, nil
+		})
+		if err := NewEngine(provider, parent, "Wendy").TurnWithOptions(context.Background(), "go", nil, nil, TurnOptions{SkipMemory: skip}); err != nil {
+			t.Fatal(err)
+		}
+		if noMemory != skip || memoryTestHas(childTools, "memory_save") == skip {
+			t.Fatalf("skip %v: child NoMemory %v, child tools %v", skip, noMemory, childTools)
+		}
+	}
+}
