@@ -4,7 +4,7 @@
 
 After confirming Go2 localization and successfully navigating, the operator observed that the robot's position matches the room but the LiDAR geometry is rotated relative to the captured room. Live red obstacle footprints and accumulated scan points must be checked independently.
 
-Navigation destination selection is fixed in #2723. This follow-up tracks the rotation mismatch; it does not yet change alignment or robot control.
+Navigation destination selection is fixed in #2723. This follow-up tracks the rotation mismatch. It also removes implicit SceneKit pose animation after a separate report of the Go2 asset flickering around zero heading. The rendering change does not alter alignment or robot control.
 
 ## Current code path
 

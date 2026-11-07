@@ -447,9 +447,11 @@ private struct SceneSurface {
             robotRoot.isHidden = state.position == nil
             if let position = state.position {
                 SCNTransaction.begin()
-                SCNTransaction.animationDuration = state.fresh && lastRobot?.fresh == true ? 0.1 : 0
+                // Telemetry already supplies sampled poses. Implicit Euler-angle
+                // interpolation can cross the long arc when yaw wraps.
+                SCNTransaction.disableActions = true
                 robotRoot.position = SCNVector3(position.x, position.y, position.z)
-                robotRoot.eulerAngles = SCNVector3(0, state.yaw, 0)
+                robotRoot.simdOrientation = Go2Model.heading(state.yaw)
                 robotModel.opacity = state.fresh ? 1 : 0.45
                 Go2Model.pose(robotModel, joints: state.joints)
                 SCNTransaction.commit()
