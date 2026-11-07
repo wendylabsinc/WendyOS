@@ -1,0 +1,17 @@
+# An inference runs one detector on cameras and emits an event when
+# something it looks for arrives. Model fields are the same as a campaign's
+# inline inference block.
+kind: inference
+version: 1
+name: front-door
+sources:
+  # Any camera selector a campaign accepts. Run `wendy data sources` for ids.
+  - camera: "*"
+model: ustc-community/dfine-nano-coco
+revision: 066438d3d8f0da137a37b38fdf3368fd4afceced
+labels: [person]
+threshold: 0.5
+rate: 2
+# The event defaults to the document's name; collections trigger on it.
+clear_after: 5s
+cooldown: 30s

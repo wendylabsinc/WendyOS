@@ -139,6 +139,12 @@ func validateDeploymentEnrollment(conn *grpcclient.AgentConnection, remote *peer
 	return fmt.Errorf("verified device identity unavailable for Cloud registration")
 }
 
+// managedAppName is the Cloud name of an app id: a campaign's or watch's own
+// name, without the id's kind prefix, and any other id unchanged.
+func managedAppName(id string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(id, data.CampaignAppPrefix), data.WatchAppPrefix)
+}
+
 func registerAppsWithCloudV2(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, device *agentpb.ProvisionedResponse, appIDs []string) error {
 	identity, err := certs.ParsePrincipal(device.GetPrincipalUri())
 	if err != nil || identity.EntityType != certs.EntityAsset || identity.TenantUUID == "" {
@@ -149,7 +155,7 @@ func registerAppsWithCloudV2(ctx context.Context, conn grpc.ClientConnInterface,
 	for _, id := range appIDs {
 		app, err := client.GetApp(ctx, &cloudpb.GetAppRequest{Id: id, OrganizationId: tenant})
 		if status.Code(err) == codes.NotFound {
-			name := strings.TrimPrefix(id, data.CampaignAppPrefix)
+			name := managedAppName(id)
 			app = new(cloudpb.App)
 			err = cloudrequest.Invoke(ctx, conn, auth, cloudpb.AppService_UpsertApp_FullMethodName,
 				&cloudpb.UpsertAppRequest{Id: id, OrganizationId: tenant, Name: &name}, app)

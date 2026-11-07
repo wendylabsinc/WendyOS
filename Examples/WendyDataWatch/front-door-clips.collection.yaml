@@ -1,0 +1,20 @@
+# Keeping what the inference sees is a collection that triggers on its
+# event. A watch never stores anything itself.
+kind: collection
+version: 1
+name: front-door-clips
+sources:
+  - camera: "*"
+    capture:
+      mode: continuous
+capture:
+  buffer: 5s
+  after_trigger: 10s
+  triggers:
+    - event: front-door
+upload:
+  when: wifi
+retention:
+  local_quota: 2GiB
+export:
+  annotation: cvat

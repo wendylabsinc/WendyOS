@@ -196,7 +196,7 @@ func TestInferenceLogsStartFailuresOnceAndExitsWithTheirStderr(t *testing.T) {
 			campaign, err := service.manager.Campaign("people-all-cameras")
 			if err == nil {
 				select {
-				case exitStatus <- service.inference.snapshot(campaign.Name, campaign.Revision):
+				case exitStatus <- service.inference.snapshot(campaignJobKey(campaign.Name), campaign.Revision):
 				default:
 				}
 			}

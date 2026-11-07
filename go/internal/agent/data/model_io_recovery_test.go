@@ -164,3 +164,44 @@ func TestInterruptedEpisodeWithoutModelInputsStaysSilent(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordModelInputForReachesOnlyTheAudience guards the audience filter: a
+// non-nil audience writes ledger lines only to the named episodes.
+func TestRecordModelInputForReachesOnlyTheAudience(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, name := range []string{"named", "other"} {
+		manifest, err := manager.Start(StartOptions{Sources: []string{"applications"}, Trigger: EpisodeTrigger{Reason: "event:x", CampaignName: name}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = manifest.ID
+	}
+	input := ModelInput{AppID: "sh.wendy.inference.x", Model: "detector", SourceID: "applications", SampleID: 1, PayloadBytes: 8}
+	if err := manager.RecordModelInputFor(input, map[string]bool{"named": true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RecordModelInputFor(input, map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	ledger := func(name string) bool {
+		_, err := os.Stat(filepath.Join(root, ids[name]+".partial", ModelInputLedgerFile))
+		return err == nil
+	}
+	if !ledger("named") {
+		t.Fatal("the named episode has no ledger")
+	}
+	if ledger("other") {
+		t.Fatal("an episode outside the audience received a ledger line")
+	}
+	if err := manager.RecordModelInput(input); err != nil {
+		t.Fatal(err)
+	}
+	if !ledger("other") {
+		t.Fatal("a nil audience must reach every open episode")
+	}
+}

@@ -184,7 +184,7 @@ func TestAgentInferenceRecordsNormalisedBoxesAndPictureSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(8 * time.Second)
-	for service.inference.snapshot(campaign.Name, campaign.Revision).Sources[input.SourceID] != "frame handled" {
+	for service.inference.snapshot(campaignJobKey(campaign.Name), campaign.Revision).Sources[input.SourceID] != "frame handled" {
 		if time.Now().After(deadline) {
 			t.Fatal("the job never handled the frame")
 		}

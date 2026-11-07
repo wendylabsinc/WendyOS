@@ -1,0 +1,14 @@
+# A watch delivers an inference's arrivals as notifications. Every arrival
+# lands in the device's notification journal; these destinations are extra.
+kind: watch
+version: 1
+name: front-door
+on:
+  inference: front-door
+notify:
+  # Wendy Cloud push. Enroll the device and enable the watch:front-door
+  # app's notification grant in Cloud first.
+  - cloud
+# A client that wants the watch gone when it stops renewing adds a lease,
+# from 15s to 10m:
+# lease: 60s

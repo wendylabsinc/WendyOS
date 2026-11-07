@@ -1,12 +1,13 @@
 ---
 name: wendy-data
-description: Create, deploy, inspect, and troubleshoot Wendy Data campaigns and episodes, or add application recording streams, event triggers, model predictions, and campaign notifications. Use for Wendy data capture and retrieval; use app lifecycle guidance for ordinary logs and OpenTelemetry.
+description: Create, deploy, inspect, and troubleshoot Wendy Data campaigns, inference and watch documents, and episodes, or add application recording streams, event triggers, model predictions, and notifications. Use for Wendy data capture and retrieval; use app lifecycle guidance for ordinary logs and OpenTelemetry.
 ---
 
 # Wendy Data
 
 Wendy Data collects device-local episodes on a shared `CLOCK_BOOTTIME` timeline.
 Campaigns arm event or model-uncertainty triggers and record a bounded window.
+Inference documents emit detector events; watch documents notify on them.
 Application streams can also retain durable records outside episodes.
 
 ## Choose the available interface
@@ -25,7 +26,7 @@ notifications, without a depth camera or custom app. Check source health,
 inference readiness, and notification permission. Deployment or a grant alone
 does not verify detection or delivery.
 
-With a terminal, check `wendy data --help` and relevant subcommand help.
+With a terminal, check `wendy data --help` and subcommand help.
 Use explicit `--device <selector>` on device commands.
 Local CLI commands reconnect independently of an MCP session, so preserve the
 connected target and transport instead of relying on the default device.
@@ -35,11 +36,9 @@ Inspect its actual tool list. General campaign/episode management uses the CLI,
 and `wendy_tools` has no `data` group. Do not invent tool names. A skill update
 does not update a running server.
 
-Use `wendy data` when a local terminal is available. Without one, prepare the
-files, explain the missing execution access, and provide exact operator
-commands. App deployment tools deploy apps; they do not deploy arbitrary
-campaign YAML. Do not claim a campaign was deployed from a file write or an app
-deployment.
+Without a terminal, prepare the files, explain the missing execution access,
+and provide exact operator commands. A file write or an app deployment does not deploy campaign YAML; do
+not claim it did.
 
 ## Select the data
 
@@ -50,20 +49,21 @@ requested measurements; preserve returned IDs.
 | Data | Campaign selection and limits |
 | --- | --- |
 | Video | `camera: <selector>` for a USB, CSI, or registered IP camera. A stable ID is preferable to an ambiguous name. `camera: "*"` includes all healthy cameras and cameras discovered later. |
-| Audio | `audio: <selector>` for a discovered capture device. Select the real microphone rather than an internal audio-routing channel. Copy its stable ID, such as `audio:alsa_input.usb-…`; the old `audio:<number>` form is deprecated and can change after a reboot or replug. |
+| Audio | `audio: <selector>` for a discovered capture device. Select the real microphone rather than an internal audio-routing channel. Copy its stable ID, such as `audio:alsa_input.usb-…`; the old `audio:<number>` form can change after a reboot. |
 | ROS 2 | `ros2: /topic` for data already published as ROS messages, such as LiDAR, odometry, IMU, GPS, or joint state. A full per-topic source ID selects one graph; a domain source ID captures the whole domain. |
-| Device health | On Linux, `telemetry: true` captures uptime, 1/5/15-minute system load, and total/free RAM at 1 Hz. It does not supply arbitrary hardware measurements. |
+| Device health | On Linux, `telemetry: true` captures uptime, 1/5/15-minute system load, and total/free RAM at 1 Hz. |
 | Application data | Campaigns automatically include application records. Apps with `episode-write` can contribute events, predictions, images, custom bytes, and time series. |
 
 Temperature, vibration, current, production counts, or other measurements need
 a ROS publisher or an application stream. Naming a measurement in YAML does
 not add a sensor adapter. Use actual sample timestamps and declare their clock
-and units; receipt time alone does not establish when a measurement occurred.
+and units.
 
 ## Follow the requested workflow
 
-- For campaign YAML, one-off recording, deployment, disarm/remove, inference,
-  notifications, and episode retrieval, read [campaigns.md](references/campaigns.md).
+- For campaign YAML, inference and watch documents, one-off recording,
+  deployment, disarm/remove, notifications, and episode retrieval, read
+  [campaigns.md](references/campaigns.md).
 - For application events, model input references, durable records, custom
   measurements, and `export-stream`, read [application-streams.md](references/application-streams.md).
 - If an app must be built or deployed, use the available `wendy-app-lifecycle`
