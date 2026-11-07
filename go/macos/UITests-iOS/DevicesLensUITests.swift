@@ -18,6 +18,35 @@ final class DevicesLensUITests: XCTestCase {
         devices.tap()
     }
 
+    func testCameraFullscreenAndSupportedControls() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CAMERAS_FIXTURE"] == "1", "Requires local Cameras fixture")
+        launch()
+        _ = openDevice("Devices UI QA", source: "local")
+        XCTAssertTrue(app.buttons["device.segment.Cameras"].waitForExistence(timeout: 30))
+        app.buttons["device.segment.Cameras"].tap()
+        XCTAssertTrue(app.staticTexts["640 × 480"].firstMatch.waitForExistence(timeout: 30))
+        capture("Camera tiles")
+        app.buttons["Full screen QA Camera"].tap()
+        XCTAssertTrue(app.buttons["Close full screen"].waitForExistence(timeout: 10))
+        app.buttons["Pause QA Camera"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Paused"].firstMatch.waitForExistence(timeout: 10))
+        capture("Camera full screen paused")
+        app.buttons["Play QA Camera"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["640 × 480"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["Close full screen"].tap()
+        app.buttons["Settings for QA Camera"].tap()
+        let gain = app.textFields["Gain"]
+        XCTAssertTrue(gain.waitForExistence(timeout: 10))
+        gain.tap()
+        gain.typeText(XCUIKeyboardKey.delete.rawValue + "8")
+        app.buttons["Apply"].tap()
+        XCTAssertTrue(app.staticTexts["Current 8"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Read only"].exists)
+        capture("Camera supported settings")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["Full screen QA Camera"].waitForExistence(timeout: 10))
+    }
+
     // Run with UITestSupport/appfixture and TEST_RUNNER_WENDY_UI_ACTIVITY_FIXTURE=1.
     func testActivityClipSelectionArchiveAndRestore() throws {
         guard ProcessInfo.processInfo.environment["WENDY_UI_ACTIVITY_FIXTURE"] == "1" else {

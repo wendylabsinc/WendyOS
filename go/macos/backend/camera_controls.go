@@ -3,6 +3,8 @@ package backend
 import (
 	"errors"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // CameraControls uses the selected session and inventory identity so a stale
@@ -17,6 +19,9 @@ func (b *Backend) CameraControls(session uint64, camera uint32, stableID string,
 		return nil, err
 	}
 	if b.lite != nil {
+		if name != "" {
+			return nil, errors.New("this device does not expose adjustable camera controls")
+		}
 		return nil, nil
 	}
 	device := b.cameraDevices[camera]
@@ -49,6 +54,9 @@ func (b *Backend) CameraControls(session uint64, camera uint32, stableID string,
 		}
 	}
 	response, err := conn.VideoService.GetCameraControls(ctx, &pb.GetCameraControlsRequest{DeviceId: camera})
+	if name == "" && status.Code(err) == codes.Unimplemented {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

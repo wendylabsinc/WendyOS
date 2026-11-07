@@ -158,6 +158,7 @@ func (d *fixtureDevice) setOnline(online bool) (int, error) {
 		d.generation++
 		server := grpc.NewServer()
 		v2.RegisterDataServiceServer(server, activityService{})
+		pb.RegisterWendyVideoServiceServer(server, &cameraService{})
 		pb.RegisterWendyContainerServiceServer(server, d.apps)
 		pb.RegisterWendyAgentServiceServer(server, deviceService{})
 		pb.RegisterWendyTelemetryServiceServer(server, telemetry{generation: d.generation})
