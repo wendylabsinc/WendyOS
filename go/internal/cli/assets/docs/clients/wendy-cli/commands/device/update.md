@@ -25,6 +25,45 @@ On success the reported version is included in the message:
 Agent updated successfully (agent reports 2026.07.01-223311).
 ```
 
+## Devices with the agent supervisor
+
+On WendyOS images that run the agent supervisor, a new agent runs on trial
+first. After the upload, the command waits until the supervisor approves or
+rejects it: usually about 15 seconds. A new agent that hangs can take up to about
+7 minutes to be rejected, because the device first gives it 3 minutes and then
+time to stop. If in its first
+3 minutes the agent keeps crashing, stops answering after a restart, or
+restarts the device more than once, the device still goes back to its previous
+agent. The command's own calls to the device are
+the "client reached it again" check the trial needs, so keep it running until
+it finishes. If the upload never reached the device, for example because it
+restarted during the upload, the command stops after about 30 seconds and asks
+you to run it again. If the supervisor rejects the agent, the device goes back to its
+previous agent, and the command exits non-zero with the reason:
+
+```
+the new agent failed its checks: <reason>; the device went back to agent <version> from <source>
+```
+
+The device can also refuse the new agent before switching to it, for example
+when the release predates the agent supervisor. Nothing restarts then. Without
+`--binary`, in text mode, the command says which agent the device kept and goes
+on to the OS update step. With `--binary`, or with `--json` (see below), it
+exits non-zero.
+
+Across an OS update the supervisor keeps an approved agent that is newer than
+the new image's agent (a dev build counts as newer than any release) and checks
+it again on the new OS; `--binary` is then not uploaded again. If
+the new image's agent is the same or newer, it replaces yours, and the command
+uploads your `--binary` again (see below), which starts a new trial.
+
+The device still updates its agent on its own once a day to the newest stable
+release (or to `WENDYOS_AGENT_VERSION` in `/etc/default/wendy-agent`). That
+agent goes through the same trial. If the device was connected to Wendy Cloud,
+the new agent must connect again before it is approved. Dev builds are never
+replaced automatically. While an automatic update
+is being checked, `wendy os update` asks you to retry in a few minutes.
+
 ## JSON output (`--json`)
 
 With `--json`, a successful agent update emits a single JSON object and the command returns without running the OS update step:
@@ -38,6 +77,17 @@ With `--json`, a successful agent update emits a single JSON object and the comm
 ```
 
 `version` is the agent version the device reported during verification. It is empty only if the agent reports no version.
+
+When the agent supervisor rejects the new agent, at its trial or at the check
+before it, the command exits non-zero after this object:
+
+```json
+{
+  "status": "rejected",
+  "message": "the new agent failed its checks: did not pass its checks within 3m0s; the device went back to agent 2026.10.29-210857 from the OS image",
+  "version": "2026.10.29-210857"
+}
+```
 
 When the device already runs the resolved release version, no upload happens and the object is instead:
 
@@ -118,7 +168,7 @@ On cloud-tunneled (asset) devices the command does not wait for the reboot and d
 
 ## `--binary` survives the OS update
 
-An OS update reboots into a new image that ships its own bundled agent, which would otherwise replace a `--binary` build. When `--binary` was provided and an OS update is applied, the command re-uploads the same binary after the device comes back online, so the development agent you asked for is what ends up running. (The auto-download path is not re-applied, to avoid downgrading the new image's bundled agent.) On cloud-tunneled devices the command does not wait for the reboot, so it prints instructions to re-run `device update --binary` once the device is back online.
+An OS update reboots into a new image that ships its own bundled agent, which would otherwise replace a `--binary` build. When `--binary` was provided and an OS update is applied, the command re-uploads the same binary after the device comes back online, so the development agent you asked for is what ends up running. (The auto-download path is not re-applied, to avoid downgrading the new image's bundled agent.) On cloud-tunneled devices the command does not wait for the reboot, so it prints instructions to re-run `device update --binary` once the device is back online; on a device with the agent supervisor, first check with `wendy device info` whether it kept your agent.
 
 The re-apply is verified the same way as the initial upload — by hash, which is what catches the failure this step exists for (the image's bundled agent still running instead of your binary):
 

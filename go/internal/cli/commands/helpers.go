@@ -3124,7 +3124,8 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	arch := resp.GetCpuArchitecture()
 	osName := resp.GetOs()
 
-	if err := performAgentUpdate(ctx, conn, osName, arch, false); err != nil {
+	sha, err := performAgentUpdate(ctx, conn, osName, arch, false)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
 		return conn, nil
 	}
@@ -3138,7 +3139,11 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 		return nil, fmt.Errorf("agent did not come back after update: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, " ready.\n")
-	return newConn, nil
+	verdictConn, err := confirmAgentOrContinue(ctx, newConn, sha, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	return verdictConn, nil
 }
 
 // checkAndOfferUpdateFn is a seam over checkAndOfferUpdate. It exists for tests
@@ -3148,16 +3153,17 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 var checkAndOfferUpdateFn = checkAndOfferUpdate
 
 // performAgentUpdate downloads the latest release for the given osName/arch and
-// uploads it to conn. Pass nightly=true to fetch the latest prerelease instead
-// of stable. The agent will restart after this returns successfully.
-func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, osName, arch string, nightly bool) error {
+// uploads it to conn, returning its sha256. Pass nightly=true to fetch the
+// latest prerelease instead of stable. The agent will restart after this
+// returns successfully.
+func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, osName, arch string, nightly bool) (string, error) {
 	if arch == "" {
-		return fmt.Errorf("device did not report CPU architecture")
+		return "", fmt.Errorf("device did not report CPU architecture")
 	}
 	fmt.Fprintf(os.Stderr, "Fetching agent for %s...\n", agentPlatformLabel(osName, arch))
 	binaryData, resolvedVer, source, err := resolveAgentArtifact(osName, arch, nightly)
 	if err != nil {
-		return fmt.Errorf("resolving agent binary: %w", err)
+		return "", fmt.Errorf("resolving agent binary: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Downloaded agent %s (from %s)\n", resolvedVer, source)
 
@@ -3165,7 +3171,7 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, o
 	sha256Hash := hex.EncodeToString(h[:])
 
 	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
-	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
+	return sha256Hash, deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
 }
 
 // waitForAgentRestart polls addr with connectWithAutoTLS until the agent answers
