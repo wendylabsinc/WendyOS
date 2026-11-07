@@ -146,3 +146,17 @@ A local quota does not provide a deletion deadline. Report advisory retention
 warnings. The current campaign state does not prove it was armed all night;
 historical arming coverage is unavailable unless independent recorded evidence
 establishes it. Never manufacture uptime or an expiration date.
+
+## Notification questions
+
+Use `device_data_notifications` for "was an alert sent?" and "why didn't I get
+one?" Read the campaign's current inference/notification errors and notify policy.
+Set `check_cloud_permission:true` when permission is relevant. Explain separately
+what the device recorded as intent, whether permission is currently enabled, and
+what is unknown about provider acceptance or phone receipt. Immediate detections
+and Cloud episode-committed notifications are different paths. An older agent
+that does not acknowledge the notification journal cannot answer this query.
+
+A journal entry is not a delivery receipt. An empty or truncated journal cannot
+prove no notification occurred. For the phone's receiving setup, offer the native
+notifications card; do not enable a grant unless the user explicitly requests it.
