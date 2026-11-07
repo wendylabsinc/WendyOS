@@ -457,6 +457,7 @@ class RunPass(unittest.TestCase):
         self.assertEqual(info["tokens_per_second"], 20.0)
         self.assertEqual(info["cli_commit"], "c" * 40)
         self.assertEqual(info["app_id"], sc.BENCHMARK_APP)
+        self.assertEqual(info["benchmark_paths"], {"files": [str(od.HERE), str(self.results)], "real_cli": "/bin/true"})
         self.assertEqual(info["os_version"], "0.20")
         self.assertIn("-c 65536", info["server"])
         self.assertIn("wendy chat sent 79 tools on its first request, before wendy_tools was called", info["notes"])

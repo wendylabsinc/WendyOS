@@ -33,6 +33,16 @@ ROUNDS = re.compile(r"stopped after \d+ model rounds")
 CHECK_COMMANDS = {"doctor", "json validate"}  # a nonzero exit is their answer: the checks found a problem
 USAGE_EXIT = 2
 FINDING_KEYS = ("section", "item", "task", "expected", "detail", "excerpt", "trace_path")
+# The model shares the container with the harness, so nothing stops it reading the scenarios, the fixtures, the
+# saved passes, or calling the real CLI the recording wrapper runs. The Dockerfile's layout, unless on_device.json
+# names other paths.
+BENCHMARK_FILES = ("/opt/harness", "/results")
+REAL_CLI = "/usr/local/bin/wendy"
+
+
+def _names_path(command, path):
+    """`command` names `path` itself or something under it, not a longer name or a URL ending the same way."""
+    return re.search(rf"(?<![\w.:/-]){re.escape(path.rstrip('/'))}(?![\w.-])", command) is not None
 
 
 def scored_share(rows):
@@ -172,7 +182,7 @@ def _cleanup_detail(row):
     return "cleanup did not finish cleanly"
 
 
-def classify(row, directory, tool_names, guards, previous=None):
+def classify(row, directory, tool_names, guards, previous=None, benchmark_files=BENCHMARK_FILES, real_cli=REAL_CLI):
     """The findings for one attempt. Limits the model didn't cause (context, server, interruption, a local
     timeout) get no model finding. `previous` is the row before this one, for the restart check."""
     adir = attempt_dir(directory, row)
@@ -287,6 +297,12 @@ def classify(row, directory, tool_names, guards, previous=None):
                     add("model", "Bad arguments", f"{e.get('name')} [{refused}]", i)
             elif _error_code(text) != "COMMAND_FAILED":  # that one is the model's own command exiting nonzero
                 add("tool", "Tool error", f"{e.get('name')} [{_error_code(text)}]", i)
+    for paths, detail in ((benchmark_files, f"read the harness's own files ({', '.join(benchmark_files)})"),
+                          ((real_cli,), f"went past the recording wrapper to the real CLI at {real_cli}")):
+        hit = next((i for i, e in enumerate(trace) if e.get("channel") == "shell"
+                    and any(_names_path(str(e.get("arguments")), p) for p in paths if p)), None)
+        if blame and hit is not None:  # once per attempt: the excerpt shows the first time
+            add("model", "Read the benchmark", detail, hit)
     for record in cli_records:
         code = record.get("exit_code")
         if code in (None, 0) or record.get("canned"):
@@ -360,6 +376,9 @@ def load_run(directory):
     tool_names = [t.get("name") for t in listed if isinstance(t, dict)] if isinstance(listed, list) else []
     tool_names = tool_names or None  # unreadable or empty: any name would look made up
     guards = sc.guard_matchers(info.get("app_id") or sc.BENCHMARK_APP)
+    paths = _dict(info.get("benchmark_paths"))
+    files = [p for p in paths.get("files") or () if isinstance(p, str) and p] or BENCHMARK_FILES
+    real_cli = paths.get("real_cli") if isinstance(paths.get("real_cli"), str) else REAL_CLI
     findings, previous = [], None
     if tool_names is None and rows:
         findings.append({"section": "undetermined", "item": "Undetermined", "task": "", "expected": "",
@@ -367,7 +386,8 @@ def load_run(directory):
                          "excerpt": "", "trace_path": str(directory / "tools.json")})
     for row in rows:
         try:
-            findings += classify(row, directory, tool_names, guards, previous=previous)
+            findings += classify(row, directory, tool_names, guards, previous=previous,
+                                 benchmark_files=tuple(files), real_cli=real_cli)
         except Exception as error:  # one odd row must not hide the rest of the pass
             findings.append({"section": "undetermined", "item": "Undetermined", "task": str(row.get("task")),
                              "expected": "", "detail": f"could not classify this attempt: {error!r}",

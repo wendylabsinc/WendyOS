@@ -474,6 +474,7 @@ def run_pass(environ):
             "prompt_tokens_per_second": baseline["prompt_per_second"], "cli_commit": cli_commit,
             "agent_version": facts["agent_version"], "os_version": facts["os_version"], "device": facts["device"],
             "app_id": environ.get("WENDY_APP_ID") or sc.BENCHMARK_APP,
+            "benchmark_paths": {"files": [str(harness), str(results)], "real_cli": wendy},
             "notes": [f"wendy chat sent {sent} tools on its first request, before wendy_tools was called",
                       f"the baseline prompt is {tokens} tokens of a {context}-token context"]})
 
