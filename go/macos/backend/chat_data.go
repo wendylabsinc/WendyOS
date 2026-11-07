@@ -18,13 +18,16 @@ type dataChatTool struct {
 	run func(context.Context, *deviceDataTools, json.RawMessage) (any, error)
 }
 
-func dataChatTools() []dataChatTool { return []dataChatTool{eventHistoryTool} }
+func dataChatTools() []dataChatTool {
+	return []dataChatTool{eventHistoryTool, recordingsTool, recordingTool}
+}
 
 // All data queries remain pinned to the original native chat session, even if
 // the model switches the embedded MCP connection to another device.
 type deviceDataTools struct {
 	chat.Executor
 	conn *grpcclient.AgentConnection
+	turn *ChatTurn
 }
 
 func (t *deviceDataTools) ListTools(ctx context.Context) ([]chat.Tool, error) {

@@ -26,7 +26,8 @@ struct ChatModelOption: Identifiable {
 struct ChatDeviceCard: Identifiable {
     let kind, title: String
     let camera: UInt32
-    var id: String { kind + String(camera) }
+    var episode: String = ""
+    var id: String { kind + String(camera) + episode }
 }
 struct ChatMessage: Identifiable {
     let id = UUID()
@@ -133,7 +134,7 @@ extension GoClient {
             defer { WDChatFree(p) }; try Self.check(p.pointee.status)
             let value = p.pointee
             let approval = value.approval_id == 0 ? nil : ChatApproval(id: value.approval_id, action: Self.string(value.approval_action), app: Self.string(value.approval_app))
-            let cards = UnsafeBufferPointer(start: value.cards, count: value.card_count).map { ChatDeviceCard(kind: Self.string($0.kind), title: Self.string($0.title), camera: $0.camera) }
+            let cards = UnsafeBufferPointer(start: value.cards, count: value.card_count).map { ChatDeviceCard(kind: Self.string($0.kind), title: Self.string($0.title), camera: $0.camera, episode: Self.string($0.episode)) }
             return ChatProgress(cards: cards, text: Self.string(value.text), error: Self.string(value.error), activity: Self.string(value.activity), trace: Self.string(value.trace), done: value.done != 0, approval: approval)
         }
     }
