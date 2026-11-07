@@ -97,7 +97,7 @@ struct RecordingEpisodePicker: View {
                 Button { beginExport() } label: {
                     if exportItems != nil { ProgressView().accessibilityLabel("Exporting recordings") }
                     else { Text("Export") }
-                }.buttonStyle(LensPillStyle()).disabled(filtered.isEmpty || incompleteFilter || exportItems != nil)
+                }.mobileActionStyle().disabled(filtered.isEmpty || incompleteFilter || exportItems != nil)
                     .accessibilityHint(selected == nil ? "Export the episodes in this filter" : "Export the selected episode")
                 Button { player = selected?.id } label: {
                     Text(selected == nil ? "Pick an episode" : "Play episode")

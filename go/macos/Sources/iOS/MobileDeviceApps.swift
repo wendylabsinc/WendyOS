@@ -136,8 +136,8 @@ struct MobileDeviceView: View {
                      chips: [device.transport == .cloud ? "Cloud" : "Local",
                              update?.busy == true ? "Updating Agent" : update?.available == true ? "Update available" : nil,
                              model.camerasError == nil ? "\(model.cameras.count) \(model.cameras.count == 1 ? "camera" : "cameras")" : nil].compactMap { $0 }, device: device, customize: { showingAppearance = true }) {
-                Button("Logs", action: openLogs).buttonStyle(LensPillStyle()).accessibilityIdentifier("devices.detail.logs")
-                Button(updateTitle) { tool = .update }.buttonStyle(LensPillStyle(primary: true))
+                Button("Logs", action: openLogs).mobileActionStyle().accessibilityIdentifier("devices.detail.logs")
+                Button(updateTitle) { tool = .update }.mobileActionStyle(primary: true)
             }
             segments
         }
@@ -284,13 +284,13 @@ struct MobileAppDetail: View {
                                  chips: []) {
                             Button(app.runningState == .running ? "Stop" : "Start") {
                                 actions.submit { await model.setAppRunning(name, running: app.runningState != .running, expectedSession: session) }
-                            }.buttonStyle(LensPillStyle()).disabled(model.appActions.contains(name) || app.runningState == .unknown)
+                            }.mobileActionStyle().disabled(model.appActions.contains(name) || app.runningState == .unknown)
                                 .accessibilityIdentifier("app.toggle")
                             if app.hasWebpage {
                                 Button("Open") { actions.submit { await model.openApp(app, expectedSession: session) } }
-                                    .buttonStyle(LensPillStyle(primary: true)).disabled(app.runningState != .running || model.appActions.contains(name))
+                                    .mobileActionStyle(primary: true).disabled(app.runningState != .running || model.appActions.contains(name))
                                     .accessibilityIdentifier("app.open")
-                            } else { Button("Logs", action: openLogs).buttonStyle(LensPillStyle(primary: true)) }
+                            } else { Button("Logs", action: openLogs).mobileActionStyle(primary: true) }
                         }
                         if model.appActions.contains(name) { ProgressView("Updating app…").font(.caption) }
                         if app.hasWebpage || !ports.isEmpty || portError != nil {

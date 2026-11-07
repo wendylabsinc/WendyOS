@@ -49,7 +49,7 @@ struct MobileLensPreference: View {
                     }.buttonStyle(.plain)
                 }
                 Button("Continue") { save(choice) }
-                    .buttonStyle(LensPillStyle(primary: true)).accessibilityIdentifier("lens.continue")
+                    .mobileActionStyle(primary: true).accessibilityIdentifier("lens.continue")
                 Text("You can change this anytime in Settings.").font(.caption).foregroundStyle(.secondary)
             }.padding(.top, 48).padding(22).frame(maxWidth: 590)
         }.frame(maxWidth: .infinity).background(MobileLensStyle.background)
@@ -174,14 +174,10 @@ struct LensIcon: View {
     }
 }
 
-struct LensPillStyle: ButtonStyle {
-    var primary = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.subheadline.weight(.semibold))
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .foregroundStyle(primary ? Color.white : MobileLensStyle.accent)
-            .background(primary ? MobileLensStyle.green : MobileLensStyle.green.opacity(0.12), in: .capsule)
-            .opacity(configuration.isPressed ? 0.75 : 1)
+extension View {
+    @ViewBuilder func mobileActionStyle(primary: Bool = false) -> some View {
+        if primary { self.buttonStyle(.borderedProminent).controlSize(.large).tint(MobileLensStyle.green) }
+        else { self.buttonStyle(.bordered).controlSize(.large).tint(MobileLensStyle.green) }
     }
 }
 

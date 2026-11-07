@@ -66,136 +66,143 @@ struct HomeWidgetEditor: View {
     private var devices: [Device] { HomeWidgetInventory.devices(model).filter { widget.kind == .favorites || !$0.lite } }
     private var device: Device? { HomeWidgetInventory.resolve(widget.devices.first, model: model) }
     var body: some View {
-        Group {
-            if widget.kind == .favorites { favoritesEditor }
-            else { standardEditor }
-        }.task { await actions.run() }
+        NavigationStack {
+            Group {
+                if widget.kind.builtIn { editorForm }
+                else {
+                    editorForm.searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
+                                          prompt: "Search devices by name")
+                }
+            }
+            .navigationTitle(widget.kind.title).navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if let cancel { Button("Back", action: cancel) }
+                    else { Button("Cancel") { dismiss() } }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        widget.label = widget.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                        save(widget); dismiss()
+                    }.disabled(!widget.valid || loading)
+                }
+            }
+        }.tint(MobileLensStyle.green).presentationDragIndicator(.visible)
+            .task { await actions.run() }
     }
-    private var standardEditor: some View {
+
+    private var editorForm: some View {
         let available = devices
         let matches = matchingDevices(available)
-        return VStack(spacing: 0) {
-            HStack {
-                if let cancel { Button("Back", systemImage: "chevron.left", action: cancel).labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44) }
-                Text(widget.kind.title).font(.title2.bold())
-                Spacer()
-                Button("Done") {
-                    widget.label = widget.label.trimmingCharacters(in: .whitespacesAndNewlines)
-                    save(widget); dismiss()
-                }.font(.headline).foregroundStyle(.white).padding(.horizontal, 22).frame(minHeight: 44)
-                    .background(MobileLensStyle.green, in: .capsule)
-                    .disabled(!widget.valid || loading).opacity(widget.valid && !loading ? 1 : 0.45)
-            }.padding(20)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    editorSection("Title") {
-                        TextField(widget.displayTitle, text: $widget.title).padding(18).accessibilityLabel("Widget title")
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        favoriteSectionTitle("Size")
-                        Picker("Size", selection: $widget.size) {
-                            ForEach(widget.kind.sizes, id: \.self) { Text($0.rawValue).tag($0) }
-                        }.pickerStyle(.segmented)
-                    }
-                    if !widget.kind.builtIn {
-                        VStack(alignment: .leading, spacing: 10) {
-                            favoriteSectionTitle("Device")
-                            HStack(spacing: 8) {
-                                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                                TextField("Search devices by name", text: $search).autocorrectionDisabled().textInputAutocapitalization(.never)
-                                if !search.isEmpty {
-                                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("Clear search")
-                                }
-                            }.padding(14).background(RecordingAppearance.card, in: .rect(cornerRadius: 16))
-                            LazyVStack(spacing: 0) {
-                                if widget.kind == .gallery {
-                                    choiceRow("All devices", selected: widget.devices.isEmpty) { widget.devices = [] }
-                                    Divider().padding(.horizontal, 18)
-                                }
-                                ForEach(matches) { candidate in
-                                    choiceRow(candidate.title,
-                                        subtitle: HomeWidgetInventory.status(candidate, model: model) + " · " + (candidate.transport == .cloud ? "Cloud" : "Local"),
-                                        selected: widget.devices.first?.id == recordingDeviceID(candidate)) {
-                                        guard widget.devices.first?.id != recordingDeviceID(candidate) else { return }
-                                        widget.devices = [HomeWidgetDevice(candidate)]; widget.resource = ""; widget.resourceTitle = ""
-                                        cameras = []; campaigns = []; apps = []; error = nil
-                                    }.disabled(loading)
-                                    if candidate.id != matches.last?.id { Divider().padding(.horizontal, 18) }
-                                }
-                                if matches.isEmpty {
-                                    Text(available.isEmpty ? "No devices available" : "No matching devices").foregroundStyle(.secondary).padding(18)
-                                }
-                                ForEach(widget.devices.filter { ref in !available.contains { recordingDeviceID($0) == ref.id } }) { ref in
-                                    HStack {
-                                        Text(ref.title + " · Unavailable").foregroundStyle(.secondary)
-                                        Spacer()
-                                        Button("Remove") { widget.devices.removeAll { $0.id == ref.id }; widget.resource = ""; widget.resourceTitle = "" }
-                                    }.padding(18)
-                                }
-                            }.background(RecordingAppearance.card, in: .rect(cornerRadius: 22))
+        return Form {
+            Section("Title") {
+                TextField(widget.displayTitle, text: $widget.title).accessibilityLabel("Widget title")
+            }
+            Section("Size") {
+                Picker("Size", selection: $widget.size) {
+                    ForEach(widget.kind.sizes, id: \.self) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented)
+            }
+            if !widget.kind.builtIn {
+                Section {
+                    if widget.kind == .favorites {
+                        ForEach(matches) { candidate in
+                            let id = recordingDeviceID(candidate)
+                            let selected = widget.devices.contains { $0.id == id }
+                            Toggle(isOn: Binding(get: { selected }, set: { chosen in
+                                if !chosen { widget.devices.removeAll { $0.id == id } }
+                                else if widget.devices.count < 6 { widget.devices.append(HomeWidgetDevice(candidate)) }
+                            })) { deviceLabel(candidate) }
+                                .disabled(!selected && widget.devices.count >= 6)
                         }
-                    }
-                    if widget.kind == .gallery {
-                        editorSection("Recordings") {
-                            Picker("Kind", selection: $widget.dataKind) {
-                                Text("All kinds").tag(nil as String?)
-                                ForEach(MobileRecordingKind.allCases, id: \.self) { Text($0 == .unknown ? "Unknown" : $0.rawValue).tag(Optional($0.rawValue)) }
-                            }.padding(14)
-                            Divider().padding(.horizontal, 18)
-                            TextField("Label, e.g. Person (optional)", text: $widget.label).autocorrectionDisabled().padding(18)
-                        }
-                    } else if !widget.kind.builtIn {
-                        editorSection(widget.kind == .camera ? "Camera" : widget.kind == .campaign ? "Campaign" : "App") {
-                            if !widget.resource.isEmpty {
-                                choiceRow(widget.resourceTitle.isEmpty ? widget.resource : widget.resourceTitle, selected: true) {}
+                    } else {
+                        Picker("Device", selection: selectedDevice) {
+                            Text(widget.kind == .gallery ? "All devices" : "Choose a device").tag("")
+                            ForEach(matches) { candidate in
+                                deviceLabel(candidate).tag(recordingDeviceID(candidate))
                             }
-                            Button(loading ? "Loading…" : (error == nil ? "Load choices" : "Try again")) { actions.submit { await loadChoices() } }
-                                .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 48)
-                                .disabled(device == nil || loading)
-                            if loading { ProgressView().padding(12) }
-                            ForEach(cameras.filter { $0.stableID != widget.resource }, id: \.orderKey) { camera in resourceRow(camera.stableID, camera.name) }
-                            ForEach(campaigns.filter { $0.name != widget.resource }) { campaign in resourceRow(campaign.name, campaign.name) }
-                            ForEach(apps.filter { $0.appName != widget.resource }) { app in resourceRow(app.appName, app.appName) }
-                            if let error { Text(error).font(.caption).foregroundStyle(.secondary).padding(18) }
-                            if device == nil { Text("Choose a device first.").font(.caption).foregroundStyle(.secondary).padding(.bottom, 14) }
-                        }
-                        if widget.kind == .campaign {
-                            Text("Clips finish automatically using the campaign’s settings.").font(.caption).foregroundStyle(.secondary)
+                            // Keep a selected value valid even when search hides its row.
+                            ForEach(widget.devices.filter { ref in !matches.contains { recordingDeviceID($0) == ref.id } }) { ref in
+                                Text(ref.title).tag(ref.id)
+                            }
+                        }.pickerStyle(.inline).disabled(loading)
+                    }
+                    if matches.isEmpty {
+                        Text(available.isEmpty ? "No devices available" : "No matching devices").foregroundStyle(.secondary)
+                    }
+                    ForEach(widget.devices.filter { ref in !available.contains { recordingDeviceID($0) == ref.id } }) { ref in
+                        Button("Remove unavailable device: " + ref.title, role: .destructive) {
+                            widget.devices.removeAll { $0.id == ref.id }
+                            widget.resource = ""; widget.resourceTitle = ""
                         }
                     }
-                    if let remove {
-                        Button("Remove widget", role: .destructive) { remove(); dismiss() }
-                            .font(.headline).frame(maxWidth: .infinity, minHeight: 56)
-                            .background(RecordingAppearance.card, in: .rect(cornerRadius: 20))
+                } header: {
+                    Text(widget.kind == .favorites ? "Devices · pick up to 6" : "Device")
+                } footer: {
+                    if widget.kind == .favorites && widget.devices.count >= 6 {
+                        Text("6 devices selected. Deselect one to choose another.")
                     }
-                }.padding(.horizontal, 20).padding(.bottom, 24)
-            }.scrollDismissesKeyboard(.interactively)
-        }.background(MobileLensStyle.background).tint(MobileLensStyle.green).presentationDragIndicator(.visible)
+                }
+            }
+            if widget.kind == .gallery {
+                Section("Recordings") {
+                    Picker("Kind", selection: $widget.dataKind) {
+                        Text("All kinds").tag(nil as String?)
+                        ForEach(MobileRecordingKind.allCases, id: \.self) {
+                            Text($0 == .unknown ? "Unknown" : $0.rawValue).tag(Optional($0.rawValue))
+                        }
+                    }
+                    TextField("Label, e.g. Person (optional)", text: $widget.label).autocorrectionDisabled()
+                }
+            } else if !widget.kind.builtIn && widget.kind != .favorites {
+                Section {
+                    Picker(resourceLabel, selection: selectedResource) {
+                        Text("Choose " + resourceLabel.lowercased()).tag("")
+                        if !widget.resource.isEmpty {
+                            Text(widget.resourceTitle.isEmpty ? widget.resource : widget.resourceTitle).tag(widget.resource)
+                        }
+                        ForEach(cameras.filter { $0.stableID != widget.resource }, id: \.orderKey) { Text($0.name).tag($0.stableID) }
+                        ForEach(campaigns.filter { $0.name != widget.resource }) { Text($0.name).tag($0.name) }
+                        ForEach(apps.filter { $0.appName != widget.resource }) { Text($0.appName).tag($0.appName) }
+                    }.pickerStyle(.inline).disabled(loading)
+                    Button(error == nil ? "Load choices" : "Try again") { actions.submit { await loadChoices() } }
+                        .disabled(device == nil || loading)
+                    if loading { ProgressView("Loading choices…") }
+                    if let error { Text(error).foregroundStyle(.secondary) }
+                } header: { Text(resourceLabel) } footer: {
+                    if device == nil { Text("Choose a device first.") }
+                    else if widget.kind == .campaign { Text("Clips finish automatically using the campaign’s settings.") }
+                }
+            }
+            if let remove {
+                Section { Button("Remove widget", role: .destructive) { remove(); dismiss() } }
+            }
+        }.scrollContentBackground(.hidden).background(MobileLensStyle.background)
+            .scrollDismissesKeyboard(.interactively)
     }
-    private func editorSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            favoriteSectionTitle(title)
-            VStack(spacing: 0, content: content).frame(maxWidth: .infinity)
-                .background(RecordingAppearance.card, in: .rect(cornerRadius: 22))
+    private var resourceLabel: String { widget.kind == .camera ? "Camera" : widget.kind == .campaign ? "Campaign" : "App" }
+    private var selectedDevice: Binding<String> {
+        Binding(get: { widget.devices.first?.id ?? "" }, set: { id in
+            guard id != widget.devices.first?.id else { return }
+            widget.devices = devices.first { recordingDeviceID($0) == id }.map { [HomeWidgetDevice($0)] } ?? []
+            widget.resource = ""; widget.resourceTitle = ""
+            cameras = []; campaigns = []; apps = []; error = nil
+        })
+    }
+    private var selectedResource: Binding<String> {
+        Binding(get: { widget.resource }, set: { id in
+            widget.resource = id
+            widget.resourceTitle = cameras.first { $0.stableID == id }?.name
+                ?? campaigns.first { $0.name == id }?.name
+                ?? apps.first { $0.appName == id }?.appName ?? id
+        })
+    }
+    private func deviceLabel(_ candidate: Device) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(candidate.title)
+            Text(HomeWidgetInventory.status(candidate, model: model) + " · " + (candidate.transport == .cloud ? "Cloud" : "Local"))
+                .font(.caption).foregroundStyle(.secondary)
         }
-    }
-    private func choiceRow(_ title: String, subtitle: String? = nil, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline).foregroundStyle(.primary)
-                    if let subtitle { Text(subtitle).font(.subheadline).foregroundStyle(.secondary) }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9).fill(selected ? MobileLensStyle.green : .clear)
-                    if selected { Image(systemName: "checkmark").font(.subheadline.bold()).foregroundStyle(.white) }
-                    else { RoundedRectangle(cornerRadius: 9).strokeBorder(.secondary.opacity(0.35), lineWidth: 1.5) }
-                }.frame(width: 28, height: 28)
-            }.padding(.horizontal, 18).padding(.vertical, 12).contentShape(.rect)
-        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
-    }
-    private func resourceRow(_ id: String, _ title: String) -> some View {
-        choiceRow(title, selected: widget.resource == id) { widget.resource = id; widget.resourceTitle = title }
     }
     private func matchingDevices(_ available: [Device]) -> [Device] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -204,99 +211,6 @@ struct HomeWidgetEditor: View {
             let rightOffline = HomeWidgetInventory.status($1, model: model) == "Offline"
             if leftOffline != rightOffline { return !leftOffline }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-        }
-    }
-    private var favoritesEditor: some View {
-        let available = devices
-        let matches = matchingDevices(available)
-        return VStack(spacing: 0) {
-            HStack {
-                if let cancel { Button("Back", systemImage: "chevron.left", action: cancel).labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44) }
-                Text("Favorite devices").font(.title2.bold())
-                Spacer()
-                Button("Done") { save(widget); dismiss() }
-                    .font(.headline).foregroundStyle(.white).padding(.horizontal, 22).frame(minHeight: 44)
-                    .background(MobileLensStyle.green, in: .capsule).disabled(!widget.valid)
-                    .opacity(widget.valid ? 1 : 0.45)
-            }.padding(20)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        favoriteSectionTitle("Title")
-                        TextField("Favorite devices", text: $widget.title).padding(18)
-                            .background(RecordingAppearance.card, in: .rect(cornerRadius: 20))
-                            .accessibilityLabel("Widget title")
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        favoriteSectionTitle("Size")
-                        Picker("Size", selection: $widget.size) {
-                            ForEach(widget.kind.sizes, id: \.self) { Text($0.rawValue).tag($0) }
-                        }.pickerStyle(.segmented)
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        favoriteSectionTitle("Devices · pick up to 6")
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Search devices by name", text: $search).autocorrectionDisabled()
-                                .textInputAutocapitalization(.never).accessibilityIdentifier("home.favorites.search")
-                            if !search.isEmpty {
-                                Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                                    .accessibilityLabel("Clear search")
-                            }
-                        }.padding(14).background(RecordingAppearance.card, in: .rect(cornerRadius: 16))
-                        LazyVStack(spacing: 0) {
-                            ForEach(matches) { device in
-                                let id = recordingDeviceID(device)
-                                let selected = widget.devices.contains { $0.id == id }
-                                Button {
-                                    if selected { widget.devices.removeAll { $0.id == id } }
-                                    else if widget.devices.count < 6 { widget.devices.append(HomeWidgetDevice(device)) }
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(device.title).font(.headline).foregroundStyle(.primary)
-                                            Text(HomeWidgetInventory.status(device, model: model) + " · " + (device.transport == .cloud ? "Cloud" : "Local"))
-                                                .font(.subheadline).foregroundStyle(.secondary)
-                                        }.frame(maxWidth: .infinity, alignment: .leading)
-                                        Image(systemName: "checkmark").opacity(selected ? 1 : 0)
-                                            .font(.subheadline.bold()).foregroundStyle(.white).frame(width: 28, height: 28)
-                                            .background(selected ? MobileLensStyle.green : .clear, in: .rect(cornerRadius: 9))
-                                            .overlay { if !selected { RoundedRectangle(cornerRadius: 9).strokeBorder(.secondary.opacity(0.35), lineWidth: 1.5) } }
-                                    }.padding(.horizontal, 18).padding(.vertical, 12).contentShape(.rect)
-                                }.buttonStyle(.plain).disabled(!selected && widget.devices.count >= 6)
-                                    .accessibilityAddTraits(selected ? .isSelected : [])
-                                if device.id != matches.last?.id { Divider().padding(.horizontal, 18) }
-                            }
-                            if matches.isEmpty {
-                                Text(available.isEmpty ? "No devices available" : "No matching devices")
-                                    .foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(20)
-                            }
-                            ForEach(widget.devices.filter { ref in !available.contains { recordingDeviceID($0) == ref.id } }) { ref in
-                                HStack {
-                                    Text(ref.title + " · Unavailable").font(.subheadline).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Button("Remove") { widget.devices.removeAll { $0.id == ref.id } }
-                                }.padding(18)
-                            }
-                        }.background(RecordingAppearance.card, in: .rect(cornerRadius: 22))
-                        if widget.devices.count >= 6 { Text("6 devices selected. Deselect one to choose another.").font(.caption).foregroundStyle(.secondary) }
-                    }
-                    if let remove {
-                        Button("Remove widget", role: .destructive) { remove(); dismiss() }
-                            .font(.headline).frame(maxWidth: .infinity, minHeight: 56)
-                            .background(RecordingAppearance.card, in: .rect(cornerRadius: 20))
-                    }
-                }.padding(.horizontal, 20).padding(.bottom, 24)
-            }.scrollDismissesKeyboard(.interactively)
-        }.background(MobileLensStyle.background).tint(MobileLensStyle.green)
-            .presentationDragIndicator(.visible)
-    }
-    private func favoriteSectionTitle(_ title: String) -> some View {
-        Text(title.uppercased()).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 8)
-    }
-    private func option(_ id: String, _ name: String) -> some View {
-        Button { widget.resource = id; widget.resourceTitle = name } label: {
-            HStack { Text(name); Spacer(); if widget.resource == id { Image(systemName: "checkmark") } }
         }
     }
     private func loadChoices() async {

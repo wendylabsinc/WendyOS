@@ -37,13 +37,16 @@ final class DevicesLensUITests: XCTestCase {
             let favorite = app.buttons["Add Favorite devices"]
             XCTAssertTrue(favorite.waitForExistence(timeout: 5))
             favorite.tap()
-            let search = app.textFields["home.favorites.search"]
+            let search = app.searchFields.firstMatch
             XCTAssertTrue(search.waitForExistence(timeout: 5))
             search.tap()
             search.typeText("NoSuchDevice123")
             XCTAssertTrue(app.staticTexts["No matching devices"].exists || app.staticTexts["No devices available"].exists)
-            app.buttons["Clear search"].tap()
+            search.buttons.firstMatch.tap()
             XCTAssertTrue(search.exists)
+            // Native search temporarily replaces the navigation toolbar.
+            app.buttons["Close"].tap()
+            XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
             app.buttons["Back"].tap()
         }
         XCTAssertTrue(app.buttons["Close widget picker"].exists)

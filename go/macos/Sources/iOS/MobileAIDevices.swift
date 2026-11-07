@@ -99,7 +99,7 @@ struct MobileAIDeviceSuggestions: View {
                         }
                     }.background(RecordingAppearance.card, in: .rect(cornerRadius: 22))
                 }
-                Button("Choose another device", action: chooseDevice).buttonStyle(LensPillStyle())
+                Button("Choose another device", action: chooseDevice).mobileActionStyle()
                 Text("For a cloud model, choose a device for context, then select Cloud.").font(.caption).foregroundStyle(.secondary)
             }.padding(20)
         }.background(MobileLensStyle.background)

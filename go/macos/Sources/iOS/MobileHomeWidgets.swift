@@ -540,7 +540,7 @@ private struct HomeWidgetCamera: View {
                     }
                     Button(feed.error != nil ? "Retry" : playing ? "Pause" : "Play", systemImage: feed.error != nil ? "arrow.clockwise" : playing ? "pause.fill" : "play.fill") {
                         if feed.error != nil { playing = true; retry += 1 } else { playing.toggle() }
-                    }.buttonStyle(LensPillStyle(primary: true))
+                    }.mobileActionStyle(primary: true)
                 }.padding(16)
             }
         }
