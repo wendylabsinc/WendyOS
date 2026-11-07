@@ -2525,11 +2525,11 @@ func buildAndPrepareComposeImageForAgentForce(ctx context.Context, conn *grpccli
 }
 
 func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConnection, regPort int, agentOS, builder, dir, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer, allowRegistryFallback bool) error {
-	normalized, err := normalizeImageBuilder(builder)
+	normalized, err := resolveOCIExportBuilder(builder)
 	if err != nil {
 		return err
 	}
-	if normalized != imageBuilderDocker {
+	if normalized != imageBuilderDocker && normalized != imageBuilderBuildkit {
 		return buildAndPushImageForAgent(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput)
 	}
 
@@ -2547,7 +2547,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	defer func() { _ = gcOCILayoutDir(layoutDir) }()
 
 	native, err := buildOrUpdateOCILayout(dir, dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, layoutDir, func() error {
-		return buildImageToOCILayoutDirWithDocker(ctx, dir, dockerfile, platform, buildArgs, layoutDir, streamOutput, logOutput)
+		return buildImageToOCILayoutDir(ctx, dir, dockerfile, platform, buildArgs, normalized, layoutDir, streamOutput, logOutput)
 	})
 	if err != nil {
 		return err
