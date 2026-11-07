@@ -360,31 +360,47 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 }
 
 func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32) (net.Conn, error) {
+	dial, closeDialer, err := d.tunnelDialer(brokerConn, auth, remotePort)
+	if err != nil {
+		return nil, err
+	}
+	defer closeDialer()
+	return dial(ctx)
+}
+
+// tunnelDialer retains the authorization connection and grant-key cache for a
+// forwarding command. Each dial still obtains a fresh grant and caller key;
+// credentials are refreshed through cloudContext before each request.
+func (d cloudDiscoveryDevice) tunnelDialer(brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32) (func(context.Context) (net.Conn, error), func(), error) {
 	if d.legacy != nil {
-		return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
+		return func(ctx context.Context) (net.Conn, error) {
+			return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
+		}, func() {}, nil
 	}
 	service, err := cloudrelay.PortService("tcp", remotePort)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	signer, err := tunnelPrincipalSigner(auth)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	cloudCtx, err := cloudContext(ctx, auth)
+	issuer, err := cloudrelay.Issuer(auth.CloudGRPC, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	conn, err := dialCloudGRPC(auth)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer conn.Close()
-	issuer, err := cloudrelay.Issuer(auth.CloudGRPC, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
-	if err != nil {
-		return nil, err
-	}
-	return cloudrelay.OpenTCP(ctx, cloudCtx, conn, &cloudrelay.Verifier{Issuer: issuer}, d.key, service, signer)
+	verifier := &cloudrelay.Verifier{Issuer: issuer}
+	return func(ctx context.Context) (net.Conn, error) {
+		cloudCtx, err := cloudContext(ctx, auth)
+		if err != nil {
+			return nil, err
+		}
+		return cloudrelay.OpenTCP(ctx, cloudCtx, conn, verifier, d.key, service, signer)
+	}, func() { _ = conn.Close() }, nil
 }
 
 func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {

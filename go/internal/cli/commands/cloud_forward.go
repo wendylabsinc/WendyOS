@@ -172,6 +172,12 @@ func cloudTunnelCommand(ctx context.Context, auth *config.AuthConfig, deviceName
 		return datagramOpenError(udpErr, asset.GetName())
 	}
 
+	dial, closeDialer, err := asset.tunnelDialer(brokerConn, auth, remotePort)
+	if err != nil {
+		return err
+	}
+	defer closeDialer()
+
 	listenAddr := fmt.Sprintf("127.0.0.1:%d", localPort)
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -182,9 +188,7 @@ func cloudTunnelCommand(ctx context.Context, auth *config.AuthConfig, deviceName
 	cliSuccess("Forwarding %s → %s:%d (via cloud)", listenAddr, asset.GetName(), remotePort)
 	cliLogln("Press Ctrl+C to stop.")
 
-	return serveTCPForward(ctx, ln, func(ctx context.Context) (net.Conn, error) {
-		return asset.openTunnel(ctx, brokerConn, auth, remotePort)
-	}, func(err error) {
+	return serveTCPForward(ctx, ln, dial, func(err error) {
 		cliLogln("Cloud tunnel failed: %v", err)
 	})
 }
