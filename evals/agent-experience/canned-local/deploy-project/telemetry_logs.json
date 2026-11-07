@@ -17,7 +17,7 @@
   ],
   "captured_with": {
     "wendy_version": "wendy version dev",
-    "wendy_sha256": "895e0203ec308ff4b5710ddcc46a99fde5315f3f77f200da11c8a70a4c61bbb0",
+    "wendy_sha256": "26737d37508f009f29f049ec4b0be255acbaa20730ac9cf72ae8a92c218fb4b7",
     "device_kind": "local"
   },
   "after": {
@@ -30,13 +30,51 @@
         "content": [
           {
             "type": "text",
-            "text": "{\"batches_collected\": 0, \"collection_limited\": false, \"logs\": []}"
+            "text": "{\"batches_collected\": 2, \"collection_limited\": false, \"logs\": [{\"attributes\": {\"stream\": \"stdout\"}, \"body\": \"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\", \"observedTimeUnixNano\": \"1794013322036045165\", \"resource\": {\"service.instance.id\": \"scrubbed\", \"service.name\": \"sensor-dashboard_web\", \"service.namespace\": \"wendy\"}, \"scope\": {\"name\": \"wendy.container\"}, \"severityNumber\": \"SEVERITY_NUMBER_INFO\", \"severityText\": \"INFO\", \"timeUnixNano\": \"1794013322036045165\"}, {\"attributes\": {\"stream\": \"stdout\"}, \"body\": \"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\", \"observedTimeUnixNano\": \"1794013337216323621\", \"resource\": {\"service.instance.id\": \"scrubbed\", \"service.name\": \"sensor-dashboard\", \"service.namespace\": \"wendy\", \"service.version\": \"latest\"}, \"scope\": {\"name\": \"wendy.container\"}, \"severityNumber\": \"SEVERITY_NUMBER_INFO\", \"severityText\": \"INFO\", \"timeUnixNano\": \"1794013337216323621\"}]}"
           }
         ],
         "structuredContent": {
-          "batches_collected": 0,
+          "batches_collected": 2,
           "collection_limited": false,
-          "logs": []
+          "logs": [
+            {
+              "attributes": {
+                "stream": "stdout"
+              },
+              "body": "Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\n",
+              "observedTimeUnixNano": "1794013322036045165",
+              "resource": {
+                "service.instance.id": "scrubbed",
+                "service.name": "sensor-dashboard_web",
+                "service.namespace": "wendy"
+              },
+              "scope": {
+                "name": "wendy.container"
+              },
+              "severityNumber": "SEVERITY_NUMBER_INFO",
+              "severityText": "INFO",
+              "timeUnixNano": "1794013322036045165"
+            },
+            {
+              "attributes": {
+                "stream": "stdout"
+              },
+              "body": "Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\n",
+              "observedTimeUnixNano": "1794013337216323621",
+              "resource": {
+                "service.instance.id": "scrubbed",
+                "service.name": "sensor-dashboard",
+                "service.namespace": "wendy",
+                "service.version": "latest"
+              },
+              "scope": {
+                "name": "wendy.container"
+              },
+              "severityNumber": "SEVERITY_NUMBER_INFO",
+              "severityText": "INFO",
+              "timeUnixNano": "1794013337216323621"
+            }
+          ]
         }
       }
     ]

@@ -351,6 +351,12 @@ class LocalCaptureTests(unittest.TestCase):
             match = self.VM_WORDS.search(visible)
             self.assertIsNone(match, f"{path.relative_to(self.LOCAL)} mentions {match and match.group(0)!r}")
 
+    def test_local_captures_never_freeze_a_stream_reset(self):
+        for path in self.files():
+            data = json.loads(path.read_text())
+            visible = json.dumps({k: v for k, v in data.items() if k not in self.HIDDEN_KEYS})
+            self.assertNotIn("RST_STREAM", visible, str(path.relative_to(self.LOCAL)))
+
     def test_local_captures_never_hold_the_thors_wifi_address(self):
         for path in self.files():
             self.assertNotIn("192.168.1.246", path.read_text(), str(path.relative_to(self.LOCAL)))
