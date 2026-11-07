@@ -18,9 +18,18 @@ not pool GPU memory or split one model across machines.
 Use Linux WendyOS devices enrolled in the same organization, with current
 Wendy Net app discovery support and NVIDIA GPU access. The supplied manifest
 targets GPU inference; the example is tested on Jetson Orin Nano with JetPack
-7.2. First follow
-[Connect devices with Wendy Net](/docs/guides/wendy-net) and verify peers with
-`wendy net status` and `wendy net topology` on both devices.
+7.2. Find both destination devices first. On the same LAN, run:
+
+```sh
+wendy discover --type lan --timeout 5s
+```
+
+Use the returned selectors for `DEVICE_A` and `DEVICE_B` below. For mesh-only
+destinations, [join Wendy Net from your computer](/docs/advanced/development/local-mesh-radio)
+and run `wendy discover --type mesh`. Follow
+[Connect devices with Wendy Net](/docs/guides/wendy-net) and verify participation
+with `wendy net status --device DEVICE_A` and
+`wendy net topology --device DEVICE_B`.
 
 ```sh
 git clone https://github.com/wendylabsinc/wendyos.git
@@ -45,7 +54,9 @@ wendy device attach --device DEVICE_A sh.wendy.examples.nvidia-pair -- pairctl r
 Find the other node's UUID and `ipAddress` in the result. Wendy Net addresses
 are allocated locally to each observer; use the address returned on the node
 that initiates the connection. Follow the example README to invite the peer,
-accept the PIN on the other node, and confirm `state: "paired"`.
+accept the PIN on the other node, and run `cluster:invite-status` with the
+returned `inviteId`. Confirm `state: "paired"` in that response;
+`nodes:get-initial` lists members and does not confirm invitation status.
 
 `pairctl health` checks the local proxy, engine health, and successful initial
 model warmup. It does not prove remote inference.
