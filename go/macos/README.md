@@ -291,6 +291,11 @@ or depend on the old Companion app. It requires iOS 26 and an Apple Silicon Mac
 for simulator builds. Xcode builds the same Go backend as an iOS C archive and
 links it directly into the SwiftUI app; no CLI executable or subprocess is needed.
 
+Install XcodeGen, CMake and Ninja (`brew install xcodegen cmake ninja`), Python 3,
+and the Go version declared in the repository-root `go.mod`. From `go/macos`,
+run `xcodegen generate` before opening the project. Build phases compile Go and
+OpenCV automatically; the first build downloads OpenCV and takes longer.
+
 Open `WendyDesktop.xcodeproj`, select **WendyMobile**, and choose an iPhone or iPad
 simulator. To build from the repository root:
 
@@ -301,8 +306,9 @@ xcodebuild -project go/macos/WendyDesktop.xcodeproj \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES build
 ```
 
-For a physical device, select your Apple development team for `WendyMobile` in
-Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
+For a physical device, select your Apple development team for both `WendyMobile`
+and `WendyMobileNetwork` in Xcode, enable Developer Mode on the device, and use an
+iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
 The device build can also be compile-checked with
 `-destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`; that unsigned
 output cannot be installed on a phone.

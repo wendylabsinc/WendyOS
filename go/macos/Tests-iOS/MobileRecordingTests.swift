@@ -24,6 +24,26 @@ final class MobileRecordingTests: XCTestCase {
         XCTAssertEqual(complete.exportTargets(trigger: "Motion", selectedID: nil).map(\.id), ["first", "third"])
     }
 
+    func testKindAndLabelFiltersIntersectAndExportCannotIncludeHiddenRows() {
+        let device = Device(id: "board", name: "Board", selector: "board:50051", transport: .lan, address: "")
+        func row(_ id: String, _ kind: MobileRecordingKind, _ trigger: String, loaded: Bool = true) -> MobileRecordingEpisode {
+            MobileRecordingEpisode(id: id, title: id, started: nil, bytes: 100, duration: nil,
+                trigger: trigger, kind: kind, synced: nil, topics: [], detailsLoaded: loaded)
+        }
+        let rows = [row("video", .video, "Person"), row("audio", .audio, "Person"), row("mix", .mixed, "Manual")]
+        let library = MobileRecordingLibrary(device: device, model: nil, episodes: rows, warning: nil)
+        XCTAssertEqual(library.episodes(matching: "Person", kind: .audio).map(\.id), ["audio"])
+        XCTAssertEqual(library.episodes(matching: nil, kind: .mixed).map(\.id), ["mix"])
+        XCTAssertTrue(library.episodes(matching: "Person", kind: .rosbag).isEmpty)
+        XCTAssertEqual(library.exportTargets(trigger: nil, selectedID: nil, kind: .audio).map(\.id), ["audio"])
+        XCTAssertTrue(library.exportTargets(trigger: nil, selectedID: "video", kind: .audio).isEmpty)
+        let partial = MobileRecordingLibrary(device: device, model: nil,
+            episodes: rows + [row("pending", .unknown, "", loaded: false)], warning: nil)
+        XCTAssertTrue(partial.exportTargets(trigger: nil, selectedID: nil, kind: .audio).isEmpty)
+        XCTAssertEqual(partial.exportTargets(trigger: nil, selectedID: "audio", kind: .audio).map(\.id), ["audio"])
+        XCTAssertEqual(MobileRecordingKind(agentKind: "mixed"), .mixed)
+    }
+
     func testOnlyMatchingTenantAndDeviceIDsShareARecordingCard() {
         func route(_ id: String, _ transport: DeviceTransport) -> Device {
             Device(id: id, name: "Same name", selector: id, transport: transport, address: "same-address")

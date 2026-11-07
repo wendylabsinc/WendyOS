@@ -379,14 +379,18 @@ struct DeviceChatView: View {
                     Button("Refresh models", systemImage: "arrow.clockwise") { actions.submit { await chat.discover() } }
                 } label: {
                     HStack(spacing: 6) {
-                        Text(chat.model.isEmpty ? "Choose a model" : modelName).font(.subheadline.weight(.semibold)).lineLimit(1).truncationMode(.tail)
+                        Text(chat.loading ? "Finding models…" : chat.model.isEmpty ? "Choose a model" : modelName).font(.subheadline.weight(.semibold)).lineLimit(1).truncationMode(.tail)
                         Image(systemName: "chevron.down").font(.caption2)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.disabled(chat.streaming || chat.loading)
                 if chat.loading { ProgressView().controlSize(.small) }
-                Button { chat.clear() } label: { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
-                    .accessibilityLabel("New chat")
-            }.padding(.horizontal, 16)
+                if !chat.messages.isEmpty {
+                    Button { chat.clear() } label: { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
+                        .accessibilityLabel("New chat")
+                }
+            }.padding(.horizontal, 12)
+                .background(MobileLensStyle.green.opacity(0.06), in: .rect(cornerRadius: 16))
+                .padding(.horizontal, 16).padding(.bottom, 8)
             #else
             HStack(spacing: 12) {
                 Label("Wendy Chat", systemImage: "bubble.left.and.bubble.right").font(.headline)
@@ -437,9 +441,13 @@ struct DeviceChatView: View {
                     LazyVStack(alignment: .leading, spacing: 22) {
                         if chat.messages.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
+                                #if os(iOS)
+                                Text("How can I help?").font(.title2.bold())
+                                if !chat.loading { Text(emptyExplanation).font(.subheadline).foregroundStyle(.secondary) }
+                                #else
                                 Text("How can I help with \(deviceName)?").font(.title3.bold())
-                                Text(emptyExplanation)
-                                    .font(.subheadline).foregroundStyle(.secondary)
+                                Text(emptyExplanation).font(.subheadline).foregroundStyle(.secondary)
+                                #endif
                                 if !chat.loading && chat.model.isEmpty {
                                     Button(chat.inference == .device ? "Browse device models" : "Connect cloud provider", systemImage: chat.inference == .device ? "square.stack.3d.up" : "cloud") {
                                         if chat.inference == .device { showingLibrary = true } else { showingCloud = true }
@@ -580,7 +588,7 @@ struct DeviceChatView: View {
         }
         if chat.error != nil { return "Wendy could not check the device model server. Review the connection below, or choose Cloud." }
         if chat.model.isEmpty { return "Download and run a model on \(deviceName), or choose Cloud to use your own provider API key." }
-        return "Ask about apps, recordings, or recent logs. Device changes need your confirmation."
+        return "Device changes need your confirmation."
     }
     private var connectionNotice: some View {
         let unavailable = !chat.unavailableReason.isEmpty
@@ -593,7 +601,7 @@ struct DeviceChatView: View {
                 Text(unavailable
                      ? "\(modelName) is downloaded on \(deviceName), but Wendy could not reach its server. Check that the model app is running, then retry."
                      : chat.inference == .cloud
-                     ? "Check your provider API key, account credits and internet connection. Cloud models do not require a model installed on your device."
+                     ? "Check your API key, account credits, and internet connection."
                      : "The request could not finish. Check the connection to \(deviceName) and try again. Your conversation is still here.")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {

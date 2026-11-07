@@ -97,10 +97,10 @@ struct RecordingRead: Sendable {
     }
     private var attempted: [String: Set<String>] = [:]
 
-    func load(_ targets: [MobileRecordingTarget], refresh: Int, priority: String?, consumer: String = "data") async {
+    func load(_ targets: [MobileRecordingTarget], refresh: Int, priority: String?, consumer: String = "data", retaining inventory: [MobileRecordingTarget]? = nil) async {
         generation += 1
         let run = generation
-        let knownTargets = Set(targets)
+        let knownTargets = Set(inventory ?? targets)
         reads = reads.filter { knownTargets.contains($0.value.target) }
         refreshedAt = refreshedAt.filter { reads[$0.key] != nil }
         let force = lastRefresh[consumer].map { $0 != refresh } ?? (refresh != 0)
@@ -202,10 +202,14 @@ struct MobileLensData: View {
     @State private var posters = RecordingPosters()
     @State private var refresh = 0
     @State private var showingProblems = false
+    @State private var kind: MobileRecordingKind?
 
     private var sources: RecordingSources { RecordingSources(model: model) }
     private var libraries: [MobileRecordingLibrary] {
-        catalog.reads.values.compactMap(\.library).filter { !$0.episodes.isEmpty }.sorted {
+        catalog.reads.values.compactMap(\.library).map { library in
+            MobileRecordingLibrary(device: library.device, model: library.model,
+                episodes: library.episodes(matching: nil, kind: kind), warning: library.warning)
+        }.filter { !$0.episodes.isEmpty }.sorted {
             let left = $0.episodes.first?.started ?? .distantPast, right = $1.episodes.first?.started ?? .distantPast
             return left == right ? recordingDeviceID($0.device) < recordingDeviceID($1.device) : left > right
         }
@@ -229,7 +233,10 @@ struct MobileLensData: View {
                           priority: picker.map { recordingDeviceID($0.device) })
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-                Text("Devices with saved episodes").foregroundStyle(.secondary).padding(.horizontal, 4)
+                RecordingKindFilter(selection: $kind)
+                if kind != nil && catalog.reads.values.contains(where: { $0.library?.labelCoverage != nil }) {
+                    Text("Results are partial while episode details load.").font(.caption).foregroundStyle(.secondary)
+                }
                 ForEach(libraries, id: \.device.id) { library in
                     RecordingDeviceCard(library: library) { label in
                         picker = MobileEpisodeRoute(device: library.device, trigger: label)
@@ -237,12 +244,15 @@ struct MobileLensData: View {
                 }
                 if catalog.loading || !model.mobileScopeIsCurrent || (!model.nearbyLoaded && model.nearbyError == nil) ||
                     (!model.mobileCloudOrganization.isEmpty && !model.cloudLoaded && model.cloudError == nil) {
-                    ProgressView("Checking devices…").padding(.vertical, 10)
+                    if libraries.isEmpty {
+                        MobileLoadingPlaceholder(label: "Loading recordings…", style: .recordings)
+                            .padding(16).background(RecordingAppearance.card, in: .rect(cornerRadius: 22))
+                    } else { ProgressView("Updating recordings…").padding(.vertical, 10) }
                 } else if libraries.isEmpty {
-                    let incomplete = !problems.isEmpty || sources.unavailable > 0
+                    let incomplete = !problems.isEmpty || sources.unavailable > 0 || kind != nil
                     ContentUnavailableView(incomplete ? "No recordings to show" : "No saved recordings",
                                            systemImage: "cylinder.split.1x2",
-                                           description: Text(incomplete ? "Some devices could not be checked." : "Devices appear here after they save their first episode."))
+                                           description: Text(incomplete ? (kind != nil ? "Try another kind, or wait for episode details." : "Some devices could not be checked.") : "Devices appear here after they save their first episode."))
                 }
                 if emptyCount > 0 {
                     Label(emptyCount == 1 ? "1 device has no saved data" : "\(emptyCount) devices have no saved data",
@@ -275,13 +285,13 @@ struct MobileLensData: View {
             let id = recordingDeviceID(route.device)
             NavigationStack {
                 if let library = catalog.reads[id]?.library {
-                    RecordingEpisodePicker(library: library, trigger: route.trigger, issue: catalog.detailProblems[id], retry: { refresh += 1 })
+                    RecordingEpisodePicker(library: library, trigger: route.trigger, kind: kind, issue: catalog.detailProblems[id], retry: { refresh += 1 })
                 } else {
                     Group {
                         if let issue = catalog.reads[id]?.problem {
                             FailureView(title: "Could not load recordings", error: issue) { refresh += 1 }
                         } else if targets.contains(where: { $0.id == id }) {
-                            ProgressView("Loading recordings…")
+                            MobileLoadingPlaceholder(label: "Loading recordings…", style: .recordings).padding(20)
                         } else {
                             ContentUnavailableView("Device unavailable", systemImage: "wifi.slash", description: Text(route.device.title))
                         }

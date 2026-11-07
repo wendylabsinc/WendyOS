@@ -237,3 +237,29 @@ func TestRecordingLibrarySnapshotCampaignIsImagesDespiteDerivedMovie(t *testing.
 		t.Fatalf("mixed cameras appeared as %s", kind)
 	}
 }
+
+func TestRecordingLibraryMixedKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kinds []string
+		want  string
+	}{
+		{"video and audio", []string{"camera", "audio"}, "mixed"},
+		{"ROS and audio", []string{"ros2", "audio"}, "mixed"},
+		{"ROS and camera", []string{"ros2", "camera"}, "mixed"},
+		{"multiple microphones", []string{"audio", "audio"}, "audio"},
+		{"auxiliary telemetry", []string{"camera", "telemetry"}, "video"},
+		{"dataset", []string{"telemetry"}, "dataset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &data.Manifest{}
+			for _, kind := range tc.kinds {
+				m.Sources = append(m.Sources, data.SourceStats{Source: data.Source{Kind: kind}, Count: 1})
+			}
+			m.Sources = append(m.Sources, data.SourceStats{Source: data.Source{Kind: "image"}, Count: 0})
+			if got, _ := recordingKind(m); got != tc.want {
+				t.Fatalf("got %s, want %s", got, tc.want)
+			}
+		})
+	}
+}

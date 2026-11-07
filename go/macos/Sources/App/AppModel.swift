@@ -41,6 +41,11 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(hiddenAppsByDevice, forKey: "hiddenAppsByDevice")
     }
     private var cameraOrder = UserDefaults.standard.dictionary(forKey: "cameraOrderByDevice") as? [String: [String]] ?? [:]
+    // Initial reads are session-scoped: a pending response is not an empty inventory.
+    @Published private var appsReadSession: UInt64?
+    @Published private var camerasReadSession: UInt64?
+    var appsInitialLoading: Bool { selectedDeviceReady && appsReadSession != session }
+    var camerasInitialLoading: Bool { selectedDeviceReady && camerasReadSession != session }
     @Published var cameras: [Camera] = []
     @Published var logs: [LogEntry] = []
     @Published var cameraFeeds: [CameraFeed] = []
@@ -296,6 +301,7 @@ final class AppModel: ObservableObject {
             connectedLite = connection.lite
             cameraFeeds.forEach { $0.pause() }
             cameraFeeds = []; cameras = []; apps = []; logs = []
+            appsReadSession = nil; camerasReadSession = nil
             deviceChat.stop()
             deviceChat = DeviceChatModel(session: newSession)
             session = newSession
@@ -507,9 +513,11 @@ final class AppModel: ObservableObject {
                 }
             }
             apps = result; appsError = nil
+            appsReadSession = capturedSession
         } catch {
             guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
             appsError = error.localizedDescription
+            appsReadSession = capturedSession
         }
         do {
             let result = try await client.cameras()
@@ -525,9 +533,10 @@ final class AppModel: ObservableObject {
             }
             applyCameraOrder()
             camerasError = nil
+            camerasReadSession = capturedSession
             if cameraWallVisible { await playCameras() }
         }
-        catch { if session == capturedSession && selectedDeviceReady && !Task.isCancelled { camerasError = error.localizedDescription } }
+        catch { if session == capturedSession && selectedDeviceReady && !Task.isCancelled { camerasError = error.localizedDescription; camerasReadSession = capturedSession } }
     }
 
     func moveCamera(_ source: String, before target: String) {

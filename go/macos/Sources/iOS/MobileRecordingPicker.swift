@@ -7,6 +7,7 @@ struct RecordingEpisodePicker: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var textSize
     @State private var trigger: String?
+    @State private var kind: MobileRecordingKind?
     @State private var selection: String?
     @State private var player: String?
     @State private var exportItems: [MobileRecordingEpisode]?
@@ -14,19 +15,20 @@ struct RecordingEpisodePicker: View {
     @State private var files: MobileRecordingExport?
     @State private var exportError: String?
 
-    init(library: MobileRecordingLibrary, trigger: String?, selectedID: String? = nil, issue: String? = nil, retry: @escaping () -> Void = {}) {
+    init(library: MobileRecordingLibrary, trigger: String?, kind: MobileRecordingKind? = nil, selectedID: String? = nil, issue: String? = nil, retry: @escaping () -> Void = {}) {
         self.library = library
         self.issue = issue
         self.retry = retry
         _trigger = State(initialValue: trigger)
+        _kind = State(initialValue: kind)
         _selection = State(initialValue: selectedID)
     }
 
     private var filtered: [MobileRecordingEpisode] {
-        library.episodes(matching: trigger)
+        library.episodes(matching: trigger, kind: kind)
     }
     private var selected: MobileRecordingEpisode? { filtered.first { $0.id == selection } }
-    private var incompleteFilter: Bool { selected == nil && trigger != nil && library.labelCoverage != nil }
+    private var incompleteFilter: Bool { selected == nil && (trigger != nil || kind != nil) && library.labelCoverage != nil }
     private var groups: [(date: Date?, episodes: [MobileRecordingEpisode])] {
         let calendar = Calendar.current
         let days = Dictionary(grouping: filtered) { $0.started.map { calendar.startOfDay(for: $0) } }
@@ -47,10 +49,11 @@ struct RecordingEpisodePicker: View {
                         .background(Color.secondary.opacity(0.12), in: .circle).frame(width: 44, height: 44)
                 }.buttonStyle(.plain).accessibilityLabel("Close recordings")
             }.padding(.horizontal, 18).padding(.top, 20)
+            RecordingKindFilter(selection: $kind).padding(.horizontal, 16)
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
-                    filterChip(nil, count: library.episodes.count)
-                    ForEach(library.labels, id: \.name) { item in filterChip(item.name, count: item.count) }
+                    filterChip(nil, count: library.episodes(matching: nil, kind: kind).count)
+                    ForEach(library.labels, id: \.name) { item in filterChip(item.name, count: library.episodes(matching: item.name, kind: kind).count) }
                 }.padding(.horizontal, 16)
             }.scrollIndicators(.hidden)
             ScrollViewReader { proxy in
@@ -69,7 +72,8 @@ struct RecordingEpisodePicker: View {
                             }
                         }
                         if filtered.isEmpty {
-                            ContentUnavailableView("No saved episodes", systemImage: "cylinder.split.1x2")
+                            ContentUnavailableView("No matching episodes", systemImage: "line.3.horizontal.decrease",
+                                description: Text(library.labelCoverage != nil ? "Some details are still missing. Wait or change the filters." : "Try a different kind or label."))
                         }
                         if let warning = issue ?? library.warning {
                             Text(PresentedFailure(warning).details).font(.footnote).foregroundStyle(.secondary)
@@ -85,7 +89,7 @@ struct RecordingEpisodePicker: View {
                 Button("Cancel export") { exportItems = nil }
                     .font(.footnote).padding(.horizontal, 16).padding(.top, 8)
             } else if let coverage = library.labelCoverage {
-                Text(incompleteFilter ? "\(coverage). Filtered export needs all labels." : coverage)
+                Text(incompleteFilter ? "\(coverage). Load all details to export this filter." : coverage)
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.top, 8)
             }
             let buttons = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
@@ -104,6 +108,7 @@ struct RecordingEpisodePicker: View {
                     .accessibilityIdentifier("data.play")
             }.padding(.horizontal, 16).padding(.vertical, 10)
         }
+        .onChange(of: kind) { _, _ in if selected == nil { selection = nil } }
         .background(MobileLensStyle.background)
         .navigationDestination(item: $player) { id in
             DataVisualizerView(session: 0, deviceName: library.device.title, initialEpisode: id,
@@ -185,7 +190,7 @@ struct RecordingEpisodePicker: View {
 
     private func beginExport() {
         guard exportItems == nil, !incompleteFilter else { return }
-        let items = library.exportTargets(trigger: trigger, selectedID: selection)
+        let items = library.exportTargets(trigger: trigger, selectedID: selection, kind: kind)
         guard !items.isEmpty else { return }
         if items.count > 1 { proposedExport = items } else { exportItems = items }
     }

@@ -1,6 +1,7 @@
 #ifndef WENDY_DESKTOP_BRIDGE_H
 #define WENDY_DESKTOP_BRIDGE_H
 #include "BridgeTypes.h"
+#include "LocalResetTypes.h"
 typedef struct { char *name; int32_t value, minimum, maximum, step; int mutable; } WDCameraControl;
 typedef struct { WDStatus status; WDCameraControl *items; size_t count; } WDCameraControlsResult;
 WDCameraControlsResult *WDCameraControls(uint64_t session, uint32_t camera, char *stable_id, char *name, int32_t value);
@@ -78,6 +79,7 @@ WDStatus *WDDeleteAccess(char *account, char *org, char *id);
 #include "ModelLibraryTypes.h"
 #include "FleetTypes.h"
 #include "SettingsTypes.h"
+#include "OSUpdateTypes.h"
 #include "SensorTypes.h"
 #include "EnrollmentTypes.h"
 #ifdef __APPLE__

@@ -3,7 +3,7 @@ import SwiftUI
 extension MobileRecordingLibrary {
     var labelCoverage: String? {
         let loaded = episodes.count(where: \.detailsLoaded)
-        return loaded < episodes.count ? "Labels checked for \(loaded) of \(episodes.count) episodes" : nil
+        return loaded < episodes.count ? "Details checked: \(loaded) of \(episodes.count) episodes" : nil
     }
     var sizeText: String {
         Self.sizeText(for: episodes)
@@ -22,15 +22,14 @@ extension MobileRecordingLibrary {
             .sorted { $0.count == $1.count ? $0.name < $1.name : $0.count > $1.count }
     }
 
-    func episodes(matching trigger: String?) -> [MobileRecordingEpisode] {
-        guard let trigger else { return episodes }
-        return episodes.filter { $0.trigger == trigger }
+    func episodes(matching trigger: String?, kind: MobileRecordingKind? = nil) -> [MobileRecordingEpisode] {
+        return episodes.filter { (trigger == nil || $0.trigger == trigger) && (kind == nil || $0.kind == kind) }
     }
 
-    func exportTargets(trigger: String?, selectedID: String?) -> [MobileRecordingEpisode] {
-        let visible = episodes(matching: trigger)
+    func exportTargets(trigger: String?, selectedID: String?, kind: MobileRecordingKind? = nil) -> [MobileRecordingEpisode] {
+        let visible = episodes(matching: trigger, kind: kind)
         if let selectedID { return visible.filter { $0.id == selectedID } }
-        if trigger != nil && labelCoverage != nil { return [] }
+        if (trigger != nil || kind != nil) && labelCoverage != nil { return [] }
         return visible
     }
 }
@@ -181,6 +180,9 @@ struct RecordingThumbnail: View {
                         }.frame(width: proxy.size.width * 0.46, height: proxy.size.height * 0.52)
                             .position(x: proxy.size.width/2, y: proxy.size.height/2)
                     }
+                case .mixed:
+                    RecordingAppearance.ink
+                    Image(systemName: "square.stack.3d.up.fill").font(.title3).foregroundStyle(.white)
                 case .dataset:
                     Color(white: 249/255)
                     datasetGrid
@@ -241,5 +243,19 @@ struct RecordingThumbnail: View {
         RoundedRectangle(cornerRadius: 5)
             .fill(Color(red: Double(rgb >> 16)/255, green: Double((rgb >> 8) & 255)/255, blue: Double(rgb & 255)/255))
             .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(.white, lineWidth: 2) }
+    }
+}
+
+// Shared control for the Data overview and the episode sheet.
+struct RecordingKindFilter: View {
+    @Binding var selection: MobileRecordingKind?
+    var body: some View {
+        Picker("Data kind", selection: $selection) {
+            Text("All kinds").tag(nil as MobileRecordingKind?)
+            ForEach(MobileRecordingKind.allCases, id: \.self) { kind in
+                Text(kind == .unknown ? "Unknown" : kind.rawValue).tag(Optional(kind))
+            }
+        }.pickerStyle(.menu).tint(MobileLensStyle.green)
+            .accessibilityIdentifier("data.kindFilter")
     }
 }

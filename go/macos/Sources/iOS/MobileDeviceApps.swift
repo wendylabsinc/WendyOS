@@ -38,7 +38,7 @@ struct MobileDeviceView: View {
                             case .data:
                                 MobileRecordingSection(model: model, recent: true)
                                 Button(action: openRecordings) {
-                                    LensRow(title: "All recordings", subtitle: "Open Data for " + device.title, symbol: "cylinder.split.1x2")
+                                    LensRow(title: "All recordings", subtitle: "", symbol: "cylinder.split.1x2")
                                 }.buttonStyle(.plain).background(MobileLensStyle.card, in: .rect(cornerRadius: 22))
                             case .location:
                                 LensSection(title: "Location") {
@@ -133,8 +133,8 @@ struct MobileDeviceView: View {
         VStack(alignment: .leading, spacing: 18) {
             LensHero(icon: "cpu", color: MobileLensStyle.green, kicker: ["DEVICE", info?.board.nonEmpty?.uppercased()].compactMap { $0 }.joined(separator: " · "),
                      title: device.title, subtitle: ["Online", "\(model.apps.count) apps", site].compactMap { $0 }.joined(separator: " · "),
-                     chips: ["Online", device.transport == .cloud ? "Cloud" : "Local",
-                             update?.busy == true ? "Updating Agent" : update?.available == true ? "Update available" : (update?.installed.nonEmpty ?? info?.version.nonEmpty).map { "Agent \($0)" },
+                     chips: [device.transport == .cloud ? "Cloud" : "Local",
+                             update?.busy == true ? "Updating Agent" : update?.available == true ? "Update available" : nil,
                              model.camerasError == nil ? "\(model.cameras.count) \(model.cameras.count == 1 ? "camera" : "cameras")" : nil].compactMap { $0 }, device: device, customize: { showingAppearance = true }) {
                 Button("Logs", action: openLogs).buttonStyle(LensPillStyle()).accessibilityIdentifier("devices.detail.logs")
                 Button(updateTitle) { tool = .update }.buttonStyle(LensPillStyle(primary: true))
@@ -226,7 +226,9 @@ private struct MobileAppsList: View {
                             Text(verbatim: app.appName.replacingOccurrences(of: ".", with: ".\u{200B}"))
                                 .font(.body.weight(.semibold)).lineLimit(textSize.isAccessibilitySize ? nil : 2)
                                 .truncationMode(.middle).accessibilityLabel(app.appName)
-                            Text(app.terminationReason?.nonEmpty ?? app.runningState.title).font(.caption).foregroundStyle(.secondary)
+                            if let reason = app.terminationReason?.nonEmpty, reason.localizedCaseInsensitiveCompare(app.runningState.title) != .orderedSame {
+                                Text(reason).font(.caption).foregroundStyle(.secondary)
+                            }
                             if textSize.isAccessibilitySize { metadata(for: app) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         if !textSize.isAccessibilitySize { metadata(for: app) }
@@ -236,10 +238,12 @@ private struct MobileAppsList: View {
                 if app.id != model.visibleApps.last?.id { Divider().padding(.leading, 64) }
             }
             if let error = model.appsError { FailureNote(message: error).padding(16) }
+            else if model.visibleApps.isEmpty && model.appsInitialLoading {
+                MobileLoadingPlaceholder(label: "Loading apps…").padding(16)
+            }
             else if model.visibleApps.isEmpty { Text("No visible apps on this device.").foregroundStyle(.secondary).padding(16) }
             if model.hiddenAppCount > 0 { HiddenAppsFilter(model: model).padding(12) }
         }
-        Text("WEB means the app serves a page you can open.").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12)
         LensSection(title: "Add") {
             Button { deploying = true } label: {
                 LensRow(title: "Deploy an app", subtitle: "From a Wendy project", symbol: "square.grid.2x2")
@@ -255,12 +259,13 @@ private struct MobileAppsList: View {
     }
 
     private func metadata(for app: DeviceApp) -> some View {
-        let badge = app.hasWebpage && app.runningState == .running ? "WEB" : app.state.replacingOccurrences(of: "_", with: " ")
+        let badge = app.state.replacingOccurrences(of: "_", with: " ")
         return HStack(spacing: 6) {
             Text(badge).font(.caption2.bold()).foregroundStyle(app.runningState.color).fixedSize()
                 .padding(.horizontal, 7).padding(.vertical, 4).background(app.runningState.color.opacity(0.12), in: .capsule)
             if app.hasWebpage {
-                Text(verbatim: ":\(app.httpPort)").font(.caption).foregroundStyle(.secondary).fixedSize()
+                Image(systemName: "globe").font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("Has a web page")
             }
         }
     }
@@ -285,7 +290,7 @@ struct MobileAppDetail: View {
                     VStack(alignment: .leading, spacing: 18) {
                         LensHero(icon: "square.grid.2x2", color: app.runningState == .running ? .green : .gray, kicker: "APP · \(device.title.uppercased())",
                                  title: name, subtitle: app.terminationReason?.nonEmpty ?? app.runningState.title,
-                                 chips: app.hasWebpage ? [":\(app.httpPort) · http"] : []) {
+                                 chips: []) {
                             Button(app.runningState == .running ? "Stop" : "Start") {
                                 actions.submit { await model.setAppRunning(name, running: app.runningState != .running, expectedSession: session) }
                             }.buttonStyle(LensPillStyle()).disabled(model.appActions.contains(name) || app.runningState == .unknown)
@@ -310,9 +315,6 @@ struct MobileAppDetail: View {
                                 }
                                 if let portError { FailureNote(message: portError).padding(12) }
                             }
-                            Text(device.transport == .cloud ? "Remote: opens through a secure Wendy Cloud tunnel." :
-                                 device.transport == .mesh ? "Opens through the Wendy mesh connection." : "Nearby: opens directly on this network.")
-                                .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 12)
                         }
                         LensSection(title: "App") {
                             Button(action: openLogs) { LensRow(title: "Logs", subtitle: "Follow live output", symbol: "clock", color: .gray) }
@@ -321,7 +323,7 @@ struct MobileAppDetail: View {
                             LensRow(title: "Version", subtitle: app.appVersion?.nonEmpty ?? "Not reported", symbol: "square.grid.2x2", color: .gray, navigates: false)
                             Divider().padding(.leading, 64)
                             Button { actions.submit { await model.restartApp(name, expectedSession: session) } } label: {
-                                LensRow(title: "Restart", subtitle: "Stops and starts the container", symbol: "arrow.clockwise", color: .orange)
+                                LensRow(title: "Restart", subtitle: "Stops and starts the app", symbol: "arrow.clockwise", color: .orange)
                             }.buttonStyle(.plain).disabled(app.runningState != .running || model.appActions.contains(name))
                                 .accessibilityIdentifier("app.restart")
                         }

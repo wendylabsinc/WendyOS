@@ -114,7 +114,6 @@ struct MobileDeviceActivity: View {
         let active = alerts.filter { state.archived[$0.id] == nil && !state.expired.contains($0.id) }
         let unread = active.filter { !state.read.contains($0.id) }
         List {
-            Text("Alerts and events from your devices").foregroundStyle(.secondary).plainActivityRow()
             HStack(spacing: 0) {
                 ForEach(MobileActivitySegment.allCases, id: \.self) { tab in
                     Button {
@@ -143,7 +142,10 @@ struct MobileDeviceActivity: View {
                 let partial = catalog.reads.values.contains { $0.library?.labelCoverage != nil }
                 let incomplete = sources.unavailable > 0 || !catalog.detailProblems.isEmpty || catalog.reads.values.contains { $0.problem != nil || $0.library?.warning != nil } || model.cloudError != nil || model.nearbyError != nil
                 if catalog.loading || (!model.mobileCloudOrganization.isEmpty && !model.cloudLoaded && model.cloudError == nil) || (!model.nearbyLoaded && model.nearbyError == nil) || (partial && catalog.detailProblems.isEmpty) {
-                    ProgressView("Checking for alerts…").plainActivityRow()
+                    if active.isEmpty {
+                        MobileLoadingPlaceholder(label: "Checking for alerts…", rows: 2)
+                            .padding(16).background(RecordingAppearance.card, in: .rect(cornerRadius: 22)).plainActivityRow()
+                    } else { ProgressView("Checking for alerts…").plainActivityRow() }
                 } else if active.isEmpty {
                     ContentUnavailableView(incomplete ? "No alerts from available devices" : "No alerts", systemImage: "bell").plainActivityRow()
                 }

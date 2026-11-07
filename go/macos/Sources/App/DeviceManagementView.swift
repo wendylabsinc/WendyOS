@@ -58,9 +58,16 @@ struct DeviceManagementView: View {
             } footer: {
                 Text("Revokes Cloud access and removes the device from this organization. This does not reset its local enrollment, apps or Wi-Fi. Local recovery is required before enrolling it again.")
             }
+            Section {
+                NavigationLink("Reset local enrollment") {
+                    DeviceLocalResetView(session: session, deviceName: deviceName, account: account,
+                        organization: identity?.organizationID ?? "", deviceID: identity?.deviceID ?? "")
+                }.disabled(!canManage)
+            }
             Section("Software and power") {
                 NavigationLink("Agent update and device info") { DeviceInfoView(session: session, deviceName: deviceName) }
-                Text("OS updates require the Wendy CLI so driver preparation and boot health can be verified. Remote device restart is not supported by this Agent API.").font(.footnote).foregroundStyle(.secondary)
+                NavigationLink("OS update") { DeviceOSUpdateView(session: session, deviceName: deviceName) }
+                Text("Remote restart is not supported yet.").font(.footnote).foregroundStyle(.secondary)
             }
             if busy { ProgressView("Applying to \(deviceName)…") }
             if let message { Text(message).foregroundStyle(.secondary) }

@@ -12,14 +12,17 @@ import (
 	"google.golang.org/protobuf/proto"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
 type settingsAgent struct {
 	pb.UnimplementedWendyWiFiServiceServer
 	pb.UnimplementedWendyLocalMeshAdminServiceServer
-	joins   chan *pb.ConnectToWiFiRequest
-	patches chan *pb.ConfigureLocalMeshRequest
+	joins      chan *pb.ConnectToWiFiRequest
+	patches    chan *pb.ConfigureLocalMeshRequest
+	priorities chan *pb.SetWiFiNetworkPriorityRequest
+	priority   atomic.Int32
 }
 
 func (s *settingsAgent) GetWiFiStatus(context.Context, *pb.GetWiFiStatusRequest) (*pb.GetWiFiStatusResponse, error) {
@@ -29,7 +32,7 @@ func (s *settingsAgent) ListWiFiNetworks(context.Context, *pb.ListWiFiNetworksRe
 	return nil, status.Error(codes.Unavailable, "scan unavailable")
 }
 func (s *settingsAgent) ListKnownWiFiNetworks(context.Context, *pb.ListKnownWiFiNetworksRequest) (*pb.ListKnownWiFiNetworksResponse, error) {
-	return &pb.ListKnownWiFiNetworksResponse{Networks: []*pb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork{{Ssid: "Saved", Security: pb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK}}}, nil
+	return &pb.ListKnownWiFiNetworksResponse{Networks: []*pb.ListKnownWiFiNetworksResponse_KnownWiFiNetwork{{Ssid: "Saved", Priority: s.priority.Load(), Security: pb.WiFiSecurityType_WIFI_SECURITY_TYPE_WPA2_PSK}}}, nil
 }
 func (s *settingsAgent) GetLocalMeshTopology(context.Context, *pb.GetLocalMeshTopologyRequest) (*pb.LocalMeshTopology, error) {
 	return &pb.LocalMeshTopology{SelfPrincipal: "self", RuntimeAvailable: true, CapturedAtUnixMs: 12345, Truncated: true,
@@ -46,6 +49,16 @@ func (s *settingsAgent) ConnectToWiFi(_ context.Context, req *pb.ConnectToWiFiRe
 	}
 	return &pb.ConnectToWiFiResponse{Success: true}, nil
 }
+func (s *settingsAgent) SetWiFiNetworkPriority(_ context.Context, req *pb.SetWiFiNetworkPriorityRequest) (*pb.SetWiFiNetworkPriorityResponse, error) {
+	s.priorities <- req
+	if req.Ssid == "Rejected" {
+		return &pb.SetWiFiNetworkPriorityResponse{ErrorMessage: proto.String("not saved")}, nil
+	}
+	if req.Ssid != "Unconfirmed" {
+		s.priority.Store(req.Priority)
+	}
+	return &pb.SetWiFiNetworkPriorityResponse{Success: true}, nil
+}
 func (s *settingsAgent) ConfigureLocalMesh(_ context.Context, req *pb.ConfigureLocalMeshRequest) (*pb.LocalMeshStatus, error) {
 	s.patches <- req
 	return &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{}}, nil
@@ -54,7 +67,7 @@ func settingsBackend(t *testing.T) (*Backend, *settingsAgent) {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
-	fake := &settingsAgent{joins: make(chan *pb.ConnectToWiFiRequest, 4), patches: make(chan *pb.ConfigureLocalMeshRequest, 4)}
+	fake := &settingsAgent{joins: make(chan *pb.ConnectToWiFiRequest, 4), patches: make(chan *pb.ConfigureLocalMeshRequest, 4), priorities: make(chan *pb.SetWiFiNetworkPriorityRequest, 4)}
 	pb.RegisterWendyWiFiServiceServer(server, fake)
 	pb.RegisterWendyLocalMeshAdminServiceServer(server, fake)
 	go server.Serve(listener)
@@ -97,6 +110,9 @@ func TestSettingsRejectStaleSessionBeforeMutating(t *testing.T) {
 		if err := b.DisconnectWiFi(session); err == nil {
 			t.Fatal("disconnect accepted stale session")
 		}
+		if err := b.SetWiFiPriority(session, "Saved", 10); err == nil {
+			t.Fatal("priority accepted stale session")
+		}
 		if err := b.ForgetWiFi(session, "Saved"); err == nil {
 			t.Fatal("forget accepted stale session")
 		}
@@ -104,7 +120,7 @@ func TestSettingsRejectStaleSessionBeforeMutating(t *testing.T) {
 			t.Fatal("mesh accepted stale session")
 		}
 	}
-	if len(fake.joins) != 0 || len(fake.patches) != 0 {
+	if len(fake.joins) != 0 || len(fake.patches) != 0 || len(fake.priorities) != 0 {
 		t.Fatal("stale operation reached device")
 	}
 }
@@ -158,4 +174,51 @@ func TestMeshPatchPreservesUnchangedFields(t *testing.T) {
 			t.Fatal("invalid patch accepted")
 		}
 	}
+}
+
+func TestWiFiPriorityReadsBackAndPreservesFailure(t *testing.T) {
+	b, fake := settingsBackend(t)
+	if err := b.SetWiFiPriority(7, "Saved", -15); err != nil {
+		t.Fatal(err)
+	}
+	req := <-fake.priorities
+	if req.Ssid != "Saved" || req.Priority != -15 {
+		t.Fatalf("wrong priority request: %v", req)
+	}
+	if err := b.SetWiFiPriority(7, "Rejected", 8); err == nil || !strings.Contains(err.Error(), "not saved") {
+		t.Fatalf("negative reply: %v", err)
+	}
+	<-fake.priorities
+	if err := b.SetWiFiPriority(7, "Unconfirmed", 8); err == nil || !strings.Contains(err.Error(), "not confirmed") {
+		t.Fatalf("missing readback: %v", err)
+	}
+	<-fake.priorities
+	if err := b.SetWiFiPriority(7, "", 8); err == nil {
+		t.Fatal("empty SSID accepted")
+	}
+	if len(fake.priorities) != 0 {
+		t.Fatal("invalid priority reached device")
+	}
+}
+func TestWiFiPasswordValidationDoesNotSendInvalidCredentials(t *testing.T) {
+	b, fake := settingsBackend(t)
+	for _, tc := range []struct {
+		ssid, password string
+		security       int32
+	}{
+		{"new", "short", 4}, {"new", strings.Repeat("x", 64), 4}, {"new", "nul\x00password", 4},
+		{"bad\x00ssid", "valid-password", 4}, {strings.Repeat("é", 17), "valid-password", 4},
+		{"new", "invalid", 2},
+	} {
+		if err := b.JoinWiFi(7, tc.ssid, tc.password, tc.security, false); err == nil {
+			t.Fatal("invalid credential accepted")
+		}
+	}
+	if len(fake.joins) != 0 {
+		t.Fatal("invalid credential reached device")
+	}
+	if err := b.JoinWiFi(7, "new", strings.Repeat("a", 64), 4, false); err != nil {
+		t.Fatal(err)
+	}
+	<-fake.joins
 }

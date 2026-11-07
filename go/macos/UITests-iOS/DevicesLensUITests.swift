@@ -18,6 +18,85 @@ final class DevicesLensUITests: XCTestCase {
         devices.tap()
     }
 
+    func testFavoriteWidgetPickerStaysOpenWhileSearchingAndGoingBack() {
+        continueAfterFailure = false
+        app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
+        app.launch()
+        if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
+        XCTAssertTrue(app.buttons["lens.open.Devices"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.otherElements["home.widgets.ready"].waitForExistence(timeout: 20))
+        let add = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Add widgets")).firstMatch
+        if add.exists { add.tap() }
+        else {
+            let widget = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.widget.options.")).firstMatch
+            XCTAssertTrue(widget.waitForExistence(timeout: 5))
+            widget.press(forDuration: 0.7)
+            app.buttons["Add widget"].tap()
+        }
+        for _ in 0..<3 {
+            let favorite = app.buttons["Add Favorite devices"]
+            XCTAssertTrue(favorite.waitForExistence(timeout: 5))
+            favorite.tap()
+            let search = app.textFields["home.favorites.search"]
+            XCTAssertTrue(search.waitForExistence(timeout: 5))
+            search.tap()
+            search.typeText("NoSuchDevice123")
+            XCTAssertTrue(app.staticTexts["No matching devices"].exists || app.staticTexts["No devices available"].exists)
+            app.buttons["Clear search"].tap()
+            XCTAssertTrue(search.exists)
+            app.buttons["Back"].tap()
+        }
+        XCTAssertTrue(app.buttons["Close widget picker"].exists)
+        app.buttons["Close widget picker"].tap()
+        XCTAssertTrue(app.buttons["lens.open.Devices"].waitForExistence(timeout: 5))
+    }
+
+    func testWidgetTitleMenuEditsAndRemovesOnlyItsWidget() {
+        func tapDone() {
+            let button = app.buttons.matching(identifier: "Done").allElementsBoundByIndex.last(where: \.isHittable)
+            XCTAssertNotNil(button)
+            button?.tap()
+        }
+        continueAfterFailure = false
+        app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
+        app.launch()
+        if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
+        XCTAssertTrue(app.otherElements["home.widgets.ready"].waitForExistence(timeout: 20))
+        let add = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Add widgets")).firstMatch
+        if add.exists { add.tap() }
+        else {
+            let header = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.widget.options.")).firstMatch
+            XCTAssertTrue(header.waitForExistence(timeout: 5))
+            header.press(forDuration: 0.7)
+            XCTAssertTrue(app.buttons["Add widget"].waitForExistence(timeout: 5))
+            app.buttons["Add widget"].tap()
+        }
+        let quick = app.buttons["Add Quick actions"]
+        for _ in 0..<4 { if quick.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(quick.isHittable)
+        quick.tap()
+        let title = app.textFields["Widget title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap(); title.typeText("Widget options QA")
+        tapDone()
+        // Adding returns to Home's layout editing mode.
+        if app.buttons.matching(identifier: "Done").firstMatch.waitForExistence(timeout: 3) { tapDone() }
+        let header = app.buttons["Widget options QA widget options"]
+        for _ in 0..<6 { if header.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(header.isHittable)
+        header.tap()
+        XCTAssertTrue(app.buttons["Edit widget"].waitForExistence(timeout: 5))
+        app.buttons["Edit widget"].tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.value as? String, "Widget options QA")
+        tapDone()
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        header.tap()
+        XCTAssertTrue(app.buttons["Remove widget"].waitForExistence(timeout: 5))
+        app.buttons["Remove widget"].tap()
+        XCTAssertFalse(header.waitForExistence(timeout: 2))
+    }
+
     func testDeviceBottomRowsClearFloatingBars() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_BOTTOM_INSETS_FIXTURE"] == "1", "Requires local device fixture")
         continueAfterFailure = false
@@ -68,7 +147,7 @@ final class DevicesLensUITests: XCTestCase {
         _ = openDevice("Devices UI QA", source: "local")
         XCTAssertTrue(app.buttons["device.segment.Cameras"].waitForExistence(timeout: 30))
         app.buttons["lens.chat"].tap()
-        XCTAssertTrue(app.navigationBars["Ask Wendy"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Change device"].waitForExistence(timeout: 5))
         let inference = app.segmentedControls["chat.inference"]
         XCTAssertTrue(inference.waitForExistence(timeout: 10))
         let cloud = inference.buttons["Cloud"]
@@ -247,7 +326,7 @@ final class DevicesLensUITests: XCTestCase {
         app.buttons["lens.tab.Data"].tap()
         XCTAssertTrue(app.navigationBars["Data"].waitForExistence(timeout: 5))
         app.buttons["lens.chat"].tap()
-        XCTAssertTrue(app.navigationBars["Ask Wendy"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Change device"].waitForExistence(timeout: 5))
         app.buttons["Close"].tap()
         app.buttons["lens.back"].tap()
         XCTAssertTrue(app.buttons["lens.open.Devices"].waitForExistence(timeout: 8))
@@ -275,7 +354,7 @@ final class DevicesLensUITests: XCTestCase {
         capture("Running app")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(row.waitForExistence(timeout: 10))
-        XCTAssertTrue(row.label.contains("WEB"))
+        XCTAssertTrue(row.label.contains("Has a web page"))
         capture("Running device Apps")
         row.tap()
         app.buttons["app.restart"].tap()
@@ -406,7 +485,7 @@ final class DevicesLensUITests: XCTestCase {
         _ = openDevice(device, source: "cloud")
         let name = "sh.wendy.examples.hellopython"
         XCTAssertTrue(app.buttons["devices.detail.logs"].waitForExistence(timeout: 30))
-        openInstalledApp(name, badge: "WEB")
+        openInstalledApp(name, badge: "Has a web page")
         verifyWebContent(containing: "Hello", captureName: "Cloud Hello Python web page")
         try await verifyAppLog(containing: "GET /", captureName: "Cloud Hello Python logs")
     }
@@ -419,7 +498,7 @@ final class DevicesLensUITests: XCTestCase {
         let template = "test-node-simple-api"
         launch()
         _ = openDevice(local, source: "local")
-        openInstalledApp(template, badge: "WEB")
+        openInstalledApp(template, badge: "Has a web page")
         waitForLabel("Stop", button: app.buttons["app.toggle"])
         let lanPage = try XCTUnwrap(showDashboard(containing: "hello-world", captureName: "Switch - LAN dashboard"))
         app.buttons["app.browser.done"].tap()
@@ -435,7 +514,7 @@ final class DevicesLensUITests: XCTestCase {
         XCTAssertFalse(remoteOpen.exists && remoteOpen.isEnabled)
         capture("Switch - same app on Thor")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        openInstalledApp("sh.wendy.examples.hellopython", badge: "WEB")
+        openInstalledApp("sh.wendy.examples.hellopython", badge: "Has a web page")
         let tunnel = try XCTUnwrap(showDashboard(containing: "Hello", captureName: "Switch - Cloud dashboard"))
         XCTAssertEqual(tunnel.host, "127.0.0.1")
         app.buttons["app.browser.done"].tap()

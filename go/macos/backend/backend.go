@@ -40,6 +40,7 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	osUpdate                mobileOSRun
 	recordings              recordingReads
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc

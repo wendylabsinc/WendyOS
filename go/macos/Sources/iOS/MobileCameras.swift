@@ -10,6 +10,9 @@ struct CameraWallView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 if let error = model.camerasError { FailureNote(message: error) }
+                else if model.cameraFeeds.isEmpty && model.camerasInitialLoading {
+                    MobileLoadingPlaceholder(label: "Loading cameras…", style: .camera)
+                }
                 else if model.cameraFeeds.isEmpty { ContentUnavailableView("No cameras attached", systemImage: "video.slash") }
                 ForEach(model.cameraFeeds) { feed in
                     MobileCameraPlayer(feed: feed, model: model, expand: { fullscreen = feed })
@@ -17,14 +20,13 @@ struct CameraWallView: View {
                         .clipShape(.rect(cornerRadius: 18))
                 }
                 if !model.cameraFeeds.isEmpty {
-                    Text("CAMERAS").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 16)
+                    Text("CAMERA CONTROLS").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 16)
                     VStack(spacing: 0) {
                         ForEach(model.cameraFeeds) { feed in
                             MobileCameraSettingsLink(feed: feed) { settings = feed }
                             if feed.id != model.cameraFeeds.last?.id { Divider().padding(.leading, 70) }
                         }
                     }.background(RecordingAppearance.card, in: .rect(cornerRadius: 22))
-                    Text("Tap a camera to view its available controls.").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
                 }
             }.padding(16)
         }
@@ -192,10 +194,10 @@ private struct MobileCameraSettings: View {
             Form {
                 Section("Stream") {
                     LabeledContent("Resolution", value: feed.resolution ?? "Waiting for video")
-                    Text("Resolution is reported by the live stream. Capture format selection is not available on this connection.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Resolution can’t be changed here.").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Camera controls") {
-                    if loading { ProgressView("Loading controls…") }
+                    if loading && controls.isEmpty && error == nil { MobileLoadingPlaceholder(label: "Loading controls…", rows: 2) }
                     else if let error {
                         FailureNote(message: error)
                         Button("Retry") { actions.submit { await load() } }
@@ -207,7 +209,7 @@ private struct MobileCameraSettings: View {
                                 actions.submit { await load(name: control.name, value: value) }
                             }
                         }
-                        Text("Values and ranges come from the camera driver. Changes apply now; they are not saved across device restarts.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Changes apply immediately and reset when the device restarts.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }
             }.scrollContentBackground(.hidden).background(MobileLensStyle.background)

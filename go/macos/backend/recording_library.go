@@ -376,6 +376,17 @@ func recordingKind(m *data.Manifest) (string, []string) {
 			images = true
 		}
 	}
+	// Count captured media families, not sidecar telemetry or derived snapshot movies.
+	// Stills and movies share a visual family: preview frames do not make a video mixed.
+	families := 0
+	for _, present := range []bool{camera || video || movie || images || snapshots, ros, audio} {
+		if present {
+			families++
+		}
+	}
+	if families > 1 {
+		return "mixed", topics
+	}
 	switch {
 	case video || ((camera || movie) && !snapshots):
 		return "video", nil

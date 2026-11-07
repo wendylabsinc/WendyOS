@@ -64,129 +64,55 @@ struct MobileGeneralHome: View {
     let notifications: () -> Void
     let setup: () -> Void
     let recordings: () -> Void
-    @AppStorage("wendy.primaryLens") private var preferred = MobileLens.devices.rawValue
+    let openDevice: (Device) -> Void
+    @StateObject private var widgets = HomeWidgetStore()
     @State private var editingHome = false
-    @AppStorage("wendy.home.sections") private var sections = "Needs you,Happening now,Quick actions"
-    @AppStorage("wendy.home.hidden") private var hidden = ""
-    private var order: [String] { sections.components(separatedBy: ",") }
-    private var hiddenItems: Set<String> { Set(hidden.split(separator: ",").map(String.init)) }
+    @State private var addingWidget = false
+    @State private var configuringWidget: HomeWidget?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day())).foregroundStyle(.secondary)
-                Button { open(primary) } label: {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 12) {
-                            LensIcon(symbol: primary.icon, color: primary.color, size: 52)
-                            Text(primary.rawValue).font(.title.bold())
-                            Spacer(minLength: 0)
-                            if primary == .devices && attentionCount > 0 {
-                                Text("\(attentionCount) need attention").font(.caption.bold()).foregroundStyle(.red)
-                                    .padding(6).background(.red.opacity(0.12), in: .capsule)
-                            }
-                        }
-                        if primary == .devices {
-                            HStack(spacing: 8) {
-                                stat(model.nearbyLoaded && model.nearbyError == nil ? model.nearby.count : nil, "Local")
-                                stat(model.cloudLoaded && model.cloudError == nil ? model.cloud.count : nil, "Cloud")
-                            }
-                        }
-                        Spacer()
-                        HStack {
-                            Text("Open \(primary.rawValue)").font(.headline)
-                            Image(systemName: "chevron.right").font(.caption.bold())
-                        }.padding(.horizontal, 16).padding(.vertical, 10)
-                            .foregroundStyle(.white).background(primary.color, in: .capsule)
-                    }.padding(20).frame(maxWidth: .infinity, minHeight: 380, alignment: .leading)
-                        .background {
-                            ZStack(alignment: .bottomTrailing) {
-                                LinearGradient(colors: [MobileLensStyle.card, primary.color.opacity(0.16)], startPoint: .top, endPoint: .bottom)
-                                if primary == .devices { LensMeshArtwork().frame(width: 260, height: 195).padding(.trailing, 4) }
-                                else { Image(systemName: primary.icon).font(.system(size: 110)).foregroundStyle(primary.color.opacity(0.16)).padding(25) }
-                            }
-                        }.clipShape(.rect(cornerRadius: 30))
-                }.buttonStyle(.plain).accessibilityIdentifier("lens.open." + primary.rawValue)
-                HStack(spacing: 12) {
-                    ForEach(MobileLens.allCases.filter { $0 != primary && !hiddenItems.contains($0.rawValue) }) { lens in
+                HStack(spacing: 8) {
+                    ForEach(MobileLens.allCases) { lens in
                         Button { open(lens) } label: {
-                            VStack(alignment: .leading, spacing: 18) {
-                                LensIcon(symbol: lens.icon, color: lens.color)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(lens.rawValue).font(.headline)
-                                    Text(lens == .sites ? "Places and facilities" : lens == .robots ? "Paired robots" : "Local and cloud devices")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                            }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(alignment: .bottomTrailing) {
-                                    Image(systemName: lens.icon).font(.system(size: 58)).foregroundStyle(lens.color.opacity(0.13)).offset(x: 6, y: 8)
-                                }
-                                .background(lens.color.opacity(0.10), in: .rect(cornerRadius: 22)).clipShape(.rect(cornerRadius: 22))
+                            VStack(spacing: 8) {
+                                LensIcon(symbol: lens.icon, color: lens.color, size: 36)
+                                Text(lens.rawValue).font(.subheadline.weight(.semibold))
+
+                            }.frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(lens.color.opacity(lens == primary ? 0.14 : 0.06), in: .rect(cornerRadius: 22))
                         }.buttonStyle(.plain).accessibilityIdentifier("lens.open." + lens.rawValue)
                     }
                 }
-                ForEach(order.filter { !hiddenItems.contains($0) }, id: \.self) { section in
-                    switch section {
-                    case "Needs you":
-                        if attentionCount > 0 {
-                            LensSection(title: section) {
-                                Button(action: { open(.devices) }) {
-                                    LensRow(title: "Devices need attention", subtitle: "\(attentionCount) reported issues", symbol: "bell", color: .orange)
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    case "Happening now":
-                        if let event = model.experienceEvents.first {
-                            LensSection(title: section) {
-                                Button(action: notifications) {
-                                    LensRow(title: event.title, subtitle: event.deviceName, symbol: event.symbol)
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    case "Quick actions":
-                        LensSection(title: section) {
-                            Button(action: setup) { LensRow(title: "Set up a new device", subtitle: "Nearby over Bluetooth", symbol: "plus") }.buttonStyle(.plain)
-                            Divider().padding(.leading, 64)
-                            Button(action: recordings) { LensRow(title: "Device recordings", subtitle: "", symbol: "cylinder.split.1x2") }.buttonStyle(.plain)
-                        }
-                    default: EmptyView()
-                    }
+                if model.account != nil && model.mobileScopeIsCurrent && !model.mobileCloudSelectionLoading {
+                HomeWidgetDeck(model: model, store: widgets, editing: $editingHome,
+                               add: { addingWidget = true }, configure: { configuringWidget = $0 },
+                               setup: setup, recordings: recordings, notifications: notifications,
+                               devices: { open(.devices) }, openDevice: openDevice)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("home.widgets.ready")
+                } else {
+                    ProgressView("Loading Home…").frame(maxWidth: .infinity).padding(24)
                 }
-                Button("Edit Home", systemImage: "slider.horizontal.3") { editingHome = true }
-                    .font(.subheadline).foregroundStyle(MobileLensStyle.accent)
             }.padding(.horizontal, 16).padding(.bottom, 22).frame(maxWidth: 700)
                 .frame(maxWidth: .infinity)
         }.background(MobileLensStyle.background)
-            .navigationTitle("Good morning")
-            .sheet(isPresented: $editingHome) {
-                NavigationStack {
-                    List {
-                        Section("Secondary lenses") {
-                            ForEach(MobileLens.allCases.filter { $0 != primary }) { lens in
-                                Toggle(lens.rawValue, isOn: visibility(lens.rawValue))
-                            }
-                        }
-                        Section("Home sections") {
-                            ForEach(order, id: \.self) { title in Toggle(title, isOn: visibility(title)) }
-                                .onMove { from, to in
-                                    var newOrder = order
-                                    newOrder.move(fromOffsets: from, toOffset: to)
-                                    sections = newOrder.joined(separator: ",")
-                                }
-                        }
-                        Picker("Primary lens", selection: $preferred) {
-                            ForEach(MobileLens.allCases) { Text($0.rawValue).tag($0.rawValue) }
-                        }
-                    }.environment(\.editMode, .constant(.active))
-                        .navigationTitle("Edit Home")
-                        .toolbar { Button("Done") { editingHome = false } }
-                }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $addingWidget) { HomeWidgetManager(store: widgets, model: model) }
+            .sheet(item: $configuringWidget) { widget in
+                HomeWidgetEditor(widget: widget, model: model, save: { widgets.save($0) }, remove: { widgets.remove(widget.id) })
+            }
+            .task(id: model.mobileCloudSelectionKey) {
+                editingHome = false; configuringWidget = nil; addingWidget = false
+                widgets.load(account: model.mobileCloudAccount, organization: model.mobileCloudOrganization)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: accounts) { HStack(spacing: 7) {
                         Image("WendyMark").resizable().frame(width: 26, height: 26).clipShape(.circle)
-                        Text(model.mobileCloudOrganizations.first { $0.id == model.mobileCloudOrganization }?.name ?? "Account")
+                        Text(model.mobileCloudOrganizations.first { $0.id == model.mobileCloudOrganization }?.name ?? "Account").lineLimit(1).truncationMode(.tail)
                         Image(systemName: "chevron.down").font(.caption2)
                     } }.accessibilityIdentifier("lens.accounts")
                 }
@@ -198,21 +124,7 @@ struct MobileGeneralHome: View {
         [model.nearbyError, model.cloudError, model.detailError].compactMap { $0 }.count +
             (model.selectedDeviceReady ? model.apps.filter { $0.runningState == .crashLooping }.count : 0)
     }
-    private func visibility(_ key: String) -> Binding<Bool> {
-        Binding(get: { !hiddenItems.contains(key) }, set: { visible in
-            var changed = hiddenItems
-            if visible { changed.remove(key) } else { changed.insert(key) }
-            hidden = changed.sorted().joined(separator: ",")
-        })
-    }
 
-    private func stat(_ count: Int?, _ title: String) -> some View {
-        VStack(alignment: .leading) {
-            Text(count.map(String.init) ?? "—").font(.title2.bold()).foregroundStyle(primary.color)
-            Text(title).font(.caption).foregroundStyle(.secondary)
-        }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(uiColor: .systemBackground).opacity(0.44), in: .rect(cornerRadius: 14))
-    }
 }
 
 private struct LensMeshArtwork: View {
@@ -340,17 +252,19 @@ struct MobileLensChat: View {
                         Label("Choose a device", systemImage: "sparkles")
                     } description: { Text("Open a device to ask Wendy about it.") } actions: { Button("Choose device", action: chooseDevice) }
                 }
-            }.navigationTitle("Ask Wendy").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle("").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        HStack(spacing: 6) {
-                            if model.mobileScopeIsCurrent, let device = model.connected {
-                                MobileDeviceAvatar(device: device, size: 24)
-                            }
-                            Text("Ask Wendy").font(.headline).lineLimit(1)
-                        }
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: chooseDevice) {
+                            HStack(spacing: 8) {
+                                if model.mobileScopeIsCurrent, let device = model.connected {
+                                    MobileDeviceAvatar(device: device, size: 26)
+                                    Text(device.title).font(.subheadline.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                                } else { Text("Choose device").font(.subheadline.weight(.semibold)) }
+                                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                            }.foregroundStyle(.primary)
+                        }.accessibilityLabel("Change device")
                     }
-                    ToolbarItem(placement: .topBarLeading) { Button("Change device", action: chooseDevice) }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly)
                     }

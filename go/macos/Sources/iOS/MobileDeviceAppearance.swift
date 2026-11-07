@@ -68,8 +68,17 @@ struct MobileDeviceAvatar: View {
     @EnvironmentObject private var appearances: DeviceAppearanceStore
     let device: Device
     var size: CGFloat = 46
+    var initialsFallback = false
     var body: some View {
-        DeviceAppearancePreview(appearance: appearances.appearance(for: DeviceAppearanceStore.key(account: model.mobileCloudAccount, organization: model.mobileCloudOrganization, device: device)), lite: device.lite, size: size)
+        let appearance = appearances.appearance(for: DeviceAppearanceStore.key(account: model.mobileCloudAccount, organization: model.mobileCloudOrganization, device: device))
+        if initialsFallback && appearance == nil {
+            let words = device.title.split { !$0.isLetter && !$0.isNumber }
+            let initials = words.prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
+            Text(initials).font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: size, height: size).background(RecordingAppearance.ink, in: .circle).accessibilityHidden(true)
+        } else {
+            DeviceAppearancePreview(appearance: appearance, lite: device.lite, size: size)
+        }
     }
 }
 

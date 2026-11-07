@@ -17,7 +17,7 @@ struct MobileRecordingSection: View {
                 if let error {
                     FailureNote(message: error).padding(16)
                 } else if !loaded {
-                    ProgressView("Loading recordings…").padding(16)
+                    MobileLoadingPlaceholder(label: "Loading recordings…", style: .recordings, rows: 2).padding(16)
                 } else if episodes.isEmpty {
                     Text("No recordings on \(device.title).").font(.subheadline).foregroundStyle(.secondary).padding(16)
                 } else {
@@ -73,7 +73,7 @@ struct MobileHomeAttention: View {
                    snapshot.0.presenceError.isEmpty, Date().timeIntervalSince(snapshot.1) < 60,
                    let offline = snapshot.0.devices.first(where: { !$0.online }) {
                     NavigationLink(value: MobileDestination.device(offline.device)) {
-                        LensRow(title: offline.name, subtitle: "Offline in Wendy Cloud", symbol: "wifi.slash", color: .orange)
+                        LensRow(title: offline.name, subtitle: "Offline in Wendy Cloud", symbol: "wifi.slash", color: .gray)
                     }.buttonStyle(.plain)
                 } else {
                     Button(action: openDevices) {
@@ -183,5 +183,88 @@ struct MobilePresenceBar: View {
                 }
             }
         }.frame(height: 7).background(.quaternary, in: .capsule).accessibilityHidden(true)
+    }
+}
+
+
+struct MobileLensUnderConstruction: View {
+    let title: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var phase
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            TimelineView(.animation(minimumInterval: 1.0 / 24, paused: reduceMotion || phase != .active)) { timeline in
+                let time = reduceMotion || phase != .active ? 0.45 : timeline.date.timeIntervalSinceReferenceDate
+                RobotForgeIllustration(time: time)
+            }.frame(maxWidth: 340).frame(height: 260)
+                .accessibilityLabel("A robot hammering an anvil")
+            Text("Under construction").font(.title2.bold())
+            Text("We’re building the \(title) lens.")
+                .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Spacer()
+            Spacer().frame(height: 32)
+        }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MobileLensStyle.background).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct RobotForgeIllustration: View {
+    let time: Double
+    var body: some View {
+        Canvas { context, size in
+            context.scaleBy(x: size.width / 320, y: size.height / 260)
+            let green = MobileLensStyle.green
+            let dark = Color(red: 0.12, green: 0.16, blue: 0.17)
+            func rounded(_ rect: CGRect, _ radius: CGFloat, _ color: Color) {
+                context.fill(Path(roundedRect: rect, cornerRadius: radius), with: .color(color))
+            }
+            func line(_ points: [CGPoint], _ color: Color, _ width: CGFloat) {
+                var path = Path()
+                path.addLines(points)
+                context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+            }
+            context.fill(Path(ellipseIn: CGRect(x: 25, y: 223, width: 272, height: 18)), with: .color(green.opacity(0.09)))
+            // Robot boots, legs, body and friendly face.
+            rounded(CGRect(x: 68, y: 182, width: 18, height: 40), 8, dark)
+            rounded(CGRect(x: 109, y: 182, width: 18, height: 40), 8, dark)
+            rounded(CGRect(x: 57, y: 212, width: 36, height: 17), 7, green)
+            rounded(CGRect(x: 104, y: 212, width: 36, height: 17), 7, green)
+            rounded(CGRect(x: 57, y: 113, width: 83, height: 78), 22, green)
+            rounded(CGRect(x: 74, y: 130, width: 48, height: 40), 12, .white.opacity(0.18))
+            rounded(CGRect(x: 88, y: 142, width: 21, height: 16), 4, .white.opacity(0.85))
+            line([CGPoint(x: 98, y: 49), CGPoint(x: 98, y: 35)], dark, 4)
+            context.fill(Path(ellipseIn: CGRect(x: 92, y: 27, width: 12, height: 12)), with: .color(green))
+            rounded(CGRect(x: 54, y: 50, width: 88, height: 66), 22, green)
+            rounded(CGRect(x: 65, y: 64, width: 66, height: 36), 13, dark)
+            rounded(CGRect(x: 77, y: 76, width: 9, height: 12), 4, .white)
+            rounded(CGRect(x: 109, y: 76, width: 9, height: 12), 4, .white)
+            line([CGPoint(x: 59, y: 134), CGPoint(x: 42, y: 160), CGPoint(x: 53, y: 176)], dark, 13)
+            context.fill(Path(ellipseIn: CGRect(x: 45, y: 168, width: 17, height: 17)), with: .color(green))
+            // Heavy anvil and wooden stand.
+            rounded(CGRect(x: 198, y: 189, width: 64, height: 38), 8, Color(red: 0.61, green: 0.46, blue: 0.31))
+            var anvil = Path()
+            anvil.move(to: CGPoint(x: 174, y: 151))
+            anvil.addLines([CGPoint(x: 288, y: 151), CGPoint(x: 274, y: 169), CGPoint(x: 246, y: 173), CGPoint(x: 241, y: 183), CGPoint(x: 262, y: 190), CGPoint(x: 190, y: 190), CGPoint(x: 208, y: 180), CGPoint(x: 205, y: 171), CGPoint(x: 185, y: 168)])
+            anvil.closeSubpath()
+            context.fill(anvil, with: .color(dark))
+            line([CGPoint(x: 178, y: 151), CGPoint(x: 284, y: 151)], .gray, 5)
+            // Pivot the forearm and hammer through one gentle strike.
+            let cycle = time.truncatingRemainder(dividingBy: 1.6) / 1.6
+            let lift = (1 - cos(cycle * .pi * 2)) / 2
+            var arm = context
+            arm.translateBy(x: 136, y: 128)
+            arm.rotate(by: .degrees(-58 * lift))
+            var handle = Path()
+            handle.move(to: .zero); handle.addLine(to: CGPoint(x: 77, y: 4))
+            arm.stroke(handle, with: .color(dark), style: StrokeStyle(lineWidth: 12, lineCap: .round))
+            arm.fill(Path(ellipseIn: CGRect(x: 25, y: -6, width: 20, height: 20)), with: .color(green))
+            arm.fill(Path(roundedRect: CGRect(x: 65, y: -12, width: 34, height: 30), cornerRadius: 6), with: .color(.gray))
+            if cycle < 0.12 {
+                let glow = 1 - cycle / 0.12
+                line([CGPoint(x: 236, y: 139), CGPoint(x: 247, y: 126)], .orange.opacity(glow), 3)
+                line([CGPoint(x: 246, y: 147), CGPoint(x: 262, y: 143)], .orange.opacity(glow), 3)
+            }
+        }.accessibilityHidden(true)
     }
 }

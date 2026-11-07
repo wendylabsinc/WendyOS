@@ -86,7 +86,7 @@ func recordingPreview(m *data.Manifest, kind string) ([]uint64, *data.File) {
 		}
 		rank := 0
 		switch kind {
-		case "video", "images":
+		case "video", "images", "mixed":
 			if format == "video" {
 				rank = 2
 				if strings.HasSuffix(strings.ToLower(f.Path), ".h264") {

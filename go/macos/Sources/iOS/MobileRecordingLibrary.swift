@@ -1,10 +1,11 @@
 import Foundation
 
-enum MobileRecordingKind: String, Equatable {
-    case video = "Video", audio = "Audio", rosbag = "ROS bag", images = "Images", dataset = "Dataset", unknown = "Recording"
+enum MobileRecordingKind: String, Equatable, CaseIterable {
+    case mixed = "Mixed", video = "Video", audio = "Audio", rosbag = "ROS bag", images = "Images", dataset = "Dataset", unknown = "Recording"
 
     init(agentKind: String) {
         switch agentKind {
+        case "mixed": self = .mixed
         case "video": self = .video
         case "audio": self = .audio
         case "rosbag": self = .rosbag

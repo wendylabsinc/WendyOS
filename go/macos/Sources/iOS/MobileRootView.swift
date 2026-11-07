@@ -133,18 +133,17 @@ struct MobileRootView: View {
             MobileLensPreference(initial: .devices) { primaryLens = $0.rawValue }
         } else if let lens {
             switch lens {
-            case .devices: MobileRecordingScope { tabs }.id(model.mobileCloudSelectionKey)
+            case .devices: tabs
             case .sites:
-                NavigationStack { SitesView { select($0) }.navigationTitle("Sites").toolbar { launcherButton } }
+                NavigationStack { MobileLensUnderConstruction(title: "Sites").toolbar { launcherButton } }
             case .robots:
-                NavigationStack { MobileRobotInventory(model: model, chooseDevice: { enter(.devices); homeTab = .devices })
-                    .toolbar { launcherButton } }
+                NavigationStack { MobileLensUnderConstruction(title: "Robots").toolbar { launcherButton } }
             }
         } else {
             NavigationStack {
                 MobileGeneralHome(model: model, primary: MobileLens(rawValue: primaryLens) ?? .devices,
                                   open: enter, accounts: { accounts = true }, notifications: { openActivity() },
-                                  setup: { showingNearbySetup = true }, recordings: { enter(.devices); homeTab = .data })
+                                  setup: { showingNearbySetup = true }, recordings: { enter(.devices); homeTab = .data }, openDevice: select)
                     .safeAreaInset(edge: .bottom, alignment: .trailing) {
                         Button("Ask Wendy", systemImage: "sparkles") { showingChat = true }
                             .labelStyle(.iconOnly).font(.title3).foregroundStyle(.white).frame(width: 52, height: 52)
@@ -231,7 +230,7 @@ struct MobileRootView: View {
     }
 
     private var presentedTabs: some View {
-        surface
+        MobileRecordingScope { surface }.id(model.mobileCloudSelectionKey)
         .sheet(isPresented: $showingChat) {
             MobileLensChat(model: model, chooseDevice: { showingChat = false; enter(.devices); homeTab = .devices })
                 .presentationDetents([.medium, .large])
@@ -340,7 +339,6 @@ private struct MobileDevicesHome: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Your hardware at a glance").foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 14) {
                     let total = (organization == nil ? MobileInventorySource.local : .cloud).count(model)
                     HStack(alignment: .bottom) {
@@ -437,6 +435,19 @@ private struct MobileInventorySection: View {
     @Environment(\.openURL) private var openURL
     private var matching: [Device] {
         source.devices(model).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
+            .sorted { left, right in
+                let leftOffline = isOffline(left), rightOffline = isOffline(right)
+                if leftOffline != rightOffline { return !leftOffline }
+                let order = left.title.localizedStandardCompare(right.title)
+                return order == .orderedSame ? left.id < right.id : order == .orderedAscending
+            }
+    }
+    private func isOffline(_ device: Device) -> Bool {
+        guard device.transport == .cloud, model.connected?.id != device.id,
+              model.mobileScopeIsCurrent, model.cloudError == nil, model.cloudLoaded,
+              let snapshot = model.mobilePresence, snapshot.0.presenceError.isEmpty,
+              Date().timeIntervalSince(snapshot.1) < 60 else { return false }
+        return snapshot.0.devices.first { $0.selector == device.selector }?.online == false
     }
     private var error: String? { source.error(model) ?? (source == .cloud ? model.mobileCloudSelectionError : nil) }
     private var loading: Bool {
@@ -453,8 +464,10 @@ private struct MobileInventorySection: View {
                 ForEach(matching) { device in
                     NavigationLink(value: MobileDestination.device(device)) {
                         DeviceIdentityRow(device: device, connected: model.connected?.id == device.id,
-                                          connecting: model.connectingDevice?.id == device.id)
-                    }.accessibilityIdentifier("devices.inventory.row." + device.id)
+                                          connecting: model.connectingDevice?.id == device.id,
+                                          offline: isOffline(device))
+                    }.listRowBackground(isOffline(device) ? Color(uiColor: .tertiarySystemFill) : Color(uiColor: .secondarySystemGroupedBackground))
+                        .accessibilityIdentifier("devices.inventory.row." + device.id)
                 }
                 if let error {
                     FailureNote(message: error)
@@ -462,7 +475,7 @@ private struct MobileInventorySection: View {
                     if source == .cloud { Button("Accounts", action: showAccounts) }
                     else if PresentedFailure(error).title == "Allow local network access" { openSettings }
                 } else if matching.isEmpty {
-                    if loading || source.count(model) == nil { ProgressView("Loading devices…") }
+                    if loading || source.count(model) == nil { MobileLoadingPlaceholder(label: "Loading devices…") }
                     else if !search.isEmpty { ContentUnavailableView.search(text: search) }
                     else {
                         ContentUnavailableView(source == .local ? "No nearby devices" : "No cloud devices",

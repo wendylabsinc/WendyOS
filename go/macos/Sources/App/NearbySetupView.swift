@@ -192,15 +192,15 @@ struct NearbySetupView: View {
         case "attention": return state.failure
         case "done": return "Your device is enrolled and ready to open."
         case "discovering": return "Power on your device and keep it nearby. We’ll find it automatically."
-        case "connecting": return "Keep your device nearby. We’re taking care of the connection."
+        case "connecting": return "Keep your device nearby."
         case "working":
             if !state.attempted && !state.pending && progress == "Connecting to Wi-Fi…" { return "We’ll continue when your device is connected." }
             if state.attempted && !state.pending && !editingLocked {
                 return "We haven’t received confirmation yet. Your enrollment won’t be sent twice."
             }
             return state.wifiConnected
-                ? "Your device is joining your organization. We’ll keep checking automatically."
-                : "Your device needs internet to finish. Connect it to Wi-Fi below, or plug in Ethernet. We’ll keep checking automatically."
+                ? "Your device is joining your organization."
+                : "Connect to Wi-Fi below or plug in Ethernet to finish."
         default:
             if flow.step == .network { return "Credentials are sent over Bluetooth. You can also use an Ethernet connection." }
             if let choice { return "Add this device to \(choice.name)." }
@@ -224,7 +224,6 @@ struct NearbySetupView: View {
                 organizationPicker
                 primaryButton(choice.map { "Enroll in \($0.name)" } ?? "Enroll device", symbol: "arrow.right") { submit(.enroll) }
                     .disabled(choice == nil || !nameValid || editingLocked)
-                Text("Home place assignment is not available during setup yet.").font(.caption).foregroundStyle(.secondary)
 
             }
             Button("Back to connection") { flow.backToNetwork(); wifiExpanded = true }

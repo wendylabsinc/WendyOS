@@ -32,6 +32,7 @@ WDVisualExportResult *WDVisualEpisodeExport(uint64_t session, char *episode);
 void WDVisualExportFree(WDVisualExportResult *value);
 
 typedef enum { WD_RECORDING_STATUS, WD_RECORDING_START, WD_RECORDING_STOP } WDVisualRecordingAction;
+WDVisualEpisodesResult *WDHomeCampaign(uint64_t session, char *name, int32_t trigger);
 WDVisualEpisodesResult *WDVisualRecording(uint64_t session, WDVisualRecordingAction action, char *name, char **sources, size_t source_count);
 WDVisualEpisodesResult *WDVisualEpisodes(uint64_t session);
 void WDVisualEpisodesFree(WDVisualEpisodesResult *value);
