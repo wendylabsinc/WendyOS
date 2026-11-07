@@ -121,4 +121,5 @@ WDCampaignNotificationsResult *WDCampaignNotifications(uint64_t session);
 void WDCampaignNotificationsFree(WDCampaignNotificationsResult *value);
 WDStatus *WDSetCampaignNotifications(uint64_t session, char *name, int32_t enabled);
 WDStatus *WDPushRegistration(char *account, uint8_t *token, size_t count, char *topic, int32_t environment, int32_t enabled);
+WDStatus *WDManageDevice(uint64_t session, char *account, char *organization, char *device, char *name, int32_t remove);
 #endif

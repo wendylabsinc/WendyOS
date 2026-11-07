@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum DeviceSegment: String, CaseIterable { case apps = "Apps", cameras = "Cameras", data = "Data", location = "Location", settings = "Settings" }
-private enum DeviceTool: String, Identifiable { case metrics = "App activity", twin = "Digital Twin", campaigns = "Campaigns", update = "Agent & OS update"
+private enum DeviceTool: String, Identifiable { case metrics = "App activity", twin = "Digital Twin", campaigns = "Campaigns", update = "Agent update", management = "Device management"
     var id: Self { self }
 }
 
@@ -77,6 +77,7 @@ struct MobileDeviceView: View {
                             Button("App activity", systemImage: "waveform.path.ecg") { tool = .metrics }
                             Button("Digital Twin", systemImage: "cube.transparent") { tool = .twin }
                             Button("Campaigns", systemImage: "record.circle") { tool = .campaigns }
+                            Button("Device management", systemImage: "gearshape") { tool = .management }
                         }
                     }
                 }
@@ -88,8 +89,12 @@ struct MobileDeviceView: View {
                 let details = try? await GoClient.shared.deviceInfo(session: captured)
                 guard !Task.isCancelled, ready, captured == model.deviceSession else { return }
                 info = details
-                let software = try? await GoClient.shared.onlineUpdate(session: captured, action: 0)
-                if !Task.isCancelled, ready, captured == model.deviceSession { update = software }
+                repeat {
+                    let software = try? await GoClient.shared.onlineUpdate(session: captured, action: 0)
+                    guard !Task.isCancelled, ready, captured == model.deviceSession else { return }
+                    update = software
+                    do { try await Task.sleep(for: .seconds(software?.busy == true ? 5 : 30)) } catch { return }
+                } while !Task.isCancelled
             }
             .navigationDestination(isPresented: $showLogs) {
                 if ready { DeviceLogsPage(model: model).id(model.deviceSession).accessibilityIdentifier("devices.detail.logPage") }
@@ -101,6 +106,7 @@ struct MobileDeviceView: View {
                     case .metrics: ActivityView(model: model)
                     case .twin: NativeSiteView(model: model)
                     case .campaigns: CampaignsView(session: model.deviceSession, deviceName: device.title, openClip: { clip = $0 }, showEventLog: { showEvents = true })
+                    case .management: DeviceManagementView(session: model.deviceSession, deviceName: device.title)
                     case .update: DeviceInfoView(session: model.deviceSession, deviceName: device.title)
                     }
                 } else { connectionState }
@@ -114,16 +120,24 @@ struct MobileDeviceView: View {
             DeviceConnectionView(model: model, device: device)
         } else { ProgressView("Connecting to \(device.title)…").frame(maxWidth: .infinity, maxHeight: .infinity) }
     }
+    private var updateTitle: String {
+        guard let update else { return "Device info" }
+        if update.busy {
+            if update.phase == "downloading", let fraction = update.downloadFraction { return "Downloading \(Int(fraction * 100))%" }
+            return update.phase == "installing" ? "Installing…" : "Reconnecting…"
+        }
+        return update.available ? "Update" : "Device info"
+    }
     private func openLogs() { model.logApp = ""; showLogs = true }
     private var header: some View {
         VStack(alignment: .leading, spacing: 18) {
             LensHero(icon: "cpu", color: MobileLensStyle.green, kicker: ["DEVICE", info?.board.nonEmpty?.uppercased()].compactMap { $0 }.joined(separator: " · "),
                      title: device.title, subtitle: ["Online", "\(model.apps.count) apps", site].compactMap { $0 }.joined(separator: " · "),
                      chips: ["Online", device.transport == .cloud ? "Cloud" : "Local",
-                             update?.available == true ? "Update available" : info?.version.nonEmpty.map { "Agent \($0)" },
+                             update?.busy == true ? "Updating Agent" : update?.available == true ? "Update available" : (update?.installed.nonEmpty ?? info?.version.nonEmpty).map { "Agent \($0)" },
                              model.camerasError == nil ? "\(model.cameras.count) \(model.cameras.count == 1 ? "camera" : "cameras")" : nil].compactMap { $0 }, device: device, customize: { showingAppearance = true }) {
                 Button("Logs", action: openLogs).buttonStyle(LensPillStyle()).accessibilityIdentifier("devices.detail.logs")
-                Button(update?.available == true ? "Update" : "Device info") { tool = .update }.buttonStyle(LensPillStyle(primary: true))
+                Button(updateTitle) { tool = .update }.buttonStyle(LensPillStyle(primary: true))
             }
             ViewThatFits(in: .horizontal) {
                 segments
