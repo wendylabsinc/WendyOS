@@ -88,8 +88,8 @@ func TestCarrierSelectionSilentLANDoesNotVetoBLE(t *testing.T) {
 		if got := runtime.HasCheaperLink(peer, 4096); got != wantCheaper {
 			t.Fatalf("cheaper LAN=%v want=%v at %s", got, wantCheaper, n.elapsed)
 		}
-		if got := policy.AllowRadio(peer, RadioBLE); got == wantCheaper {
-			t.Fatalf("BLE allowed=%v with cheaper LAN=%v at %s", got, wantCheaper, n.elapsed)
+		if got := policy.AllowRadio(peer, RadioBLE); !got {
+			t.Fatalf("BLE standby allowed=%v with cheaper LAN=%v at %s", got, wantCheaper, n.elapsed)
 		}
 		if got := policy.HasLAN(peer); got != wantCheaper {
 			t.Fatalf("usable LAN=%v want=%v", got, wantCheaper)
@@ -139,7 +139,7 @@ func TestCarrierSelectionRequiresSignedDirectForwarding(t *testing.T) {
 	n.accept(1, carrierSelectionProof(n, signer))
 	n.advance(20 * time.Second)
 	refreshCarrierSelection(n, runtime)
-	if !runtime.HasCheaperLink(peer, 4096) || policy.AllowRadio(peer, RadioBLE) {
+	if !runtime.HasCheaperLink(peer, 4096) || !policy.AllowRadio(peer, RadioBLE) {
 		t.Fatal("verified and installed cheaper route never became eligible")
 	}
 }

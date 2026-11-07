@@ -70,7 +70,8 @@ so multiple computers can participate with the same operator account. Routing
 stays inside the private session; it does not install host routes or change DNS.
 
 The CLI discovers nearby routers over LAN and Bluetooth, then follows routes
-across the mesh. LAN mesh discovery requires an IPv4 interface and multicast
+across the mesh. When capacity allows, it can keep both connections to a neighbour,
+with the slower connection ready as a backup. LAN mesh discovery requires an IPv4 interface and multicast
 access. Routed LAN subnets can work when ordinary device discovery supplies
 addresses, for example through a DNS-SD reflector between VLANs, and the agents
 support routed operator links. USB Ethernet is included when the operating

@@ -123,6 +123,7 @@ func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() ([]lanInterf
 		cfg.Selection = NewPeerSelection(cfg.Node.Snapshot)
 	}
 	claims := &lanClaims{policy: NewConnectionPolicy(cfg.Credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})}
+	claims.policy.SetSnapshot(cfg.Node.Snapshot)
 	health := &lanCarrierHealth{report: cfg.Status}
 	type worker struct {
 		cancel context.CancelFunc
@@ -271,7 +272,7 @@ func lanIncomingContext(selected lanInterface, claims *lanClaims) func(context.C
 		if !ok || selected.net == nil || source.IP.To4() == nil || (!selected.net.Contains(source.IP) && (!source.IP.IsGlobalUnicast() || source.IP.IsLinkLocalUnicast())) {
 			return nil, errors.New("LAN source is not an eligible IPv4 address")
 		}
-		lease := claims.policy.ReserveGroup(fmt.Sprintf("incoming:%d", claims.incoming.Add(1)), meshid.Device{}, false, strconv.Itoa(int(selected.cost)))
+		lease := claims.policy.ReservePreferred(fmt.Sprintf("incoming:%d", claims.incoming.Add(1)), meshid.Device{}, false, strconv.Itoa(int(selected.cost)), true)
 		if lease == nil {
 			return nil, errors.New("LAN incoming connection limit")
 		}
@@ -355,7 +356,7 @@ func serveLANInterface(parent context.Context, cfg LANConfig, selected lanInterf
 				defer wg.Done()
 				defer lease.Release()
 				defer func() {
-					if lease.WasReady() && !lease.Retired() && ctx.Err() == nil && cfg.allow(asset, selected.cost) && !cfg.Node.HasCheaperLink(asset, selected.cost) {
+					if lease.WasReady() && !lease.Retired() && ctx.Err() == nil && cfg.allow(asset, selected.cost) {
 						claims.candidates.Failed(asset.Principal(), time.Now())
 					}
 				}()
@@ -381,13 +382,16 @@ func serveLANInterface(parent context.Context, cfg LANConfig, selected lanInterf
 		}
 		entries = append(operatorLANEntries(cfg), entries...)
 		byKey, keys := lanCandidateEntries(entries, cfg.Credentials.Device, selected.net)
-		for _, candidateKey := range claims.candidates.Order(keys, time.Now()) {
+		for _, candidateKey := range claims.candidates.OrderPreferred(keys, time.Now(), cfg.Node.Snapshot(), func(key string) (meshid.Device, uint16) {
+			peer, _, _ := parseLANEntry(byKey[key], cfg.Credentials.Device)
+			return peer, selected.cost
+		}) {
 			entry := byKey[candidateKey]
 			asset, ip, ok := parseLANEntry(entry, cfg.Credentials.Device)
-			if !ok || ctx.Err() != nil || !lanPeerAddressAllowed(cfg.Credentials.Device, asset, ip, selected.net) || cfg.Node.HasCheaperLink(asset, selected.cost) || !cfg.allow(asset, selected.cost) {
+			if !ok || ctx.Err() != nil || !lanPeerAddressAllowed(cfg.Credentials.Device, asset, ip, selected.net) || !cfg.allow(asset, selected.cost) {
 				continue
 			}
-			lease := claims.policy.ReserveGroup(asset.Principal()+"/"+strconv.Itoa(int(selected.cost)), asset, true, strconv.Itoa(int(selected.cost)))
+			lease := claims.policy.ReservePreferred(asset.Principal()+"/"+strconv.Itoa(int(selected.cost)), asset, true, strconv.Itoa(int(selected.cost)), claims.candidates.ReclaimEligible(candidateKey, time.Now()))
 			if lease == nil {
 				continue
 			}
@@ -398,7 +402,7 @@ func serveLANInterface(parent context.Context, cfg LANConfig, selected lanInterf
 				defer lease.Release()
 				attemptCtx := WithConnectionLease(ctx, lease)
 				defer func() {
-					if ctx.Err() == nil && !lease.Retired() && cfg.allow(asset, selected.cost) && !cfg.Node.HasCheaperLink(asset, selected.cost) {
+					if ctx.Err() == nil && !lease.Retired() && cfg.allow(asset, selected.cost) {
 						claims.candidates.Failed(candidateKey, time.Now())
 					}
 				}()
@@ -631,7 +635,7 @@ func attachLAN(ctx context.Context, cfg LANConfig, selected lanInterface, asset 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if cfg.Node.HasCheaperLink(asset, selected.cost) || !cfg.allow(asset, selected.cost) {
+				if !cfg.allow(asset, selected.cost) {
 					conn.CloseWithError(0, "LAN peer selection changed")
 					return
 				}

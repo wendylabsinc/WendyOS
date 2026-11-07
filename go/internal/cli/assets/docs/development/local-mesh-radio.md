@@ -51,6 +51,22 @@ activity or transit traffic. Later discovery can start it again unless you expli
 router status or opening the Wendy Client Networks view only observes an
 existing router.
 
+## Backup connections and recovery
+
+WendyOS and CLI routers can keep more than one connection to a neighbour. When
+capacity allows, the router can switch to a faster connection and keep a slower
+one, such as Bluetooth, ready as a backup. It keeps the working connection while
+checking the new one. You do not need to select a router or connection manually.
+
+Backups share the device's connection limits. A router may close an unused backup
+to make room for another neighbour. Recovery starts after a failure is detected;
+it is not an instant handover, and application connections can still be
+interrupted. Check a real command to your destination after a network change.
+
+Both ends need compatible versions to keep a backup connection. An older peer
+may close Bluetooth while LAN works, then need time to establish a new Bluetooth
+connection after LAN fails.
+
 ## Check connection status
 
 Inspect the background router on this computer without starting it:

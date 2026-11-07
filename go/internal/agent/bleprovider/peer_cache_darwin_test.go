@@ -3,41 +3,87 @@
 package bleprovider
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-func TestDarwinKnownRadioAllowsImmediateLANFailover(t *testing.T) {
+func TestDarwinKnownRadioIdentityRequiresFreshMatchingAdvertisement(t *testing.T) {
 	now := time.Now()
 	adv, _ := NewAdvertisement(peerDevice, "test", DefaultPSM)
-	view := localmesh.NodeSnapshot{Links: []localmesh.PeerLink{{Device: peerFixture, Cost: 64}}}
-	selection := localmesh.NewPeerSelection(func() localmesh.NodeSnapshot { return view })
 	var cache darwinPeerCache
-	if cache.suppressed("radio", adv, selection, now) {
-		t.Fatal("unverified radio skipped authentication")
+	if cache.known("radio", adv, now) != (meshid.Device{}) {
+		t.Fatal("unverified radio has an identity")
 	}
 	cache.remember("radio", adv, peerFixture, now)
-	if !cache.suppressed("radio", adv, selection, now) {
-		t.Fatal("healthy LAN peer dialed BLE again")
+	if cache.known("radio", adv, now) != peerFixture {
+		t.Fatal("verified radio identity missing")
 	}
-	view.Links = nil
-	if cache.suppressed("radio", adv, selection, now) {
-		t.Fatal("LAN loss did not enable immediate BLE fallback")
-	}
-	view.Links = []localmesh.PeerLink{{Device: selfFixture, Cost: 64}}
-	if cache.suppressed("radio", adv, selection, now) {
-		t.Fatal("another peer's LAN path suppressed fallback")
-	}
-	view.Links = []localmesh.PeerLink{{Device: peerFixture, Cost: 64}}
-	if cache.suppressed("radio", adv, selection, now.Add(time.Minute)) {
-		t.Fatal("stale radio identity did not reauthenticate")
+	if cache.known("radio", adv, now.Add(time.Minute)) != (meshid.Device{}) {
+		t.Fatal("stale radio identity retained")
 	}
 	adv.PSM++
-	if cache.suppressed("radio", adv, selection, now) {
-		t.Fatal("changed advertisement did not reauthenticate")
+	if cache.known("radio", adv, now) != (meshid.Device{}) {
+		t.Fatal("changed advertisement retained identity")
+	}
+}
+
+func TestDarwinStandbyYieldsOnlyToRunnableNewPeer(t *testing.T) {
+	for _, mode := range []string{"new-peer", "known-upgrade", "failed-candidate", "no-working-alternate"} {
+		t.Run(mode, func(t *testing.T) {
+			now := time.Now()
+			adv, _ := NewAdvertisement(peerDevice, "test", DefaultPSM)
+			view := localmesh.NodeSnapshot{Links: []localmesh.PeerLink{
+				{ID: 1, Device: peerFixture, Cost: LinkCost},
+				{ID: 2, Device: peerFixture, Cost: 64, ForwardingReady: true},
+			}}
+			policy := newDarwinConnectionPolicy(selfFixture, func() localmesh.NodeSnapshot { return view })
+			var cache darwinPeerCache
+			var candidates localmesh.CandidateQueue
+			old := cache.reserve(policy, &candidates, "old", adv, now)
+			if old == nil || !old.Ready(peerFixture, func() { t.Fatal("capacity used physical closer") }) {
+				t.Fatal("standby not admitted")
+			}
+			defer old.Release()
+			signals := 0
+			localmesh.BindConnectionLink(localmesh.WithConnectionLease(context.Background(), old), 1, LinkCost, func() { signals++ })
+			// Fill the second slot with a unique carrier, which must not be retired.
+			other := cache.reserve(policy, &candidates, "other", adv, now)
+			if other == nil || !other.Ready(lowFixture, func() { t.Fatal("unique carrier closed") }) {
+				t.Fatal("second slot not admitted")
+			}
+			defer other.Release()
+			if mode == "known-upgrade" {
+				cache.remember("next", adv, peerFixture, now)
+			}
+			if mode == "failed-candidate" {
+				candidates.Failed("next", now)
+			}
+			if mode == "no-working-alternate" {
+				view.Links[1].ForwardingReady = false
+			}
+			if cache.reserve(policy, &candidates, "next", adv, now) != nil {
+				t.Fatal("slot allocated before owner released")
+			}
+			want := mode == "new-peer"
+			if old.Retired() != want || (signals == 1) != want {
+				t.Fatalf("retired=%v signals=%d", old.Retired(), signals)
+			}
+			if !want {
+				return
+			}
+			old.Release()
+			view.Links = view.Links[1:]
+			next := cache.reserve(policy, &candidates, "next", adv, now)
+			if next == nil {
+				t.Fatal("released standby slot not available to new peer")
+			}
+			next.Release()
+		})
 	}
 }
 
