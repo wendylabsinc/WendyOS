@@ -93,7 +93,7 @@ func updateMCPSimulatorAgent(ctx context.Context, name string) (*wendymcp.Simula
 		return nil, fmt.Errorf("uploading simulator agent: %w", err)
 	}
 	_ = conn.Close()
-	next, err := waitForUpdatedAgentReady(ctx, func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+	reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
 		fresh, version, err := simulatorUpdateConnect(ctx, name, address)
 		if err != nil {
 			return nil, err
@@ -103,17 +103,21 @@ func updateMCPSimulatorAgent(ctx context.Context, name string) (*wendymcp.Simula
 			return nil, err
 		}
 		return fresh, nil
-	}, agentRestartWaitOptions{})
+	}
+	next, err := waitForUpdatedAgentReady(ctx, reconnect, agentRestartWaitOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("reconnecting to updated simulator: %w", err)
 	}
-	defer next.Close()
+	defer func() { next.Close() }()
 	verified, err := verifyAgentAfterUpdate(ctx, next.AgentService, expectedHash, expectedVersion, agentVerifyWaitOptions{RequireHash: true})
 	if err != nil {
 		// The shared CLI verifier suggests an untargeted device update. Keep
 		// recovery scoped to this simulator, even when a physical default exists.
 		detail := strings.ReplaceAll(err.Error(), "re-run 'wendy device update'", "refresh this simulator's status and retry Finish setup")
 		return nil, fmt.Errorf("verifying agent for vm:%s: %s", name, detail)
+	}
+	if _, next, err = awaitAgentVerdict(ctx, next, reconnect, expectedHash, func() {}); err != nil {
+		return nil, fmt.Errorf("verifying agent for vm:%s: %w", name, err)
 	}
 	if err := requireRobotAgentCapability(ctx, next, profile.Kind); err != nil {
 		return nil, fmt.Errorf("official agent %s was installed, but robot support is not available: %w", verified.Version, err)
