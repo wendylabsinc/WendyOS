@@ -148,7 +148,7 @@ exec "$WENDY_REAL_LSBLK" "$@"
 	t.Setenv("WENDY_REAL_LSBLK", realLSBLK)
 	t.Setenv("WENDY_LSBLK_COUNTER", counter)
 	agent := []byte("loop-fixture-agent")
-	if err := writeConfigPartition(drive{DevicePath: f.disk}, agent, nil, "loop-fixture", nil); err != nil {
+	if err := writeConfigPartition(drive{DevicePath: f.disk}, configAgent{data: agent}, nil, "loop-fixture", nil); err != nil {
 		t.Fatal(err)
 	}
 	count, err := os.ReadFile(counter)
@@ -177,7 +177,7 @@ func TestInstallLoopReconnectNeverWritesReplacementDisk(t *testing.T) {
 			original.attach("")
 			return &os.PathError{Op: "write", Path: oldPath, Err: syscall.ENXIO}
 		}
-		return writeConfigPartition(d, agent, c, name, j)
+		return writeConfigPartition(d, configAgent{data: agent}, c, name, j)
 	}, true, []bool{true})
 	rescanPartitionTableFn, readDriveIdentityFn, drivePresentFn = rescanPartitionTable, installLoopIdentity, drivePresent
 	reconnectTimeout = 5 * time.Second
@@ -193,7 +193,7 @@ func TestInstallLoopReconnectNeverWritesReplacementDisk(t *testing.T) {
 		}
 		return found, nil
 	}
-	got, attached, err := provisionConfigWithRetry(context.Background(), drive{DevicePath: oldPath}, nil, "loop-fixture", nil, true, nil)
+	got, attached, err := provisionConfigWithRetry(context.Background(), drive{DevicePath: oldPath}, nil, "loop-fixture", nil, true, agentSeed{})
 	if err != nil || !attached || got.DevicePath != original.disk || *calls != 2 {
 		t.Fatalf("reconnected=%s attached=%v calls=%d error=%v", got.DevicePath, attached, *calls, err)
 	}
