@@ -59,6 +59,7 @@ struct LogsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
+    var fixedApp: String? = nil
     @State private var search = ""
     @State private var problemsOnly = false
     @State private var follow = true
@@ -72,7 +73,9 @@ struct LogsView: View {
     var body: some View {
         actionContent.task { await actions.run() }
             .task(id: "\(model.deviceSession)/\(model.logApp)/\(scenePhase == .active)") {
-                if scenePhase == .active { await model.observeLogs() }
+                guard scenePhase == .active else { return }
+                if let fixedApp, model.logApp != fixedApp { model.logApp = fixedApp; return }
+                await model.observeLogs()
             }
     }
 
@@ -176,6 +179,7 @@ struct LogsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }.padding(.vertical, 4).contentShape(Rectangle())
                     }.buttonStyle(.plain)
+                        .accessibilityIdentifier("devices.logs.entry")
                         .contextMenu { Button("Copy message", systemImage: "doc.on.doc") { PlatformClipboard.copy(entry.copyText) } }
                         .listRowBackground(entry.level.rawValue >= LogLevel.warning.rawValue ? entry.level.color.opacity(0.06) : Color.clear)
                 }
@@ -191,11 +195,13 @@ struct LogsView: View {
                 VStack(spacing: 8) {
                     HStack(spacing: 12) {
                         Menu {
-                            Picker("App", selection: $model.logApp) {
-                                Text("All apps").tag("")
-                                ForEach(model.apps) { Text($0.appName).tag($0.appName) }
+                            if fixedApp == nil {
+                                Picker("App", selection: $model.logApp) {
+                                    Text("All apps").tag("")
+                                    ForEach(model.apps) { Text($0.appName).tag($0.appName) }
+                                }
+                                Divider()
                             }
-                            Divider()
                             Button("Copy visible logs", systemImage: "doc.on.doc") { PlatformClipboard.copy(visibleLogs.map(\.copyText).joined(separator: "\n")) }
                             Button("Clear logs", systemImage: "trash") { model.logs = [] }
                             Text("\(visibleLogs.count) messages · Latest 2,000 records")
@@ -288,12 +294,13 @@ private struct LogRow: View {
 struct DeviceLogsPage: View {
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
+    var fixedApp: String? = nil
     var body: some View {
         actionContent.task { await actions.run() }
     }
 
     @ViewBuilder private var actionContent: some View {
-        LogsView(model: model)
+        LogsView(model: model, fixedApp: fixedApp)
             .navigationTitle("Logs")
     }
 }

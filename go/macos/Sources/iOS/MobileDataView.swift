@@ -2,10 +2,13 @@ import SwiftUI
 import Charts
 
 struct DataVisualizerView: View {
+    @Environment(\.recordingPosters) private var posters
     @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     var initialEpisode: String?
+    var recordingDevice: Device?
+    var startPlaying = false
     @State private var episodes: [DataVisualEpisode] = []
     @State private var episode = ""
     @State private var data: DataVisualSnapshot?
@@ -15,6 +18,7 @@ struct DataVisualizerView: View {
     @State private var error: String?
     @State private var generation = 0
     @State private var playing = false
+    @State private var didStartPlayback = false
     @State private var viewport = DataTimelineViewport(start: 0, end: 1)
     @State private var timestamps: [String: [Double]] = [:]
     var body: some View {
@@ -29,7 +33,7 @@ struct DataVisualizerView: View {
                 }.padding().pickerStyle(.menu)
             }
             if loading { ProgressView("Loading recording…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let error { FailureView(title: "Could not load recording", error: error) { actions.submit { await load() } } }
+            else if let error { FailureView(title: "Could not load recording", error: error) { actions.submit { await refresh() } } }
             else if let data {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -41,6 +45,10 @@ struct DataVisualizerView: View {
                             } else { ContentUnavailableView("No frame at this time", systemImage: "video") }
                         } else if let bytes = data.latest(track: track, at: cursor)?.image, let image = UIImage(data: bytes) {
                             Image(uiImage: image).resizable().scaledToFit()
+                        }
+                        if let segment = data.audio.first(where: { $0.track == track && $0.start <= cursor && cursor < $0.end }) {
+                            MobileRecordingAudio(segment: segment, owner: data.mediaFiles, cursor: cursor, playing: playing)
+                                .id(segment.url).frame(height: 20)
                         }
                         let numeric = data.samples.filter { $0.track == track && $0.value != nil }
                         if !numeric.isEmpty {
@@ -79,10 +87,20 @@ struct DataVisualizerView: View {
             }
         }
         .onDisappear { playing = false }
+        .task(id: data.map { ObjectIdentifier($0.mediaFiles) }) {
+            if let data, let recordingDevice, let initialEpisode {
+                await posters?.remember(data, device: recordingDevice, episode: initialEpisode)
+            }
+        }
         .task(id: episode) { if !episode.isEmpty { await load() } }
         .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading, perform: { actions.submit { await refresh() } }))
     }
     private func refresh() async {
+        if recordingDevice != nil, let initialEpisode {
+            if episode == initialEpisode { await load() }
+            else { episode = initialEpisode }
+            return
+        }
         do {
             episodes = try await GoClient.shared.visualEpisodes(session: session)
             if let initialEpisode { episodes = episodes.filter { $0.id == initialEpisode } }
@@ -98,12 +116,21 @@ struct DataVisualizerView: View {
         generation += 1; let request = generation
         loading = true; error = nil; playing = false
         do {
-            let snapshot = try await GoClient.shared.visualEpisode(session: session, episode: episode)
+            let snapshot: DataVisualSnapshot
+            if let recordingDevice {
+                snapshot = try await GoClient.shared.visualEpisode(device: recordingDevice, episode: episode)
+            } else {
+                snapshot = try await GoClient.shared.visualEpisode(session: session, episode: episode)
+            }
             guard request == generation, !Task.isCancelled else { return }
             data = snapshot; cursor = snapshot.start
             viewport = .fitted(start: snapshot.start, end: snapshot.end)
             timestamps = Dictionary(grouping: snapshot.samples, by: \.track).mapValues { $0.map(\.seconds).sorted() }
-            track = snapshot.videos.first?.track ?? snapshot.tracks.first?.id ?? ""
+            track = snapshot.videos.first?.track ?? snapshot.audio.first?.track ?? snapshot.tracks.first?.id ?? ""
+            if startPlaying && !didStartPlayback {
+                didStartPlayback = true
+                playing = snapshot.end > snapshot.start
+            }
         } catch { if request == generation { self.error = error.localizedDescription } }
         if request == generation { loading = false }
     }

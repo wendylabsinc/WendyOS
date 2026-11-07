@@ -104,15 +104,23 @@ final class GoClient: Sendable {
     func initialize(cliPath: String) async throws {
         try await perform { try Self.withCString(cliPath) { try Self.finish(WDInitialize($0)) } }
     }
-    func nearby() async throws -> [Device] { try await perform { try Self.readDevices(WDNearby()) } }
+    func nearbyInventory() async throws -> (devices: [Device], warning: String?) {
+        try await perform {
+            guard let result = WDNearby() else { throw WendyError(message: "Missing devices result.") }
+            defer { WDDevicesFree(result) }
+            if result.pointee.count == 0 { try Self.check(result.pointee.status) }
+            return (Self.deviceRows(result), Self.optionalString(result.pointee.status.message))
+        }
+    }
+    func nearby() async throws -> [Device] { try await nearbyInventory().devices }
     func cloud() async throws -> [Device] { try await perform { try Self.readDevices(WDCloud()) } }
     func login(development: Bool) async throws { try await perform { try Self.finish(WDLogin(development ? 1 : 0)) } }
     func cancelLogin() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDCancelLogin()) } }
     func beginConnection() -> UInt64 { WDBeginConnection() }
-    func connect(selector: String, request: UInt64, forgetIdentity: Bool = false) async throws -> DeviceConnection {
+    func connect(selector: String, request: UInt64, forgetIdentity: Bool = false, requiresMTLS: Bool = false) async throws -> DeviceConnection {
         try await BlockingWork.run(on: connections) {
             try Self.withCString(selector) {
-                try Self.readConnection(forgetIdentity ? WDForgetIdentityAndReconnect($0, request) : WDConnect($0, request))
+                try Self.readConnection(forgetIdentity ? WDForgetIdentityAndReconnect($0, request, requiresMTLS ? 1 : 0) : WDConnect($0, request, requiresMTLS ? 1 : 0))
             }
         }
     }
@@ -142,10 +150,12 @@ final class GoClient: Sendable {
         try await perform { try Self.withCString(app) { try Self.finish(WDDeleteApp($0, session)) } }
     }
     func cameras() async throws -> [Camera] { try await perform { try Self.readCameras(WDCameras()) } }
-    func startLogs(app: String, stream: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStartLogs($0, stream)) } }
+    func startLogs(app: String, stream: UInt64, session: UInt64) async throws {
+        try await perform { try Self.withCString(app) { try Self.finish(WDStartLogs($0, stream, session)) } }
     }
-    func stopLogs() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopLogs()) } }
+    func stopLogs(stream: UInt64, session: UInt64) async throws {
+        try await perform(unlessCancelled: false) { try Self.finish(WDStopLogs(stream, session)) }
+    }
     func startCamera(id: UInt32, stream: UInt64, session: UInt64, stableID: String = "") async throws {
         try await perform { try Self.withCString(stableID) { try Self.finish(WDStartCamera(id, stream, session, $0)) } }
     }
@@ -199,9 +209,13 @@ final class GoClient: Sendable {
         guard let pointer else { throw WendyError(message: "Missing devices result.") }
         defer { WDDevicesFree(pointer) }
         try check(pointer.pointee.status)
-        return UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
+        return deviceRows(pointer)
+    }
+    private static func deviceRows(_ pointer: UnsafeMutablePointer<WDDevicesResult>) -> [Device] {
+        UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
             Device(id: string($0.id), name: string($0.name), selector: string($0.selector),
-                   transport: DeviceTransport($0.transport), address: string($0.address), lite: $0.lite != 0)
+                   transport: DeviceTransport($0.transport), address: string($0.address), lite: $0.lite != 0,
+                   requiresMTLS: $0.requires_mtls != 0)
         }
     }
     static func readApps(_ pointer: UnsafeMutablePointer<WDAppsResult>?) throws -> [DeviceApp] {
@@ -310,6 +324,7 @@ struct Device: Identifiable, Hashable {
     let transport: DeviceTransport
     let address: String
     var lite = false
+    var requiresMTLS = false
     var routable: Bool { !lite && (transport == .mesh || transport == .cloud) }
     var title: String { name.isEmpty ? selector : DeviceDisplayName.title(name) }
 }

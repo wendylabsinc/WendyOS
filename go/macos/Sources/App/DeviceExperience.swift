@@ -24,12 +24,20 @@ struct DeviceIdentityRow: View {
     let device: Device
     var connected = false
     var connecting = false
+    var offline = false
     var body: some View {
         HStack(spacing: 14) {
+            #if os(iOS)
+            MobileDeviceAvatar(device: device, size: 46)
+                .saturation(offline ? 0 : 1)
+            #else
             DeviceEmblem(lite: device.lite, size: 46)
+            #endif
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.title).font(.headline).lineLimit(2)
+                    .foregroundStyle(offline ? Color.secondary : Color.primary)
                 if connected { Text("Connected").font(.caption).foregroundStyle(.secondary) }
+                else if offline { Label("Offline", systemImage: "wifi.slash").font(.caption).foregroundStyle(.secondary) }
                 else if device.lite { Text("Wendy Lite").font(.caption).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 4)
@@ -53,10 +61,18 @@ struct DeviceConnectionView: View {
     @State private var actions = AsyncActions()
     var body: some View {
         VStack(spacing: 22) {
+            #if os(iOS)
+            MobileDeviceAvatar(device: device, size: 88)
+            #else
             DeviceEmblem(lite: device.lite, size: 88)
+            #endif
             Text(device.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
             if let error = model.detailError, !ConnectionRecovery.canRetry(error) {
                 Text(PresentedFailure(error).message).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                if PresentedFailure(error).offersDeviceSignIn {
+                    Button("Sign in to Wendy Cloud") { actions.submit { await model.signIn() } }
+                        .disabled(model.signingIn)
+                }
                 if model.canForgetIdentity {
                     Button("Forget saved identity and reconnect") { actions.submit { await model.connect(device, forgetIdentity: true) } }
                 } else {

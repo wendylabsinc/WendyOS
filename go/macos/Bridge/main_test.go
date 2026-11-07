@@ -98,7 +98,7 @@ func TestTypedEntryPointsRejectInvalidState(t *testing.T) {
 		t.Fatal("empty routes accepted")
 	}
 	WDVPNFree(vpn)
-	connection := WDForgetIdentityAndReconnect(nil, WDBeginConnection())
+	connection := WDForgetIdentityAndReconnect(nil, WDBeginConnection(), 0)
 	if connection.status.message == nil {
 		t.Fatal("unpin without refusal accepted")
 	}

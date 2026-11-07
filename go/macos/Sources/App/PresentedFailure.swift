@@ -4,6 +4,7 @@ import Network
 struct PresentedFailure {
     private(set) var title: String? = nil
     private(set) var symbol = "wifi.exclamationmark"
+    private(set) var offersDeviceSignIn = false
     let message: String
     let details: String
 
@@ -19,9 +20,21 @@ struct PresentedFailure {
             message = "Your account cannot add devices to this organization. Choose another organization or ask an administrator for access."
         } else if lower.contains("enrollment is not available for this organization") {
             message = "Enrollment is not available for this organization. Contact your administrator."
+        } else if lower.contains("sign in to wendy cloud to connect to this enrolled device") {
+            title = "Sign in to connect"
+            message = "This device is enrolled. Sign in to Wendy Cloud with an account in its organization."
+            offersDeviceSignIn = true
+        } else if lower.contains("this account has no device connection certificate") {
+            title = "Device certificate needed"
+            message = "Your signed-in account has no device connection certificate. Sign in again with an account in the device’s organization."
+            offersDeviceSignIn = true
         } else if lower.contains("local network access denied") {
             title = "Allow local network access"
+            #if os(iOS)
+            message = "Allow Wendy in Settings → Privacy & Security → Local Network, then try again."
+            #else
             message = "macOS is blocking Wendy from reaching this device. Allow Wendy in Local Network settings, then find the device again."
+            #endif
         } else if lower.contains("agent does not support network traffic statistics") {
             message = "This device’s agent does not report network traffic. Update the agent to see these statistics."
         } else if lower.contains("valid app_id is required") {

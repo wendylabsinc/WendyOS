@@ -83,7 +83,18 @@ final class CameraFeed: ObservableObject, Identifiable {
         guard running, self.stream == stream else { return }
         error = message
         running = false
-        if thermalFrame != nil { jpeg = nil; thermalFrame = nil; receivedVideo = false }
+        // Never leave a disconnected feed looking live.
+        jpeg = nil
+        thermalFrame = nil
+        receivedVideo = false
+        decoder.reset()
+    }
+
+    var resolution: String? {
+        if let image = jpeg { return "\(image.width) × \(image.height)" }
+        if let frame = thermalFrame { return "\(frame.width) × \(frame.height)" }
+        if let size = decoder.imageSize { return "\(size.width) × \(size.height)" }
+        return nil
     }
 
     func calibrationFrame() -> CameraCalibrationFrame? {

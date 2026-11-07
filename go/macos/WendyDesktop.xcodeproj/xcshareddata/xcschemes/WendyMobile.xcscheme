@@ -50,6 +50,17 @@
                ReferencedContainer = "container:WendyDesktop.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5198757F852AB57452928A68"
+               BuildableName = "WendyMobileUITests.xctest"
+               BlueprintName = "WendyMobileUITests"
+               ReferencedContainer = "container:WendyDesktop.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

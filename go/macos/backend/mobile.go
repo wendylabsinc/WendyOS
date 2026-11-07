@@ -19,6 +19,7 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if !active || changed {
+		b.recordings.setActive(false)
 		b.cancelOperation()
 		b.ReserveConnection()
 		// Retire device streams while their packet carrier can still deliver
@@ -36,7 +37,11 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 		}
 	}
 	b.mobileScope = scope
-	return sessionbroker.SetEmbeddedActive(ctx, active && account != "")
+	if err := sessionbroker.SetEmbeddedActive(ctx, active && account != ""); err != nil {
+		return err
+	}
+	b.recordings.setActive(active)
+	return nil
 }
 
 func (b *Backend) MobileMeshSummary() (string, string) {

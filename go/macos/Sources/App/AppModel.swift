@@ -41,6 +41,11 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(hiddenAppsByDevice, forKey: "hiddenAppsByDevice")
     }
     private var cameraOrder = UserDefaults.standard.dictionary(forKey: "cameraOrderByDevice") as? [String: [String]] ?? [:]
+    // Initial reads are session-scoped: a pending response is not an empty inventory.
+    @Published private var appsReadSession: UInt64?
+    @Published private var camerasReadSession: UInt64?
+    var appsInitialLoading: Bool { selectedDeviceReady && appsReadSession != session }
+    var camerasInitialLoading: Bool { selectedDeviceReady && camerasReadSession != session }
     @Published var cameras: [Camera] = []
     @Published var logs: [LogEntry] = []
     @Published var cameraFeeds: [CameraFeed] = []
@@ -49,10 +54,11 @@ final class AppModel: ObservableObject {
     @Published var failedConnection: Device?
     @Published var connectionError: String?
     private var connectionAttempt: UInt64 = 0
-    private let connectDevice: (String, UInt64, Bool) async throws -> DeviceConnection
+    private let connectDevice: (Device, UInt64, Bool) async throws -> DeviceConnection
 
-    init(connectDevice: @escaping (String, UInt64, Bool) async throws -> DeviceConnection = { selector, request, forgetIdentity in
-        try await GoClient.shared.connect(selector: selector, request: request, forgetIdentity: forgetIdentity)
+    init(connectDevice: @escaping (Device, UInt64, Bool) async throws -> DeviceConnection = { device, request, forgetIdentity in
+        try await GoClient.shared.connect(selector: device.selector, request: request, forgetIdentity: forgetIdentity,
+                                          requiresMTLS: device.requiresMTLS)
     }) {
         self.connectDevice = connectDevice
     }
@@ -60,7 +66,13 @@ final class AppModel: ObservableObject {
     var selectedDeviceReady: Bool {
         selection != nil && selection?.id == connected?.id && connectingDevice == nil && detailError == nil
     }
-    @Published var discovering = false
+    @Published private var nearbyRequest: UUID?
+    @Published private var cloudRequest: UUID?
+    @Published private(set) var nearbyLoaded = false
+    @Published private(set) var cloudLoaded = false
+    var nearbyLoading: Bool { nearbyRequest != nil }
+    var cloudLoading: Bool { cloudRequest != nil }
+    var discovering: Bool { nearbyLoading || cloudLoading }
     @Published var signingIn = false
     @Published var account: CloudAccount?
     @Published var accountError: String?
@@ -77,10 +89,12 @@ final class AppModel: ObservableObject {
     @Published var vpnError: String?
     @Published var loginURL: URL?
     #if os(iOS)
-    @Published var webpageURL: URL?
+    let rememberedAIDevices = RememberedAIDevices()
+    @Published var webpage: MobileAppWebpage?
     @Published var mobileCloudAccounts: [SavedAccount] = []
     @Published var mobileCloudOrganizations: [CloudOrganization] = []
     @Published var mobileCloudAccount = ""
+    @Published private(set) var mobilePresence: (FleetSnapshot, Date)?
     @Published var mobileCloudOrganization = ""
     @Published var mobileCloudSelectionLoading = false
     @Published var mobileCloudSelectionError: String?
@@ -90,6 +104,7 @@ final class AppModel: ObservableObject {
     private var mobileLifecycleGeneration = 0
     private var mobileWasBackgrounded = false
     var mobileCloudSelectionKey: String { mobileCloudAccount + "|" + mobileCloudOrganization }
+    var mobileScopeIsCurrent: Bool { mobileCloudSelectionKey == mobileRuntimeScope }
     var mobileCloudSelectionGeneration = 0
     #endif
     let client = GoClient.shared
@@ -169,25 +184,39 @@ final class AppModel: ObservableObject {
         catch { if !Task.isCancelled { accountError = error.localizedDescription } }
     }
 
-    func refreshNearby() async {
-        guard initialized, !discovering else { return }
-        discovering = true
-        defer { discovering = false }
+    func refreshNearby(
+        automatic: Bool = false,
+        load: () async throws -> (devices: [Device], warning: String?) = { try await GoClient.shared.nearbyInventory() }
+    ) async {
+        guard initialized, !nearbyLoading else { return }
+        if automatic && nearbyError?.localizedCaseInsensitiveContains("local network access denied") == true { return }
+        #if os(iOS)
+        let scope = mobileCloudSelectionKey
+        guard scope == mobileRuntimeScope else { return }
+        #endif
+        let request = UUID()
+        nearbyRequest = request
+        defer { if nearbyRequest == request { nearbyRequest = nil } }
         #if os(macOS)
         async let robots = UnitreeClient.shared.robots()
         #endif
         do {
+            let inventory = try await load()
+            guard nearbyRequest == request, !Task.isCancelled else { return }
             #if os(iOS)
-                let scope = mobileCloudSelectionKey
-                let devices = try await client.nearby()
-                guard scope == mobileCloudSelectionKey, !Task.isCancelled else { return }
-                nearby = devices
-            #else
-                nearby = try await client.nearby()
+            guard scope == mobileCloudSelectionKey else { return }
             #endif
-            nearbyError = nil
+            nearby = inventory.devices
+            nearbyLoaded = true
+            nearbyError = inventory.warning
         }
-        catch { if !Task.isCancelled { nearbyError = error.localizedDescription } }
+        catch {
+            guard nearbyRequest == request, !Task.isCancelled else { return }
+            #if os(iOS)
+            guard scope == mobileCloudSelectionKey else { return }
+            #endif
+            nearbyError = error.localizedDescription
+        }
         #if os(macOS)
         do {
             let discovered = try await robots.robots
@@ -199,21 +228,51 @@ final class AppModel: ObservableObject {
     }
 
     func refreshCloud() async {
-        guard initialized, !discovering else { return }
-        discovering = true
-        defer { discovering = false }
-        do {
-            #if os(iOS)
-                let scope = mobileCloudSelectionKey
-                let devices = try await client.cloud()
-                guard scope == mobileCloudSelectionKey, !Task.isCancelled else { return }
-                cloud = devices
-            #else
-                cloud = try await client.cloud()
-            #endif
-            cloudError = nil
+        #if os(iOS)
+        let account = mobileCloudAccount, organization = mobileCloudOrganization
+        guard !account.isEmpty, !organization.isEmpty else { return }
+        var fresh: FleetSnapshot?
+        let published = await refreshCloud {
+            let snapshot = try await self.client.fleet(account: account, org: organization)
+            fresh = snapshot
+            return snapshot.devices.map(\.device)
         }
-        catch { if !Task.isCancelled { cloudError = error.localizedDescription } }
+        if published, let fresh, account == mobileCloudAccount, organization == mobileCloudOrganization,
+           mobileScopeIsCurrent { mobilePresence = (fresh, Date()) }
+        #else
+        await refreshCloud { try await self.client.cloud() }
+        #endif
+    }
+
+    @discardableResult
+    func refreshCloud(load: () async throws -> [Device]) async -> Bool {
+        guard initialized, !cloudLoading else { return false }
+        #if os(iOS)
+        let scope = mobileCloudSelectionKey
+        guard scope == mobileRuntimeScope else { return false }
+        #endif
+        let request = UUID()
+        cloudRequest = request
+        defer { if cloudRequest == request { cloudRequest = nil } }
+        do {
+            let devices = try await load()
+            guard cloudRequest == request, !Task.isCancelled else { return false }
+            #if os(iOS)
+            guard scope == mobileCloudSelectionKey else { return false }
+            #endif
+            cloud = devices
+            cloudLoaded = true
+            cloudError = nil
+            return true
+        }
+        catch {
+            guard cloudRequest == request, !Task.isCancelled else { return false }
+            #if os(iOS)
+            guard scope == mobileCloudSelectionKey else { return false }
+            #endif
+            cloudError = error.localizedDescription
+            return false
+        }
     }
 
     func connect(_ device: Device, forgetIdentity: Bool = false, force: Bool = false) async {
@@ -223,24 +282,47 @@ final class AppModel: ObservableObject {
         detailError = nil
         failedConnection = nil; connectionError = nil
         canForgetIdentity = false
-        if connected?.id == device.id && !forgetIdentity && !force {
+        if connected?.id == device.id && connected?.selector == device.selector &&
+            (!device.requiresMTLS || connected?.requiresMTLS == true) &&
+            connectingDevice == nil && !forgetIdentity && !force {
             connectingDevice = nil
             return
         }
         connectingDevice = device
+        #if os(iOS)
+        webpage = nil
+        #endif
+        logs = []
+        logError = nil
+        if connected?.id != device.id { logApp = "" }
         do {
-            let connection = try await connectDevice(device.selector, attempt, forgetIdentity)
+            let connection = try await connectDevice(device, attempt, forgetIdentity)
             guard connectionAttempt == attempt else { return }
             let newSession = connection.session
             connectedLite = connection.lite
             cameraFeeds.forEach { $0.pause() }
             cameraFeeds = []; cameras = []; apps = []; logs = []
+            appsReadSession = nil; camerasReadSession = nil
             deviceChat.stop()
             deviceChat = DeviceChatModel(session: newSession)
             session = newSession
             var resolvedDevice = device
             resolvedDevice.lite = connection.lite
             selection = resolvedDevice; connected = resolvedDevice
+            #if os(iOS)
+            let aiAccount = mobileCloudAccount, aiOrg = mobileCloudOrganization
+            let aiDevice = resolvedDevice
+            deviceChat.onDeviceDiscovery = { [weak self] models in
+                guard let self, self.deviceSession == newSession, self.mobileScopeIsCurrent,
+                      self.mobileCloudAccount == aiAccount, self.mobileCloudOrganization == aiOrg else { return }
+                self.rememberedAIDevices.discovered(device: aiDevice, models: models, account: aiAccount, organization: aiOrg)
+            }
+            deviceChat.onDeviceModelUsed = { [weak self] name in
+                guard let self, self.deviceSession == newSession, self.mobileScopeIsCurrent,
+                      self.mobileCloudAccount == aiAccount, self.mobileCloudOrganization == aiOrg else { return }
+                self.rememberedAIDevices.used(deviceID: recordingDeviceID(aiDevice), model: name, account: aiAccount, organization: aiOrg)
+            }
+            #endif
             recordExperience("Connected", symbol: "checkmark.circle", device: resolvedDevice)
             detailError = nil; appsError = nil; camerasError = nil; logError = nil
             connectingDevice = nil
@@ -248,18 +330,26 @@ final class AppModel: ObservableObject {
         } catch {
             guard connectionAttempt == attempt else { return }
             connectingDevice = nil
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                // A running dial may have committed in Go before its Swift waiter was cancelled.
+                connected = nil; connectedLite = false
+                return
+            }
             canForgetIdentity = (error as? WendyError)?.canForgetIdentity ?? false
             if connected?.id == device.id { connected = nil; connectedLite = false }
             failedConnection = device
             let raw = error.localizedDescription
             let denied = raw.lowercased().contains("no route to host") ? await LocalNetworkAccess.denied(selector: device.selector) : false
             guard connectionAttempt == attempt, !Task.isCancelled else { return }
-            detailError = denied ? "Local network access denied by macOS. " + raw : raw
+            detailError = denied ? "Local network access denied. " + raw : raw
         }
     }
 
     func retryConnection(_ device: Device) async {
+        if device.transport == .cloud {
+            await connect(device, force: true)
+            return
+        }
         let previous = connectionAttempt
         connectingDevice = device
         detailError = nil
@@ -267,7 +357,12 @@ final class AppModel: ObservableObject {
             let refreshed = try await client.nearby()
             guard connectionAttempt == previous, !Task.isCancelled else { return }
             nearby = refreshed
-            let current = refreshed.first { $0.id == device.id } ?? device
+            var current = refreshed.first { $0.id == device.id } ?? device
+            if device.requiresMTLS && (current.transport == .usb || current.transport == .lan) {
+                // A later sighting may find a new address, but cannot downgrade
+                // the security requirement of the selected device on retry.
+                current.requiresMTLS = true
+            }
             await connect(current, force: true)
         } catch {
             guard connectionAttempt == previous, !Task.isCancelled else { return }
@@ -312,45 +407,64 @@ final class AppModel: ObservableObject {
             }
             guard !Task.isCancelled else { return }
             if Date.now.timeIntervalSince(lastDiscovery) >= 30 {
-                await refreshNearby()
+                await refreshNearby(automatic: true)
                 if account?.signedIn == true { await refreshCloud() }
                 lastDiscovery = .now
             }
         }
     }
 
-    func openApp(_ app: DeviceApp) async {
-        guard connected != nil else { return }
+    func openApp(_ app: DeviceApp, expectedSession: UInt64? = nil) async {
+        guard selectedDeviceReady, expectedSession == nil || expectedSession == session else { return }
         let capturedSession = session
         do {
             let url = try await client.openApp(app.appName, session: capturedSession)
-            guard session == capturedSession, !Task.isCancelled else { return }
+            guard selectedDeviceReady, session == capturedSession, !Task.isCancelled else { return }
             #if os(macOS)
             if !NSWorkspace.shared.open(url) { alert = "Could not open the app webpage in your browser." }
             #else
-            webpageURL = url
+            webpage = MobileAppWebpage(url: url, app: app.appName, device: connected?.title ?? "")
             #endif
         } catch {
-            guard session == capturedSession, !Task.isCancelled else { return }
+            guard selectedDeviceReady, session == capturedSession, !Task.isCancelled else { return }
             alert = error.localizedDescription
         }
     }
 
-    func setAppRunning(_ app: String, running: Bool) async {
-        guard connected != nil, !appActions.contains(app) else { return }
-        let capturedSession = session
+    private enum AppCommand { case start, stop, restart }
+
+    func setAppRunning(_ app: String, running: Bool, expectedSession: UInt64? = nil) async {
+        await applyAppCommand(running ? .start : .stop, to: app, session: expectedSession ?? session)
+    }
+
+    func restartApp(_ app: String, expectedSession: UInt64) async {
+        await applyAppCommand(.restart, to: app, session: expectedSession)
+    }
+
+    private func applyAppCommand(_ command: AppCommand, to app: String, session target: UInt64) async {
+        guard selectedDeviceReady, target == session, !appActions.contains(app), !Task.isCancelled else { return }
         appActions.insert(app)
         defer { appActions.remove(app) }
         do {
-            if running { try await client.startApp(app, session: capturedSession) }
-            else { try await client.stopApp(app, session: capturedSession) }
-            guard session == capturedSession, !Task.isCancelled else { return }
-            let updated = try await client.apps()
-            guard session == capturedSession, !Task.isCancelled else { return }
-            apps = updated
+            if command != .start { try await client.stopApp(app, session: target) }
+            if command != .stop {
+                guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
+                try await client.startApp(app, session: target)
+            }
         } catch {
-            guard session == capturedSession, !Task.isCancelled else { return }
+            guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
             alert = error.localizedDescription
+        }
+        // A restart can stop successfully and then fail to start. Re-read the
+        // agent even on failure so the controls reflect the actual process state.
+        guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
+        do {
+            let current = try await client.apps()
+            guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
+            apps = current
+            appsError = nil
+        } catch {
+            if selectedDeviceReady, target == session, !Task.isCancelled { appsError = error.localizedDescription }
         }
     }
 
@@ -391,7 +505,7 @@ final class AppModel: ObservableObject {
             try await client.deleteApp(target.app, session: target.session)
             guard session == target.session else { return }
             apps.removeAll { $0.id == target.app }
-            if logApp == target.app { try? await client.stopLogs(); logApp = "" }
+            if logApp == target.app { logApp = "" }
             let updated = try await client.apps()
             guard session == target.session else { return }
             apps = updated
@@ -402,11 +516,11 @@ final class AppModel: ObservableObject {
     }
 
     func refreshDetails() async {
-        guard connected != nil else { return }
+        guard selectedDeviceReady else { return }
         let capturedSession = session
         do {
             let result = connectedLite ? [] : try await client.apps()
-            guard session == capturedSession, !Task.isCancelled else { return }
+            guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
             let previous = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0.runningState) })
             if let connected {
                 for app in result where previous[app.id] != nil && previous[app.id] != app.runningState {
@@ -414,13 +528,15 @@ final class AppModel: ObservableObject {
                 }
             }
             apps = result; appsError = nil
+            appsReadSession = capturedSession
         } catch {
-            guard session == capturedSession, !Task.isCancelled else { return }
+            guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
             appsError = error.localizedDescription
+            appsReadSession = capturedSession
         }
         do {
             let result = try await client.cameras()
-            guard session == capturedSession, !Task.isCancelled else { return }
+            guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
             cameras = result
             let previous = Dictionary(uniqueKeysWithValues: cameraFeeds.map { ($0.camera.id, $0) })
             for feed in cameraFeeds where !cameras.contains(feed.camera) {
@@ -432,9 +548,10 @@ final class AppModel: ObservableObject {
             }
             applyCameraOrder()
             camerasError = nil
+            camerasReadSession = capturedSession
             if cameraWallVisible { await playCameras() }
         }
-        catch { if session == capturedSession && !Task.isCancelled { camerasError = error.localizedDescription } }
+        catch { if session == capturedSession && selectedDeviceReady && !Task.isCancelled { camerasError = error.localizedDescription; camerasReadSession = capturedSession } }
     }
 
     func moveCamera(_ source: String, before target: String) {
@@ -460,41 +577,42 @@ final class AppModel: ObservableObject {
     func resources() async throws -> ResourceSnapshot { try await client.resources(session: session) }
     func ports(app: String) async throws -> [ResourcePort] { try await client.ports(app: app, session: session) }
 
-    func streamLogs(clear: Bool = true) async {
-        guard !Task.isCancelled else { return }
-        if clear { logs = [] }
-        logError = nil
-        logStream &+= 1
-        let stream = logStream
-        do { try await client.startLogs(app: logApp, stream: stream) }
-        catch { if logStream == stream && !Task.isCancelled { logError = error.localizedDescription } }
-    }
-
-    func observeLogs() async {
-        await streamLogs()
-        var ownedStream = logStream
+    func observeLogs(
+        start: (String, UInt64, UInt64) async throws -> Void = { try await GoClient.shared.startLogs(app: $0, stream: $1, session: $2) },
+        stop: (UInt64, UInt64) async throws -> Void = { try await GoClient.shared.stopLogs(stream: $0, session: $1) }
+    ) async {
         let capturedSession = session
-        defer {
-            let closingStream = ownedStream
-            cleanup.submit { [weak self] in
-                guard let self, self.logStream == closingStream else { return }
-                try? await self.client.stopLogs()
+        let app = logApp
+        guard capturedSession != 0, selectedDeviceReady, !Task.isCancelled else { return }
+        logs = []
+        while !Task.isCancelled && selectedDeviceReady && session == capturedSession && logApp == app {
+            logStream &+= 1
+            let stream = logStream
+            logError = nil
+            do { try await start(app, stream, capturedSession) }
+            catch {
+                if !Task.isCancelled && session == capturedSession && logStream == stream && selectedDeviceReady {
+                    logError = error.localizedDescription
+                }
             }
-        }
-        while !Task.isCancelled && session == capturedSession && logStream == ownedStream {
-            do { try await Task.sleep(for: .seconds(5)) } catch { return }
-            guard !Task.isCancelled, session == capturedSession, logStream == ownedStream else { return }
-            if let error = logError, ConnectionRecovery.canRetry(error) {
-                await streamLogs(clear: false)
-                ownedStream = logStream
+            while !Task.isCancelled && selectedDeviceReady && session == capturedSession && logApp == app && logStream == stream {
+                do { try await Task.sleep(for: .seconds(5)) } catch { break }
+                if let error = logError, ConnectionRecovery.canRetry(error) { break }
             }
+            try? await stop(stream, capturedSession)
+            // Drop already-queued records after the logs page has closed.
+            guard logStream == stream else { return }
+            logStream &+= 1
         }
     }
 
     func showCameraWall(limit: Int? = nil) async {
+        let opening = !cameraWallVisible
         cameraWallVisible = true
         cameraPreviewLimit = limit
-        for feed in cameraFeeds.prefix(limit ?? cameraFeeds.count) { feed.allowAutoplay() }
+        if opening {
+            for feed in cameraFeeds.prefix(limit ?? cameraFeeds.count) { feed.allowAutoplay() }
+        }
         cameraRecoveryGeneration &+= 1
         let generation = cameraRecoveryGeneration
         await playCameras()
@@ -619,7 +737,7 @@ final class AppModel: ObservableObject {
         initialized = false
     }
 
-    private func receive(_ event: BridgeEvent, refreshes: AsyncStream<Void>.Continuation) {
+    func receive(_ event: BridgeEvent, refreshes: AsyncStream<Void>.Continuation) {
         switch event.payload {
         case .loginURL(let text):
             if let url = URL(string: text), url.scheme == "https" {
@@ -637,7 +755,7 @@ final class AppModel: ObservableObject {
         case .vpnError(let text):
             if vpn.enabled && !vpnUpdating { vpnError = text }
         default:
-            guard event.session == session, connected != nil else { return }
+            guard event.session == session, selectedDeviceReady else { return }
             switch event.payload {
             case .log(let text):
                 guard event.stream == logStream else { return }
@@ -664,18 +782,38 @@ final class AppModel: ObservableObject {
             let changed = scope != mobileRuntimeScope
             let reconnect = !changed && mobileWasBackgrounded ? selection : nil
             if !active || changed {
+                if !active { mobileWasBackgrounded = true }
                 deviceChat.stop()
                 hideCameraWall()
                 connectionAttempt = client.beginConnection()
                 connected = nil
                 connectedLite = false
                 connectingDevice = nil
+                session = 0
+                logStream &+= 1
+                logs = []
+                logError = nil
+                logApp = ""
+                webpage = nil
                 apps = []
+                cameras = []
                 cameraFeeds = []
+                nearbyRequest = nil
+                cloudRequest = nil
                 if changed {
                     selection = nil
+                    requestedDevice = nil
+                    appDeletion = nil
+                    failedConnection = nil
+                    detailError = nil
+                    experienceEvents = []
                     nearby = []
                     cloud = []
+                    nearbyError = nil
+                    cloudError = nil
+                    nearbyLoaded = false
+                    cloudLoaded = false
+                    mobilePresence = nil
                 }
             }
             do {
@@ -703,7 +841,7 @@ final class AppModel: ObservableObject {
                             try Task.checkCancellation()
                             guard generation == mobileLifecycleGeneration,
                                 selection?.id == reconnect.id else { return }
-                            await refreshNearby()
+                            await refreshNearby(automatic: true)
                             if nearby.contains(where: { $0.selector == reconnect.selector }) {
                                 await connect(reconnect, force: true)
                                 break
@@ -711,6 +849,8 @@ final class AppModel: ObservableObject {
                             try await Task.sleep(for: .seconds(2))
                         }
                     } else {
+                        guard generation == mobileLifecycleGeneration, !Task.isCancelled,
+                              selection?.id == reconnect.id else { return }
                         await connect(reconnect, force: true)
                     }
                 }
@@ -720,7 +860,7 @@ final class AppModel: ObservableObject {
                     guard generation == mobileLifecycleGeneration else { return }
                     mobileMeshState = summary.0
                     mobileMeshDetail = summary.1
-                    await refreshNearby()
+                    await refreshNearby(automatic: true)
                     try await Task.sleep(for: .seconds(5))
                 }
             } catch {

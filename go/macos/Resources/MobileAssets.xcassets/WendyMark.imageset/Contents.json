@@ -1,0 +1,7 @@
+{
+  "images": [
+    { "filename": "WendyMark.svg", "idiom": "universal" }
+  ],
+  "properties": { "preserves-vector-representation": true },
+  "info": { "author": "xcode", "version": 1 }
+}
