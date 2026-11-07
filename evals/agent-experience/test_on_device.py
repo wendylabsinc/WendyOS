@@ -495,6 +495,18 @@ class RunPass(unittest.TestCase):
         self.assertIn(("-c", "32768"), list(zip(od.ModelServer.call_args.args[0], od.ModelServer.call_args.args[0][1:])))
 
 
+class AppManifest(unittest.TestCase):
+    def test_wendy_json_declares_the_entitlements_and_namespaced_volumes(self):
+        app = json.loads((HERE / "wendy.json").read_text())
+        self.assertEqual(app["appId"], sc.BENCHMARK_APP)
+        types = {e["type"] for e in app["entitlements"]}
+        self.assertLessEqual({"gpu", "admin", "build"}, types)
+        persist = {e["name"]: e["path"] for e in app["entitlements"] if e["type"] == "persist"}
+        self.assertEqual(persist, {"model-tool-report-models": "/models", "model-tool-report-results": "/results",
+                                   "model-tool-report-buildkit": "/var/lib/buildkit"})
+        self.assertTrue(all(name.startswith("model-tool-report-") for name in persist))
+
+
 class PlanOnly(unittest.TestCase):
     def argv(self):
         tasks = [t["id"] for t in json.loads((HERE / "tasks.json").read_text())]
