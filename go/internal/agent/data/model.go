@@ -89,8 +89,8 @@ type Source struct {
 	UnusableReason string `json:"-"`
 	// Aliases are other identifiers that select this source, so a selector
 	// written before its ID changed still resolves (see resolveSourceAliases).
-	// Today only a microphone carries one: the session-local "audio:<n>" it was
-	// listed under before microphones had stable IDs. Never in the manifest: an
+	// Microphones and SensorLink cameras carry their old session-local
+	// "audio:<n>" or "v4l2:/dev/video<n>" identifiers. Never in the manifest: an
 	// episode records the ID it selected.
 	Aliases []string `json:"-"`
 	// Capture is the per-episode capture policy a campaign attached to this

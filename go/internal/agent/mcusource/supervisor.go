@@ -46,6 +46,7 @@ type Supervisor struct {
 
 	nodeIDsMu sync.Mutex
 	nodeIDs   map[string]uint32 // "pairing key:channelID" -> MCU-band node id
+	cameras   map[uint32]Camera
 }
 
 // SourceResolver locates the current endpoints for a saved source identity.
@@ -63,7 +64,7 @@ func (s *Supervisor) SetSourceResolver(resolve SourceResolver) {
 // mirroring mesh_dialer.go's per-target pinning — a single shared transport
 // cannot do that across pairings with different source identities.
 func NewSupervisor(logger *zap.Logger, lb Loopback, transportFor TransportFactory, newWriter func(path string) ros2camera.CameraWriter, audioLoop AudioLoop) *Supervisor {
-	return &Supervisor{logger: logger, lb: lb, transportFor: transportFor, newWriter: newWriter, audioLoop: audioLoop, nodeIDs: make(map[string]uint32), connected: make(map[string]bool)}
+	return &Supervisor{logger: logger, lb: lb, transportFor: transportFor, newWriter: newWriter, audioLoop: audioLoop, nodeIDs: make(map[string]uint32), cameras: make(map[uint32]Camera), connected: make(map[string]bool)}
 }
 
 // IsConnected reports whether the current stream has delivered a frame to a
@@ -78,19 +79,57 @@ func (s *Supervisor) IsPairingConnected(p SensorPairing) bool {
 	return s.connected[p.Key()]
 }
 
-// CameraIdentities maps mounted nodes to their source principal and channel.
-// Node numbers are allocated in connection order and can change after restart;
-// consumers such as site models must persist this identity instead.
-func (s *Supervisor) CameraIdentities() map[uint32]string {
+// Camera is the authoritative metadata for a mounted SensorLink channel.
+// Kernel card labels can outlive the supervisor and must not identify a source.
+type Camera struct {
+	StableID string
+	Name     string
+	Online   bool
+}
+
+// Cameras returns names, identities and per-camera frame status from one snapshot.
+// A mounted node without current ownership metadata is deliberately omitted.
+func (s *Supervisor) Cameras() map[uint32]Camera {
 	s.nodeIDsMu.Lock()
 	defer s.nodeIDsMu.Unlock()
-	out := make(map[uint32]string, len(s.nodeIDs))
-	for key, id := range s.nodeIDs {
+	out := make(map[uint32]Camera, len(s.cameras))
+	for id, camera := range s.cameras {
 		if _, exists := s.lb.NodePath(id); exists {
-			out[id] = "sensorlink:" + key
+			out[id] = camera
 		}
 	}
 	return out
+}
+
+func (s *Supervisor) mountCamera(id uint32, p SensorPairing, ch *sensorlinkpb.SensorDescriptor) {
+	s.nodeIDsMu.Lock()
+	defer s.nodeIDsMu.Unlock()
+	s.cameras[id] = Camera{StableID: fmt.Sprintf("sensorlink:%s:%d", p.Key(), ch.ChannelId), Name: nodeLabel(p, ch)}
+}
+
+func (s *Supervisor) cameraFrame(p SensorPairing, channel uint32) {
+	s.nodeIDsMu.Lock()
+	defer s.nodeIDsMu.Unlock()
+	if id, ok := s.nodeIDs[fmt.Sprintf("%s:%d", p.Key(), channel)]; ok {
+		camera, mounted := s.cameras[id]
+		if !mounted {
+			return
+		}
+		camera.Online = true
+		s.cameras[id] = camera
+	}
+}
+
+func (s *Supervisor) camerasDisconnected(p SensorPairing) {
+	s.nodeIDsMu.Lock()
+	defer s.nodeIDsMu.Unlock()
+	prefix := "sensorlink:" + p.Key() + ":"
+	for id, camera := range s.cameras {
+		if strings.HasPrefix(camera.StableID, prefix) {
+			camera.Online = false
+			s.cameras[id] = camera
+		}
+	}
 }
 
 func (s *Supervisor) setConnected(p SensorPairing, connected bool) {
@@ -132,8 +171,8 @@ func (s *Supervisor) nodeIDForKey(sourceKey string, channelID uint32) (uint32, e
 }
 
 // releaseSource runs only after the pairing's supervisor has exited. Camera
-// nodes still held open by consumers remain reserved if removal fails, so a
-// different source cannot reuse a node that still belongs to the old one.
+// reservations survive removal: both kernel consumers and in-process feed
+// subscribers must never see a different source at the old path.
 func (s *Supervisor) releaseSource(sourceAssetID int32) {
 	s.releasePairing(SensorPairing{SourceAssetID: sourceAssetID})
 }
@@ -153,10 +192,11 @@ func (s *Supervisor) releasePairing(p SensorPairing) {
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
+		delete(s.cameras, id)
 		s.lb.RemoveCamera(id)
-		if _, exists := s.lb.NodePath(id); !exists {
-			delete(s.nodeIDs, key)
-		}
+		// Retain ownership until agent restart: in-process frame subscribers
+		// can outlive node removal and must never see a different source at
+		// this path. Re-pairing the same channel reuses its reservation.
 	}
 }
 
@@ -260,7 +300,9 @@ func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr strin
 // can reset its reconnect backoff after a stream that was actually healthy.
 func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr string) (delivered bool, err error) {
 	s.setConnected(p, false)
+	s.camerasDisconnected(p)
 	defer s.setConnected(p, false)
+	defer s.camerasDisconnected(p)
 	tr, err := s.transportFor(p, addr)
 	if err != nil {
 		return false, fmt.Errorf("mcusource: resolving transport for source %s: %w", p.Key(), err)
@@ -330,6 +372,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		}
 		path, _ := s.lb.NodePath(id)
 		writers[ch.ChannelId] = s.newWriter(path)
+		s.mountCamera(id, p, ch)
 		subs = append(subs, ch.ChannelId)
 		usedInputs[ch.InputId] = true
 	}
@@ -385,6 +428,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 			if err := w.WriteFrame(frame); err != nil {
 				return delivered, err
 			}
+			s.cameraFrame(p, f.ChannelID)
 			if !delivered {
 				s.setConnected(p, true)
 			}
