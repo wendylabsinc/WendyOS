@@ -111,6 +111,7 @@ def _wendy_work(entry):
         return entry.get("name") not in SESSION_TOOLS
     if entry.get("channel") == "cli":
         argv = entry.get("arguments") if isinstance(entry.get("arguments"), list) else []
+        argv = [word for word in argv if isinstance(word, str)]
         path = cli_path(argv)
         return bool(path) and path != ["version"] and not CLI_NO_WORK & set(argv)
     return False

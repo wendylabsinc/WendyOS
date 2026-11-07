@@ -50,6 +50,12 @@ class WentAroundTests(unittest.TestCase):
                  cli("version"), shell("dmesg | tail")]
         self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
 
+    def test_odd_cli_arguments_do_not_break_grading(self):
+        trace = [{"channel": "cli", "name": "run", "arguments": [["nested"], 3, "run"]},
+                 {"channel": "cli", "name": "x", "arguments": "run"}, shell("dmesg")]
+        # One real call (the string word in the first list) against one plain command: a tie is went around.
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
+
     def test_as_many_plain_commands_as_wendy_calls_is_went_around(self):
         trace = [mcp("device_info"), shell("dmesg | tail")]
         self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")

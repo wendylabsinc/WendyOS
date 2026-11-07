@@ -161,6 +161,12 @@ class EachCategory(unittest.TestCase):
                       cli=[{"argv": argv, "exit_code": code}])
             self.assertEqual(p.classify(), [], code)
 
+    def test_a_non_numeric_exit_code_is_still_a_tool_error(self):
+        argv = ["run"]
+        f = self.check(("tool", "Tool error"), outcome="right",
+                       trace=[tt.entry("cli", "run", argv, "wrapper")], cli=[{"argv": argv, "exit_code": "1"}])
+        self.assertIn("exit 1", f["detail"])
+
     def test_a_check_that_reports_failures_is_no_finding(self):
         for argv in (["json", "validate", "/tmp/x/wendy.json"], ["doctor", "--json"]):
             p = Pass(self)

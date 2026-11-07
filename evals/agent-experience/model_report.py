@@ -194,8 +194,9 @@ def classify(row, directory, tool_names, guards, previous=None):
             at = next((i for i, e in enumerate(ordered) if e.get("channel") == "cli" and e.get("arguments") == argv),
                       next((i for i, e in enumerate(ordered)
                             if e.get("channel") == "shell" and " ".join(argv) in str(e.get("arguments"))), None))
-        elif index is not None:
-            at = next((i for i, e in enumerate(ordered) if e is trace[index] or _key(e) == _key(trace[index])), None)
+        elif index is not None:  # the entry itself, or the first call like it when the transcript has its own copy
+            at = next((i for i, e in enumerate(ordered) if e is trace[index]),
+                      next((i for i, e in enumerate(ordered) if _key(e) == _key(trace[index])), None))
         else:
             at = None
         window = ordered[:at + 1] if at is not None else ordered
@@ -295,7 +296,7 @@ def classify(row, directory, tool_names, guards, previous=None):
         if code == USAGE_EXIT:
             if blame:
                 add("model", "Bad arguments", f"wendy {path} [exit {code}]", argv=argv)
-        elif code < 0 or code >= 128 or path in CHECK_COMMANDS:
+        elif (isinstance(code, int) and (code < 0 or code >= 128)) or path in CHECK_COMMANDS:
             continue  # killed by a signal, usually the model's own `| head`; or a check reporting what it found
         else:
             add("tool", "Tool error", f"wendy {path} [exit {code}]", argv=argv)
