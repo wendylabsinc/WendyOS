@@ -1,0 +1,44 @@
+{
+  "tool": "telemetry_logs",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"batches_collected\": 0, \"collection_limited\": false, \"logs\": []}"
+        }
+      ],
+      "structuredContent": {
+        "batches_collected": 0,
+        "collection_limited": false,
+        "logs": []
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "895e0203ec308ff4b5710ddcc46a99fde5315f3f77f200da11c8a70a4c61bbb0",
+    "device_kind": "local"
+  },
+  "after": {
+    "actions": [
+      "tool:run",
+      "cli:run"
+    ],
+    "replies": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"batches_collected\": 0, \"collection_limited\": false, \"logs\": []}"
+          }
+        ],
+        "structuredContent": {
+          "batches_collected": 0,
+          "collection_limited": false,
+          "logs": []
+        }
+      }
+    ]
+  }
+}

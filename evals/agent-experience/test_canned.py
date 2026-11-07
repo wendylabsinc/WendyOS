@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -330,6 +331,29 @@ class CannedTests(unittest.TestCase):
         self.assertIsNone(canned.load_capture(self.root, "s", "../x"))
         self.assertEqual(canned.CannedStore(self.root, "s", {}).reply("../x", {}),
                          (canned.FALLBACK_RESULT, False))
+
+
+class LocalCaptureTests(unittest.TestCase):
+    """Captures made on a Thor are what a model on that Thor must see: no VM, no home-network address."""
+    LOCAL = Path(__file__).resolve().parent / "canned-local"
+    VM_WORDS = re.compile(r"simulator|qemu|\bvm:|virtio|kvm|hypervisor|wendy-eval|vm-arm64", re.I)
+    HIDDEN_KEYS = ("captured_with", "tool", "argv_prefix")  # provenance and routing, never shown to a model
+
+    def files(self):
+        found = sorted(self.LOCAL.glob("**/*.json"))
+        self.assertTrue(found, "canned-local/ has no captures")
+        return found
+
+    def test_local_captures_never_mention_a_vm(self):
+        for path in self.files():
+            data = json.loads(path.read_text())
+            visible = json.dumps({k: v for k, v in data.items() if k not in self.HIDDEN_KEYS})
+            match = self.VM_WORDS.search(visible)
+            self.assertIsNone(match, f"{path.relative_to(self.LOCAL)} mentions {match and match.group(0)!r}")
+
+    def test_local_captures_never_hold_the_thors_wifi_address(self):
+        for path in self.files():
+            self.assertNotIn("192.168.1.246", path.read_text(), str(path.relative_to(self.LOCAL)))
 
 
 if __name__ == "__main__":

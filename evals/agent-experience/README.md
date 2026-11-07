@@ -437,6 +437,15 @@ python3 evals/agent-experience/capture.py \
   placeholders: `{{args.X}}`, `{{reply.TOOL.KEY}}`, `{{device}}` and `{{vm_name}}`.
 - Error replies are never saved.
 
+`canned-local/<set>/` holds the captures for the `local` target (a model running on the Jetson it
+manages). It mirrors `canned/` but was recorded on a Thor from inside the benchmark container over the agent
+socket, so no reply says it came from a simulator. Capture with `--device local --canned-dir
+canned-local` from that container (see `capture-image` notes in the plan). `run` cannot be captured there:
+a provisioned device's registry wants mTLS client certificates, which the container does not have, so
+`deploy-project` stays `unconfigured` until a `run` reply exists. Camera, Wi-Fi connect and Bluetooth
+connect/disconnect have no local captures either. `test_canned.py` fails if a local capture mentions a VM
+or holds the Thor's Wi-Fi address.
+
 ### Captures still needed
 
 `benchmark.py --scenario all --repetitions 1` (plan only; no model or device calls)
