@@ -49,6 +49,7 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 - A service with an empty or missing `context`.
 - A `context` that is an absolute path.
 - A `context` that contains `..` path components.
+- On Windows, a `context` that is drive-relative (`C:camera`), root-relative (`\camera`), or a reserved device name (`NUL`).
 - A `dependsOn` entry that references a service name not present in the `services` map.
 - A service `entitlements` entry with an unknown or missing type.
 - A service `persist` entitlement missing `name` or `path`, or with a non-absolute or `..`-containing `path`.
