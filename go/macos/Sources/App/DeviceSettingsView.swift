@@ -200,7 +200,7 @@ struct DeviceSettingsView: View {
         #else
         NavigationLink { settingsPage(page) } label: {
             settingsLabel(page.rawValue, symbol: symbol, value: value)
-        }
+        }.accessibilityIdentifier("device.settings." + page.rawValue)
         #endif
     }
     private func settingsPage(_ page: Page) -> some View {

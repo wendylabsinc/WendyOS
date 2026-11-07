@@ -79,6 +79,18 @@ struct MobileRootView: View {
     }
 
     private var tabs: some View {
+        VStack(spacing: 0) {
+            tabContent
+            MobileLensBar(tab: $homeTab, chatModel: model.deviceChat, context: model.selectedDeviceReady ? model.connected?.title : nil, chat: { showingChat = true })
+        }
+        .background(MobileLensStyle.background)
+        .tint(MobileLensStyle.accent)
+    }
+
+    // Reserve the bars’ actual height outside the tab/navigation containers.
+    // An inset on TabView can be lost by its nested NavigationSplitView/Form,
+    // leaving their final rows behind the floating controls.
+    private var tabContent: some View {
         TabView(selection: $homeTab) {
             NavigationStack(path: $homePath) {
                 MobileDevicesHome(model: model, launcher: { lens = nil }, notifications: { openActivity() },
@@ -106,10 +118,7 @@ struct MobileRootView: View {
             }.toolbarVisibility(.hidden, for: .tabBar).tag(MobileHome.activity)
         }
         .toolbarVisibility(.hidden, for: .tabBar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            MobileLensBar(tab: $homeTab, chatModel: model.deviceChat, context: model.selectedDeviceReady ? model.connected?.title : nil, chat: { showingChat = true })
-        }
-        .tint(MobileLensStyle.accent)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var launcherButton: some ToolbarContent {

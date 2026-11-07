@@ -18,6 +18,50 @@ final class DevicesLensUITests: XCTestCase {
         devices.tap()
     }
 
+    func testDeviceBottomRowsClearFloatingBars() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_BOTTOM_INSETS_FIXTURE"] == "1", "Requires local device fixture")
+        continueAfterFailure = false
+        app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
+        if !app.buttons["lens.tab.Devices"].waitForExistence(timeout: 3) {
+            let open = app.buttons["lens.open.Devices"]
+            XCTAssertTrue(open.waitForExistence(timeout: 15))
+            open.tap()
+        }
+        XCTAssertTrue(app.buttons["lens.tab.Devices"].waitForExistence(timeout: 15))
+        app.buttons["lens.tab.Devices"].tap()
+        _ = selectInventoryRow("Devices UI QA")
+        let settings = app.buttons["device.segment.Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 30))
+        settings.tap()
+        let logs = app.buttons["device.settings.Logs"]
+        let chat = app.buttons["lens.chat"]
+        for _ in 0..<6 {
+            if logs.exists && logs.isHittable && logs.frame.maxY <= chat.frame.minY { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(logs.isHittable)
+        XCTAssertLessThanOrEqual(logs.frame.maxY, chat.frame.minY, "Last Settings row must clear both floating bars")
+        capture("Settings last row above bars")
+        logs.tap()
+        XCTAssertTrue(app.navigationBars["Logs"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["device.segment.Apps"].tap()
+        let deploy = app.buttons.containing(.staticText, identifier: "Deploy an app").firstMatch
+        for _ in 0..<6 {
+            if deploy.exists && deploy.isHittable && deploy.frame.maxY <= chat.frame.minY { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(deploy.isHittable)
+        XCTAssertLessThanOrEqual(deploy.frame.maxY, chat.frame.minY, "Apps footer must clear both floating bars")
+        capture("Apps footer above bars")
+        deploy.tap()
+        XCTAssertTrue(app.navigationBars["Deploy an app"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+    }
+
     func testCloudModelSetupWithoutDeviceModel() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CLOUD_CHAT_FIXTURE"] == "1", "Requires local device fixture; no cloud API calls")
         launch()
