@@ -13,8 +13,7 @@ import XCTest
         app.buttons["devices.home.local"].tap()
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "devices.inventory.row.", "Devices UI QA")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 45)); row.tap()
-        XCTAssertTrue(app.buttons["devices.appearance.avatar"].waitForExistence(timeout: 30))
-        app.buttons["devices.appearance.avatar"].tap()
+        openAppearance(app)
         XCTAssertTrue(app.buttons["appearance.photo"].waitForExistence(timeout: 5))
         app.buttons["appearance.photo"].tap()
         XCTAssertTrue(app.buttons["Cancel"].firstMatch.waitForExistence(timeout: 10))
@@ -30,9 +29,9 @@ import XCTest
         XCTAssertTrue(app.buttons["appearance.save"].waitForExistence(timeout: 5))
         let editor = XCTAttachment(screenshot: app.screenshot()); editor.name = "Device photo preview"; editor.lifetime = .keepAlways; add(editor)
         app.buttons["appearance.save"].tap()
-        XCTAssertTrue(app.buttons["devices.appearance.avatar"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["More device tools"].waitForExistence(timeout: 5))
         let result = XCTAttachment(screenshot: app.screenshot()); result.name = "Personalized device photo"; result.lifetime = .keepAlways; add(result)
-        app.buttons["devices.appearance.avatar"].tap()
+        openAppearance(app)
         app.swipeUp()
         XCTAssertTrue(app.buttons["appearance.reset"].waitForExistence(timeout: 5))
         app.buttons["appearance.reset"].tap()
@@ -52,8 +51,7 @@ import XCTest
         app.buttons["devices.home.local"].tap()
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "devices.inventory.row.", "Devices UI QA")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 45)); row.tap()
-        let avatar = app.buttons["devices.appearance.avatar"]
-        XCTAssertTrue(avatar.waitForExistence(timeout: 30)); avatar.tap()
+        openAppearance(app)
         XCTAssertTrue(app.navigationBars["Device appearance"].waitForExistence(timeout: 5))
         app.buttons["Use 🚀"].tap()
         app.swipeUp()
@@ -61,16 +59,25 @@ import XCTest
         XCTAssertTrue(blue.waitForExistence(timeout: 3)); blue.tap()
         let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "Device appearance choices"; screenshot.lifetime = .keepAlways; add(screenshot)
         app.buttons["appearance.save"].tap()
-        XCTAssertTrue(avatar.waitForExistence(timeout: 5)); avatar.tap()
+        openAppearance(app)
         XCTAssertTrue(app.buttons["Use 🚀"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Use 🚀"].isSelected)
         app.swipeUp()
         XCTAssertTrue(app.buttons["appearance.color.blue"].isSelected)
         app.buttons["appearance.reset"].tap()
         app.buttons["appearance.save"].tap()
-        XCTAssertTrue(avatar.waitForExistence(timeout: 5)); avatar.tap()
+        openAppearance(app)
         XCTAssertTrue(app.buttons["Use 🚀"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Use 🚀"].isSelected)
         app.buttons["Cancel"].tap()
     }
+    private func openAppearance(_ app: XCUIApplication) {
+        let tools = app.buttons["More device tools"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 30))
+        tools.tap()
+        let appearance = app.buttons["devices.appearance"]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 5))
+        appearance.tap()
+    }
+
 }

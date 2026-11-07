@@ -135,6 +135,11 @@ struct HomeWidget: Codable, Identifiable, Equatable {
     }
     func remove(_ id: UUID) { items.removeAll { $0.id == id }; persist() }
     func move(from: IndexSet, to: Int) { items.move(fromOffsets: from, toOffset: to); persist() }
+    func resize(_ id: UUID, to size: HomeWidgetSize) {
+        guard let i = items.firstIndex(where: { $0.id == id }), items[i].kind.sizes.contains(size) else { return }
+        items[i].size = size
+        persist()
+    }
     func resize(_ id: UUID) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { return }
         let sizes = items[i].kind.sizes

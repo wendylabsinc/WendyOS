@@ -18,6 +18,46 @@ final class DevicesLensUITests: XCTestCase {
         devices.tap()
     }
 
+    func testLensAndNotificationsSupportEdgeSwipeBack() {
+        continueAfterFailure = false
+        app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
+        app.launch()
+        if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
+        capture("General Home navigation links")
+        for lens in ["Devices", "Robots", "Sites"] {
+            let link = app.buttons["lens.open." + lens]
+            XCTAssertTrue(link.waitForExistence(timeout: 12))
+            link.tap()
+            XCTAssertTrue(app.navigationBars[lens].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["lens.chat"].exists)
+            capture(lens + " native tabs and floating chat")
+            swipeBack()
+            XCTAssertTrue(link.waitForExistence(timeout: 5))
+        }
+        app.buttons["Notifications"].tap()
+        XCTAssertTrue(app.navigationBars["Activity"].waitForExistence(timeout: 5))
+        swipeBack()
+        XCTAssertTrue(app.buttons["lens.open.Devices"].waitForExistence(timeout: 5))
+        app.buttons["lens.open.Devices"].tap()
+        app.buttons["Notifications"].tap()
+        XCTAssertTrue(app.navigationBars["Activity"].waitForExistence(timeout: 5))
+        swipeBack()
+        XCTAssertTrue(app.navigationBars["Devices"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.tabBars.buttons["Devices"].exists)
+        app.buttons["devices.home.local"].tap()
+        XCTAssertTrue(app.navigationBars["Local devices"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["lens.chat"].exists)
+        capture("Local inventory with floating chat")
+        swipeBack()
+        XCTAssertTrue(app.navigationBars["Devices"].waitForExistence(timeout: 5))
+    }
+
+    private func swipeBack() {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.001, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))
+    }
+
     func testFavoriteWidgetPickerStaysOpenWhileSearchingAndGoingBack() {
         continueAfterFailure = false
         app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
@@ -28,25 +68,30 @@ final class DevicesLensUITests: XCTestCase {
         let add = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Add widgets")).firstMatch
         if add.exists { add.tap() }
         else {
-            let widget = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.widget.options.")).firstMatch
+            let widget = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.widget.options.")).firstMatch
             XCTAssertTrue(widget.waitForExistence(timeout: 5))
             widget.press(forDuration: 0.7)
+            app.buttons["Edit"].tap()
             app.buttons["Add widget"].tap()
         }
         for _ in 0..<3 {
             let favorite = app.buttons["Add Favorite devices"]
             XCTAssertTrue(favorite.waitForExistence(timeout: 5))
             favorite.tap()
-            let search = app.searchFields.firstMatch
+            app.buttons["home.widget.selectDevices"].tap()
+            let search = app.searchFields["Search devices"]
             XCTAssertTrue(search.waitForExistence(timeout: 5))
             search.tap()
             search.typeText("NoSuchDevice123")
             XCTAssertTrue(app.staticTexts["No matching devices"].exists || app.staticTexts["No devices available"].exists)
-            search.buttons.firstMatch.tap()
+            app.buttons["Clear text"].tap()
             XCTAssertTrue(search.exists)
-            // Native search temporarily replaces the navigation toolbar.
-            app.buttons["Close"].tap()
-            XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
+            capture("Favorite devices searchable picker")
+            app.navigationBars["Favorite devices"].buttons["Close"].tap()
+            let back = app.navigationBars["Favorite devices"].buttons.allElementsBoundByIndex.first { $0.isHittable && $0.label != "Done" && $0.label != "Cancel" && $0.label != "Close" }
+            XCTAssertNotNil(back, app.debugDescription)
+            back?.tap()
+            XCTAssertTrue(app.buttons["home.widget.selectDevices"].waitForExistence(timeout: 5))
             app.buttons["Back"].tap()
         }
         XCTAssertTrue(app.buttons["Close widget picker"].exists)
@@ -60,6 +105,7 @@ final class DevicesLensUITests: XCTestCase {
             XCTAssertNotNil(button)
             button?.tap()
         }
+        let widgetTitle = "Widget options QA " + String(UUID().uuidString.prefix(6))
         continueAfterFailure = false
         app.launchEnvironment["WENDY_MOBILE_TEST_HOST"] = "0"
         app.launch()
@@ -68,9 +114,10 @@ final class DevicesLensUITests: XCTestCase {
         let add = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Add widgets")).firstMatch
         if add.exists { add.tap() }
         else {
-            let header = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.widget.options.")).firstMatch
+            let header = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.widget.options.")).firstMatch
             XCTAssertTrue(header.waitForExistence(timeout: 5))
             header.press(forDuration: 0.7)
+            app.buttons["Edit"].tap()
             XCTAssertTrue(app.buttons["Add widget"].waitForExistence(timeout: 5))
             app.buttons["Add widget"].tap()
         }
@@ -80,23 +127,41 @@ final class DevicesLensUITests: XCTestCase {
         quick.tap()
         let title = app.textFields["Widget title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        title.tap(); title.typeText("Widget options QA")
+        title.tap(); title.typeText(widgetTitle)
         tapDone()
         // Adding returns to Home's layout editing mode.
         if app.buttons.matching(identifier: "Done").firstMatch.waitForExistence(timeout: 3) { tapDone() }
-        let header = app.buttons["Widget options QA widget options"]
+        let header = app.staticTexts[widgetTitle]
         for _ in 0..<6 { if header.isHittable { break }; app.swipeUp() }
         XCTAssertTrue(header.isHittable)
+        let cardID = header.identifier.replacingOccurrences(of: "home.widget.options.", with: "home.widget.")
+        let card = app.descendants(matching: .any)[cardID].firstMatch
+        XCTAssertTrue(card.exists, app.debugDescription)
         header.tap()
-        XCTAssertTrue(app.buttons["Edit widget"].waitForExistence(timeout: 5))
-        app.buttons["Edit widget"].tap()
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-        XCTAssertEqual(title.value as? String, "Widget options QA")
+        XCTAssertFalse(app.buttons["Edit"].exists, "Tapping the title must not open a menu")
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).press(forDuration: 0.7)
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars.buttons["Done"].exists)
+        app.buttons["Edit"].tap()
+        XCTAssertTrue(app.navigationBars.buttons["Done"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons["Add widget"].exists)
+        capture("Widget edit mode navbar and resize handle")
+        let handle = card.descendants(matching: .any)["home.widget.resize"].firstMatch
+        XCTAssertTrue(handle.waitForExistence(timeout: 5))
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: -120, dy: 0)))
+        XCTAssertEqual(card.value as? String, "Small")
         tapDone()
+        app.buttons["lens.accounts"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        let sheet = app.navigationBars["Settings"]
+        sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).press(forDuration: 0.1,
+            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
         XCTAssertTrue(header.waitForExistence(timeout: 5))
-        header.tap()
-        XCTAssertTrue(app.buttons["Remove widget"].waitForExistence(timeout: 5))
-        app.buttons["Remove widget"].tap()
+        XCTAssertEqual(card.value as? String, "Small", "Opening Settings must retain the widget and its size")
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).press(forDuration: 0.7)
+        XCTAssertTrue(app.buttons["Delete widget"].waitForExistence(timeout: 5))
+        app.buttons["Delete widget"].tap()
         XCTAssertFalse(header.waitForExistence(timeout: 2))
     }
 
@@ -107,15 +172,11 @@ final class DevicesLensUITests: XCTestCase {
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         if app.buttons["lens.continue"].waitForExistence(timeout: 2) { app.buttons["lens.continue"].tap() }
-        if !app.tabBars.buttons["Devices"].waitForExistence(timeout: 3) {
-            let open = app.buttons["lens.open.Devices"]
-            XCTAssertTrue(open.waitForExistence(timeout: 15))
-            open.tap()
-        }
-        XCTAssertTrue(app.tabBars.buttons["Devices"].waitForExistence(timeout: 15))
-        app.tabBars.buttons["Devices"].tap()
-        _ = selectInventoryRow("Devices UI QA")
-        let settings = app.segmentedControls["device.sections"].buttons["Settings"]
+        let open = app.buttons["lens.open.Devices"]
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        open.tap()
+        _ = openDevice("Devices UI QA", source: "local")
+        let settings = app.segmentedControls.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30))
         settings.tap()
         let logs = app.buttons["device.settings.Logs"]
@@ -125,20 +186,25 @@ final class DevicesLensUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(logs.isHittable)
-        XCTAssertLessThanOrEqual(logs.frame.maxY, chat.frame.minY, "Last Settings row must clear both floating bars")
+        XCTAssertLessThanOrEqual(logs.frame.maxY, chat.frame.minY, "Last Settings row must clear the floating chat control")
         capture("Settings last row above bars")
         logs.tap()
         XCTAssertTrue(app.navigationBars["Logs"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.firstMatch.tap()
-        app.segmentedControls["device.sections"].buttons["Apps"].tap()
-        let deploy = app.buttons.containing(.staticText, identifier: "Deploy an app").firstMatch
-        for _ in 0..<6 {
-            if deploy.exists && deploy.isHittable && deploy.frame.maxY <= chat.frame.minY { break }
-            app.swipeUp()
+        app.segmentedControls.buttons["Apps"].tap()
+        let deploy = app.buttons["device.apps.add"]
+        XCTAssertTrue(deploy.waitForExistence(timeout: 5))
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
+        for _ in 0..<6 { list.swipeUp() }
+        let lastApp = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "device.apps.row.")).allElementsBoundByIndex.last
+        XCTAssertNotNil(lastApp)
+        if let lastApp {
+            XCTAssertTrue(lastApp.isHittable)
+            XCTAssertLessThanOrEqual(lastApp.frame.maxY, chat.frame.minY, "Last app row must scroll above the floating chat control")
         }
+        capture("Apps final row above floating chat")
+        for _ in 0..<6 { if deploy.isHittable { break }; list.swipeDown() }
         XCTAssertTrue(deploy.isHittable)
-        XCTAssertLessThanOrEqual(deploy.frame.maxY, chat.frame.minY, "Apps footer must clear both floating bars")
-        capture("Apps footer above bars")
         deploy.tap()
         XCTAssertTrue(app.navigationBars["Deploy an app"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
@@ -148,16 +214,16 @@ final class DevicesLensUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CLOUD_CHAT_FIXTURE"] == "1", "Requires local device fixture; no cloud API calls")
         launch()
         _ = openDevice("Devices UI QA", source: "local")
-        XCTAssertTrue(app.segmentedControls["device.sections"].buttons["Cameras"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.segmentedControls.buttons["Cameras"].waitForExistence(timeout: 30))
         app.buttons["lens.chat"].tap()
-        XCTAssertTrue(app.buttons["Change device"].waitForExistence(timeout: 5))
-        let inference = app.segmentedControls["chat.inference"]
-        XCTAssertTrue(inference.waitForExistence(timeout: 10))
-        let cloud = inference.buttons["Cloud"]
+        let settings = app.buttons["chat.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
         let ready = NSPredicate(format: "enabled == true")
-        expectation(for: ready, evaluatedWith: cloud)
+        expectation(for: ready, evaluatedWith: settings)
         waitForExpectations(timeout: 30)
-        cloud.tap()
+        settings.tap()
+        XCTAssertTrue(app.buttons["Cloud"].waitForExistence(timeout: 5))
+        app.buttons["Cloud"].tap()
         XCTAssertTrue(app.navigationBars["Cloud models"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.secureTextFields.firstMatch.exists)
         XCTAssertFalse(app.buttons["Save key & find models"].isEnabled)
@@ -166,7 +232,8 @@ final class DevicesLensUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Connect cloud provider"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Send message"].isEnabled)
         capture("Ask Wendy cloud empty state")
-        inference.buttons["On device"].tap()
+        settings.tap()
+        app.buttons["On device"].tap()
         XCTAssertTrue(app.buttons["Browse device models"].waitForExistence(timeout: 30))
     }
 
@@ -174,8 +241,8 @@ final class DevicesLensUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CAMERAS_FIXTURE"] == "1", "Requires local Cameras fixture")
         launch()
         _ = openDevice("Devices UI QA", source: "local")
-        XCTAssertTrue(app.segmentedControls["device.sections"].buttons["Cameras"].waitForExistence(timeout: 30))
-        app.segmentedControls["device.sections"].buttons["Cameras"].tap()
+        XCTAssertTrue(app.segmentedControls.buttons["Cameras"].waitForExistence(timeout: 30))
+        app.segmentedControls.buttons["Cameras"].tap()
         XCTAssertTrue(app.staticTexts["640 × 480"].firstMatch.waitForExistence(timeout: 30))
         capture("Camera tiles")
         app.buttons["Full screen QA Camera"].tap()
@@ -239,10 +306,13 @@ final class DevicesLensUITests: XCTestCase {
                 XCUIDevice.shared.press(.home)
                 app.activate()
                 XCTAssertTrue(inventory.waitForExistence(timeout: 10))
+                app.navigationBars.buttons.firstMatch.tap()
+                XCTAssertTrue(tile.waitForExistence(timeout: 10))
                 app.tabBars.buttons["Activity"].tap()
                 app.tabBars.buttons["Home"].tap()
+                tile.tap()
                 XCTAssertTrue(inventory.waitForExistence(timeout: 10),
-                              "Returning to Home should restore the local list.")
+                              "Home should still open the local inventory after switching tabs.")
             }
             app.navigationBars.buttons.element(boundBy: 0).tap()
             XCTAssertTrue(tile.waitForExistence(timeout: 10))
@@ -264,13 +334,16 @@ final class DevicesLensUITests: XCTestCase {
         XCTAssertTrue(["local", "cloud"].contains(source))
         launch()
         let row = openDevice(device, source: source)
-        let logs = app.buttons["devices.detail.logs"]
-        guard logs.waitForExistence(timeout: 25) else {
+        let tools = app.buttons["More device tools"]
+        guard app.segmentedControls.buttons["Apps"].waitForExistence(timeout: 25) else {
             let details = app.buttons["Connection details"]
             if details.exists { details.tap() }
             XCTFail("Could not open the connected device overview: \(app.staticTexts.allElementsBoundByIndex.map(\.label))")
             return
         }
+        tools.tap()
+        let logs = app.buttons["devices.detail.logs"]
+        XCTAssertTrue(logs.waitForExistence(timeout: 5))
         logs.tap()
         XCTAssertTrue(app.navigationBars["Logs"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.buttons.matching(identifier: "devices.logs.entry").firstMatch.waitForExistence(timeout: 25),
@@ -281,7 +354,7 @@ final class DevicesLensUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(identifier: "devices.logs.entry").firstMatch.waitForExistence(timeout: 25),
                       "The selected device’s log stream did not resume.")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(logs.waitForExistence(timeout: 12))
+        XCTAssertTrue(app.segmentedControls.buttons["Apps"].waitForExistence(timeout: 12))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(row.waitForExistence(timeout: 12))
     }
@@ -301,7 +374,7 @@ final class DevicesLensUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_SIGNED_OUT_LOGIN"] == "1",
                           "Opt in on a signed-out simulator with access to Wendy Cloud.")
         launch()
-        app.buttons["lens.back"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["lens.accounts"].tap()
         app.buttons["Manage organization"].tap()
         let signIn = app.buttons["Sign in"]
@@ -316,22 +389,17 @@ final class DevicesLensUITests: XCTestCase {
 
     func testDevicesTabsAndGeneralHome() {
         launch(captureLauncher: true)
-        for tab in ["Home", "Devices", "Data", "Activity"] {
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5))
+        for tab in ["Home", "Data", "Activity"] {
             XCTAssertTrue(app.tabBars.buttons[tab].exists)
         }
-        XCTAssertFalse(app.tabBars.buttons["Sites"].exists)
-        XCTAssertEqual(app.tabBars.count, 1, "The lens should expose one native tab bar.")
-        app.tabBars.buttons["Devices"].tap()
-        let picker = app.segmentedControls.firstMatch
-        XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        picker.buttons["Mesh"].tap()
-        picker.buttons["List"].tap()
+        XCTAssertFalse(app.tabBars.buttons["Devices"].exists)
         app.tabBars.buttons["Data"].tap()
         XCTAssertTrue(app.navigationBars["Data"].waitForExistence(timeout: 5))
         app.buttons["lens.chat"].tap()
-        XCTAssertTrue(app.buttons["Change device"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 5))
         app.buttons["Close"].tap()
-        app.buttons["lens.back"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.buttons["lens.open.Devices"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["lens.open.Sites"].exists)
     }
@@ -487,7 +555,7 @@ final class DevicesLensUITests: XCTestCase {
         launch()
         _ = openDevice(device, source: "cloud")
         let name = "sh.wendy.examples.hellopython"
-        XCTAssertTrue(app.buttons["devices.detail.logs"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.segmentedControls.buttons["Apps"].waitForExistence(timeout: 30))
         openInstalledApp(name, badge: "Has a web page")
         verifyWebContent(containing: "Hello", captureName: "Cloud Hello Python web page")
         try await verifyAppLog(containing: "GET /", captureName: "Cloud Hello Python logs")
@@ -508,8 +576,8 @@ final class DevicesLensUITests: XCTestCase {
         app.buttons["app.logs"].tap()
         try await verifyLiveTemplateLog(at: lanPage)
 
-        app.tabBars.buttons["Devices"].tap()
-        _ = selectInventoryRow(cloud)
+        returnToDevicesHome()
+        _ = openDevice(cloud, source: "cloud")
         XCTAssertTrue(app.navigationBars[cloud].waitForExistence(timeout: 30))
         openInstalledApp(template, badge: "STOPPED")
         waitForLabel("Start", button: app.buttons["app.toggle"])
@@ -530,7 +598,10 @@ final class DevicesLensUITests: XCTestCase {
         _ = try await fetch(lanPage)
         XCTAssertFalse(logRecord(containing: "Received request: GET /").waitForExistence(timeout: 3))
 
-        app.tabBars.buttons["Home"].tap()
+        returnToDevicesHome()
+        _ = openDevice(local, source: "local")
+        openInstalledApp(template, badge: "Has a web page")
+        app.buttons["app.logs"].tap()
         try await verifyLiveTemplateLog(at: lanPage)
         do {
             _ = try await fetch(tunnel)
@@ -547,16 +618,16 @@ final class DevicesLensUITests: XCTestCase {
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "device.apps.row."))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 30))
         let row = app.buttons["device.apps.row." + name]
-        let scroll = app.scrollViews.firstMatch
+        let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
         if !row.exists || !row.isHittable {
             for _ in 0..<10 {
-                if app.buttons["devices.detail.logs"].isHittable { break }
+                if row.exists && row.isHittable { break }
                 scroll.swipeDown()
             }
         }
         for _ in 0..<18 {
             let top = app.navigationBars.firstMatch.frame.maxY
-            let bottom = app.tabBars.buttons["Home"].frame.minY
+            let bottom = app.buttons["lens.chat"].frame.minY
             if row.exists && row.isHittable && row.frame.midY > top && row.frame.midY < bottom { break }
             if row.exists && !row.frame.isEmpty && row.frame.midY < top { scroll.swipeDown() } else { scroll.swipeUp() }
         }
@@ -627,7 +698,16 @@ final class DevicesLensUITests: XCTestCase {
     }
 
     private func capture(_ title: String) {
-        let shot = XCTAttachment(screenshot: app.screenshot())
+        let screenshot = app.screenshot()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("NativeUIQA", isDirectory: true)
+        let filename = title.replacingOccurrences(of: "/", with: "-") + ".png"
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let path = directory.appendingPathComponent(filename)
+            try screenshot.pngRepresentation.write(to: path)
+            print("QA screenshot: " + path.path)
+        } catch { print("Could not save QA screenshot: " + error.localizedDescription) }
+        let shot = XCTAttachment(screenshot: screenshot)
         shot.name = title
         shot.lifetime = .keepAlways
         add(shot)
@@ -638,6 +718,17 @@ final class DevicesLensUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: matches, object: button)], timeout: timeout), .completed)
     }
 
+
+    private func returnToDevicesHome() {
+        let inventory = app.buttons["devices.home.local"]
+        for _ in 0..<8 {
+            if inventory.exists && inventory.isHittable { return }
+            let back = app.navigationBars.buttons.firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+        }
+        XCTAssertTrue(inventory.isHittable, "Expected the Devices Home inventory cards")
+    }
 
     private func openDevice(_ name: String, source: String) -> XCUIElement {
         let tile = app.buttons["devices.home.\(source)"]

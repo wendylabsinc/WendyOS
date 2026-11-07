@@ -11,7 +11,6 @@ struct MobileDeviceView: View {
     let openRecordings: () -> Void
     @State private var showingAppearance = false
     @State private var segment = DeviceSegment.apps
-    @State private var info: DeviceInfoSnapshot?
     @State private var update: DeviceUpdateSnapshot?
     @State private var showLogs = false
     @State private var showEvents = false
@@ -22,12 +21,13 @@ struct MobileDeviceView: View {
     var body: some View {
         Group {
             if ready {
-                if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) }
-                else if segment == .cameras || segment == .settings {
+                if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession).modifier(MobileFloatingChatScrollMargins()) }
+                else if segment == .cameras || segment == .settings || segment == .apps {
                     VStack(spacing: 0) {
                         header.padding(.horizontal, 16).padding(.vertical, 8)
-                        if segment == .cameras { CameraWallView(model: model) }
-                        else { DeviceSettingsView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession) }
+                        if segment == .cameras { CameraWallView(model: model).modifier(MobileFloatingChatScrollMargins()) }
+                        else if segment == .apps { MobileAppsList(model: model, device: device).refreshable { await model.refreshDetails() } }
+                        else { DeviceSettingsView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession).modifier(MobileFloatingChatScrollMargins()) }
                     }
                 } else {
                     ScrollView {
@@ -51,7 +51,8 @@ struct MobileDeviceView: View {
                             case .cameras, .settings: EmptyView()
                             }
                         }.padding(.horizontal, 16).padding(.vertical, 8).frame(maxWidth: 700).frame(maxWidth: .infinity)
-                    }.refreshable { await model.refreshDetails() }
+                    }.modifier(MobileFloatingChatScrollMargins())
+                        .refreshable { await model.refreshDetails() }
                 }
             } else { connectionState }
         }.background(MobileLensStyle.background)
@@ -74,6 +75,9 @@ struct MobileDeviceView: View {
                         Button("Customize appearance", systemImage: "paintpalette") { showingAppearance = true }
                             .accessibilityIdentifier("devices.appearance")
                         if ready && !model.connectedLite {
+                            Button("Logs", systemImage: "text.alignleft", action: openLogs)
+                                .accessibilityIdentifier("devices.detail.logs")
+                            Button(updateTitle, systemImage: "info.circle") { tool = .update }
                             Button("App activity", systemImage: "waveform.path.ecg") { tool = .metrics }
                             Button("Digital Twin", systemImage: "cube.transparent") { tool = .twin }
                             Button("Campaigns", systemImage: "record.circle") { tool = .campaigns }
@@ -83,12 +87,9 @@ struct MobileDeviceView: View {
                 }
             }
             .task(id: ready ? model.deviceSession : 0) {
-                info = nil; update = nil
+                update = nil
                 guard ready && !model.connectedLite else { return }
                 let captured = model.deviceSession
-                let details = try? await GoClient.shared.deviceInfo(session: captured)
-                guard !Task.isCancelled, ready, captured == model.deviceSession else { return }
-                info = details
                 repeat {
                     let software = try? await GoClient.shared.onlineUpdate(session: captured, action: 0)
                     guard !Task.isCancelled, ready, captured == model.deviceSession else { return }
@@ -97,7 +98,7 @@ struct MobileDeviceView: View {
                 } while !Task.isCancelled
             }
             .navigationDestination(isPresented: $showLogs) {
-                if ready { DeviceLogsPage(model: model).id(model.deviceSession).accessibilityIdentifier("devices.detail.logPage") }
+                if ready { DeviceLogsPage(model: model).id(model.deviceSession).modifier(MobileFloatingChatScrollMargins()).accessibilityIdentifier("devices.detail.logPage") }
                 else { connectionState.navigationTitle("Logs") }
             }
             .navigationDestination(item: $tool) { destination in
@@ -130,25 +131,12 @@ struct MobileDeviceView: View {
     }
     private func openLogs() { model.logApp = ""; showLogs = true }
     private var header: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            LensHero(icon: "cpu", color: MobileLensStyle.green, kicker: ["DEVICE", info?.board.nonEmpty?.uppercased()].compactMap { $0 }.joined(separator: " · "),
-                     title: device.title, subtitle: ["Online", "\(model.apps.count) apps", site].compactMap { $0 }.joined(separator: " · "),
-                     chips: [device.transport == .cloud ? "Cloud" : "Local",
-                             update?.busy == true ? "Updating Agent" : update?.available == true ? "Update available" : nil,
-                             model.camerasError == nil ? "\(model.cameras.count) \(model.cameras.count == 1 ? "camera" : "cameras")" : nil].compactMap { $0 }, device: device, customize: { showingAppearance = true }) {
-                Button("Logs", action: openLogs).mobileActionStyle().accessibilityIdentifier("devices.detail.logs")
-                Button(updateTitle) { tool = .update }.mobileActionStyle(primary: true)
-            }
-            segments
-        }
-    }
-    private var segments: some View {
         Picker("Device section", selection: $segment) {
             ForEach(DeviceSegment.allCases, id: \.self) { item in
                 Text(item.rawValue).tag(item)
+                    .accessibilityIdentifier("device.segment." + item.rawValue)
             }
-        }.pickerStyle(.segmented)
-            .accessibilityIdentifier("device.sections")
+        }.pickerStyle(.segmented).accessibilityIdentifier("device.sections")
     }
 }
 
@@ -174,9 +162,9 @@ private struct LensHero<Actions: View>: View {
                         .buttonStyle(.plain).accessibilityLabel("Customize device appearance").accessibilityIdentifier("devices.appearance.avatar")
                 } else { LensIcon(symbol: icon, color: color, size: 54) }
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(kicker).font(.caption2.bold()).tracking(0.4).foregroundStyle(color)
-                    Text(title).font(.title2.bold())
-                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                    Text(kicker).font(.caption2.bold()).tracking(0.4).foregroundStyle(color).lineLimit(1)
+                    Text(title).font(.title2.bold()).lineLimit(2)
+                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Spacer(minLength: 0)
             }
@@ -192,7 +180,7 @@ private struct LensHero<Actions: View>: View {
     private var chipRow: some View {
         HStack(spacing: 6) {
             ForEach(chips, id: \.self) { value in
-                Text(value).font(.caption.weight(.semibold)).fixedSize().padding(.horizontal, 9).padding(.vertical, 5)
+                Text(value).font(.caption.weight(.semibold)).lineLimit(1).padding(.horizontal, 9).padding(.vertical, 5)
                     .background(.quaternary, in: .capsule)
             }
         }
@@ -205,7 +193,8 @@ private struct MobileAppsList: View {
     let device: Device
     @State private var deploying = false
     var body: some View {
-        LensSection(title: "Apps") {
+        List {
+        Section {
             ForEach(model.visibleApps) { app in
                 NavigationLink {
                     MobileAppDetail(model: model, device: device, name: app.appName)
@@ -215,18 +204,16 @@ private struct MobileAppsList: View {
                         VStack(alignment: .leading, spacing: 2) {
                             // Prefer wrapping bundle identifiers at a dot instead of splitting a word or version.
                             Text(verbatim: app.appName.replacingOccurrences(of: ".", with: ".\u{200B}"))
-                                .font(.body.weight(.semibold)).lineLimit(textSize.isAccessibilitySize ? nil : 2)
+                                .font(.body.weight(.semibold)).lineLimit(textSize.isAccessibilitySize ? 3 : 2)
                                 .truncationMode(.middle).accessibilityLabel(app.appName)
                             if let reason = app.terminationReason?.nonEmpty, reason.localizedCaseInsensitiveCompare(app.runningState.title) != .orderedSame {
-                                Text(reason).font(.caption).foregroundStyle(.secondary)
+                                Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
                             if textSize.isAccessibilitySize { metadata(for: app) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         if !textSize.isAccessibilitySize { metadata(for: app) }
-                        Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
-                    }.padding(.horizontal, 16).padding(.vertical, 10).contentShape(.rect)
+                    }.padding(.vertical, 4).contentShape(.rect)
                 }.buttonStyle(.plain).accessibilityIdentifier("device.apps.row." + app.appName)
-                if app.id != model.visibleApps.last?.id { Divider().padding(.leading, 64) }
             }
             if let error = model.appsError { FailureNote(message: error).padding(16) }
             else if model.visibleApps.isEmpty && model.appsInitialLoading {
@@ -234,12 +221,22 @@ private struct MobileAppsList: View {
             }
             else if model.visibleApps.isEmpty { Text("No visible apps on this device.").foregroundStyle(.secondary).padding(16) }
             if model.hiddenAppCount > 0 { HiddenAppsFilter(model: model).padding(12) }
+        } header: {
+            HStack {
+                Text("Apps")
+                Spacer()
+                Button("Add", systemImage: "plus") { deploying = true }
+                    .font(.subheadline.weight(.semibold))
+                    .textCase(nil)
+                    .accessibilityLabel("Deploy an app")
+                    .accessibilityIdentifier("device.apps.add")
+            }
         }
-        LensSection(title: "Add") {
-            Button { deploying = true } label: {
-                LensRow(title: "Deploy an app", subtitle: "From a Wendy project", symbol: "square.grid.2x2")
-            }.buttonStyle(.plain)
-        }.sheet(isPresented: $deploying) {
+        }.listStyle(.insetGrouped)
+        .modifier(MobileFloatingChatScrollMargins())
+        .scrollContentBackground(.hidden)
+        .background(MobileLensStyle.background)
+        .sheet(isPresented: $deploying) {
             NavigationStack {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Run this command in your project on your developer machine.")
@@ -323,7 +320,8 @@ struct MobileAppDetail: View {
             } else {
                 ContentUnavailableView(ready ? "App unavailable" : "Device disconnected", systemImage: "square.grid.2x2")
             }
-        }.background(MobileLensStyle.background).navigationTitle(name).navigationBarTitleDisplayMode(.inline)
+        }.modifier(MobileFloatingChatScrollMargins())
+            .background(MobileLensStyle.background).navigationTitle(name).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     if ready {
@@ -344,7 +342,7 @@ struct MobileAppDetail: View {
             }
             .navigationDestination(isPresented: $showingLogs) {
                 if app != nil {
-                    DeviceLogsPage(model: model, fixedApp: name).id(model.deviceSession)
+                    DeviceLogsPage(model: model, fixedApp: name).id(model.deviceSession).modifier(MobileFloatingChatScrollMargins())
                 } else { ContentUnavailableView("Device or app unavailable", systemImage: "bolt.slash") }
             }
     }

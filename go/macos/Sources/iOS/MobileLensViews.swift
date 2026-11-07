@@ -57,6 +57,7 @@ struct MobileLensPreference: View {
 }
 
 struct MobileGeneralHome: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject var model: AppModel
     let primary: MobileLens
     let open: (MobileLens) -> Void
@@ -73,19 +74,38 @@ struct MobileGeneralHome: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 8) {
+                let layout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(spacing: 8))
+                    : AnyLayout(HStackLayout(spacing: 8))
+                layout {
                     ForEach(MobileLens.allCases) { lens in
-                        Button { open(lens) } label: {
-                            VStack(spacing: 8) {
-                                LensIcon(symbol: lens.icon, color: lens.color, size: 36)
-                                Text(lens.rawValue).font(.subheadline.weight(.semibold))
-
-                            }.frame(maxWidth: .infinity).padding(.vertical, 12)
-                                .background(lens.color.opacity(lens == primary ? 0.14 : 0.06), in: .rect(cornerRadius: 22))
-                        }.buttonStyle(.plain).accessibilityIdentifier("lens.open." + lens.rawValue)
+                        NavigationLink(value: MobileDestination.lens(lens)) {
+                            if dynamicTypeSize.isAccessibilitySize {
+                                HStack(spacing: 12) {
+                                    LensIcon(symbol: lens.icon, color: lens.color, size: 36)
+                                    Text(lens.rawValue).font(.headline)
+                                    Spacer(minLength: 8)
+                                    Image(systemName: "chevron.right").font(.body.weight(.semibold))
+                                }.frame(maxWidth: .infinity, minHeight: 52)
+                            } else {
+                                VStack(spacing: 10) {
+                                    LensIcon(symbol: lens.icon, color: lens.color, size: 36)
+                                    HStack(spacing: 5) {
+                                        Text(lens.rawValue).font(.subheadline.weight(.semibold))
+                                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                                    }
+                                }.frame(maxWidth: .infinity, minHeight: 76)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.roundedRectangle(radius: 16))
+                        .tint(lens.color)
+                        .accessibilityLabel(lens.rawValue)
+                        .accessibilityHint("Opens the \(lens.rawValue.lowercased()) view")
+                        .accessibilityIdentifier("lens.open." + lens.rawValue)
                     }
                 }
-                if model.account != nil && model.mobileScopeIsCurrent && !model.mobileCloudSelectionLoading {
+                if model.account != nil && model.mobileScopeIsCurrent {
                 HomeWidgetDeck(model: model, store: widgets, editing: $editingHome,
                                add: { addingWidget = true }, configure: { configuringWidget = $0 },
                                setup: setup, recordings: recordings, notifications: notifications,
@@ -102,13 +122,21 @@ struct MobileGeneralHome: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $addingWidget) { HomeWidgetManager(store: widgets, model: model) }
             .sheet(item: $configuringWidget) { widget in
-                HomeWidgetEditor(widget: widget, model: model, save: { widgets.save($0) }, remove: { widgets.remove(widget.id) })
+                HomeWidgetEditor(widget: widget, model: model, save: { widgets.save($0) })
             }
             .task(id: model.mobileCloudSelectionKey) {
                 editingHome = false; configuringWidget = nil; addingWidget = false
                 widgets.load(account: model.mobileCloudAccount, organization: model.mobileCloudOrganization)
             }
             .toolbar {
+                if editingHome {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Add widget", systemImage: "plus") { addingWidget = true }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { editingHome = false }
+                    }
+                } else {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: accounts) { HStack(spacing: 7) {
                         Image("WendyMark").resizable().frame(width: 26, height: 26).clipShape(.circle)
@@ -117,6 +145,7 @@ struct MobileGeneralHome: View {
                     } }.accessibilityIdentifier("lens.accounts")
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("Notifications", systemImage: "bell", action: notifications) }
+                }
             }
     }
 
@@ -141,26 +170,6 @@ private struct LensMeshArtwork: View {
                 context.fill(Path(ellipseIn: CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12)), with: .color(MobileLensStyle.green.opacity(0.48)))
             }
         }.accessibilityHidden(true)
-    }
-}
-
-struct MobileLensChatAccessory: View {
-    @ObservedObject var chatModel: DeviceChatModel
-    let context: String?
-    let chat: () -> Void
-    var body: some View {
-        Button(action: chat) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                Text("Ask Wendy about \(context ?? "a device")…").lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 0)
-                if chatModel.unreadReplies > 0 || chatModel.approval != nil {
-                    Text(chatModel.approval != nil ? "Review" : "\(chatModel.unreadReplies)")
-                        .font(.caption.bold()).foregroundStyle(MobileLensStyle.green)
-                }
-            }.font(.subheadline).padding(.horizontal, 16).frame(maxWidth: .infinity, minHeight: 44)
-                .contentShape(.rect)
-        }.buttonStyle(.plain).accessibilityIdentifier("lens.chat")
     }
 }
 
@@ -194,6 +203,7 @@ struct LensSection<Content: View>: View {
 }
 
 struct LensRow: View {
+    @Environment(\.dynamicTypeSize) private var textSize
     let title: String
     let subtitle: String
     let symbol: String
@@ -205,10 +215,15 @@ struct LensRow: View {
             LensIcon(symbol: symbol, color: color)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.body.weight(.semibold))
-                if !subtitle.isEmpty { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
-            }
+                    .lineLimit(textSize.isAccessibilitySize ? 3 : 2).truncationMode(.middle)
+                    .accessibilityLabel(title)
+                if !subtitle.isEmpty { Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(textSize.isAccessibilitySize ? 3 : 2).truncationMode(.tail)
+                    .accessibilityLabel(subtitle) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 4)
-            if !trailing.isEmpty { Text(trailing).font(.caption).foregroundStyle(.secondary) }
+            if !trailing.isEmpty { Text(trailing).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(textSize.isAccessibilitySize ? 2 : 1).truncationMode(.tail).frame(maxWidth: 92, alignment: .trailing) }
             if navigates { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
         }.padding(.horizontal, 16).padding(.vertical, 10).contentShape(.rect)
     }
@@ -252,24 +267,13 @@ struct MobileLensChat: View {
                         }
                     }
                 }
-            }.navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle("Ask Wendy").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button(action: chooseDevice) {
-                            HStack(spacing: 8) {
-                                if model.mobileScopeIsCurrent, let device = model.connected {
-                                    MobileDeviceAvatar(device: device, size: 26)
-                                    Text(device.title).font(.subheadline.weight(.semibold)).lineLimit(1).truncationMode(.middle)
-                                } else { Text("Choose device").font(.subheadline.weight(.semibold)) }
-                                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-                            }.foregroundStyle(.primary)
-                        }.accessibilityLabel("Change device")
-                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly)
                     }
                 }
-                .background(MobileLensStyle.background)
+                .background(Color(uiColor: .systemBackground))
                 .task(id: selection?.id) {
                     guard let request = selection else { return }
                     await connectSuggestion(request)

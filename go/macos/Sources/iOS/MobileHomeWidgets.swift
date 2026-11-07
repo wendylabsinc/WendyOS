@@ -23,6 +23,8 @@ struct HomeWidgetDeck: View {
     @State private var expandedCamera: HomeWidget?
     @State private var refresh = 0
     @State private var dragged: UUID?
+    @State private var resizing: UUID?
+    @State private var resizePreview: HomeWidgetSize?
     @State private var selectedEpisode: String?
     @State private var galleryDevice: String?
     @Environment(\.dynamicTypeSize) private var textSize
@@ -35,14 +37,7 @@ struct HomeWidgetDeck: View {
     private struct LoadKey: Hashable { let targets: [MobileRecordingTarget]; let inventory: [MobileRecordingTarget]; let active: Bool; let refresh: Int }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if editing {
-              HStack {
-                Spacer()
-                    Button("Add widget", systemImage: "plus", action: add).labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                    Button("Done") { editing = false; dragged = nil }.font(.subheadline.bold())
-              }.tint(MobileLensStyle.green)
-            }
-            if let error = store.error { Text(error).font(.footnote).foregroundStyle(.secondary) }
+            if let error = store.error { Text(error).font(.footnote).foregroundStyle(.secondary).lineLimit(3) }
             if store.items.isEmpty {
                 Button { beginEditing(); add() } label: {
                     VStack(spacing: 10) {
@@ -57,17 +52,17 @@ struct HomeWidgetDeck: View {
                         .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(.secondary.opacity(0.3), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])) }
                 }.buttonStyle(.plain)
             }
-            HomeWidgetGrid(sizes: store.items.map(\.size), accessible: textSize.isAccessibilitySize) {
+            HomeWidgetGrid(sizes: store.items.map { $0.id == resizing ? resizePreview ?? $0.size : $0.size }, accessible: textSize.isAccessibilitySize) {
                 ForEach(store.items) { widget in
                     widgetCard(widget)
                 }
             }.animation(reduceMotion ? nil : .snappy(duration: 0.22), value: store.items)
             if editing && !store.items.isEmpty {
-                Text("Drag to reorder · tap to configure · tap S/M/L to resize")
+                Text("Drag to reorder · drag the corner to resize · tap to configure")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.task { await actions.run() }
-        .onChange(of: editing) { _, value in if value { activeCamera = nil } }
+        .onChange(of: editing) { _, value in if value { activeCamera = nil } else { dragged = nil; resizing = nil; resizePreview = nil } }
         .onDisappear { activeCamera = nil }
         .task(id: LoadKey(targets: targets, inventory: RecordingSources(model: model).inventory, active: phase == .active, refresh: refresh)) {
             if phase == .active { await catalog.load(targets, refresh: refresh, priority: nil, consumer: "home.widgets", retaining: RecordingSources(model: model).inventory) }
@@ -102,55 +97,45 @@ struct HomeWidgetDeck: View {
             .clipShape(.rect(cornerRadius: 22))
             .overlay { if editing {
                 RoundedRectangle(cornerRadius: 22).strokeBorder(Color.secondary.opacity(0.3), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
-                    .contentShape(.rect).onTapGesture { configure(widget) }
+                    .contentShape(RoundedRectangle(cornerRadius: 22)).onTapGesture { configure(widget) }
             } }
-            .overlay(alignment: .topLeading) { if editing {
-                Button { store.remove(widget.id) } label: {
-                    Image(systemName: "minus").font(.caption.bold()).foregroundStyle(.white).frame(width: 28, height: 28).background(Color(white: 0.35), in: .circle)
-                }.accessibilityLabel("Remove " + widget.displayTitle).offset(x: 7, y: 7)
+            .modifier(HomeWidgetReordering(enabled: editing, widget: widget, store: store, dragged: $dragged))
+            .overlay(alignment: .bottomTrailing) { if editing {
+                HomeWidgetResizeHandle(size: widget.size, allowed: widget.kind.sizes) { size in
+                    resizing = widget.id
+                    resizePreview = size
+                } commit: { size in
+                    store.resize(widget.id, to: size)
+                    resizing = nil
+                    resizePreview = nil
+                } cancel: {
+                    resizing = nil
+                    resizePreview = nil
+                }.padding(4)
             } }
-            .overlay(alignment: .topTrailing) { if editing {
-                Button { store.resize(widget.id) } label: {
-                    HStack(spacing: 4) {
-                        Text(widget.size.short)
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold))
-                    }.font(.caption.bold()).foregroundStyle(.white).frame(width: 44, height: 28).background(RecordingAppearance.ink, in: .capsule)
-                }.accessibilityLabel("Resize " + widget.displayTitle).accessibilityValue(widget.size.rawValue).offset(x: -7, y: 7)
-            } }
+            .contentShape(.interaction, RoundedRectangle(cornerRadius: 22))
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 22))
+            .contextMenu {
+                Button("Edit", systemImage: "pencil") { beginEditing() }
+                Button("Delete widget", systemImage: "trash", role: .destructive) {
+                    if activeCamera == widget.id { activeCamera = nil }
+                    store.remove(widget.id)
+                }
+            }
             .scaleEffect(editing ? (dragged == widget.id ? 1.03 : 0.97) : 1)
             .opacity(dragged == widget.id ? 0.55 : 1)
-            .onLongPressGesture(minimumDuration: 0.55) { beginEditing() }
-            .onDrag { beginEditing(); dragged = widget.id; return NSItemProvider(object: widget.id.uuidString as NSString) }
-            .onDrop(of: [UTType.text], delegate: HomeWidgetDrop(target: widget.id, store: store, dragged: $dragged))
             .accessibilityAction(named: "Configure") { configure(widget) }
             .accessibilityAction(named: "Resize") { store.resize(widget.id) }
             .accessibilityAction(named: "Move earlier") { move(widget, offset: -1) }
             .accessibilityAction(named: "Move later") { move(widget, offset: 1) }
             .accessibilityElement(children: .contain)
+            .accessibilityLabel(widget.displayTitle)
+            .accessibilityValue(widget.size.rawValue)
             .accessibilityIdentifier("home.widget." + widget.id.uuidString)
     }
-    @ViewBuilder private func widgetHeader(_ widget: HomeWidget) -> some View {
-        if editing {
-            headerLabel(widget)
-                .padding(.leading, 26).padding(.trailing, 44)
-        } else {
-            Menu {
-                Button("Edit widget", systemImage: "slider.horizontal.3") {
-                    activeCamera = nil
-                    configure(widget)
-                }
-                Button("Remove widget", systemImage: "trash", role: .destructive) {
-                    if activeCamera == widget.id { activeCamera = nil }
-                    store.remove(widget.id)
-                }
-            } label: {
-                headerLabel(widget)
-            }.menuStyle(.borderlessButton).buttonStyle(.plain).tint(HomeWidgetKind.headerColor)
-                .highPriorityGesture(LongPressGesture(minimumDuration: 0.55).onEnded { _ in beginEditing() })
-                .accessibilityLabel(widget.displayTitle + " widget options")
-                .accessibilityHint("Edit or remove this widget")
-                .accessibilityIdentifier("home.widget.options." + widget.id.uuidString)
-        }
+    private func widgetHeader(_ widget: HomeWidget) -> some View {
+        headerLabel(widget)
+            .accessibilityIdentifier("home.widget.options." + widget.id.uuidString)
     }
     private func headerLabel(_ widget: HomeWidget) -> some View {
         HStack(spacing: 8) {
@@ -197,13 +182,13 @@ struct HomeWidgetDeck: View {
                                     }
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(device.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                    Text(HomeWidgetInventory.status(device, model: model) + " · " + (device.transport == .cloud ? "Cloud" : "Local")).font(.caption2).foregroundStyle(.secondary)
+                                    Text(HomeWidgetInventory.status(device, model: model) + " · " + (device.transport == .cloud ? "Cloud" : "Local")).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                                 }
                                 Spacer(minLength: 0)
                                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
                             }
                         }.buttonStyle(.plain)
-                    } else { Text(reference.title + " · Unavailable").font(.caption).foregroundStyle(.secondary) }
+                    } else { Text(reference.title + " · Unavailable").font(.caption).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle) }
                 }
             }
         }
@@ -413,11 +398,11 @@ private struct HomeWidgetSession: View {
                     } else if widget.kind == .campaign {
                         Form {
                             Section {
-                                Text(widget.resourceTitle).font(.headline)
-                                Text(device?.title ?? "")
+                                Text(widget.resourceTitle).font(.headline).lineLimit(3).truncationMode(.middle)
+                                Text(device?.title ?? "").lineLimit(2).truncationMode(.middle)
                                 if let campaign {
                                     LabeledContent("Campaign", value: campaign.state)
-                                    if !campaign.problem.isEmpty { Text(campaign.problem).foregroundStyle(.secondary) }
+                                    if !campaign.problem.isEmpty { Text(campaign.problem).foregroundStyle(.secondary).lineLimit(3) }
                                 }
                                 ForEach(episodes) { episode in LabeledContent(episode.title, value: episode.state) }
                                 if episodes.isEmpty { Text("No active clips reported.").foregroundStyle(.secondary) }
@@ -584,4 +569,56 @@ private struct HomeWidgetDrop: DropDelegate {
     }
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
     func performDrop(info: DropInfo) -> Bool { dragged = nil; return true }
+}
+
+private struct HomeWidgetReordering: ViewModifier {
+    let enabled: Bool
+    let widget: HomeWidget
+    let store: HomeWidgetStore
+    @Binding var dragged: UUID?
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled {
+            content.onDrag {
+                dragged = widget.id
+                return NSItemProvider(object: widget.id.uuidString as NSString)
+            }.onDrop(of: [UTType.text], delegate: HomeWidgetDrop(target: widget.id, store: store, dragged: $dragged))
+        } else { content }
+    }
+}
+
+private struct HomeWidgetResizeHandle: View {
+    let size: HomeWidgetSize
+    let allowed: [HomeWidgetSize]
+    let preview: (HomeWidgetSize) -> Void
+    let commit: (HomeWidgetSize) -> Void
+    let cancel: () -> Void
+    @GestureState private var dragging = false
+
+    private func proposed(_ translation: CGSize) -> HomeWidgetSize {
+        let tall = (size == .large ? 332.0 : 160.0) + translation.height > 246
+        let wide = (size == .small ? 0.0 : 160.0) + translation.width > 80
+        let next: HomeWidgetSize = tall ? .large : wide ? .medium : .small
+        return allowed.contains(next) ? next : .medium
+    }
+
+    var body: some View {
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .font(.caption.bold()).foregroundStyle(MobileLensStyle.green)
+            .frame(width: 44, height: 44)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .highPriorityGesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                .updating($dragging) { _, state, _ in state = true }
+                .onChanged { preview(proposed($0.translation)) }
+                .onEnded { commit(proposed($0.translation)) })
+            .onChange(of: dragging) { _, active in if !active { cancel() } }
+            .accessibilityIdentifier("home.widget.resize")
+            .accessibilityLabel("Resize widget")
+            .accessibilityValue(size.rawValue)
+            .accessibilityAdjustableAction { direction in
+                guard let index = allowed.firstIndex(of: size) else { return }
+                let next = direction == .increment ? index + 1 : index - 1
+                if allowed.indices.contains(next) { commit(allowed[next]) }
+            }
+    }
 }

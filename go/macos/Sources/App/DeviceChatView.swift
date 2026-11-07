@@ -371,6 +371,7 @@ struct DeviceChatView: View {
 
     @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
+            #if !os(iOS)
             Picker("Inference", selection: Binding(get: { chat.inference }, set: { source in
                 chat.selectInference(source)
                 if source == .cloud { showingCloud = true }
@@ -379,36 +380,6 @@ struct DeviceChatView: View {
                 ForEach(ChatInference.allCases, id: \.self) { Text($0.title).tag($0) }
             }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 10)
                 .disabled(chat.streaming).accessibilityIdentifier("chat.inference")
-            #if os(iOS)
-            HStack(spacing: 12) {
-                Menu {
-                    Picker("Model", selection: $chat.model) {
-                        Text("Choose a model").tag("")
-                        ForEach(chat.models) { Text($0.displayName).tag($0.id) }
-                    }
-                    Divider()
-                    if chat.inference == .device {
-                        Button("Browse models", systemImage: "square.stack.3d.up") { showingLibrary = true }
-                        Button("Connection settings", systemImage: "network") { showingConnection = true }
-                    } else {
-                        Button("Cloud models & API key", systemImage: "cloud") { showingCloud = true }
-                    }
-                    Button("Refresh models", systemImage: "arrow.clockwise") { actions.submit { await chat.discover() } }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(chat.loading ? "Finding models…" : chat.model.isEmpty ? "Choose a model" : modelName).font(.subheadline.weight(.semibold)).lineLimit(1).truncationMode(.tail)
-                        Image(systemName: "chevron.down").font(.caption2)
-                    }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                }.disabled(chat.streaming || chat.loading)
-                if chat.loading { ProgressView().controlSize(.small) }
-                if !chat.messages.isEmpty {
-                    Button { chat.clear() } label: { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
-                        .accessibilityLabel("New chat")
-                }
-            }.padding(.horizontal, 12)
-                .background(MobileLensStyle.green.opacity(0.06), in: .rect(cornerRadius: 16))
-                .padding(.horizontal, 16).padding(.bottom, 8)
-            #else
             HStack(spacing: 12) {
                 Label("Wendy Chat", systemImage: "bubble.left.and.bubble.right").font(.headline)
                 Spacer()
@@ -440,14 +411,6 @@ struct DeviceChatView: View {
                     }
             }.padding(.horizontal, 20).padding(.bottom, 8)
             #endif
-            #if os(iOS)
-            HStack(spacing: 6) {
-                Image(systemName: chat.inference == .device ? "cpu" : "cloud")
-                Text(inferenceLocation).lineLimit(1).truncationMode(.middle)
-            }.font(.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
-                .accessibilityIdentifier("chat.deviceContext")
-            #endif
             #if os(macOS)
             Text("\(inferenceLocation) · Wendy skills and MCP tools")
                 .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28)
@@ -459,8 +422,8 @@ struct DeviceChatView: View {
                         if chat.messages.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
                                 #if os(iOS)
-                                Text("How can I help?").font(.title2.bold())
-                                if !chat.loading { Text(emptyExplanation).font(.subheadline).foregroundStyle(.secondary) }
+                                Text("Ask about your device").font(.headline)
+                                if !chat.loading { Text(mobileEmptyExplanation).font(.subheadline).foregroundStyle(.secondary) }
                                 #else
                                 Text("How can I help with \(deviceName)?").font(.title3.bold())
                                 Text(emptyExplanation).font(.subheadline).foregroundStyle(.secondary)
@@ -474,10 +437,12 @@ struct DeviceChatView: View {
                                 if chat.inference == .device && !chat.loading && chat.model.isEmpty, let chooseAIDevice {
                                     Button("Use another AI device", action: chooseAIDevice).buttonStyle(.bordered)
                                 }
+                                #if !os(iOS)
                                 ForEach(["Which apps are running?", "Explain recent device errors", "Show recent recordings"], id: \.self) { suggestion in
                                     Button(suggestion) { chat.prompt = suggestion }
                                         .buttonStyle(.bordered).disabled(chat.streaming)
                                 }
+                                #endif
                             }.padding(16)
                         }
                         ForEach(chat.messages) { message in
@@ -487,9 +452,24 @@ struct DeviceChatView: View {
                                 if !message.trace.isEmpty {
                                     DisclosureGroup("Device activity") { Text(message.trace).font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                                 }
-                                if chat.isWaiting(for: message) { ProgressView().controlSize(.small) }
+                                if chat.isWaiting(for: message) {
+                                    #if os(iOS)
+                                    ProgressView(chat.activity.isEmpty ? "Thinking…" : chat.activity)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .accessibilityIdentifier("chat.actionProgress")
+                                    #else
+                                    ProgressView().controlSize(.small)
+                                    #endif
+                                }
                                 else if message.isUser { Text(message.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                                 else { ChatMarkdown(source: message.text) }
+                                #if os(iOS)
+                                if !chat.isWaiting(for: message), chat.activeResponseID == message.id,
+                                   chat.approval == nil, chat.streaming, !chat.activity.isEmpty {
+                                    ProgressView(chat.activity).font(.caption).foregroundStyle(.secondary)
+                                        .accessibilityIdentifier("chat.actionProgress")
+                                }
+                                #endif
                                 if message.interrupted {
                                     Text("Response stopped").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -511,6 +491,10 @@ struct DeviceChatView: View {
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.vertical, 20).padding(.horizontal, 12).frame(maxWidth: 900).frame(maxWidth: .infinity)
                 }
+                #if os(iOS)
+                .scrollDismissesKeyboard(.interactively)
+                .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+                #endif
                 .onChange(of: chat.messages.last?.text) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: chat.approval?.id) { _, id in
                     if id != nil { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
@@ -530,6 +514,7 @@ struct DeviceChatView: View {
                     .frame(maxWidth: 900, alignment: .leading).padding(.bottom, 2)
             }
             #endif
+            #if os(macOS)
             if chat.approval == nil && chat.streaming && !chat.activity.isEmpty {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
@@ -538,31 +523,16 @@ struct DeviceChatView: View {
                     .padding(12).background(PlatformColors.control, in: RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 20).accessibilityIdentifier("chat.actionProgress")
             }
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("Message", text: $chat.prompt, axis: .vertical)
-                    .lineLimit(1...6).textFieldStyle(.plain)
-                    .padding(.vertical, 9).padding(.leading, 6)
-                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                    .onSubmit { chat.send() }
-                Button {
-                    if chat.streaming { chat.stop() } else { chat.send() }
-                } label: {
-                    Image(systemName: chat.streaming ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(chat.streaming || chat.canSend ? Color.white : Color.secondary)
-                        .frame(width: 36, height: 36)
-                        .background(chat.streaming || chat.canSend ? Color.accentColor : Color.secondary.opacity(0.12), in: Circle())
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain).disabled(!chat.streaming && !chat.canSend)
-                .help(chat.streaming ? "Stop response" : "Send message")
-                .accessibilityLabel(chat.streaming ? "Stop response" : "Send message")
-            }
-            .padding(8)
-            .background(PlatformColors.control, in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(PlatformColors.separator.opacity(0.5)))
-            .frame(maxWidth: 900).padding(.horizontal, 20).padding(.bottom, 12).padding(.top, 6)
-        }.task { await chat.discoverIfNeeded() }
+            composer
+            #endif
+        }
+        #if os(iOS)
+        .background(Color(uiColor: .systemBackground))
+        .toolbar {
+            ToolbarItem(placement: .principal) { mobileSettingsMenu }
+        }
+        #endif
+        .task { await chat.discoverIfNeeded() }
         .task(id: chat.turn) { if ownsResponse { await chat.respond() } }
         .onAppear { if ownsResponse { chat.setPresented(true) } }
         .onDisappear { if ownsResponse { chat.setPresented(false); chat.stop() } }
@@ -594,6 +564,109 @@ struct DeviceChatView: View {
             #endif
             .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !chat.loading && !chat.streaming, perform: { actions.submit { await chat.discover() } }))
     }
+
+    private var composer: some View {
+        VStack(spacing: 8) {
+            #if os(iOS)
+            if chat.messages.isEmpty && !chat.model.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        suggestion("Running apps", prompt: "Which apps are running?", symbol: "square.grid.2x2")
+                        suggestion("Recent errors", prompt: "Explain recent device errors", symbol: "exclamationmark.bubble")
+                        suggestion("Recordings", prompt: "Show recent recordings", symbol: "play.rectangle")
+                    }.padding(.horizontal, 2)
+                }.scrollIndicators(.hidden)
+            }
+            #endif
+            HStack(alignment: .bottom, spacing: 10) {
+                TextField("Message", text: $chat.prompt, axis: .vertical)
+                    .lineLimit(1...6).textFieldStyle(.plain)
+                    .padding(.vertical, 9).padding(.leading, 6)
+                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                    .onSubmit { chat.send() }
+                Button {
+                    if chat.streaming { chat.stop() } else { chat.send() }
+                } label: {
+                    Image(systemName: chat.streaming ? "stop.fill" : "arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(chat.streaming || chat.canSend ? Color.white : Color.secondary)
+                        .frame(width: 36, height: 36)
+                        .background(chat.streaming || chat.canSend ? Color.accentColor : Color.secondary.opacity(0.12), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain).disabled(!chat.streaming && !chat.canSend)
+                .help(chat.streaming ? "Stop response" : "Send message")
+                .accessibilityLabel(chat.streaming ? "Stop response" : "Send message")
+            }
+            .padding(8)
+            #if os(iOS)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
+            #else
+            .background(PlatformColors.control, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(PlatformColors.separator.opacity(0.5)))
+            #endif
+        }.frame(maxWidth: 900).padding(.horizontal, 16).padding(.bottom, 10).padding(.top, 6)
+    }
+
+    #if os(iOS)
+    private func suggestion(_ title: String, prompt: String, symbol: String) -> some View {
+        Button { chat.prompt = prompt } label: {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).frame(minHeight: 36)
+                .background(.regularMaterial, in: Capsule())
+                .contentShape(Capsule())
+        }.buttonStyle(.plain).disabled(chat.streaming)
+    }
+
+    private var mobileSettingsMenu: some View {
+        Menu {
+            Section(deviceName) {
+                Picker("Run model", selection: Binding(get: { chat.inference }, set: { source in
+                    chat.selectInference(source)
+                    if source == .cloud { showingCloud = true }
+                    else { actions.submit { await chat.discover() } }
+                })) {
+                    ForEach(ChatInference.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.pickerStyle(.inline).accessibilityIdentifier("chat.inference")
+                Picker("Model", selection: $chat.model) {
+                    Text("Choose a model").tag("")
+                    ForEach(chat.models) { Text($0.displayName).tag($0.id) }
+                }
+            }
+            Section {
+                if chat.inference == .device {
+                    Button("Browse models", systemImage: "square.stack.3d.up") { showingLibrary = true }
+                    Button("Connection settings", systemImage: "network") { showingConnection = true }
+                } else {
+                    Button("Cloud models & API key", systemImage: "cloud") { showingCloud = true }
+                }
+                Button("Refresh models", systemImage: "arrow.clockwise") { actions.submit { await chat.discover() } }
+                if let chooseAIDevice {
+                    Button("Change device", systemImage: "cpu", action: chooseAIDevice)
+                }
+            }
+            if !chat.messages.isEmpty {
+                Section { Button("New chat", systemImage: "square.and.pencil") { chat.clear() } }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(chat.loading ? "Finding models…" : chat.model.isEmpty ? "Ask Wendy" : modelName)
+                    .font(.headline).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+            }.foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
+        }.disabled(chat.streaming || chat.loading)
+            .accessibilityLabel("Chat settings")
+            .accessibilityValue(chat.model.isEmpty ? "No model selected" : modelName)
+            .accessibilityIdentifier("chat.settings")
+    }
+
+    private var mobileEmptyExplanation: String {
+        if chat.inference == .cloud && !chat.hasCloudKey { return "Connect a cloud provider to start a conversation." }
+        if chat.model.isEmpty { return "Choose a model from this device or a cloud provider." }
+        return "Ask about apps, logs, or recordings. Device changes need your confirmation."
+    }
+    #endif
 
     private var inferenceLocation: String {
         chat.inference == .device ? "Runs on \(deviceName)" : "Runs in \(chat.cloudProvider.title) cloud · Device: \(deviceName)"

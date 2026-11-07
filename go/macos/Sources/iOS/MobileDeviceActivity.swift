@@ -167,8 +167,8 @@ struct MobileDeviceActivity: View {
                     ForEach(state.archived.values.sorted { $0.archivedAt > $1.archivedAt }, id: \.summary.id) { entry in
                         HStack {
                             VStack(alignment: .leading) {
-                                Text(entry.summary.title).font(.headline)
-                                Text(entry.summary.deviceName).font(.caption).foregroundStyle(.secondary)
+                                Text(entry.summary.title).font(.headline).lineLimit(3).truncationMode(.middle)
+                                Text(entry.summary.deviceName).font(.caption).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
                             }
                             Spacer()
                             Button("Restore") { update { $0.archived.removeValue(forKey: entry.summary.id) } }

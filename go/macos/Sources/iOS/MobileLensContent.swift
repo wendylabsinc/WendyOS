@@ -19,7 +19,7 @@ struct MobileRecordingSection: View {
                 } else if !loaded {
                     MobileLoadingPlaceholder(label: "Loading recordings…", style: .recordings, rows: 2).padding(16)
                 } else if episodes.isEmpty {
-                    Text("No recordings on \(device.title).").font(.subheadline).foregroundStyle(.secondary).padding(16)
+                    Text("No recordings on \(device.title).").font(.subheadline).foregroundStyle(.secondary).lineLimit(3).truncationMode(.middle).padding(16)
                 } else {
                     let visible = recent ? Array(episodes.prefix(3)) : episodes
                     ForEach(visible) { episode in
@@ -115,7 +115,7 @@ struct MobileRobotInventory: View {
     var body: some View {
         List {
             if model.selectedDeviceReady && !model.connectedLite {
-                if let status { Text(status).foregroundStyle(.secondary) }
+                if let status { Text(status).foregroundStyle(.secondary).lineLimit(3).truncationMode(.tail) }
                 ForEach(robots) { robot in
                     NavigationLink {
                         if model.selectedDeviceReady { NativeSiteView(model: model) }
@@ -179,10 +179,10 @@ struct MobilePresenceBar: View {
         GeometryReader { g in
             HStack(spacing: 0) {
                 ForEach(values) { value in
-                    Capsule().fill(value.color).frame(width: g.size.width * CGFloat(value.count) / CGFloat(total))
+                    Rectangle().fill(value.color).frame(width: g.size.width * CGFloat(value.count) / CGFloat(total))
                 }
             }
-        }.frame(height: 7).background(.quaternary, in: .capsule).accessibilityHidden(true)
+        }.frame(height: 7).background(.quaternary).clipShape(Capsule()).accessibilityHidden(true)
     }
 }
 

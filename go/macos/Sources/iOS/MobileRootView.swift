@@ -1,7 +1,7 @@
 import SwiftUI
 
-enum MobileHome: String, CaseIterable { case home = "Home", devices = "Devices", data = "Data", activity = "Activity" }
-enum MobileDestination: Hashable { case inventory(MobileInventorySource), device(Device) }
+enum MobileHome: String, CaseIterable { case home = "Home", data = "Data", activity = "Activity" }
+enum MobileDestination: Hashable { case inventory(MobileInventorySource), device(Device), lens(MobileLens), activity }
 
 enum MobileInventorySource: CaseIterable, Hashable {
     case local, cloud
@@ -16,17 +16,17 @@ struct MobileRootView: View {
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
-    @State private var destination: MobileDestination?
     @AppStorage("wendy.primaryLens") private var primaryLens = ""
-    @State private var lens: MobileLens?
+    private var lens: MobileLens? {
+        for route in homePath { if case .lens(let lens) = route { return lens } }
+        return nil
+    }
     @State private var homeTab = MobileHome.home
     @State private var recordingPicker: MobileEpisodeRoute?
     @State private var showingChat = false
+    @State private var floatingChatHeight: CGFloat = 52
     @State private var activitySegment = MobileActivitySegment.alerts
-    @State private var showMesh = false
     @State private var homePath: [MobileDestination] = []
-    @State private var preferredColumn = NavigationSplitViewColumn.sidebar
-    @State private var search = ""
     @State private var address = ""
     @State private var adding = false
     @State private var showingNearbySetup = false
@@ -37,12 +37,7 @@ struct MobileRootView: View {
     @State private var details: String?
     private var selectedRouteDevice: Device? {
         guard lens == .devices, model.mobileScopeIsCurrent else { return nil }
-        let route: MobileDestination? = switch homeTab {
-        case .home: homePath.last
-        case .devices: destination
-        case .data, .activity: nil
-        }
-        if case .device(let device) = route { return device }
+        if case .device(let device) = homePath.last { return device }
         return nil
     }
     var body: some View {
@@ -67,12 +62,8 @@ struct MobileRootView: View {
         }
         .onChange(of: model.mobileCloudSelectionKey) { _, _ in
             // A source list can reload in the new organization; a device or log route cannot.
-            if let first = homePath.first, case .inventory = first { homePath = [first] }
-            else { homePath = [] }
-            destination = nil
+            homePath = homePath.filter { if case .device = $0 { return false }; return true }
             recordingPicker = nil
-            preferredColumn = .sidebar
-            search = ""
         }
         .modifier(NearbySetupPrompt())
         .environmentObject(appearances)
@@ -80,64 +71,76 @@ struct MobileRootView: View {
 
     private var tabs: some View {
         tabContent
-            .tabViewBottomAccessory {
-                MobileLensChatAccessory(chatModel: model.deviceChat,
-                                        context: model.selectedDeviceReady ? model.connected?.title : nil,
-                                        chat: { showingChat = true })
-            }
+            .navigationTitle(homeTab == .home ? "Devices" : homeTab.rawValue)
             .tint(MobileLensStyle.accent)
+            .toolbar {
+                if homeTab == .home {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Notifications", systemImage: "bell") { openActivity() }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu("Connect to a device", systemImage: "plus") {
+                            Button("Recognize a device", systemImage: "viewfinder") { recognizing = true }
+                            Button("Connect by address", systemImage: "link") { adding = true }
+                        }
+                    }
+                }
+            }
     }
 
     private var tabContent: some View {
         TabView(selection: $homeTab) {
-            NavigationStack(path: $homePath) {
-                MobileDevicesHome(model: model, launcher: { lens = nil }, notifications: { openActivity() },
-                                  setup: { showingNearbySetup = true })
-                    .navigationDestination(for: MobileDestination.self) { route in
-                        switch route {
-                        case .inventory(let inventory):
-                            MobileInventoryList(model: model, source: inventory, showAccounts: { accounts = true })
-                        case .device(let device):
-                            MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
-                        }
-                    }
-            }.tabItem { Label("Home", systemImage: "house") }.tag(MobileHome.home)
-            deviceBrowser.tabItem { Label("Devices", systemImage: "cpu") }.tag(MobileHome.devices)
-            NavigationStack {
+            MobileDevicesHome(model: model, notifications: { openActivity() },
+                              setup: { showingNearbySetup = true })
+                .tabItem { Label("Home", systemImage: "house") }.tag(MobileHome.home)
+            Group {
                 MobileLensData(model: model, isVisible: homeTab == .data, picker: $recordingPicker)
                     .id(model.mobileCloudSelectionKey)
-                    .toolbar { launcherButton }
             }.tabItem { Label("Data", systemImage: "cylinder.split.1x2") }.tag(MobileHome.data)
-            NavigationStack {
+            Group {
                 MobileDeviceActivity(model: model, isVisible: homeTab == .activity, segment: $activitySegment, select: select)
                     .id(model.mobileCloudSelectionKey)
                     .background(MobileLensStyle.background)
-                    .toolbar { launcherButton }
             }.tabItem { Label("Activity", systemImage: "clock") }.tag(MobileHome.activity)
         }
+        .tabViewBottomAccessory { chatAccessory }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var launcherButton: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button("General Home", systemImage: "chevron.left") { lens = nil }
-                .accessibilityIdentifier("lens.back")
-        }
+    private var chatAccessory: some View {
+        Button { showingChat = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                Text("Ask Wendy about \(model.selectedDeviceReady ? model.connected?.title ?? "a device" : "a device")…")
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                if model.deviceChat.unreadReplies > 0 || model.deviceChat.approval != nil {
+                    Image(systemName: "circle.fill").font(.caption2).foregroundStyle(.red)
+                }
+            }.padding(.horizontal, 16).frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityIdentifier("lens.chat")
+    }
+
+    private func unfinishedLensTabs(_ lens: MobileLens) -> some View {
+        TabView {
+            MobileLensUnderConstruction(title: lens.rawValue)
+                .tabItem { Label("Home", systemImage: "house") }
+            MobileLensUnderConstruction(title: lens.rawValue)
+                .tabItem { Label(lens.rawValue, systemImage: lens.icon) }
+            MobileLensUnderConstruction(title: lens.rawValue + " Data")
+                .tabItem { Label("Data", systemImage: "cylinder.split.1x2") }
+            MobileLensUnderConstruction(title: lens.rawValue + " Activity")
+                .tabItem { Label("Activity", systemImage: "clock") }
+        }.tabViewBottomAccessory { chatAccessory }
+            .tint(MobileLensStyle.accent).navigationTitle(lens.rawValue)
     }
 
     @ViewBuilder private var surface: some View {
         if MobileLens(rawValue: primaryLens) == nil {
             MobileLensPreference(initial: .devices) { primaryLens = $0.rawValue }
-        } else if let lens {
-            switch lens {
-            case .devices: tabs
-            case .sites:
-                NavigationStack { MobileLensUnderConstruction(title: "Sites").toolbar { launcherButton } }
-            case .robots:
-                NavigationStack { MobileLensUnderConstruction(title: "Robots").toolbar { launcherButton } }
-            }
         } else {
-            NavigationStack {
+            NavigationStack(path: $homePath) {
                 MobileGeneralHome(model: model, primary: MobileLens(rawValue: primaryLens) ?? .devices,
                                   open: enter, accounts: { accounts = true }, notifications: { openActivity() },
                                   setup: { showingNearbySetup = true }, recordings: { enter(.devices); homeTab = .data }, openDevice: select)
@@ -146,90 +149,58 @@ struct MobileRootView: View {
                             .labelStyle(.iconOnly).font(.title3).foregroundStyle(.white).frame(width: 52, height: 52)
                             .background(MobileLensStyle.green, in: .circle).padding(.trailing, 16)
                     }
+                    .navigationDestination(for: MobileDestination.self) { route in
+                        switch route {
+                        case .lens(.devices): tabs
+                        case .lens(let lens): unfinishedLensTabs(lens)
+                        case .inventory(let inventory):
+                            MobileInventoryList(model: model, source: inventory, showAccounts: { accounts = true })
+                        case .device(let device):
+                            MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
+                        case .activity:
+                            MobileDeviceActivity(model: model, isVisible: true, segment: $activitySegment, select: select)
+                        }
+                    }
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if showsFloatingChat {
+                    chatAccessory
+                        .glassEffect(.regular, in: .capsule)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { floatingChatHeight = $0 }
+                }
+            }
+            .environment(\.mobileFloatingChatBottomInset, showsFloatingChat ? floatingChatHeight + 12 : 0)
+        }
+    }
+
+    private var showsFloatingChat: Bool {
+        switch homePath.last {
+        case .inventory, .device: true
+        default: false
         }
     }
 
     private func openActivity() {
-        enter(.devices)
         activitySegment = .alerts
-        homeTab = .activity
+        homePath.append(.activity)
     }
 
     private func openRecordings(for device: Device) {
+        enter(.devices)
         recordingPicker = MobileEpisodeRoute(device: device)
         homeTab = .data
     }
 
     private func enter(_ next: MobileLens) {
-        lens = next
-    }
-
-    @ViewBuilder private var deviceBrowser: some View {
-        NavigationSplitView(preferredCompactColumn: $preferredColumn) {
-            List(selection: $destination) {
-                if showMesh {
-                    MobileMeshSection(model: model)
-                } else {
-                    Section {
-                        Button("Set up a new device", systemImage: "plus.circle.fill") { showingNearbySetup = true }
-                    }
-                    ForEach(MobileInventorySource.allCases, id: \.self) { inventory in
-                        MobileInventorySection(model: model, source: inventory, search: search, showAccounts: { accounts = true })
-                    }
-                }
-            }
-            .scrollContentBackground(.hidden).background(MobileLensStyle.background)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                Picker("Device view", selection: $showMesh) {
-                    Text("List").tag(false)
-                    Text("Mesh").tag(true)
-                }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(MobileLensStyle.background)
-            }
-            .navigationTitle("Devices").navigationBarTitleDisplayMode(.inline)
-            .contentMargins(.top, 8, for: .scrollContent)
-            .listSectionSpacing(12)
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a device")
-            .refreshable {
-                async let local: Void = MobileInventorySource.local.refresh(model)
-                async let cloud: Void = MobileInventorySource.cloud.refresh(model)
-                _ = await (local, cloud)
-            }
-            .toolbar {
-                launcherButton
-                ToolbarItem(placement: .topBarTrailing) { Button { recognizing = true } label: { Image(systemName: "viewfinder") }.accessibilityLabel("Recognize a device") }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Set up a device", systemImage: "cpu") { showingNearbySetup = true }
-                        Button("Connect by address", systemImage: "link") { adding = true }
-                    } label: { Image(systemName: "plus") }.accessibilityLabel("Add device")
-                }
-            }
-        } detail: {
-            NavigationStack {
-                switch destination {
-                case .device(let device): MobileDeviceView(device: device, openRecordings: { openRecordings(for: device) }).id(device.id)
-                default: ContentUnavailableView("Your devices", systemImage: "network", description: Text("Choose a nearby or cloud device."))
-                }
-            }.id(destination)
-        }
-        .task(id: model.mobileCloudSelectionKey) {
-            async let local: Void = MobileInventorySource.local.refresh(model)
-            async let cloud: Void = MobileInventorySource.cloud.refresh(model)
-            _ = await (local, cloud)
-        }
-        .onChange(of: showMesh) { _, _ in destination = nil; preferredColumn = .sidebar }
-
-        .onChange(of: destination) { _, route in
-            if case .device = route { preferredColumn = .detail }
-        }
+        homePath = [.lens(next)]
     }
 
     private var presentedTabs: some View {
         MobileRecordingScope { surface }.id(model.mobileCloudSelectionKey)
         .sheet(isPresented: $showingChat) {
-            MobileLensChat(model: model, chooseDevice: { showingChat = false; enter(.devices); homeTab = .devices })
+            MobileLensChat(model: model, chooseDevice: { showingChat = false; enter(.devices); homeTab = .home })
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
@@ -288,17 +259,33 @@ struct MobileRootView: View {
         } message: { Text("The app will be removed from the device.") }
     }
     private func select(_ device: Device) {
-        lens = .devices
-        homeTab = .devices
-        showMesh = false
-        destination = .device(device)
-        preferredColumn = .detail
+        enter(.devices)
+        homeTab = .home
+        homePath.append(.device(device))
+    }
+}
+
+private struct MobileFloatingChatBottomInsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var mobileFloatingChatBottomInset: CGFloat {
+        get { self[MobileFloatingChatBottomInsetKey.self] }
+        set { self[MobileFloatingChatBottomInsetKey.self] = newValue }
+    }
+}
+
+struct MobileFloatingChatScrollMargins: ViewModifier {
+    @Environment(\.mobileFloatingChatBottomInset) private var inset
+    func body(content: Content) -> some View {
+        content.contentMargins(.bottom, inset, for: .scrollContent)
     }
 }
 
 enum MobileLensStyle {
-    static let background = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemBackground : UIColor(red: 241/255, green: 238/255, blue: 231/255, alpha: 1) })
-    static let card = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .secondarySystemBackground : UIColor(red: 230/255, green: 226/255, blue: 216/255, alpha: 1) })
+    static let background = Color(uiColor: .systemGroupedBackground)
+    static let card = Color(uiColor: .secondarySystemGroupedBackground)
     static let green = Color(red: 42/255, green: 112/255, blue: 80/255)
     static let accent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 159/255, green: 226/255, blue: 191/255, alpha: 1) : UIColor(red: 42/255, green: 112/255, blue: 80/255, alpha: 1) })
 }
@@ -326,7 +313,6 @@ enum MobileLensStyle {
 private struct MobileDevicesHome: View {
     @EnvironmentObject private var catalog: RecordingCatalog
     @ObservedObject var model: AppModel
-    let launcher: () -> Void
     let notifications: () -> Void
     let setup: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicType
@@ -343,7 +329,7 @@ private struct MobileDevicesHome: View {
                             Text(total?.formatted() ?? "—").font(.system(size: countSize, weight: .bold))
                         .monospacedDigit().accessibilityLabel(total.map { String($0) } ?? "Count unavailable")
                     Text(organization.map { "devices in \($0)" } ?? "devices nearby")
-                                .font(.subheadline).foregroundStyle(.secondary)
+                                .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                         }
                         Spacer()
                         MobilePresenceLegend(model: model)
@@ -391,13 +377,6 @@ private struct MobileDevicesHome: View {
         }
         .background(MobileLensStyle.background)
         .navigationTitle("Devices")
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("General Home", systemImage: "chevron.left", action: launcher)
-                    .accessibilityIdentifier("lens.back")
-            }
-            ToolbarItem(placement: .topBarTrailing) { Button("Notifications", systemImage: "bell", action: notifications).badge(catalog.unreadAlerts) }
-        }
         .refreshable {
             await model.refreshNearby()
             if !model.mobileCloudOrganization.isEmpty { await model.refreshCloud() }
@@ -415,6 +394,7 @@ private struct MobileInventoryList: View {
             MobileInventorySection(model: model, source: source, search: search, showAccounts: showAccounts)
         }
         .accessibilityIdentifier("devices.inventory")
+        .modifier(MobileFloatingChatScrollMargins())
         .scrollContentBackground(.hidden).background(MobileLensStyle.background)
         .navigationTitle(source.title)
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a device")
@@ -525,7 +505,7 @@ private struct MobileAccountsView: View {
                                             .font(.headline).foregroundStyle(.white)
                                             .frame(width: 48, height: 48)
                                             .background(RecordingAppearance.ink, in: .circle)
-                                        Text(organization.name).font(.headline)
+                                        Text(organization.name).font(.headline).lineLimit(2)
                                             .foregroundStyle(.primary)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                         if organization.id == model.mobileCloudOrganization {
@@ -562,8 +542,8 @@ private struct MobileAccountsView: View {
                         Button { actions.submit { await model.selectMobileCloudAccount(entry.id) } } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.account.email.isEmpty ? "Email unavailable" : entry.account.email)
-                                Text(entry.account.cloud).font(.caption).foregroundStyle(.secondary)
+                                Text(entry.account.email.isEmpty ? "Email unavailable" : entry.account.email).lineLimit(1).truncationMode(.middle)
+                                Text(entry.account.cloud).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                             }
                             Spacer()
                             if entry.id == model.mobileCloudAccount { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }

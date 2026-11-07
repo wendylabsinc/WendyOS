@@ -96,9 +96,12 @@ struct RecordingDeviceCard: View {
                 HStack(alignment: .center, spacing: 12) {
                     if let latest { RecordingThumbnail(device: library.device, episode: latest).frame(width: 60, height: 60).clipShape(.rect(cornerRadius: 14)) }
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(library.device.title).font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                        Text(library.device.title).font(.callout.weight(.semibold))
+                            .lineLimit(textSize.isAccessibilitySize ? 3 : 2).truncationMode(.middle)
+                            .accessibilityLabel(library.device.title)
                         Text([library.model, latest?.started.map { "latest " + RecordingAppearance.time($0) }, library.sizeText]
                             .compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(textSize.isAccessibilitySize ? 3 : 2).truncationMode(.tail)
                         if textSize.isAccessibilitySize { Text(countDescription).font(.subheadline.weight(.semibold)) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     if !textSize.isAccessibilitySize {
@@ -119,8 +122,8 @@ struct RecordingDeviceCard: View {
                         Button { open(label.name) } label: {
                             HStack(spacing: 5) {
                                 Circle().fill(RecordingAppearance.dot(label.name)).frame(width: 6, height: 6)
-                                Text(label.name).fontWeight(.semibold)
-                                Text("\(label.count)").foregroundStyle(.secondary)
+                                Text(label.name).fontWeight(.semibold).lineLimit(1).truncationMode(.middle)
+                                Text("\(label.count)").foregroundStyle(.secondary).lineLimit(1).fixedSize()
                             }.font(.caption).padding(.horizontal, 9).padding(.vertical, 4)
                                 .background(MobileLensStyle.background, in: .capsule).frame(minHeight: 44).contentShape(.rect)
                         }.buttonStyle(.plain).accessibilityLabel("\(label.name), \(label.count) episodes")

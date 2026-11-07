@@ -146,8 +146,8 @@ struct RecordingEpisodePicker: View {
         } label: {
             HStack(spacing: 6) {
                 Circle().fill(name == nil && active ? .white : RecordingAppearance.dot(name)).frame(width: 7, height: 7)
-                Text(name ?? "All")
-                Text("\(count)").opacity(0.7)
+                Text(name ?? "All").lineLimit(1).truncationMode(.middle)
+                Text("\(count)").opacity(0.7).lineLimit(1).fixedSize()
             }.font(.footnote.weight(.semibold)).padding(.horizontal, 12).padding(.vertical, 7)
                 .foregroundStyle(active ? Color.white : .primary)
                 .background(active ? RecordingAppearance.ink : RecordingAppearance.card, in: .capsule)

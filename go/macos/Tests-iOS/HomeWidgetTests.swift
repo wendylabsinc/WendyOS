@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import UIKit
 @testable import WendyMobile
 
 final class HomeWidgetTests: XCTestCase {
@@ -114,6 +116,25 @@ extension HomeWidgetTests {
         XCTAssertTrue(reopened.items.isEmpty)
         XCTAssertEqual(try JSONDecoder().decode(HomeWidgetSize.self, from: Data("\"Expanded\"".utf8)), .medium)
     }
+    @MainActor func testDragResizePersistsWithoutChangingWidgetConfiguration() {
+        let suite = "HomeWidgetDragResize." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = HomeWidgetStore(defaults: defaults)
+        store.load(account: "a", organization: "b")
+        var widget = HomeWidget(kind: .actions)
+        widget.title = "My shortcuts"
+        store.save(widget)
+        store.resize(widget.id, to: .small)
+        store.resize(widget.id, to: .large)
+        let reopened = HomeWidgetStore(defaults: defaults)
+        reopened.load(account: "a", organization: "b")
+        XCTAssertEqual(reopened.items.count, 1)
+        XCTAssertEqual(reopened.items.first?.id, widget.id)
+        XCTAssertEqual(reopened.items.first?.title, "My shortcuts")
+        XCTAssertEqual(reopened.items.first?.size, .small, "Unsupported sizes must not replace the last valid drag size")
+    }
+
     @MainActor func testBuiltInResizeAndGalleryAllDevices() {
         let suite = "HomeWidgetResize." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
@@ -144,5 +165,23 @@ extension HomeWidgetTests {
         await catalog.load([changed], refresh: 0, priority: nil, consumer: "home.widgets", retaining: [changed])
         let count = await fixture.count()
         XCTAssertEqual(count, 1, "Route/name changes must not invalidate fresh recording data")
+    }
+}
+
+
+extension HomeWidgetTests {
+    @MainActor func testLensRowBoundsLongRecordingTitlesAtNormalAndAccessibilitySizes() {
+        let title = String(repeating: "X", count: 8_000)
+        let subtitle = String(repeating: "Long device name ", count: 400)
+        for size in [DynamicTypeSize.large, .accessibility3] {
+            let row = LensRow(title: title, subtitle: subtitle, symbol: "cylinder.split.1x2", trailing: "Nov 7")
+                .environment(\.dynamicTypeSize, size)
+            let host = UIHostingController(rootView: row)
+            let measured = host.sizeThatFits(in: CGSize(width: 320, height: 20_000))
+            // Hosting measurements can round outward to the next display pixel.
+            XCTAssertLessThanOrEqual(measured.width, 321, "A long recording label must stay within its row")
+            XCTAssertGreaterThan(measured.height, 40)
+            XCTAssertLessThan(measured.height, 500, "A long recording label must not fill the entire screen, including at larger text sizes")
+        }
     }
 }
