@@ -46,7 +46,7 @@ Hosts that are not WendyOS OTA targets — including macOS, Windows, unknown pla
 
 1. **Validate target identity** — query the agent and confirm the target is a WendyOS OTA target. Exits immediately with an error if not.
 2. **Check minimum OS version** — if the device reports a WendyOS version older than 0.17.0, exit non-zero with guidance to reflash using `wendy os install`. Dev builds, empty, and unparseable versions are allowed through. This check runs before the agent is updated, so no agent update is wasted on a device that must be reflashed.
-3. **Update the agent** — ensure the agent binary is at the latest release before proceeding with the OS image update. GitHub release lookups use the `GITHUB_TOKEN` environment variable when present, and fall back to unauthenticated requests otherwise.
+3. **Update the agent** — ensure the agent binary is at the latest release before proceeding with the OS image update. GitHub release lookups use the `GITHUB_TOKEN` environment variable when present, and fall back to unauthenticated requests otherwise. On a device with the agent supervisor, the device may refuse the release before switching to it (for example, a release that predates the supervisor); the command then says which agent the device kept and goes on with the OS update.
 4. **Re-query version** — query the agent's version again after the agent update.
 5. **Validate OTA support** — confirm the device advertises the `wendyos-update` featureset.
 6. **Resolve artifact** — if no artifact or URL was provided, look up the latest OTA artifact for the device's reported `device_type`. If the device type is missing or not recognized, shows a warning and prompts the user to select the correct device type.

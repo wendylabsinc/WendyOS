@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -1261,8 +1262,10 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...s
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
 		}
+		reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) { return waitForAgentRestart(ctx, addr) }
+		_, newConn, err = awaitAgentVerdict(ctx, newConn, reconnect, sha256Hash, func() {})
 		newConn.Close()
-		return discoverUpdateDoneMsg{deviceName: name}
+		return discoverUpdateDoneMsg{deviceName: name, err: err}
 	}
 }
 

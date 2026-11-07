@@ -889,3 +889,12 @@ func TestFormatError_UnresolvedDeviceNamesTheHost(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatError_LeavesADeviceVerdictAlone(t *testing.T) {
+	// The device's reason can quote a gRPC error about the new agent's socket;
+	// it says nothing about the user's own connection.
+	err := errors.New(commands.AgentVerdictPrefix + `did not pass its checks within 3m0s: agent does not answer on its local socket: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial unix /x: connect: connection refused"; the device went back to agent 2026.12.04-100000 from /data`)
+	if got := formatError(err).Error(); got != err.Error() {
+		t.Fatalf("a device verdict was rewritten:\n%s", got)
+	}
+}
