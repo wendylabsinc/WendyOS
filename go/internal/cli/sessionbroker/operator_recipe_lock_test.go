@@ -43,7 +43,7 @@ func TestUnchangedOperatorRecipeDoesNotWaitForAnotherStartup(t *testing.T) {
 	defer func() { releaseLock(startup); startup.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := writeOperatorRecipe(ctx, spec, path, recipe); err != nil {
+	if err := writeOperatorRecipe(ctx, spec, path, recipe, false); err != nil {
 		t.Fatalf("unchanged intent blocked behind another command's startup: %v", err)
 	}
 }

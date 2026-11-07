@@ -60,13 +60,18 @@ func prepareOperatorAutomatic(ctx context.Context, certificate config.Certificat
 		}
 	}
 	defer func() { releaseLock(lock); _ = lock.Close() }()
+	if enabled {
+		return prepareOperatorRecipe(ctx, certificate, OperatorSpec{Version: 2, Principal: operator.Principal(), Enabled: true}, true)
+	}
 	if recipe, err := readOperatorRecipe(operatorRecipePath(directory, operator.Principal())); err == nil {
-		recipe.Enabled = recipe.Enabled || enabled
-		return prepareOperatorRecipe(ctx, certificate, recipe)
+		if recipe.Disconnected {
+			return nil, errOperatorDisconnected
+		}
+		return prepareOperatorRecipe(ctx, certificate, recipe, false)
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 	// The detached broker creates its own signed origin before discovering any
 	// first hop. Ordinary bounded LAN/BLE candidates then establish verified TLS.
-	return prepareOperatorRecipe(ctx, certificate, OperatorSpec{Version: 2, Principal: operator.Principal(), Enabled: enabled})
+	return prepareOperatorRecipe(ctx, certificate, OperatorSpec{Version: 2, Principal: operator.Principal(), Enabled: enabled}, false)
 }

@@ -26,3 +26,6 @@ explain the missing access rather than inventing a mesh-join tool.
 
 `device_disconnect` ends the current MCP device connection. To stop the local
 mesh router itself, use `wendy net disconnect` when requested.
+After that, discovery and device commands must leave it disabled until the user
+explicitly reconnects with `wendy net connect`. Ordinary LAN device
+management remains available.
