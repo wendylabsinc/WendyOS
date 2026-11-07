@@ -441,7 +441,7 @@ python3 evals/agent-experience/capture.py \
 manages). It mirrors `canned/` but was recorded on a Thor from inside the benchmark container over the agent
 socket, so no reply says it came from a simulator. Capture with `--device local --canned-dir
 canned-local` from that container (see `capture-image` notes in the plan). `run` is captured there too, over the socket, from the not-yet-deployed state. Camera, Wi-Fi connect and Bluetooth
-connect/disconnect have no local captures either. `test_canned.py` fails if a local capture mentions a VM
+connect/disconnect have no local captures. `test_canned.py` fails if a local capture mentions a VM
 or holds the Thor's Wi-Fi address.
 
 ### Captures still needed
