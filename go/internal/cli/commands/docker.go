@@ -294,6 +294,13 @@ func appleContainerPushScheme(registryImage string) (string, error) {
 // authentication and verifies the CLI has the necessary certs.
 // Returns an error if the device is provisioned but no CLI certs are available.
 func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	if strings.HasPrefix(conn.Host, "unix:") {
+		// A container with the admin entitlement reaches the agent over its
+		// socket with no client certificates; the socket is its credential.
+		// If a registry push is ever really needed over the socket, it fails
+		// with its own error.
+		return nil
+	}
 	resp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
 	if err != nil {
 		return nil // can't determine provisioning status; let the push fail naturally
