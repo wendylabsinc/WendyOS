@@ -112,21 +112,11 @@ func (b *Backend) RecordingLibrary(id uint64, selector string, secure bool) (Rec
 		return RecordingLibrary{}, err
 	}
 	defer done()
-	lib, err := readRecordingLibrary(ctx, conn.DataService, 2*time.Second)
-	if err != nil {
-		return RecordingLibrary{}, err
-	}
-	if len(lib.Episodes) != 0 && ctx.Err() == nil {
-		// Older Agents may have no DeviceInfo service. Model is optional.
-		infoCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		info, _ := pb.NewWendyDeviceInfoServiceClient(conn.Conn).GetDeviceInfo(infoCtx, &pb.GetDeviceInfoRequest{})
-		lib.Model = info.GetBoardModel()
-	}
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return RecordingLibrary{}, ctx.Err()
-	}
-	return lib, nil
+	// Publish the lightweight index first. Details are fetched progressively by
+	// the scoped mobile catalog, which already retains completed metadata.
+	// Re-inspecting here made every refresh spend up to two seconds repeating
+	// work and delayed first paint even when every tag was already cached.
+	return readRecordingLibrary(ctx, conn.DataService)
 }
 
 func (b *Backend) PlayRecording(id uint64, selector string, secure bool, episode string) (*VisualSnapshot, error) {
@@ -163,12 +153,26 @@ func exportRecordings(ctx context.Context, client pb.DataServiceClient, episodes
 	return paths, nil
 }
 
-func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient, manifestBudget time.Duration) (RecordingLibrary, error) {
-	items, err := inspectSavedEpisodes(ctx, client, manifestBudget, summarizeRecording)
+func readRecordingLibrary(ctx context.Context, client pb.DataServiceClient) (RecordingLibrary, error) {
+	list, err := client.Episodes(ctx, &pb.DataEpisodesRequest{})
 	if err != nil {
 		return RecordingLibrary{}, err
 	}
-	return recordingRows(items), nil
+	if err := ctx.Err(); err != nil {
+		return RecordingLibrary{}, err
+	}
+	episodes := append([]*pb.DataEpisode(nil), list.GetEpisodes()...)
+	sort.Slice(episodes, func(i, j int) bool {
+		if episodes[i].GetStartedUnixNanos() == episodes[j].GetStartedUnixNanos() {
+			return episodes[i].GetId() < episodes[j].GetId()
+		}
+		return episodes[i].GetStartedUnixNanos() > episodes[j].GetStartedUnixNanos()
+	})
+	lib := RecordingLibrary{Episodes: make([]RecordingEpisode, len(episodes))}
+	for i, episode := range episodes {
+		lib.Episodes[i] = summarizeRecording(episode, nil)
+	}
+	return lib, nil
 }
 
 const RecordingDetailBatchLimit = 64

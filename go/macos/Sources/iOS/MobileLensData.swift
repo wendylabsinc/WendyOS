@@ -78,23 +78,44 @@ struct RecordingRead: Sendable {
     @Published var unreadAlerts = 0
     @Published var detailProblems: [String: String] = [:]
     private var generation = 0
-    private var lastRefresh: Int?
+    // In-memory only: MobileRecordingScope is recreated for each account/org.
+    // Independent screen refresh counters must not invalidate one another.
+    private var lastRefresh: [String: Int] = [:]
+    private var refreshedAt: [String: Date] = [:]
+    private let now: () -> Date
+    private let fetch: @Sendable (MobileRecordingTarget) async -> RecordingRead
+    private let fetchDetails: @Sendable (Device, [MobileRecordingEpisode]) async throws -> [MobileRecordingEpisode]
+
+    init(now: @escaping () -> Date = Date.init,
+         fetch: @escaping @Sendable (MobileRecordingTarget) async -> RecordingRead = RecordingRead.fetch,
+         details: @escaping @Sendable (Device, [MobileRecordingEpisode]) async throws -> [MobileRecordingEpisode] = { device, episodes in
+             try await GoClient.shared.recordingDetails(device: device, episodes: episodes)
+         }) {
+        self.now = now
+        self.fetch = fetch
+        self.fetchDetails = details
+    }
     private var attempted: [String: Set<String>] = [:]
 
-    func load(_ targets: [MobileRecordingTarget], refresh: Int, priority: String?) async {
+    func load(_ targets: [MobileRecordingTarget], refresh: Int, priority: String?, consumer: String = "data") async {
         generation += 1
         let run = generation
         let knownTargets = Set(targets)
         reads = reads.filter { knownTargets.contains($0.value.target) }
-        let force = lastRefresh != refresh
+        refreshedAt = refreshedAt.filter { reads[$0.key] != nil }
+        let force = lastRefresh[consumer].map { $0 != refresh } ?? (refresh != 0)
         if force { attempted = [:]; detailProblems = [:] }
-        lastRefresh = refresh
+        lastRefresh[consumer] = refresh
         let remaining = targets.filter { $0.id != priority }
         // Check nearby routes first so a cloud fleet cannot delay a local device.
         let ordered = targets.filter { $0.id == priority }
             + remaining.filter { $0.routes.first?.transport != .cloud }
             + remaining.filter { $0.routes.first?.transport == .cloud }
-        let pending = ordered.filter { force || reads[$0.id] == nil }
+        let pending = ordered.filter { target in
+            force || reads[target.id]?.library == nil || reads[target.id]?.problem != nil ||
+                refreshedAt[target.id].map { now().timeIntervalSince($0) >= 30 } != false
+        }
+        let fetch = self.fetch
         loading = !pending.isEmpty
         defer { if generation == run { loading = false } }
         if !force, let priority, reads[priority]?.library != nil {
@@ -103,11 +124,15 @@ struct RecordingRead: Sendable {
         await withTaskGroup(of: RecordingRead.self) { group in
             var remaining = pending.makeIterator()
             for _ in 0..<3 {
-                if !Task.isCancelled, let target = remaining.next() { group.addTask { await RecordingRead.fetch(target) } }
+                if !Task.isCancelled, let target = remaining.next() { group.addTask { await fetch(target) } }
             }
             for await read in group {
                 guard !Task.isCancelled, run == generation else { group.cancelAll(); return }
                 var current = read
+                if read.library == nil, let saved = reads[read.target.id]?.library {
+                    current.library = saved
+                    current.problem = "Couldn’t refresh. Showing saved recordings. " + (read.problem ?? "Try again.")
+                }
                 if let library = read.library, let previous = reads[read.target.id]?.library {
                     // Finalized IDs retain their recording metadata. Keep it across
                     // refreshes while applying any freshly reported manifest first.
@@ -117,13 +142,16 @@ struct RecordingRead: Sendable {
                               row.started == cached.started, row.title == cached.title else { return row }
                         return cached
                     }
-                    current.library = MobileRecordingLibrary(device: library.device, model: library.model, episodes: episodes,
+                    current.library = MobileRecordingLibrary(device: library.device, model: library.model ?? previous.model, episodes: episodes,
                                                             warning: episodes.contains { !$0.detailsLoaded } ? library.warning : nil)
                 }
-                attempted[read.target.id] = nil
-                detailProblems[read.target.id] = nil
+                if read.library != nil {
+                    refreshedAt[read.target.id] = now()
+                    attempted[read.target.id] = nil
+                    detailProblems[read.target.id] = nil
+                }
                 reads[read.target.id] = current
-                if let target = remaining.next() { group.addTask { await RecordingRead.fetch(target) } }
+                if let target = remaining.next() { group.addTask { await fetch(target) } }
             }
         }
         guard !Task.isCancelled, generation == run else { return }
@@ -138,14 +166,14 @@ struct RecordingRead: Sendable {
             var hadWork = false
             for id in ids {
                 guard !Task.isCancelled, generation == run else { return }
-                guard let read = reads[id], let library = read.library else { continue }
+                guard let read = reads[id], read.problem == nil, let library = read.library else { continue }
                 let visited = attempted[id] ?? []
                 let batch = Array(library.episodes.lazy.filter { !$0.detailsLoaded && !visited.contains($0.id) }
                     .prefix(MobileRecordingEpisode.detailBatchLimit))
                 guard !batch.isEmpty else { continue }
                 hadWork = true
                 do {
-                    let updated = try await GoClient.shared.recordingDetails(device: library.device, episodes: batch)
+                    let updated = try await fetchDetails(library.device, batch)
                     guard !Task.isCancelled, generation == run else { return }
                     let known = Dictionary(updated.filter(\.detailsLoaded).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                     let episodes = library.episodes.map { known[$0.id] ?? $0 }
@@ -236,7 +264,6 @@ struct MobileLensData: View {
         }
         .background(MobileLensStyle.background).navigationTitle("Data").navigationBarTitleDisplayMode(.large)
         .task(id: key) { if key.active { await catalog.load(targets, refresh: refresh, priority: key.priority) } }
-        .onChange(of: isVisible) { _, visible in if visible { refresh += 1 } }
         .onChange(of: phase) { old, new in if old == .background && new != .background { refresh += 1 } }
         .refreshable {
             async let nearby: Void = model.refreshNearby()

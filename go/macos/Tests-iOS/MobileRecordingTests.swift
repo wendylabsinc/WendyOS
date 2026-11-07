@@ -37,3 +37,95 @@ final class MobileRecordingTests: XCTestCase {
         XCTAssertNotEqual(recordingDeviceID(unknown), recordingDeviceID(cloud))
     }
 }
+
+private actor RecordingSpeedFixture {
+    var indexes = 0
+    var details = 0
+    var fail = false
+    var bytes: Int64 = 100
+    var delay: Duration = .zero
+    func configure(fail: Bool = false, bytes: Int64 = 100, delay: Duration = .zero) {
+        self.fail = fail; self.bytes = bytes; self.delay = delay
+    }
+    func counts() -> (Int, Int) { (indexes, details) }
+    func fetch(_ target: MobileRecordingTarget) async -> RecordingRead {
+        indexes += 1
+        try? await Task.sleep(for: delay)
+        if fail { return RecordingRead(target: target, problem: "Offline") }
+        let episode = MobileRecordingEpisode(id: "episode", title: "Clip", started: nil, bytes: bytes,
+            duration: nil, trigger: nil, kind: .unknown, synced: nil, topics: [])
+        return RecordingRead(target: target, library: MobileRecordingLibrary(device: target.routes[0], model: nil,
+            episodes: [episode], warning: nil))
+    }
+    func loadDetails(_ device: Device, _ episodes: [MobileRecordingEpisode]) -> [MobileRecordingEpisode] {
+        details += episodes.count
+        return episodes.map { row in
+            MobileRecordingEpisode(id: row.id, title: row.title, started: row.started, bytes: row.bytes,
+                duration: 10, trigger: "Person", kind: .video, synced: nil, topics: [], detailsLoaded: true)
+        }
+    }
+}
+
+final class RecordingSpeedTests: XCTestCase {
+    private var target: MobileRecordingTarget {
+        MobileRecordingTarget(id: "board", routes: [Device(id: "board", name: "Board", selector: "board:50051", transport: .lan, address: "")])
+    }
+
+    @MainActor func testFreshCatalogAvoidsRequestsAcrossScreensAndRefreshReusesDetails() async {
+        let fixture = RecordingSpeedFixture()
+        var clock = Date(timeIntervalSince1970: 100)
+        let catalog = RecordingCatalog(now: { clock }, fetch: { await fixture.fetch($0) },
+                                       details: { await fixture.loadDetails($0, $1) })
+        await catalog.load([target], refresh: 0, priority: nil)
+        await catalog.load([target], refresh: 0, priority: nil, consumer: "activity")
+        await catalog.load([target], refresh: 0, priority: "board")
+        var counts = await fixture.counts()
+        XCTAssertEqual(counts.0, 1, "Tab visits within 30 seconds must not repeat the index request")
+        XCTAssertEqual(counts.1, 1)
+        await catalog.load([target], refresh: 1, priority: nil)
+        counts = await fixture.counts()
+        XCTAssertEqual(counts.0, 2, "Pull to refresh must bypass freshness")
+        XCTAssertEqual(counts.1, 1, "Unchanged finalized episodes must reuse cached tags")
+        await catalog.load([target], refresh: 0, priority: nil, consumer: "activity")
+        counts = await fixture.counts()
+        XCTAssertEqual(counts.0, 2, "Activity's refresh counter must not invalidate Data's refresh")
+        clock += 31
+        await fixture.configure(bytes: 200)
+        await catalog.load([target], refresh: 1, priority: nil)
+        counts = await fixture.counts()
+        XCTAssertEqual(counts.0, 3)
+        XCTAssertEqual(counts.1, 2, "Changed index metadata invalidates the cached episode")
+        XCTAssertEqual(catalog.reads["board"]?.library?.episodes.first?.bytes, 200)
+    }
+
+    @MainActor func testFailedRefreshRetainsLabeledSavedDataAndScopeDoesNotShareCache() async {
+        let fixture = RecordingSpeedFixture()
+        let catalog = RecordingCatalog(fetch: { await fixture.fetch($0) }, details: { await fixture.loadDetails($0, $1) })
+        await catalog.load([target], refresh: 0, priority: nil)
+        await fixture.configure(fail: true)
+        await catalog.load([target], refresh: 1, priority: nil)
+        XCTAssertEqual(catalog.reads["board"]?.library?.episodes.first?.trigger, "Person")
+        XCTAssertTrue(catalog.reads["board"]?.problem?.contains("Showing saved recordings") == true)
+        let otherScope = RecordingCatalog(fetch: { await fixture.fetch($0) }, details: { await fixture.loadDetails($0, $1) })
+        XCTAssertTrue(otherScope.reads.isEmpty)
+        await otherScope.load([target], refresh: 0, priority: nil)
+        XCTAssertNil(otherScope.reads["board"]?.library)
+        await catalog.load([], refresh: 1, priority: nil)
+        XCTAssertTrue(catalog.reads.isEmpty, "Removed targets must not remain accessible from cached inventory")
+    }
+
+    @MainActor func testCanceledIndexCannotPublishIntoNewGeneration() async {
+        let fixture = RecordingSpeedFixture()
+        await fixture.configure(delay: .milliseconds(100))
+        let catalog = RecordingCatalog(fetch: { await fixture.fetch($0) }, details: { await fixture.loadDetails($0, $1) })
+        let target = target
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await catalog.load([target], refresh: 0, priority: nil) }
+            while await fixture.counts().0 == 0 { await Task.yield() }
+            group.cancelAll()
+            await catalog.load([], refresh: 0, priority: nil)
+        }
+        XCTAssertTrue(catalog.reads.isEmpty)
+        XCTAssertFalse(catalog.loading)
+    }
+}

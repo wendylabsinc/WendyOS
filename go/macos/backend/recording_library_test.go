@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -78,18 +77,18 @@ func TestRecordingLibraryUsesIndependentConnectionForListPlayAndExport(t *testin
 	defer b.EndRecordingRead(id)
 	const secondary = "secondary.local:50051"
 	library, err := b.RecordingLibrary(id, secondary, false)
-	if err != nil || len(library.Episodes) != 2 || library.Warning == "" {
+	if err != nil || len(library.Episodes) != 2 || library.Warning != "" {
 		t.Fatalf("list: %+v, %v", library, err)
 	}
 	newest := library.Episodes[0]
-	if newest.ID != "one" || newest.Duration != 6 || newest.Trigger != "event:door_opened" || newest.UploadState != "uploaded" || newest.Kind != "rosbag" || strings.Join(newest.Topics, ",") != "/camera" {
+	if newest.ID != "one" || newest.Duration != -1 || newest.DetailsLoaded {
 		t.Fatalf("metadata: %+v", newest)
 	}
 	if row := library.Episodes[1]; row.ID != "gone" || row.Bytes != 300 || row.Kind != "" || row.Duration != -1 {
 		t.Fatalf("listed recording lost: %+v", row)
 	}
 	details, err := b.RecordingDetails(id, secondary, false, []string{"gone", "one"})
-	if err != nil || len(details.Episodes) != 2 || details.Episodes[0].DetailsLoaded || details.Episodes[1].Trigger != newest.Trigger || !details.Episodes[1].DetailsLoaded {
+	if err != nil || len(details.Episodes) != 2 || details.Episodes[0].DetailsLoaded || details.Episodes[1].Trigger != "event:door_opened" || !details.Episodes[1].DetailsLoaded {
 		t.Fatalf("detail continuation: %+v, %v", details, err)
 	}
 	snap, err := b.PlayRecording(id, secondary, false, "one")
@@ -189,21 +188,24 @@ func TestRecordingLibraryContinuesMissingDetailsWithoutRelisting(t *testing.T) {
 		c.episodes = append(c.episodes, &pb.DataEpisode{Id: id, StartedUnixNanos: int64(i + 1), Name: "episode-" + id, SizeBytes: 100})
 		c.manifests[id] = data.Manifest{ID: id, Trigger: data.EpisodeTrigger{Reason: "manual"}}
 	}
-	lib, err := readRecordingLibrary(context.Background(), c, 100*time.Millisecond)
+	lib, err := readRecordingLibrary(context.Background(), c)
 	if err != nil || len(lib.Episodes) != len(ids) || lib.Warning != "" {
 		t.Fatalf("index: %+v %v", lib, err)
 	}
-	if row := lib.Episodes[0]; row.ID != "latest" || !row.DetailsLoaded || row.Trigger != "manual" {
+	if row := lib.Episodes[0]; row.ID != "latest" || row.DetailsLoaded || row.Trigger != "" {
 		t.Fatalf("latest episode was not prioritized: %+v", row)
 	}
 	var missing []string
-	for _, row := range lib.Episodes[1:] {
+	for _, row := range lib.Episodes {
 		if row.DetailsLoaded || row.Title != "episode-"+row.ID || row.Bytes != 100 {
 			t.Fatalf("lost index row: %+v", row)
 		}
 		missing = append(missing, row.ID)
 	}
 
+	if len(c.inspected) != 0 {
+		t.Fatalf("index blocked on %d manifest reads", len(c.inspected))
+	}
 	c.fast = true
 	c.inspected = nil
 	for offset := 0; offset < len(missing); offset += 2 {

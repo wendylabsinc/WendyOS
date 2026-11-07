@@ -178,7 +178,7 @@ struct MobileDeviceActivity: View {
         .navigationTitle("Activity").navigationBarTitleDisplayMode(.large)
         .task(id: key) {
             if isVisible && phase == .active { update { $0.expire(now: Date()) } }
-            if key.active { await catalog.load(key.targets, refresh: refresh, priority: nil) }
+            if key.active { await catalog.load(key.targets, refresh: refresh, priority: nil, consumer: "activity") }
         }
         .task(id: softwareSession) {
             updateStatus = nil
