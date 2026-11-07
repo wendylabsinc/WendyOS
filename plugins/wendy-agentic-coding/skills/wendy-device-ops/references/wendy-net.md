@@ -24,6 +24,12 @@ enable mesh participation. Use the CLI for Lite operations not exposed by the
 connected MCP server. If no terminal is available on the intended computer,
 explain the missing access rather than inventing a mesh-join tool.
 
+To inspect the existing router on this computer, use
+`wendy --json net topology --local-cli`. Without `--local-cli`,
+`topology` inspects the selected device instead. Device mesh status can be active
+through Bluetooth while LAN is still waiting; verify the destination with a real
+device command rather than inferring reachability from a status label.
+
 `device_disconnect` ends the current MCP device connection. To stop the local
 mesh router itself, use `wendy net disconnect` when requested.
 After that, discovery and device commands must leave it disabled until the user
