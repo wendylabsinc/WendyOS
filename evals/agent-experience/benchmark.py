@@ -5,6 +5,7 @@ import argparse
 import atexit
 import collections
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -35,6 +36,14 @@ TOKEN_FIELDS = ("input_tokens", "cached_input_tokens", "cache_write_tokens",
 
 def dump(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
+
+
+def dump_atomic(path, value):
+    """dump(), but a kill mid-write leaves the old file, not half of a new one."""
+    path = Path(path)
+    temporary = path.with_name(f".{path.name}.tmp")
+    dump(temporary, value)
+    os.replace(temporary, path)
 
 
 def prompt_variables(variables, target):
@@ -584,7 +593,7 @@ def model_server_healthy(config, timeout=5):
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             return 200 <= response.status < 300
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):  # a garbled reply as the server dies
         return False
 
 
@@ -1297,8 +1306,12 @@ def main(argv=None):
         argv = expand(config["agents"][name]["command"], {"wendy": wendy})
         snapshot[name + "_version"] = run_process([argv[0], "--version"], ROOT, output / (name + "-version"), 15)
     tools = list_all_tools(wendy, dict(os.environ))
-    if first or not (output / "tools.json").exists():
-        dump(output / "tools.json", tools)
+    try:
+        saved_tools = json.loads((output / "tools.json").read_text())
+    except (OSError, ValueError):
+        saved_tools = None
+    if first or not isinstance(saved_tools, list) or not saved_tools:  # a torn file would mislead the report
+        dump_atomic(output / "tools.json", tools)
     snapshot["tools_sha256"] = hashlib.sha256((output / "tools.json").read_bytes()).hexdigest()
     revision, diff_sha256 = treatment_git(treatment_root)
     snapshot["argv"], snapshot["cwd"] = sys.argv, os.getcwd()
@@ -1433,8 +1446,15 @@ def main(argv=None):
         # The interrupted attempt may have left an app or a held port; clear them before the first attempt
         # so that failure isn't scored against the model.
         sweep = sweep_env_run(lambda env: sc.sweep_apps(wendy, baseline, sc.BENCHMARK_APP, env))
-        history = json.loads((output / "resume_sweeps.json").read_text()) if (output / "resume_sweeps.json").exists() else []
-        dump(output / "resume_sweeps.json", history + [sweep])
+        try:
+            history = json.loads((output / "resume_sweeps.json").read_text())
+        except OSError:
+            history = []
+        except ValueError:  # a torn write: the history is a log, so start it again
+            history = []
+        if not isinstance(history, list):
+            history = []
+        dump_atomic(output / "resume_sweeps.json", history + [sweep])
         if sweep["failed"] or sweep["list_error"] is not None:
             sweep_failures += 1
     try:

@@ -753,7 +753,7 @@ class LocalTaskTests(unittest.TestCase):
 
     def test_guard_matchers_cover_every_os_agent_network_and_enrolment_verb(self):
         block = sc.guard_matchers(sc.BENCHMARK_APP)
-        verbs = ["os update", "os install", "install", "cloud enroll-device", "net configure"]
+        verbs = ["os update", "os install", "install", "update", "cloud enroll-device", "net configure"]
         verbs += [f"{prefix} {v}" for prefix in ("device", "cloud device") for v in (
             "update", "push-agent", "setup", "enroll", "unenroll", "wifi connect", "wifi disconnect", "wifi forget",
             "wifi rank", "wifi regulatory set-country")]
@@ -967,6 +967,22 @@ class SweepTests(unittest.TestCase):
             # a restart after a leftover appeared must not adopt the leftover as baseline
             self.assertEqual(sc.baseline_apps(path, "wendy", {}, run=self.fake_run(apps=["old", "leftover"])), ["old"])
             self.assertEqual(json.loads(path.read_text()), ["old"])
+
+    def test_a_torn_or_odd_baseline_file_is_read_as_absent(self):
+        for text in ('["old", "le', "", '{"a": 1}', '[1, 2]'):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "baseline_apps.json"
+                path.write_text(text)
+                self.assertEqual(sc.baseline_apps(path, "wendy", {}, run=self.fake_run(apps=["old"])), ["old"])
+                self.assertEqual(json.loads(path.read_text()), ["old"])
+
+    def test_the_baseline_is_written_through_a_temp_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "baseline_apps.json"
+            with mock.patch.object(sc.b.os, "replace", wraps=os.replace) as replace:
+                sc.baseline_apps(path, "wendy", {}, run=self.fake_run(apps=["old"]))
+            self.assertEqual(replace.call_args.args[1], path)
+            self.assertEqual(os.listdir(tmp), ["baseline_apps.json"])
 
 
 class MainTests(unittest.TestCase):
@@ -1412,6 +1428,30 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(json.loads((directory / "baseline_apps.json").read_text()), ["old"])
         # the resume sweeps once before the attempt, then after it, both against the saved baseline
         self.assertEqual(self.sweep_calls, [(["old"], sc.BENCHMARK_APP)] * 2)
+
+    def test_a_torn_resume_sweeps_file_does_not_stop_a_resume(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        (directory / "resume_sweeps.json").write_text('[{"removed": [], "fa')
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual((code, len(rows)), (0, 2), text)
+        self.assertEqual(len(json.loads((directory / "resume_sweeps.json").read_text())), 1)
+
+    def test_a_torn_baseline_file_does_not_stop_a_resume(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1", baseline=("old",))
+        (directory / "baseline_apps.json").write_text('["ol')
+        code, text, rows = self.resume_main(directory, "--repetitions", "2", baseline=("old",))
+        self.assertEqual((code, len(rows)), (0, 2), text)
+        self.assertEqual(json.loads((directory / "baseline_apps.json").read_text()), ["old"])
+
+    def test_a_torn_tools_file_is_listed_again_on_resume(self):
+        directory = self.root / "pass"
+        self.resume_main(directory, "--repetitions", "1")
+        (directory / "tools.json").write_text('[{"name": "ru')
+        code, text, rows = self.resume_main(directory, "--repetitions", "2")
+        self.assertEqual(code, 0, text)
+        self.assertIsInstance(json.loads((directory / "tools.json").read_text()), list)
 
     def test_resume_removes_a_stale_halt_reason(self):
         directory = self.root / "pass"

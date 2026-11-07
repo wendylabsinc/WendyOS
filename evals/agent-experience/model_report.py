@@ -130,11 +130,13 @@ def _chronological(trace, events):
 
 
 def _unanswered(events):
-    """Names of tools the transcript started and never saw a result for."""
+    """Names of Wendy tools the transcript started and never saw a result for (chat's own tools are left out)."""
     answered = {(e.get("agent_id", ""), e.get("id")) for e in events if e.get("type") == "tool_result"}
     names = []
     for index, e in enumerate(events):
         if e.get("type") == "tool_start" and (e.get("agent_id", ""), e.get("id", f"#{index}")) not in answered:
+            if e.get("tool") in tt.CHAT_BUILTINS or e.get("tool") == "workspace_exec":
+                continue  # still running at the time limit: the harness's limit, not a tool that hung
             if e.get("tool") not in names:
                 names.append(e.get("tool"))
     return names
@@ -240,9 +242,9 @@ def classify(row, directory, tool_names, guards, previous=None):
     elif outcome == "missed" and not verifier_failed:
         add("model", "Missing tool", f"never called {_expected(expect)}")
 
-    known = set(tool_names) | tt.CHAT_BUILTINS | {"workspace_exec"}
+    known = set(tool_names or ()) | tt.CHAT_BUILTINS | {"workspace_exec"}
     made_up = []
-    for group in tt.wendy_entries(events):
+    for group in tt.wendy_entries(events) if tool_names is not None else ():  # None: no list to check against
         for e in group:
             if e["channel"] == "mcp" and e["name"] not in known and e["name"] not in made_up:
                 made_up.append(e["name"])
@@ -254,9 +256,10 @@ def classify(row, directory, tool_names, guards, previous=None):
             add("model", "Touched the benchmark", f"{e.get('name')} would have ended the run", i)
         elif e.get("channel") == "mcp" and not e.get("canned") and e.get("is_error") is True:
             text = e.get("reply_text") or ""
-            if "INVALID_ARGUMENT" in text:
+            refused = next((code for code in ("INVALID_ARGUMENT", "UNSUPPORTED") if code in text), None)
+            if refused:  # the model asked for something the tool refuses
                 if blame:
-                    add("model", "Bad arguments", f"{e.get('name')} [INVALID_ARGUMENT]", i)
+                    add("model", "Bad arguments", f"{e.get('name')} [{refused}]", i)
             else:
                 add("tool", "Tool error", f"{e.get('name')} [{_error_code(text)}]", i)
     for record in cli_records:
@@ -317,9 +320,15 @@ def load_run(directory):
     directory = Path(directory)
     rows = [r for r in b.load_rows(directory / "results.jsonl")]
     info = _dict(_read_json(directory / "on_device.json", {}))
-    tool_names = [t.get("name") for t in _read_json(directory / "tools.json", []) if isinstance(t, dict)]
+    listed = _read_json(directory / "tools.json", [])
+    tool_names = [t.get("name") for t in listed if isinstance(t, dict)] if isinstance(listed, list) else []
+    tool_names = tool_names or None  # unreadable or empty: any name would look made up
     guards = sc.guard_matchers(info.get("app_id") or sc.BENCHMARK_APP)
     findings, previous = [], None
+    if tool_names is None and rows:
+        findings.append({"section": "undetermined", "item": "Undetermined", "task": "", "expected": "",
+                         "detail": "tools.json was unreadable or empty, so made-up tools were not checked",
+                         "excerpt": "", "trace_path": str(directory / "tools.json")})
     for row in rows:
         try:
             findings += classify(row, directory, tool_names, guards, previous=previous)
@@ -347,6 +356,15 @@ def _fmt(value):
     return str(value).replace("|", "/")
 
 
+def _wall_minutes(directory):
+    """Minutes from the first start (the manifest is written once) to the last saved row; None if either is missing."""
+    try:
+        seconds = (Path(directory) / "results.jsonl").stat().st_mtime - (Path(directory) / "manifest.json").stat().st_mtime
+    except OSError:
+        return None
+    return f"{max(seconds, 0) / 60:.0f} min"
+
+
 def _header_rows(run):
     info, rows = run["info"], run["rows"]
     def pick(*keys):
@@ -357,7 +375,8 @@ def _header_rows(run):
             ("Wendy CLI commit", pick("cli_commit") or run["treatment_revision"]),
             ("Agent version", pick("agent_version")), ("OS version", pick("os_version")),
             ("Device", pick("device", "device_type")),
-            ("Duration", f"{sum(r.get('task_seconds') or 0 for r in rows) / 60:.0f} min"),
+            ("Duration", _wall_minutes(run["directory"])),
+            ("Agent time", f"{sum(r.get('task_seconds') or 0 for r in rows) / 60:.0f} min"),
             ("Attempts run", len(rows)),
             ("Attempts not run", sum(a.get("not_run", 0) for e in run["coverage"] if isinstance(e, dict)
                                      for a in _dict(e.get("agents")).values() if isinstance(a, dict))),
@@ -454,7 +473,7 @@ def _json_run(run):
 def _replace(path, text):
     handle, temp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(handle, "w") as f:
+        with os.fdopen(handle, "w", errors="backslashreplace") as f:
             f.write(text)
         os.replace(temp, path)
     except BaseException:

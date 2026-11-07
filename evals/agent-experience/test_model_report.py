@@ -111,7 +111,7 @@ class EachCategory(unittest.TestCase):
     def test_ignored_error_is_both_task_not_finished_and_a_tool_error(self):
         # The model is blamed for going on; the tool's error is still shown as the tool's.
         p = Pass(self)
-        p.attempt(outcome="right", verified=False, trace=[call("run", {"x": 1}, True, "[UNSUPPORTED] no")])
+        p.attempt(outcome="right", verified=False, trace=[call("run", {"x": 1}, True, "[DEVICE_UNREACHABLE] no")])
         self.assertEqual(sorted(labels(p.classify())), [("model", "Task not finished"), ("tool", "Tool error")])
 
     def test_restart_when_markers_change(self):
@@ -376,6 +376,70 @@ class FixRound1(unittest.TestCase):
         q = Pass(self)
         q.attempt(status="failed", outcome="missed", trace=[call("device_info")], events=events)
         self.assertNotIn(("tool", "Hang"), labels(q.classify()))
+
+    def test_a_timed_out_builtin_is_not_a_tool_hang(self):
+        p = Pass(self)
+        events = [start("1", "workspace_exec", {"command": "wendy run"}), start("2", "telemetry_logs")]
+        p.attempt(status="timeout", outcome="missed", trace=[], events=events)
+        found = p.classify()
+        self.assertEqual(labels(found), [("tool", "Hang")])
+        self.assertNotIn("workspace_exec", found[0]["detail"])
+        self.assertIn("telemetry_logs", found[0]["detail"])
+
+    def test_unsupported_is_bad_arguments_when_the_model_is_blamed(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("device_connect", {"device": "other"}, True,
+                                               "[UNSUPPORTED] this device deploys only to itself")])
+        found = p.classify()
+        self.assertEqual(labels(found), [("model", "Bad arguments")])
+        self.assertIn("UNSUPPORTED", found[0]["detail"])
+        q = Pass(self)
+        q.attempt(status="model_server_down", outcome="right", trace=[call("run", {}, True, "[UNSUPPORTED] no")])
+        self.assertNotIn(("model", "Bad arguments"), labels(q.classify()))
+        self.assertNotIn(("tool", "Tool error"), labels(q.classify()))
+
+    def test_device_unreachable_stays_a_tool_error(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("run", {}, True, "[DEVICE_UNREACHABLE] down")])
+        self.assertEqual(labels(p.classify()), [("tool", "Tool error")])
+
+    def test_without_a_tool_list_no_tool_is_made_up(self):
+        p = Pass(self)
+        events = [start("1", "container_list"), finish("1")]
+        p.attempt(outcome="right", trace=[call("container_list")], events=events)
+        self.assertIn(("model", "Made-up tool"), labels(mr.classify(p.rows[0], p.dir, ["run"], sc.guard_matchers(APP))))
+        self.assertNotIn(("model", "Made-up tool"), labels(mr.classify(p.rows[0], p.dir, None, sc.guard_matchers(APP))))
+
+    def test_an_unreadable_tools_file_is_undetermined_not_made_up_tools(self):
+        p = Pass(self)
+        events = [start("1", "container_list"), finish("1")]
+        p.attempt(outcome="right", trace=[call("container_list")], events=events)
+        for text in ('[{"name": "ru', "[]"):
+            (p.dir / "tools.json").write_text(text)
+            run = mr.load_run(p.dir)
+            self.assertNotIn("Made-up tool", [f["item"] for f in run["findings"]])
+            notes = [f for f in run["findings"] if f["section"] == "undetermined"]
+            self.assertEqual(len(notes), 1)
+            self.assertIn("tools.json", notes[0]["detail"])
+            self.assertIn("tools.json", mr.render_markdown([run]))
+
+    def test_duration_is_the_wall_time_between_the_manifest_and_the_last_row(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("run")])
+        (p.dir / "manifest.json").write_text("{}")
+        os.utime(p.dir / "manifest.json", (1_000_000, 1_000_000))
+        os.utime(p.dir / "results.jsonl", (1_000_000 + 3 * 3600 + 1800, 1_000_000 + 3 * 3600 + 1800))
+        text = mr.render_markdown([mr.load_run(p.dir)])
+        self.assertIn("| Duration | 210 min |", text)
+        self.assertIn("| Agent time | 0 min |", text)  # the one attempt took 10 s
+        (p.dir / "manifest.json").unlink()
+        self.assertIn("| Duration | - |", mr.render_markdown([mr.load_run(p.dir)]))
+
+    def test_a_lone_surrogate_does_not_block_the_report(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("run", {}, True, "[DEVICE_UNREACHABLE] bad \ud800 text")])
+        mr.write_report([p.dir], p.dir)
+        self.assertIn("\\ud800", (p.dir / "report.md").read_text())
 
     def test_notes_render_after_the_header(self):
         p = Pass(self)

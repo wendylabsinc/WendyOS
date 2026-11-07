@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -136,6 +137,17 @@ class Fetch(unittest.TestCase):
             self.assertIn("a.gguf", str(caught.exception))
             self.assertIn("22", str(caught.exception))
 
+    def test_a_checksum_mismatch_stops_at_once_and_says_so(self):
+        with tempfile.TemporaryDirectory() as directory:
+            calls, pauses = [], []
+            with self.assertRaises(od.FetchError) as caught:
+                od.fetch_model(self.PIN, Path(directory), run=lambda argv, **kw: calls.append(argv) or mock.Mock(returncode=32),
+                               attempts=30, sleep=pauses.append)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(pauses, [])
+            self.assertIn("checksum", str(caught.exception))
+            self.assertIn("a.gguf", str(caught.exception))
+
     def test_a_file_of_the_right_size_without_a_checksum_pass_is_fetched_again(self):
         with tempfile.TemporaryDirectory() as directory:
             models = Path(directory)
@@ -162,6 +174,30 @@ class Server(unittest.TestCase):
             count = server.starts
             time.sleep(0.3)
             self.assertEqual(server.starts, count)  # stopped means stopped
+
+    def test_a_garbled_health_reply_is_not_healthy_and_does_not_raise(self):
+        import http.client
+        server = od.ModelServer(["x"], "/dev/null", "http://127.0.0.1:9/health")
+        with mock.patch.object(od.urllib.request, "urlopen", side_effect=http.client.BadStatusLine("garbage")):
+            self.assertFalse(server.healthy())
+        with mock.patch.object(od.urllib.request, "urlopen", side_effect=http.client.IncompleteRead(b"x")):
+            self.assertFalse(server.healthy())
+
+    def test_stop_ends_a_server_restarted_while_it_was_stopping(self):
+        server = od.ModelServer(["x"], "/dev/null", "http://127.0.0.1:9/health")
+        exited = mock.Mock()
+        exited.poll.return_value = 0
+        fresh = mock.Mock()
+        fresh.poll.return_value = None
+        server._process = exited
+
+        class Thread:
+            def join(self_, timeout=None):
+                server._process = fresh  # the supervisor finished a launch after stop() read the old process
+
+        server._thread = Thread()
+        server.stop()
+        fresh.terminate.assert_called_once()
 
     def test_wait_healthy_reads_the_health_endpoint(self):
         from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -466,6 +502,16 @@ class RunPass(unittest.TestCase):
         self.quiet(self.env)
         self.assertEqual(seen, [os.path.realpath(self.pdir())])
 
+    def test_latest_already_points_at_the_pass_during_the_model_fetch(self):
+        seen = []
+        server, _ = self.healthy_pass()
+        od.fetch_model.side_effect = lambda *a, **k: seen.append(os.path.realpath(self.results / "latest"))
+        previous = self.results / "old-pass"
+        previous.mkdir(parents=True)
+        od._point_latest(self.results, previous)
+        self.quiet(self.env)
+        self.assertEqual(seen, [os.path.realpath(self.pdir())])
+
     def test_a_benchmark_crash_leaves_its_reason_and_still_reaches_the_container_log(self):
         self.healthy_pass(exit_code=2, stderr=["usage: benchmark.py\n", "benchmark.py: error: bad flag\n"])
         err = io.StringIO()
@@ -599,5 +645,16 @@ class PlanOnly(unittest.TestCase):
         self.assertIn("model_health_url", err.getvalue())
 
 
+class InitScript(unittest.TestCase):
+    def test_the_log_line_reports_the_real_exit_code_despite_set_e(self):
+        text = (HERE / "on-device-init.sh").read_text()
+        start = text.index("(\n  cd /opt/harness")
+        block = text[start:text.index("\n) &", start) + 2].replace("cd /opt/harness", "cd /").replace(
+            "python3 on_device.py", "sh -c 'exit 3'")
+        done = subprocess.run(["sh", "-ec", block], capture_output=True, text=True, timeout=30)
+        self.assertIn("pass exited with code 3", done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -491,9 +491,14 @@ def baseline_apps(path, wendy, env, run=subprocess.run):
     left over from before the restart is still swept."""
     path = Path(path)
     if path.exists():
-        return json.loads(path.read_text())
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, ValueError):  # a torn write: no sweep has trusted it yet, so list the apps again
+            saved = None
+        if isinstance(saved, list) and all(isinstance(name, str) for name in saved):
+            return saved
     names = list_apps(wendy, env, run)
-    b.dump(path, names)
+    b.dump_atomic(path, names)
     return names
 
 
@@ -537,7 +542,7 @@ GUARDED_TOOLS = ("os_update", "device_update_agent", "wifi_connect", "wifi_disco
 # mirrors `wendy device`, so each device verb is guarded under both. Reads (status, list, scan) stay open.
 GUARDED_DEVICE_CLI = ("update", "push-agent", "setup", "enroll", "unenroll", "wifi connect", "wifi disconnect",
                       "wifi forget", "wifi rank", "wifi regulatory set-country")
-GUARDED_OTHER_CLI = ("os update", "os install", "install", "cloud enroll-device", "net configure")
+GUARDED_OTHER_CLI = ("os update", "os install", "install", "update", "cloud enroll-device", "net configure")
 GUARDED_APP_VERBS = ("start", "stop", "remove")
 GUARDED_CLI = tuple(f"{prefix}{verb}" for prefix in ("device ", "cloud device ") for verb in GUARDED_DEVICE_CLI
                     ) + GUARDED_OTHER_CLI

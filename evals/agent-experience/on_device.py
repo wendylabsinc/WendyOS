@@ -3,6 +3,7 @@ check what `wendy chat` sends it, run benchmark.py, and leave the report on the 
 Python standard library only."""
 
 import collections
+import http.client
 import json
 import os
 import re
@@ -85,6 +86,9 @@ def fetch_model(pin, models_dir, run=subprocess.run, attempts=30, pause=30, slee
             if done.returncode == 0:
                 break
             last = f"aria2c exited {done.returncode}"
+            if done.returncode == 32:  # aria2c's checksum error: another try downloads the same wrong bytes
+                raise FetchError(f"{entry['file']}: the SHA-256 checksum failed (aria2c exited 32); "
+                                 "the pin in models.json is wrong or the file changed upstream")
             print(f"download of {entry['file']} failed ({last}), attempt {attempt} of {attempts}", file=sys.stderr, flush=True)
             if attempt < attempts:
                 sleep(pause)
@@ -134,7 +138,7 @@ class ModelServer:
         except urllib.error.HTTPError as error:  # 503 while the model loads
             error.close()
             return False
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):  # a garbled reply as the server dies
             return False
 
     def wait_healthy(self, timeout=900, poll=2.0):
@@ -157,6 +161,14 @@ class ModelServer:
                 process.wait()
         if self._thread is not None:
             self._thread.join(10)
+        process = self._process  # the supervisor may have finished a launch after the read above
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 def _chunk(delta, finish=None):
@@ -413,9 +425,10 @@ def run_pass(environ):
             cli_commit = "unknown"
         label = f"pass{environ.get('EVAL_PASS') or 1}-{cli_commit[:12]}"
         pdir = pass_dir(results, model_id, pin["revision"], label)
+        pdir.mkdir(parents=True, exist_ok=True)
+        _point_latest(results, pdir)  # from the start, so a long fetch never leaves the last pass's report in place
         state = json.loads((pdir / "pass.json").read_text()) if (pdir / "pass.json").is_file() else {}
         if state.get("status") == "finished":
-            _point_latest(results, pdir)
             print(f"Pass {pdir.name} already finished.")
             _print_header(pdir)
             return 0
@@ -453,7 +466,6 @@ def run_pass(environ):
 
         facts = device_facts(wendy, env)
         sent = len(request_tool_names(request))
-        pdir.mkdir(parents=True, exist_ok=True)
         import scenarios as sc
         shown = [a for i, a in enumerate(argv) if a != "-m" and (i == 0 or argv[i - 1] != "-m")]
         _write_json(pdir / "on_device.json", {
@@ -471,7 +483,6 @@ def run_pass(environ):
         _write_json(config_path, config)
         task_ids = [t["id"] for t in json.loads((harness / "tasks.json").read_text())]
         _write_json(pdir / "pass.json", {"status": "running", "model": model_id, "label": label})
-        _point_latest(results, pdir)  # readable from the first attempt on, and never another model's report
         returncode, tail = run_benchmark(
             [sys.executable, str(harness / "benchmark.py"),
              *benchmark_argv(config_path, task_ids, repetitions, wendy, treatment, pdir, limit)], harness, env)

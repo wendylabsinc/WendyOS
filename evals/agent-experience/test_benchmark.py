@@ -505,6 +505,12 @@ class DisposableDeviceTests(unittest.TestCase):
     def test_wait_for_model_does_not_wait_when_health_is_unknown(self):
         self.assertTrue(b.wait_for_model({}, health=lambda: None, sleep=lambda s: self.fail("slept")))
 
+    def test_a_garbled_health_reply_is_not_healthy_and_does_not_raise(self):
+        import http.client
+        for error in (http.client.BadStatusLine("garbage"), http.client.IncompleteRead(b"x")):
+            with mock.patch.object(b.urllib.request, "urlopen", side_effect=error):
+                self.assertIs(b.model_server_healthy({"model_health_url": "http://127.0.0.1:9/health"}), False)
+
     def test_disposable_needs_both_the_flag_and_the_socket(self):
         for flag in (True, False, None):
             for socket in (True, False):

@@ -44,8 +44,9 @@ done
 # and `wendy device attach` needs the container alive either way.
 (
   cd /opt/harness
-  python3 on_device.py
-  echo "pass exited with code $?" >&2
+  code=0
+  python3 on_device.py || code=$?  # set -e would exit before the echo
+  echo "pass exited with code $code" >&2
 ) &
 PASS_PID=$!
 
