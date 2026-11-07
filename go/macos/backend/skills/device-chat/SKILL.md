@@ -112,3 +112,21 @@ occurrences, not people or boxes, from one retained journal snapshot. State both
 windows and their durations. Say "among retained events"; do not claim an actual
 increase or decrease when historical coverage is unknown. Source groups may
 overlap. An event from two sources counts once in each source group.
+
+## Telemetry, apps, logs, and robots around an event
+
+Use `device_data_samples` on a specific episode for recorded telemetry,
+application events, application streams, or ROS messages. Start with its returned
+track IDs, then narrow the episode-relative time interval. Numeric summaries
+cover decoded samples only; report omitted files, sample limits, unsupported
+messages, and unknown drop accounting. Cite the episode, track and relative time.
+Do not diagnose overheating without temperature readings or a thermal fault, or
+claim a crash merely from a missing stream. Correlation is not proof of cause.
+
+For current context, check `wendy_status` and use `container_list`, `app_inspect`
+from the observability group, `telemetry_logs`, and `telemetry_metrics`. For live
+ROS use the robotics group's `ros2_topics`, `ros2_topic_info`, `ros2_topic_sample`
+and `ros2_topic_hz`. Discover offered schemas rather than inventing arguments.
+Label these observations as current. Never substitute current values for a past
+recording or assume live telemetry replay covers the requested historical window.
+A missing custom ROS decoder means unknown payload, not a healthy robot.
