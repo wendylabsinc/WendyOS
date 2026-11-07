@@ -11,6 +11,7 @@ import (
 
 // Synthetic testsrc2 640x480 frame, encoded with ffmpeg/libx264 (ultrafast, zerolatency).
 // Repeated IDRs exercise the same H.264 bridge/decoder as a physical camera.
+//
 //go:embed camera.h264
 var cameraFrame []byte
 

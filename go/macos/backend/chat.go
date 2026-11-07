@@ -303,7 +303,7 @@ func (b *Backend) startChat(session, turn uint64, port uint32, model string, mes
 			state.mu.Unlock()
 			return
 		}
-		engine := chat.NewEngine(deviceHistoryProvider{Provider: provider, history: messages[:len(messages)-1]}, &deviceCardTools{Executor: &deviceCampaignTools{Executor: executor, conn: conn, approveNotifications: state.approve}, conn: conn, turn: state}, deviceChatPrompt())
+		engine := chat.NewEngine(deviceHistoryProvider{Provider: provider, history: messages[:len(messages)-1]}, &deviceCardTools{Executor: &deviceCampaignTools{Executor: &deviceDataTools{Executor: executor, conn: conn}, conn: conn, approveNotifications: state.approve}, conn: conn, turn: state}, deviceChatPrompt())
 		err = engine.Turn(ctx, messages[len(messages)-1].Content, func(event chat.Event) {
 			state.mu.Lock()
 			defer state.mu.Unlock()
