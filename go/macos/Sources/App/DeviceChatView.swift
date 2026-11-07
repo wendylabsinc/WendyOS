@@ -361,7 +361,7 @@ struct DeviceChatView: View {
             })) {
                 ForEach(ChatInference.allCases, id: \.self) { Text($0.title).tag($0) }
             }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 10)
-                .disabled(chat.streaming || chat.loading).accessibilityIdentifier("chat.inference")
+                .disabled(chat.streaming).accessibilityIdentifier("chat.inference")
             #if os(iOS)
             HStack(spacing: 12) {
                 Menu {
