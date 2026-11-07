@@ -11,7 +11,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -48,9 +50,14 @@ func NewAgentUpdateService(logger *zap.Logger, installer *AgentInstaller) *Agent
 }
 
 func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpbv2.UpdateAgentRequest, agentpbv2.UpdateAgentResponse]) error {
+	if err := refuseUpdates(); err != nil {
+		return err
+	}
 	if !s.installer.TryLock() {
 		return status.Error(codes.FailedPrecondition, "an update is already in progress")
 	}
+	// A wake now would restart this agent and cut the upload off.
+	defer holdSupervisorWake()()
 	// See AgentService.UpdateAgent for why committed is captured before the defer
 	// and why the lock is not released on success.
 	committed := false
@@ -67,7 +74,7 @@ func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb
 		return err
 	}
 
-	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(execPath)
+	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(updateTempTarget(execPath))
 	if err != nil {
 		return err
 	}
@@ -128,7 +135,11 @@ func (s *AgentUpdateService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb
 					}
 				}
 
-				if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
+				if inbox, ok := supervisor.InboxFromEnv(); ok {
+					if err := stageForSupervisor(stream.Context(), tmpFile, tmpPath, inbox, computedHash, expectedHash, interceptor.RemoteVia(stream.Context())); err != nil {
+						return err
+					}
+				} else if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
 					if errors.Is(err, ErrDirFsync) {
 						s.logger.Warn("Update dir fsync failed; binary installed but rename may not survive power loss", zap.Error(err))
 					} else {

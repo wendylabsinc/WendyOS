@@ -52,6 +52,7 @@ import (
 	agentnet "github.com/wendylabsinc/wendy/go/internal/agent/network"
 	"github.com/wendylabsinc/wendy/go/internal/agent/networkaccess"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
+	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/go/internal/agent/robotarm"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
@@ -69,6 +70,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -151,15 +153,14 @@ func main() {
 	telemetryCore := services.NewTelemetryCore(telemetryBuf, zapcore.DebugLevel)
 	logger = zap.New(zapcore.NewTee(logger.Core(), telemetryCore))
 
-	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
+	// Logging the contract also keeps it in the binary, where the supervisor
+	// looks for it before it runs a new agent.
+	logger.Info("Starting wendy-agent", zap.String("version", version.Version), zap.String("contract", supervisor.AgentContract))
 	if err := hoststats.EnableAgentNetworkAccounting(context.Background()); err != nil {
 		logger.Info("Agent network accounting unavailable", zap.Error(err))
 	}
 
-	configPath := "/etc/wendy-agent"
-	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
-		configPath = envPath
-	}
+	configPath := agentConfigPath()
 	accessPolicy, err := networkaccess.Load(configPath)
 	if err != nil {
 		logger.Fatal("Invalid network access configuration", zap.Error(err))
@@ -201,7 +202,9 @@ func main() {
 
 	// Run the OS-update gate after the time floor is applied so the marker
 	// staleness check and the persisted result timestamps use a sane clock.
-	services.RunOSUpdateGate(logger)
+	if !osGateDoneBySupervisor() {
+		services.RunOSUpdateGate(logger)
+	}
 
 	services.CleanupOldBackups(logger)
 	cdi.EnsureNVIDIACDISpec(logger)
@@ -769,9 +772,10 @@ func main() {
 					logger.Error("invalid Cloud grant issuer", zap.Error(err))
 					return
 				}
+				markCloudEnrolled(logger)
 				client := &cloudrelay.Agent{Endpoint: endpoint, Verifier: &cloudrelay.Verifier{Issuer: issuer},
 					StateDir: filepath.Join(configPath, "cloud-relay"), Credentials: provisioningSvc.ProvisioningCerts,
-					Logger: logger, MTLSPort: mtlsPortNum}
+					Logger: logger, MTLSPort: mtlsPortNum, OnRegistered: cloudReachedMark(logger)}
 				client.Run(ctx)
 				return
 			}
@@ -1000,8 +1004,10 @@ func main() {
 		srv, err := mtls.NewServer(certPEM, chainPEM, keyPEM, logger, floor, expectedScope, effectiveMode,
 			// mTLS authentication and the exact-method device RPC allowlist are
 			// embedded inside mtls.NewServer before these error interceptors.
-			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
-			grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+			append([]grpc.ServerOption{
+				grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
+				grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
+			}, remoteSeenOptions()...)...,
 		)
 		if err != nil {
 			logger.Error("Failed to create mTLS server", zap.Error(err))
@@ -1420,7 +1426,7 @@ func main() {
 	// remains active for on-device containers with the admin entitlement.
 	var agentServer *grpc.Server
 	if !alreadyProvisioned {
-		agentServer = grpc.NewServer(
+		agentServer = grpc.NewServer(append(remoteSeenOptions(),
 			grpc.UnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 			grpc.InitialWindowSize(8*1024*1024),
@@ -1434,7 +1440,7 @@ func main() {
 				MinTime:             10 * time.Second,
 				PermitWithoutStream: true,
 			}),
-		)
+		)...)
 		registerAllServices(agentServer)
 
 		agentLis, err := listenForAccess(accessPolicy, agentPort)
@@ -1635,7 +1641,13 @@ func main() {
 	go func() {
 		const bakedACMEPath = "/config/acme-enrollment.json"
 		if _, err := os.Stat(bakedACMEPath); err == nil {
+			pending := configpartition.EnrollmentPending(configPath)
 			provisioningSvcV2.ApplyACMEEnrollmentFile(ctx, bakedACMEPath)
+			// Once, after this attempt: hand the held /config seed over now.
+			if pending && configpartition.SeedWaiting(configPath) {
+				logger.Info("Restarting to hand the config partition agent to the supervisor")
+				os.Exit(0)
+			}
 		} else if os.IsNotExist(err) {
 			provisioningSvc.ApplyEnrollmentFile(ctx)
 		} else {
@@ -1987,8 +1999,13 @@ func handleUtilityCommand(args []string) (bool, int) {
 		}
 		return true, 0
 	}
+	if args[1] == "os-gate" {
+		return true, runOSGateUtility()
+	}
 	if args[1] != "open-browser" {
-		return false, 0
+		// Falling through would start a second agent next to the running one.
+		fmt.Fprintf(os.Stderr, "unknown utils command %q\n", args[1])
+		return true, 2
 	}
 
 	if len(args) != 3 {
@@ -2045,4 +2062,76 @@ func envBytes(logger *zap.Logger, name string, fallback, minimum int64) int64 {
 		return fallback
 	}
 	return v
+}
+
+func agentConfigPath() string {
+	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
+		return envPath
+	}
+	return "/etc/wendy-agent"
+}
+
+// runOSGateUtility commits or rolls back a pending OS update, then exits. The
+// supervisor runs it with the image's agent before it starts any agent, so a
+// bad agent on /data can never decide the OS update.
+var runOSGateUtility = func() int {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
+		return 1
+	}
+	defer logger.Sync()
+	timesync.NewManager(logger, agentConfigPath()).ApplyFloor()
+	services.RunOSUpdateGate(logger)
+	return osGateExitCode(oshealth.DefaultStateDir)
+}
+
+// osGateExitCode is 1 while a booted OS update still waits for its commit, so
+// the supervisor has the image agent retry the gate before handing over.
+func osGateExitCode(stateDir string) int {
+	marker, found, err := oshealth.ReadPendingMarker(stateDir)
+	if err == nil && found && marker.BootID != oshealth.CurrentBootID() {
+		return 1
+	}
+	return 0
+}
+
+func osGateDoneBySupervisor() bool {
+	return os.Getenv("WENDY_OS_GATE") == "done"
+}
+
+// markCloudEnrolled tells the agent supervisor this agent connects to the
+// cloud relay, so an automatic update waits while it is not connected.
+func markCloudEnrolled(logger *zap.Logger) {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return
+	}
+	if err := supervisor.MarkCloudEnrolled(supervisor.RemoteSeenDir); err != nil {
+		logger.Warn("cannot tell the agent supervisor this agent uses the cloud relay", zap.Error(err))
+	}
+}
+
+// cloudReachedMark tells the agent supervisor this agent is reachable through
+// the cloud relay, which is what approves an automatic agent update.
+func cloudReachedMark(logger *zap.Logger) func() {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return nil
+	}
+	return func() {
+		if err := interceptor.MarkRemoteSeen(supervisor.RemoteSeenDir, supervisor.ViaCloud); err != nil {
+			logger.Warn("cannot tell the agent supervisor the cloud relay was reached", zap.Error(err))
+		}
+	}
+}
+
+// remoteSeenOptions let the agent supervisor see that a remote client reached
+// this agent over the network servers; the local socket never counts.
+func remoteSeenOptions() []grpc.ServerOption {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return nil
+	}
+	return []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(interceptor.UnaryRemoteSeen(supervisor.RemoteSeenDir)),
+		grpc.ChainStreamInterceptor(interceptor.StreamRemoteSeen(supervisor.RemoteSeenDir)),
+	}
 }
