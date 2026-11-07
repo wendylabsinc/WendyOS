@@ -234,9 +234,23 @@ private struct LensMeshArtwork: View {
 
 struct MobileLensBar: View {
     @Binding var tab: MobileHome
+    @ObservedObject var chatModel: DeviceChatModel
+    let context: String?
     let chat: () -> Void
     var body: some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 8) {
+            Button(action: chat) {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                    Text("Ask Wendy about \(context ?? "a device")…").lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if chatModel.unreadReplies > 0 || chatModel.approval != nil {
+                        Text(chatModel.approval != nil ? "Review" : "\(chatModel.unreadReplies)")
+                            .font(.caption.bold()).padding(6).foregroundStyle(.white).background(.red, in: .capsule)
+                    }
+                }.font(.subheadline).padding(.horizontal, 16).frame(minHeight: 44)
+            }.buttonStyle(.plain).glassEffect(.regular, in: .capsule)
+                .accessibilityIdentifier("lens.chat")
             HStack(spacing: 1) {
                 ForEach(MobileHome.allCases, id: \.self) { item in
                     Button { tab = item } label: {
@@ -250,11 +264,7 @@ struct MobileLensBar: View {
                         .accessibilityIdentifier("lens.tab." + item.rawValue)
                 }
             }.padding(4).glassEffect(.regular, in: .capsule)
-            Button(action: chat) {
-                Image(systemName: "sparkles").font(.title3).foregroundStyle(.white).frame(width: 52, height: 52)
-                    .background(MobileLensStyle.green, in: .circle)
-            }.buttonStyle(.plain).glassEffect(.regular, in: .circle).accessibilityLabel("Ask Wendy")
-                .accessibilityIdentifier("lens.chat")
+
         }.frame(maxWidth: 520).padding(.horizontal, 14).padding(.bottom, 2).frame(maxWidth: .infinity)
     }
     private func symbol(_ item: MobileHome) -> String {
@@ -324,14 +334,35 @@ struct MobileLensChat: View {
         NavigationStack {
             Group {
                 if model.mobileScopeIsCurrent, model.selectedDeviceReady, let device = model.connected, !model.connectedLite {
-                    DeviceChatView(deviceName: device.title, chat: model.deviceChat).id(model.deviceSession)
+                    DeviceChatView(deviceName: device.title, chat: model.deviceChat, ownsResponse: false).id(model.deviceSession)
                 } else {
                     ContentUnavailableView {
                         Label("Choose a device", systemImage: "sparkles")
                     } description: { Text("Open a device to ask Wendy about it.") } actions: { Button("Choose device", action: chooseDevice) }
                 }
             }.navigationTitle("Ask Wendy").navigationBarTitleDisplayMode(.inline)
-                .toolbar { Button("Close") { dismiss() } }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { Button("Change device", action: chooseDevice) }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly)
+                    }
+                }
+                .background(MobileLensStyle.background)
         }
+    }
+}
+
+// The lens owns generation so dismissing the sheet does not cancel a reply.
+// Replacing the session cancels this task before another device can own it.
+struct MobileChatLifetime: View {
+    @ObservedObject var chat: DeviceChatModel
+    let isPresented: Bool
+    let active: Bool
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .task(id: active ? chat.turn : 0) { if active { await chat.respond() } }
+            .onChange(of: active) { _, available in if !available { chat.stop() } }
+            .onChange(of: isPresented, initial: true) { _, visible in chat.setPresented(visible) }
+            .onDisappear { chat.setPresented(false); chat.stop() }
     }
 }

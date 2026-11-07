@@ -46,6 +46,7 @@ struct MobileRootView: View {
     }
     var body: some View {
         presentedTabs
+        .background { MobileChatLifetime(chat: model.deviceChat, isPresented: showingChat, active: model.mobileScopeIsCurrent && model.selectedDeviceReady && scenePhase != .background).id(model.deviceSession) }
         .task { await model.start() }
         .task(id: model.account) { await model.refreshMobileCloudSelection() }
         .task(
@@ -104,7 +105,7 @@ struct MobileRootView: View {
         }
         .toolbarVisibility(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            MobileLensBar(tab: $homeTab, chat: { showingChat = true })
+            MobileLensBar(tab: $homeTab, chatModel: model.deviceChat, context: model.selectedDeviceReady ? model.connected?.title : nil, chat: { showingChat = true })
         }
         .tint(MobileLensStyle.accent)
     }

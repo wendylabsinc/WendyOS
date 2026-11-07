@@ -42,7 +42,7 @@ struct ChatApproval: Identifiable {
     var isNotificationPermission: Bool { action == "enable_campaign_notifications" }
     var isCampaign: Bool { action == "create_person_detection_campaign" }
     var title: String { isNotificationPermission ? "Allow campaign notifications?" : isCampaign ? "Create person-detection campaign?" : "Allow device action?" }
-    var confirmLabel: String { isNotificationPermission ? "Allow notifications" : isCampaign ? "Create campaign" : "Allow" }
+    var confirmLabel: String { isNotificationPermission ? "Allow notifications" : isCampaign ? "Create campaign" : "Confirm" }
     var arguments: [String: Any] {
         guard let data = app.data(using: .utf8), let args = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
         return args
@@ -163,6 +163,13 @@ extension GoClient {
     @Published var activity = ""
     @Published var approval: ChatApproval?
     @Published var resolvingApproval = false
+    @Published private(set) var unreadReplies = 0
+    var isPresented = false
+    func setPresented(_ presented: Bool) {
+        isPresented = presented
+        if presented { unreadReplies = 0 }
+    }
+    func receivedReply() { if !isPresented { unreadReplies += 1 } }
     @Published private(set) var turn: UInt64 = 0
     private var loadedPort: UInt32?
     private let discoverModels: (UInt64, UInt32) async throws -> [ChatModelOption]
@@ -221,11 +228,14 @@ extension GoClient {
                 messages[index].cards = result.cards
                 activity = result.activity; approval = result.approval
                 if !result.error.isEmpty { error = result.error }
-                if result.done { break }
+                if result.done {
+                    if !result.text.isEmpty || !result.cards.isEmpty || !result.error.isEmpty { receivedReply() }
+                    break
+                }
                 try await Task.sleep(for: .milliseconds(100))
             }
         } catch {
-            if !Task.isCancelled && turn == request { self.error = error.localizedDescription }
+            if !Task.isCancelled && turn == request { self.error = error.localizedDescription; receivedReply() }
         }
         // This cleanup remains in the owning task and is allowed after cancellation.
         try? await GoClient.shared.stopChat(session: session, turn: request)
@@ -250,7 +260,7 @@ extension GoClient {
         }
         streaming = false; activeResponseID = nil; approval = nil; activity = ""
     }
-    func clear() { stop(); messages = []; error = nil }
+    func clear() { stop(); messages = []; error = nil; unreadReplies = 0 }
     func useModel(_ name: String, port: UInt32) {
         clear(); self.port = String(port); loadedPort = port
         models.removeAll { $0.id == name }
@@ -263,6 +273,7 @@ struct DeviceChatView: View {
     @State private var actions = AsyncActions()
     let deviceName: String
     @ObservedObject var chat: DeviceChatModel
+    var ownsResponse = true
     @State private var showingLibrary = false
     @State private var showingConnection = false
     @State private var showingConnectionDetails = false
@@ -283,7 +294,7 @@ struct DeviceChatView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(height: 260)
                     HStack { Spacer(); Button("Done") { showingConnectionDetails = false }.keyboardShortcut(.defaultAction) }
-                }.padding(24).frame(width: 560)
+                }.padding(24).frame(idealWidth: 560, maxWidth: 560)
             }
     }
 
@@ -338,6 +349,14 @@ struct DeviceChatView: View {
                     }
             }.padding(.horizontal, 20).padding(.bottom, 8)
             #endif
+            #if os(iOS)
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                Text("Runs on \(deviceName)").lineLimit(1).truncationMode(.middle)
+            }.font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
+                .accessibilityIdentifier("chat.deviceContext")
+            #endif
             #if os(macOS)
             Text("Runs on \(deviceName) · Wendy skills and MCP tools")
                 .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28)
@@ -346,6 +365,21 @@ struct DeviceChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
+                        if chat.messages.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("How can I help with \(deviceName)?").font(.title3.bold())
+                                Text(chat.loading ? "Finding models on this device…" : chat.error != nil ? "Wendy could not check the model server. Review the connection below." : chat.model.isEmpty ? "This device needs an installed, running model. Browse models to download and run one on \(deviceName). There is no automatic hosted AI fallback." : "Ask about apps, recordings, or recent logs. Device changes need your confirmation.")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                if !chat.loading && chat.error == nil && chat.model.isEmpty {
+                                    Button("Browse models", systemImage: "square.stack.3d.up") { showingLibrary = true }
+                                        .buttonStyle(.borderedProminent).accessibilityIdentifier("chat.browseModels")
+                                }
+                                ForEach(["Which apps are running?", "Explain recent device errors", "Show recent recordings"], id: \.self) { suggestion in
+                                    Button(suggestion) { chat.prompt = suggestion }
+                                        .buttonStyle(.bordered).disabled(chat.streaming)
+                                }
+                            }.padding(16)
+                        }
                         ForEach(chat.messages) { message in
                             VStack(alignment: .leading, spacing: 8) {
                                 Label(message.isUser ? "You" : modelName, systemImage: message.isUser ? "person.crop.circle" : "sparkles")
@@ -390,7 +424,12 @@ struct DeviceChatView: View {
             }
             #endif
             if chat.approval == nil && chat.streaming && !chat.activity.isEmpty {
-                Text(chat.activity).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28)
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(chat.activity).font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12).background(PlatformColors.control, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 20).accessibilityIdentifier("chat.actionProgress")
             }
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("Message", text: $chat.prompt, axis: .vertical)
@@ -417,8 +456,9 @@ struct DeviceChatView: View {
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(PlatformColors.separator.opacity(0.5)))
             .frame(maxWidth: 900).padding(.horizontal, 20).padding(.bottom, 12).padding(.top, 6)
         }.task { await chat.discoverIfNeeded() }
-        .task(id: chat.turn) { await chat.respond() }
-        .onDisappear { chat.stop() }
+        .task(id: chat.turn) { if ownsResponse { await chat.respond() } }
+        .onAppear { if ownsResponse { chat.setPresented(true) } }
+        .onDisappear { if ownsResponse { chat.setPresented(false); chat.stop() } }
             .sheet(isPresented: $showingLibrary) {
                 ModelLibraryView(session: chat.session, deviceName: deviceName, port: chat.port) { model, port in chat.useModel(model, port: port) }
             }
@@ -433,7 +473,11 @@ struct DeviceChatView: View {
                                 .disabled(chat.streaming || chat.loading || chat.portNumber == nil)
                         }
                         if !chat.model.isEmpty { Section("Model ID") { Text(chat.model).font(.caption.monospaced()).textSelection(.enabled) } }
-                        Section { Text("Wendy skills and MCP tools are available in this chat.").foregroundStyle(.secondary) }
+                        Section("Where the model runs") {
+                            Text("Inference runs on \(deviceName), not this iPhone. Wendy Cloud can relay the connection to that device.")
+                            Text("The selected model determines its license. A locally running model is not necessarily open source.")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Close") { showingConnection = false } } }

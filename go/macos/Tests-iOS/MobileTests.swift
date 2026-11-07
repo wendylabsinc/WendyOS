@@ -513,3 +513,39 @@ final class MobileTests: XCTestCase {
         XCTAssertEqual(DataVisualSearch.latest(times, at: 2, time: { $0 }), 0.2)
     }
 }
+
+extension MobileTests {
+    @MainActor
+    func testChatUnreadRepliesFollowPresentationAndClear() {
+        let chat = DeviceChatModel(session: 42)
+        chat.setPresented(true)
+        chat.receivedReply()
+        XCTAssertEqual(chat.unreadReplies, 0)
+        chat.setPresented(false)
+        chat.receivedReply()
+        XCTAssertEqual(chat.unreadReplies, 1)
+        chat.setPresented(true)
+        XCTAssertEqual(chat.unreadReplies, 0)
+        chat.setPresented(false)
+        chat.receivedReply()
+        chat.clear()
+        XCTAssertEqual(chat.unreadReplies, 0)
+    }
+
+    @MainActor
+    func testChatStopInvalidatesPendingApprovalAndResponse() {
+        let chat = DeviceChatModel(session: 42)
+        chat.useModel("test-model", port: 11434)
+        chat.prompt = "Which apps are running?"
+        chat.send()
+        XCTAssertTrue(chat.streaming)
+        XCTAssertNotEqual(chat.turn, 0)
+        chat.approval = ChatApproval(id: 1, action: "app_stop", app: "test-app")
+        chat.stop()
+        XCTAssertEqual(chat.turn, 0)
+        XCTAssertNil(chat.approval)
+        XCTAssertNil(chat.activeResponseID)
+        XCTAssertFalse(chat.streaming)
+        XCTAssertTrue(chat.messages.last?.interrupted == true)
+    }
+}
