@@ -33,6 +33,10 @@ class FetchError(RuntimeError):
     pass
 
 
+class BaselineError(RuntimeError):
+    """The model server refused the baseline request; the message says why in words a person can act on."""
+
+
 def load_model(path, model_id):
     pins = json.loads(Path(path).read_text())
     if model_id not in pins:
@@ -247,14 +251,37 @@ def measure_baseline(url, request, timeout=900):
     body = {k: v for k, v in request.items() if k not in ("stream", "stream_options", "max_tokens")}
     body.update(stream=False, max_tokens=BASELINE_MAX_TOKENS)
     req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as reply:
-        data = json.load(reply)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as reply:
+            data = json.load(reply)
+    except urllib.error.HTTPError as error:
+        raise BaselineError(_baseline_refusal(error)) from None
     tokens = (data.get("usage") or {}).get("prompt_tokens")
     if not isinstance(tokens, int):
         raise ValueError("the model server's reply has no usage.prompt_tokens")
     timings = data.get("timings") or {}
     return {"baseline_prompt_tokens": tokens, "prompt_per_second": timings.get("prompt_per_second"),
             "predicted_per_second": timings.get("predicted_per_second")}
+
+
+def _baseline_refusal(error):
+    try:
+        text = error.read().decode(errors="replace")
+    except OSError:
+        text = ""
+    finally:
+        error.close()
+    detail = {}
+    try:
+        parsed = json.loads(text).get("error")
+        detail = parsed if isinstance(parsed, dict) else {}
+    except (ValueError, AttributeError):
+        pass
+    message = str(detail.get("message") or "")
+    if "exceeds the available context" in message or detail.get("type") == "exceed_context_size_error":
+        return (f"the baseline prompt doesn't fit in the model's context: the server said \"{message[:300]}\". "
+                "Raise EVAL_CONTEXT, or choose a model with a larger context.")
+    return f"the model server refused the baseline request with HTTP {error.code}: {text[:300]}"
 
 
 def baseline_ok(tokens, context):
@@ -415,7 +442,10 @@ def run_pass(environ):
         if unknown:
             return fail("wendy chat sent tools that neither Wendy's MCP server nor chat's built-ins explain: "
                         + ", ".join(sorted(unknown)) + ". Update CHAT_BUILTINS or the tool list before running.")
-        baseline = measure_baseline(f"http://{HOST}:{PORT}/v1/chat/completions", {**request, "model": model_id})
+        try:
+            baseline = measure_baseline(f"http://{HOST}:{PORT}/v1/chat/completions", {**request, "model": model_id})
+        except BaselineError as error:
+            return fail(str(error))
         tokens = baseline["baseline_prompt_tokens"]
         if not baseline_ok(tokens, context):
             return fail(f"the baseline prompt takes {tokens} tokens, over half of the {context}-token context; "

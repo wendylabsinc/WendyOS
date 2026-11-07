@@ -17,6 +17,7 @@ import scenarios as sc
 import tool_trace
 
 HERE = Path(__file__).resolve().parent
+REAL_MEASURE_BASELINE = od.measure_baseline
 FLASH = od.load_model(HERE / "models.json", "qwen3.8-flash-next")
 GIB = 2 ** 30
 FLASH_BYTES = sum(f["bytes"] for f in FLASH["files"])
@@ -481,6 +482,36 @@ class RunPass(unittest.TestCase):
         run.side_effect = lambda argv, **kw: (pdir.joinpath("halt.json").write_text('{"reason": "r"}'), FakeProcess(3, ["noise\n"]))[1]
         self.quiet(self.env)
         self.assertFalse((self.results / "last-error.txt").exists())
+
+    def http_error(self, code, body):
+        import urllib.error
+        return urllib.error.HTTPError("http://x/v1/chat/completions", code, "err", {}, io.BytesIO(body.encode()))
+
+    def test_a_baseline_that_overflows_the_context_says_so(self):
+        server, run = self.healthy_pass()
+        body = json.dumps({"error": {"code": 400, "type": "exceed_context_size_error", "n_prompt_tokens": 19166, "n_ctx": 8192,
+                                     "message": "request (19166 tokens) exceeds the available context size (8192 tokens), try increasing it"}})
+        with mock.patch.object(od, "measure_baseline", REAL_MEASURE_BASELINE), \
+                mock.patch.object(od.urllib.request, "urlopen", side_effect=self.http_error(400, body)):
+            self.assertNotEqual(self.quiet({**self.env, "EVAL_CONTEXT": "16384"}), 0)
+        text = self.last_error()
+        for needle in ("EVAL_CONTEXT", "19166", "8192", "baseline"):
+            self.assertIn(needle, text)
+        self.assertNotIn("Bad Request", text)
+        run.assert_not_called()
+        server.stop.assert_called()
+
+    def test_another_http_error_in_the_baseline_shows_status_and_body(self):
+        server, run = self.healthy_pass()
+        with mock.patch.object(od, "measure_baseline", REAL_MEASURE_BASELINE), \
+                mock.patch.object(od.urllib.request, "urlopen", side_effect=self.http_error(500, "boom " * 100)):
+            self.assertNotEqual(self.quiet(self.env), 0)
+        text = self.last_error()
+        self.assertIn("500", text)
+        self.assertIn("boom boom", text)
+        self.assertLess(len(text), 600)
+        run.assert_not_called()
+        server.stop.assert_called()
 
     def test_eval_limit_and_repetitions_reach_the_benchmark(self):
         _, run = self.healthy_pass()
