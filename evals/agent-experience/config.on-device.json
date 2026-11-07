@@ -1,0 +1,34 @@
+{
+  "wendy": "/usr/local/bin/wendy",
+  "disposable_device": true,
+  "model_health_url": "http://127.0.0.1:18081/health",
+  "scenario_reserve_usd": 0,
+  "trial_reserve_usd": 0,
+  "context_policy": "Fresh transcript and workspace; the staged skills; a local model served on this device.",
+  "agent_seconds": {"scenario": 900, "task": 3600},
+  "environment_context": "You are running inside the app container sh.wendy.evals.model-tool-report on the device you are managing. Leave that app alone.",
+  "agents": {
+    "chat": {
+      "adapter": "wendy",
+      "model": "SET_BY_RUN_PASS",
+      "command": [
+        "{wendy}", "chat", "--no-memory", "--json", "--yes",
+        "--provider", "local", "--base-url", "http://127.0.0.1:18081/v1",
+        "--model", "{model}", "--prompt", "{prompt}"
+      ]
+    }
+  },
+  "targets": {
+    "local": {
+      "kind": "local",
+      "device": "local",
+      "prompt_device": "this device",
+      "canned_dir": "canned-local",
+      "capabilities": null,
+      "fixtures": {}
+    }
+  },
+  "prior_spend_usd": 0,
+  "isolate_device_state": true,
+  "syntax_error_limit": 3
+}
