@@ -1226,3 +1226,19 @@ do not feed robot navigation or collision avoidance.
 Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+
+### Personal device appearance on iOS
+
+Tap the device icon, or choose **More device tools → Customize appearance**.
+Choose a photo with the system Photos picker and crop it, choose an emoji, or
+choose a symbol and background color. Save applies the appearance to inventory,
+device details, connection status, and the Ask Wendy device context. Cancel
+leaves the saved appearance unchanged; Reset to default takes effect on Save.
+
+Appearance is local to the app and scoped to the selected account and organization.
+Enrolled LAN and Cloud routes share the existing canonical device identity;
+unenrolled devices use their discovery identity. No icon is uploaded or changed
+for other users, and cross-phone sync is not implemented. Photo imports are
+limited to 50 MB, decoded at up to 1024 pixels, then stored as a 512-pixel crop
+without original photo metadata. Image Playground and Memoji creation are not
+part of this first version.

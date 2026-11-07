@@ -12,6 +12,7 @@ enum MobileInventorySource: CaseIterable, Hashable {
 }
 
 struct MobileRootView: View {
+    @StateObject private var appearances = DeviceAppearanceStore()
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
@@ -74,6 +75,7 @@ struct MobileRootView: View {
             search = ""
         }
         .modifier(NearbySetupPrompt())
+        .environmentObject(appearances)
     }
 
     private var tabs: some View {

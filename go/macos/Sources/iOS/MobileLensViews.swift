@@ -334,7 +334,14 @@ struct MobileLensChat: View {
         NavigationStack {
             Group {
                 if model.mobileScopeIsCurrent, model.selectedDeviceReady, let device = model.connected, !model.connectedLite {
-                    DeviceChatView(deviceName: device.title, chat: model.deviceChat, ownsResponse: false).id(model.deviceSession)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 10) {
+                            MobileDeviceAvatar(device: device, size: 30)
+                            Text(device.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Spacer()
+                        }.padding(.horizontal, 16).padding(.vertical, 6)
+                        DeviceChatView(deviceName: device.title, chat: model.deviceChat, ownsResponse: false).id(model.deviceSession)
+                    }
                 } else {
                     ContentUnavailableView {
                         Label("Choose a device", systemImage: "sparkles")

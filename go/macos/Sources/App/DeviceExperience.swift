@@ -26,7 +26,11 @@ struct DeviceIdentityRow: View {
     var connecting = false
     var body: some View {
         HStack(spacing: 14) {
+            #if os(iOS)
+            MobileDeviceAvatar(device: device, size: 46)
+            #else
             DeviceEmblem(lite: device.lite, size: 46)
+            #endif
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.title).font(.headline).lineLimit(2)
                 if connected { Text("Connected").font(.caption).foregroundStyle(.secondary) }
@@ -53,7 +57,11 @@ struct DeviceConnectionView: View {
     @State private var actions = AsyncActions()
     var body: some View {
         VStack(spacing: 22) {
+            #if os(iOS)
+            MobileDeviceAvatar(device: device, size: 88)
+            #else
             DeviceEmblem(lite: device.lite, size: 88)
+            #endif
             Text(device.title).font(.title2.weight(.semibold)).multilineTextAlignment(.center)
             if let error = model.detailError, !ConnectionRecovery.canRetry(error) {
                 Text(PresentedFailure(error).message).foregroundStyle(.secondary).multilineTextAlignment(.center)

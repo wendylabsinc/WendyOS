@@ -9,6 +9,7 @@ struct MobileDeviceView: View {
     @EnvironmentObject private var model: AppModel
     let device: Device
     let openRecordings: () -> Void
+    @State private var showingAppearance = false
     @State private var segment = DeviceSegment.apps
     @State private var info: DeviceInfoSnapshot?
     @State private var update: DeviceUpdateSnapshot?
@@ -55,6 +56,10 @@ struct MobileDeviceView: View {
             } else { connectionState }
         }.background(MobileLensStyle.background)
             .navigationTitle(device.title).navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingAppearance) {
+                let key = DeviceAppearanceStore.key(account: model.mobileCloudAccount, organization: model.mobileCloudOrganization, device: device)
+                MobileDeviceAppearanceEditor(device: device, key: key).id(key)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     if ready && !model.connectedLite {
@@ -65,8 +70,10 @@ struct MobileDeviceView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if ready && !model.connectedLite {
-                        Menu("More device tools", systemImage: "ellipsis.circle") {
+                    Menu("More device tools", systemImage: "ellipsis.circle") {
+                        Button("Customize appearance", systemImage: "paintpalette") { showingAppearance = true }
+                            .accessibilityIdentifier("devices.appearance")
+                        if ready && !model.connectedLite {
                             Button("App activity", systemImage: "waveform.path.ecg") { tool = .metrics }
                             Button("Digital Twin", systemImage: "cube.transparent") { tool = .twin }
                             Button("Campaigns", systemImage: "record.circle") { tool = .campaigns }
@@ -114,7 +121,7 @@ struct MobileDeviceView: View {
                      title: device.title, subtitle: ["Online", "\(model.apps.count) apps", site].compactMap { $0 }.joined(separator: " · "),
                      chips: ["Online", device.transport == .cloud ? "Cloud" : "Local",
                              update?.available == true ? "Update available" : info?.version.nonEmpty.map { "Agent \($0)" },
-                             model.camerasError == nil ? "\(model.cameras.count) \(model.cameras.count == 1 ? "camera" : "cameras")" : nil].compactMap { $0 }) {
+                             model.camerasError == nil ? "\(model.cameras.count) \(model.cameras.count == 1 ? "camera" : "cameras")" : nil].compactMap { $0 }, device: device, customize: { showingAppearance = true }) {
                 Button("Logs", action: openLogs).buttonStyle(LensPillStyle()).accessibilityIdentifier("devices.detail.logs")
                 Button(update?.available == true ? "Update" : "Device info") { tool = .update }.buttonStyle(LensPillStyle(primary: true))
             }
@@ -151,11 +158,16 @@ private struct LensHero<Actions: View>: View {
     let title: String
     let subtitle: String
     let chips: [String]
+    var device: Device? = nil
+    var customize: (() -> Void)? = nil
     @ViewBuilder let actions: Actions
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
-                LensIcon(symbol: icon, color: color, size: 54)
+                if let device, let customize {
+                    Button(action: customize) { MobileDeviceAvatar(device: device, size: 54) }
+                        .buttonStyle(.plain).accessibilityLabel("Customize device appearance").accessibilityIdentifier("devices.appearance.avatar")
+                } else { LensIcon(symbol: icon, color: color, size: 54) }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(kicker).font(.caption2.bold()).tracking(0.4).foregroundStyle(color)
                     Text(title).font(.title2.bold())
