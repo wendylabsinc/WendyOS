@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 /// Coordinates are metres, right-handed, Y up. A marker is a manually placed
 /// sensor location, not a camera calibration or a measured object position.
@@ -25,6 +26,7 @@ public struct SiteCamera: Codable, Identifiable, Equatable, Sendable {
     public var sourceID: String
     public var name: String
     public var position: SitePoint?
+    var manualAlignment: SiteManualAlignment?
 
     public init(
         id: UUID = UUID(),
@@ -80,6 +82,9 @@ public struct Site: Codable, Identifiable, Equatable, Sendable {
                     .inserted,
                 camera.position?.isValid != false
             else { throw SiteError.invalidSite }
+            if let manual = camera.manualAlignment {
+                guard let position = camera.position, manual.geometry(position: position, revision: modelRevision, now: Date()) != nil else { throw SiteError.invalidSite }
+            }
         }
     }
 
@@ -88,7 +93,7 @@ public struct Site: Codable, Identifiable, Equatable, Sendable {
     public mutating func replaceModel(metresPerUnit: Double = 1) {
         modelRevision = UUID()
         metresPerModelUnit = metresPerUnit
-        for index in cameras.indices { cameras[index].position = nil }
+        for index in cameras.indices { cameras[index].position = nil; cameras[index].manualAlignment = nil }
     }
 }
 
@@ -154,5 +159,32 @@ public struct SiteObservation: Codable, Equatable, Identifiable, Sendable {
         let receiveAge = now.timeIntervalSince(receivedAt)
         return captureAge >= 0 && captureAge <= maximumAge && receiveAge >= 0
             && receiveAge <= maximumAge
+    }
+}
+
+/// User-authored visualization, kept with the model rather than reported as a measured device calibration.
+struct SiteManualAlignment: Codable, Equatable, Sendable {
+    var modelRevision: UUID
+    var yaw: Double
+    var pitch: Double
+    var roll: Double
+    var horizontalFOV: Double
+    var width: Int
+    var height: Int
+
+    func geometry(position: SitePoint, revision: UUID, now: Date) -> SiteCameraGeometry? {
+        guard revision == modelRevision, position.isValid,
+              [yaw, pitch, roll, horizontalFOV].allSatisfy(\.isFinite),
+              (20...140).contains(horizontalFOV), (1...8192).contains(width), (1...8192).contains(height) else { return nil }
+        let rotation = simd_quatd(angle: yaw * .pi / 180, axis: SIMD3(0, 1, 0))
+            * simd_quatd(angle: pitch * .pi / 180, axis: SIMD3(1, 0, 0))
+            * simd_quatd(angle: roll * .pi / 180, axis: SIMD3(0, 0, 1))
+        let focal = Double(width) / (2 * tan(horizontalFOV * .pi / 360))
+        let lens = SiteCameraLens(width: width, height: height, fx: focal, fy: focal,
+            cx: Double(width)/2, cy: Double(height)/2, distortionModel: "none", distortion: [],
+            measured: false, note: "Manually aligned", captureMode: "Manual \(width)x\(height)")
+        let pose = SiteCameraPose(modelRevision: revision, position: position, rotation: rotation.vector,
+            method: 1, provenance: "Manual visualization", observedAt: now, validUntil: now.addingTimeInterval(86400))
+        return SiteCameraGeometry(pose: pose, lens: lens)
     }
 }

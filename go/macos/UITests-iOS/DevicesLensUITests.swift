@@ -28,7 +28,7 @@ final class DevicesLensUITests: XCTestCase {
             let link = app.buttons["lens.open." + lens]
             XCTAssertTrue(link.waitForExistence(timeout: 12))
             link.tap()
-            XCTAssertTrue(app.navigationBars[lens].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars[lens == "Sites" ? "Home" : lens].waitForExistence(timeout: 5))
             XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5))
             XCTAssertTrue(app.buttons["lens.chat"].exists)
             capture(lens + " native tabs and floating chat")

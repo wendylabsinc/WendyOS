@@ -191,7 +191,7 @@ struct SiteGatewayIdentity: Equatable {
     }
 }
 
-private struct SiteCameraPreview: View {
+struct SiteCameraPreview: View {
     @State private var ownedStream: UInt64 = 0
     @ObservedObject var model: AppModel
     @ObservedObject var feed: CameraFeed
@@ -231,7 +231,7 @@ private struct SiteCameraPreview: View {
 }
 
 /// A twin owns its color subscriptions independently of the selected preview.
-private struct SiteCameraColorCapture: View {
+struct SiteCameraColorCapture: View {
     @ObservedObject var model: AppModel
     let sourceIDs: [String]
     var body: some View {

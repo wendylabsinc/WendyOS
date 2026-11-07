@@ -179,8 +179,12 @@ func (b *Backend) disconnect() {
 
 // Public operations serialize access to the CLI connection and configuration.
 func (b *Backend) begin() (context.Context, func()) {
+	return b.beginTimeout(65 * time.Second)
+}
+
+func (b *Backend) beginTimeout(timeout time.Duration) (context.Context, func()) {
 	b.mu.Lock()
-	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	b.operationMu.Lock()
 	b.operationCancel = cancel
 	b.operationMu.Unlock()

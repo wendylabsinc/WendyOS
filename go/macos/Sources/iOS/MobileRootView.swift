@@ -152,6 +152,9 @@ struct MobileRootView: View {
                     .navigationDestination(for: MobileDestination.self) { route in
                         switch route {
                         case .lens(.devices): tabs
+                        case .lens(.sites):
+                            MobileSitesLens(model: model).id(model.mobileCloudSelectionKey)
+                                .tabViewBottomAccessory { chatAccessory }
                         case .lens(let lens): unfinishedLensTabs(lens)
                         case .inventory(let inventory):
                             MobileInventoryList(model: model, source: inventory, showAccounts: { accounts = true })
