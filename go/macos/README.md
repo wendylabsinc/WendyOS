@@ -1242,3 +1242,13 @@ for other users, and cross-phone sync is not implemented. Photo imports are
 limited to 50 MB, decoded at up to 1024 pixels, then stored as a 512-pixel crop
 without original photo metadata. Image Playground and Memoji creation are not
 part of this first version.
+
+Appearance QA uses `WendyMobileTests/DeviceAppearanceTests` plus the opt-in
+`DeviceAppearanceUITests` against the loopback `UITestSupport/appfixture`.
+Set `TEST_RUNNER_WENDY_UI_APPEARANCE_FIXTURE=1` for emoji/color persistence/reset.
+For photo crop/save/reset, first seed
+`UITestSupport/Wendy-QA-Device-Avatar.png` as the newest simulator photo with
+`xcrun simctl addmedia <QA-simulator-UUID> UITestSupport/Wendy-QA-Device-Avatar.png`,
+then set `TEST_RUNNER_WENDY_UI_APPEARANCE_PHOTO_FIXTURE=1`. The test changes only
+the loopback fixture's appearance, then restores its default; it never signs out
+or changes the selected Wendy Cloud account/organization.

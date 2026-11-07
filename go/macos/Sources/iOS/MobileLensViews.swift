@@ -334,14 +334,7 @@ struct MobileLensChat: View {
         NavigationStack {
             Group {
                 if model.mobileScopeIsCurrent, model.selectedDeviceReady, let device = model.connected, !model.connectedLite {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 10) {
-                            MobileDeviceAvatar(device: device, size: 30)
-                            Text(device.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                            Spacer()
-                        }.padding(.horizontal, 16).padding(.vertical, 6)
-                        DeviceChatView(deviceName: device.title, chat: model.deviceChat, ownsResponse: false).id(model.deviceSession)
-                    }
+                    DeviceChatView(deviceName: device.title, chat: model.deviceChat, ownsResponse: false).id(model.deviceSession)
                 } else {
                     ContentUnavailableView {
                         Label("Choose a device", systemImage: "sparkles")
@@ -349,6 +342,14 @@ struct MobileLensChat: View {
                 }
             }.navigationTitle("Ask Wendy").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        HStack(spacing: 6) {
+                            if model.mobileScopeIsCurrent, let device = model.connected {
+                                MobileDeviceAvatar(device: device, size: 24)
+                            }
+                            Text("Ask Wendy").font(.headline).lineLimit(1)
+                        }
+                    }
                     ToolbarItem(placement: .topBarLeading) { Button("Change device", action: chooseDevice) }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly)

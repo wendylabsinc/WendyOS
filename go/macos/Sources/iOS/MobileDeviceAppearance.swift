@@ -91,7 +91,7 @@ private struct DeviceAppearancePreview: View {
                     }
                 }.frame(width: size, height: size).clipShape(.rect(cornerRadius: size * 0.28))
                     .overlay { RoundedRectangle(cornerRadius: size * 0.22).strokeBorder(.white.opacity(0.22), lineWidth: 1).padding(size * 0.08) }
-            } else { DeviceEmblem(lite: lite, size: size) }
+            } else { DeviceEmblem(lite: lite, size: size).accentColor(MobileLensStyle.green) }
         }.accessibilityHidden(true)
     }
 }

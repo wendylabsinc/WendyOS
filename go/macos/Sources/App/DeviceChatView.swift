@@ -475,6 +475,11 @@ struct DeviceChatView: View {
                             .disabled(chat.resolvingApproval)
                             .padding(.horizontal, 16)
                         }
+                        #if os(iOS)
+                        if chat.error != nil || !chat.unavailableReason.isEmpty {
+                            connectionNotice.padding(.horizontal, 8)
+                        }
+                        #endif
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(.vertical, 20).padding(.horizontal, 12).frame(maxWidth: 900).frame(maxWidth: .infinity)
                 }
@@ -483,11 +488,13 @@ struct DeviceChatView: View {
                     if id != nil { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
                 }
             }
+            #if os(macOS)
             if chat.error != nil || !chat.unavailableReason.isEmpty {
                 connectionNotice
                     .frame(maxWidth: 900)
                     .padding(.horizontal, 20).padding(.vertical, 10)
             }
+            #endif
             #if os(macOS)
             if chat.messages.isEmpty && !chat.loading && chat.error == nil && chat.unavailableReason.isEmpty {
                 Text(chat.model.isEmpty ? "Choose a model to begin." : "Ask about this device, its apps, or recent logs.")
