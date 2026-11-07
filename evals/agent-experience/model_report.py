@@ -28,7 +28,10 @@ NOT_COUNTED = {
     "setup_error": "the harness could not set the attempt up",
 }
 WARN_BELOW = 0.8
-CODE = re.compile(r"^\s*\[([A-Z][A-Z0-9_]*)\]")
+CODE = re.compile(r'^\s*\[([A-Z][A-Z0-9_]*)\]|"error_code"\s*:\s*"([A-Za-z0-9_]+)"')
+ROUNDS = re.compile(r"stopped after \d+ model rounds")
+CHECK_COMMANDS = {"doctor", "json validate"}  # a nonzero exit is their answer: the checks found a problem
+USAGE_EXIT = 2
 FINDING_KEYS = ("section", "item", "task", "expected", "detail", "excerpt", "trace_path")
 
 
@@ -88,6 +91,8 @@ def _describe(matcher):
 
 def _expected(expect):
     names = [_describe(m) for m in expect.get("right", []) if isinstance(m, dict)]
+    if expect.get("ask"):
+        names.append("asking the user")
     return " or ".join(names) if names else "no specific tool listed"
 
 
@@ -96,8 +101,8 @@ def _key(entry):
 
 
 def _error_code(text):
-    match = CODE.match(text or "")
-    return match.group(1) if match else "error"
+    match = CODE.search(text or "")
+    return (match.group(1) or match.group(2)) if match else "error"
 
 
 def _errored(entry, cli_records):
@@ -180,15 +185,21 @@ def classify(row, directory, tool_names, guards, previous=None):
     path = adir / "agent.stdout"
     events = b.read_events(path)[0] if path.exists() else []
     ordered = _chronological(trace, events)
+    final_text = metrics.get("final_text") or ""
     findings = []
 
-    def add(section, item, detail, index=None):
-        # `index` is a position in `trace`; the excerpt is cut at that entry in transcript order.
-        at = next((i for i, e in enumerate(ordered) if index is not None and e is trace[index]), None)
+    def add(section, item, detail, index=None, argv=None):
+        # The excerpt is cut, in transcript order, at trace position `index` or at the CLI call `argv`.
+        if argv is not None:
+            at = next((i for i, e in enumerate(ordered) if e.get("channel") == "cli" and e.get("arguments") == argv), None)
+        elif index is not None:
+            at = next((i for i, e in enumerate(ordered) if e is trace[index] or _key(e) == _key(trace[index])), None)
+        else:
+            at = None
         window = ordered[:at + 1] if at is not None else ordered
+        excerpt = "\n".join(_line(e) for e in window[-6:]) or (f"The model said: {_clip(final_text, 300)}" if final_text else "")
         findings.append({"section": section, "item": item, "task": task, "expected": _expected(expect),
-                         "detail": detail, "excerpt": "\n".join(_line(e) for e in window[-6:]),
-                         "trace_path": str(adir)})
+                         "detail": detail, "excerpt": excerpt, "trace_path": str(adir)})
 
     if row.get("cleanup_ok") is False:
         add("tool", "Cleanup failed", _cleanup_detail(row))
@@ -213,13 +224,21 @@ def classify(row, directory, tool_names, guards, previous=None):
 
     adapter = row.get("adapter")
     outcome = _dict(row.get("tool_choice")).get("outcome")
-    final_text = metrics.get("final_text") or ""
     metrics_errors = metrics.get("agent_errors")
+    stopped = _dict(_dict(_dict(row.get("stages")).get("agent")).get("no_progress"))
+    error_text = next((str(e.get("text")) for e in events if e.get("type") == "error" and e.get("text")), None)
+    if error_text is None and metrics_errors:
+        error_text = str(metrics_errors[0] if isinstance(metrics_errors, list) else metrics_errors)
+    ran_out = bool(metrics_errors and error_text and ROUNDS.search(error_text))
     unjudged = None
     if row.get("status") == "mcp_unverified":
         unjudged = "status mcp_unverified: the model's tool calls never reached the proxy"
+    elif stopped:  # the harness stopped chat, so chat's own "context canceled" error says nothing about the model
+        add("model", "Hit the call limit", f"the harness stopped it at its limit of {stopped.get('limit')} tool calls")
+    elif ran_out:
+        add("model", "Ran out of rounds", ROUNDS.search(error_text).group(0))
     elif metrics_errors:
-        unjudged = f"the agent reported an error: {_clip(metrics_errors[0] if isinstance(metrics_errors, list) else metrics_errors, 100)}"
+        unjudged = f"the agent reported an error: {_clip(error_text, 100)}"
     elif metrics.get("agent_completed") is False and row.get("status") != "timeout":
         unjudged = "the agent did not finish its turn"
     if unjudged:
@@ -240,7 +259,10 @@ def classify(row, directory, tool_names, guards, previous=None):
     elif asked:
         add("model", "Asked instead of acting", "ended on a question without doing the task")
     elif outcome == "missed" and not verifier_failed:
-        add("model", "Missing tool", f"never called {_expected(expect)}")
+        if expect.get("ask") and not expect.get("right"):
+            add("model", "Did not ask first", "this request needs the user's confirmation, and it didn't ask")
+        else:
+            add("model", "Missing tool", f"did none of: {_expected(expect)}")
 
     known = set(tool_names or ()) | tt.CHAT_BUILTINS | {"workspace_exec"}
     made_up = []
@@ -253,19 +275,28 @@ def classify(row, directory, tool_names, guards, previous=None):
 
     for i, e in enumerate(trace):
         if e.get("canned") and blame and any(grading.matches(m, e, adapter) for m in guards):
-            add("model", "Touched the benchmark", f"{e.get('name')} would have ended the run", i)
+            add("model", "Touched the benchmark", f"{e.get('name')} was blocked by the device guard", i)
         elif e.get("channel") == "mcp" and not e.get("canned") and e.get("is_error") is True:
             text = e.get("reply_text") or ""
             refused = next((code for code in ("INVALID_ARGUMENT", "UNSUPPORTED") if code in text), None)
             if refused:  # the model asked for something the tool refuses
                 if blame:
                     add("model", "Bad arguments", f"{e.get('name')} [{refused}]", i)
-            else:
+            elif _error_code(text) != "COMMAND_FAILED":  # that one is the model's own command exiting nonzero
                 add("tool", "Tool error", f"{e.get('name')} [{_error_code(text)}]", i)
     for record in cli_records:
-        if record.get("exit_code") not in (None, 0) and not record.get("canned"):
-            argv = record.get("argv") if isinstance(record.get("argv"), list) else []
-            add("tool", "Tool error", f"wendy {' '.join(tt.cli_path(argv))} [exit {record['exit_code']}]")
+        code = record.get("exit_code")
+        if code in (None, 0) or record.get("canned"):
+            continue
+        argv = record.get("argv") if isinstance(record.get("argv"), list) else []
+        path = " ".join(w for w in tt.cli_path(argv) if "/" not in w and w != ".")  # no temp paths in the grouping
+        if code == USAGE_EXIT:
+            if blame:
+                add("model", "Bad arguments", f"wendy {path} [exit {code}]", argv=argv)
+        elif code < 0 or code >= 128 or path in CHECK_COMMANDS:
+            continue  # killed by a signal, usually the model's own `| head`; or a check reporting what it found
+        else:
+            add("tool", "Tool error", f"wendy {path} [exit {code}]", argv=argv)
 
     start = 0
     while blame and start < len(ordered):
@@ -284,7 +315,9 @@ def classify(row, directory, tool_names, guards, previous=None):
         else:
             hits = [i for i, e in enumerate(trace)
                     if not e.get("canned") and any(grading.matches(m, e, adapter) for m in rights)]
-            if not hits:
+            if stopped or ran_out:
+                add("model", "Task not finished", "it was stopped before the verifier passed")
+            elif not hits:
                 add("model", "Task not finished", f"the verifier failed and {_expected(expect)} was never called")
             else:
                 failed = _errored(trace[hits[-1]], cli_records)
@@ -454,7 +487,8 @@ def render_markdown(runs):
                 continue
             if e.get("status") != "ready":
                 shown = True
-                lines.append(f"- {who}{e.get('task')} on {e.get('target')}: {e.get('reason') or e.get('status')}")
+                where = f" on {e['target']}" if e.get("target") else ""
+                lines.append(f"- {who}{e.get('task')}{where}: {e.get('reason') or e.get('status')}")
                 continue
             left = sum(a.get("not_run", 0) for a in _dict(e.get("agents")).values() if isinstance(a, dict))
             if left:

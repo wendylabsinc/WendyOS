@@ -147,6 +147,58 @@ class EachCategory(unittest.TestCase):
                        cli=[{"argv": argv, "exit_code": 1}, {"argv": ["x"], "exit_code": 0}])
         self.assertIn("device apps list", f["detail"])
 
+    def test_cli_usage_error_is_the_models_bad_arguments(self):
+        argv = ["run", "--wait-for-it"]
+        f = self.check(("model", "Bad arguments"), outcome="right",
+                       trace=[tt.entry("cli", "run", argv, "wrapper")], cli=[{"argv": argv, "exit_code": 2}])
+        self.assertIn("wendy run", f["detail"])
+
+    def test_cli_killed_by_the_models_pipeline_is_no_finding(self):
+        argv = ["device", "logs"]
+        for code in (141, 143, -13):
+            p = Pass(self)
+            p.attempt(outcome="right", trace=[tt.entry("cli", "device logs", argv, "wrapper")],
+                      cli=[{"argv": argv, "exit_code": code}])
+            self.assertEqual(p.classify(), [], code)
+
+    def test_a_check_that_reports_failures_is_no_finding(self):
+        for argv in (["json", "validate", "/tmp/x/wendy.json"], ["doctor", "--json"]):
+            p = Pass(self)
+            p.attempt(outcome="right", trace=[tt.entry("cli", " ".join(argv[:2]), argv, "wrapper")],
+                      cli=[{"argv": argv, "exit_code": 1}])
+            self.assertEqual(p.classify(), [], argv)
+
+    def test_cli_excerpt_stops_at_the_failing_call(self):
+        argv = ["run"]
+        events = [{"type": "tool_start", "id": "a", "tool": "workspace_exec", "arguments": {"command": "wendy run"}},
+                  {"type": "tool_start", "id": "b", "tool": "device_info", "arguments": {}}]
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("device_info")], cli=[{"argv": argv, "exit_code": 6}], events=events)
+        f = p.classify()[0]
+        self.assertEqual(f["item"], "Tool error")
+        self.assertIn("run", f["excerpt"])
+        self.assertNotIn("device_info", f["excerpt"])
+
+    def test_a_failing_command_in_a_container_is_not_the_tools_fault(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[
+            call("container_exec", {"command": ["false"]}, True, '[COMMAND_FAILED] command exited with code 1')])
+        self.assertEqual(p.classify(), [])
+
+    def test_a_json_error_reply_shows_its_code(self):
+        f = self.check(("tool", "Tool error"), outcome="right", trace=[
+            call("ros2_topics", {}, True, '{"error_code":"INTERNAL","message":"no running ROS 2 containers found"}')])
+        self.assertIn("ros2_topics [INTERNAL]", f["detail"])
+
+    def test_empty_trace_shows_what_the_model_said(self):
+        f = self.check(("model", "Missing tool"), outcome="missed", kind="scenario", final_text="I'll check the logs first.")
+        self.assertIn("I'll check the logs first.", f["excerpt"])
+
+    def test_ask_only_scenario_that_did_not_ask(self):
+        p = Pass(self)
+        p.attempt(outcome="missed", kind="scenario", expect={"right": [], "ask": True}, trace=[call("device_info")])
+        self.assertEqual(labels(p.classify()), [("model", "Did not ask first")])
+
     def test_made_up_tool_comes_from_the_transcript(self):
         p = Pass(self)
         events = [{"type": "tool_start", "id": "1", "tool": "make_coffee", "arguments": {}},
@@ -227,6 +279,15 @@ class Rendering(unittest.TestCase):
         section = text.split("Not run")[1]
         self.assertIn("camera-capture", section)
         self.assertIn("no capture recorded", section)
+
+    def test_not_run_without_a_target_does_not_say_none(self):
+        p = self.build(2, 2)
+        (p.dir / "coverage.json").write_text(json.dumps([
+            {"task": "ros-topics", "target": None, "status": "unconfigured", "reason": "no matching target configured",
+             "agents": {}}]))
+        text = mr.render_markdown([mr.load_run(p.dir)])
+        self.assertIn("- ros-topics: no matching target configured", text)
+        self.assertNotIn("on None", text)
 
     def test_findings_sorted_by_frequency_with_counts(self):
         p = Pass(self)
@@ -352,6 +413,43 @@ class FixRound1(unittest.TestCase):
             {"task": "deploy", "target": "thor", "status": "ready", "reason": None,
              "agents": {"chat": {"not_run": 0}}}]))
         self.assertIn("Everything configured was run", mr.render_markdown([mr.load_run(p.dir)]))
+
+    def test_harness_stop_keeps_the_grade_and_is_the_models_finding(self):
+        # The harness stopped chat at its call limit. Chat's "context canceled" comes from that stop.
+        stop = {"agent": {"exit_code": None, "no_progress": {"kind": "tool_call_cap", "calls": 21, "limit": 20}}}
+        events = [{"type": "error", "text": "model response: context canceled"}]
+        p = Pass(self)
+        p.attempt(outcome="wrong", kind="scenario", status="no_progress", stages=stop, events=events,
+                  trace=[call("os_update", canned=True)])
+        p.rows[-1]["metrics"]["agent_errors"] = 1
+        p.rows[-1]["tool_choice"]["entry"] = 0
+        found = labels(p.classify())
+        self.assertIn(("model", "Hit the call limit"), found)
+        self.assertIn(("model", "Wrong tool"), found)
+        self.assertNotIn(("undetermined", "Undetermined"), found)
+        self.assertIn("limit of 20", next(f for f in p.classify() if f["item"] == "Hit the call limit")["detail"])
+
+    def test_running_out_of_rounds_keeps_the_grade(self):
+        events = [{"type": "error", "text": "stopped after 40 model rounds; send another message to continue"}]
+        p = Pass(self)
+        p.attempt(outcome="right", verified=True, events=events, trace=[call("run")])
+        p.rows[-1]["metrics"]["agent_errors"] = 1
+        self.assertEqual(labels(p.classify()), [("model", "Ran out of rounds")])
+        self.assertIn("40 model rounds", p.classify()[0]["detail"])
+
+    def test_running_out_of_rounds_before_the_verifier_passed_is_not_the_tools_fault(self):
+        events = [{"type": "error", "text": "stopped after 40 model rounds; send another message to continue"}]
+        p = Pass(self)
+        p.attempt(outcome="right", verified=False, events=events, trace=[call("run")])
+        p.rows[-1]["metrics"]["agent_errors"] = 1
+        self.assertEqual(sorted(labels(p.classify())), [("model", "Ran out of rounds"), ("model", "Task not finished")])
+
+    def test_another_agent_error_shows_its_text(self):
+        p = Pass(self)
+        p.attempt(outcome="right", events=[{"type": "error", "text": "provider exploded"}], trace=[call("run")])
+        p.rows[-1]["metrics"]["agent_errors"] = 1
+        self.assertEqual(labels(p.classify()), [("undetermined", "Undetermined")])
+        self.assertIn("provider exploded", p.classify()[0]["detail"])
 
     def test_unverified_or_failed_agent_goes_to_undetermined(self):
         p = Pass(self)

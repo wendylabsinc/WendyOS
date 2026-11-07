@@ -101,6 +101,21 @@ def _plain_shell(entry):
             and not parse_wendy_invocations(command))
 
 
+SESSION_TOOLS = {"wendy_status", "wendy_tools", "device_list", "device_connect", "device_disconnect"}
+CLI_NO_WORK = {"-h", "--help", "-v", "--version"}
+
+
+def _wendy_work(entry):
+    """A Wendy call that does something: not connecting, listing tools or reading help."""
+    if entry.get("channel") == "mcp":
+        return entry.get("name") not in SESSION_TOOLS
+    if entry.get("channel") == "cli":
+        argv = entry.get("arguments") if isinstance(entry.get("arguments"), list) else []
+        path = cli_path(argv)
+        return bool(path) and path != ["version"] and not CLI_NO_WORK & set(argv)
+    return False
+
+
 def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, went_around=False):
     """Order: wrong, right, went around, asked, missed. `went_around` is set only where the model shares
     the device (the local target), so a laptop's grades don't change."""
@@ -110,10 +125,11 @@ def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, 
         if hit:
             result.update(outcome=side, rule=f"{side}[{hit[0]}]", entry=hit[1])
             return result
-    plain = next((i for i, e in enumerate(trace) if _plain_shell(e)), None) if went_around else None
-    if plain is not None:
-        result.update(outcome="went_around", entry=plain)
-        return result
+    if went_around:  # plain Linux instead of Wendy: at least as many plain commands as Wendy calls
+        plain = [i for i, e in enumerate(trace) if _plain_shell(e)]
+        if plain and len(plain) >= sum(_wendy_work(e) for e in trace):
+            result.update(outcome="went_around", entry=plain[0])
+            return result
     if expect.get("ask") and agent_completed and "?" in (final_text or ""):
         result["outcome"] = "asked"
         return result

@@ -40,6 +40,20 @@ class WentAroundTests(unittest.TestCase):
         self.assertEqual(g.grade(wrong, USB_LOGS, "", True, went_around=True)["outcome"], "wrong")
         self.assertEqual(g.grade(THOR_TRACE, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
 
+    def test_wendy_work_with_a_few_plain_commands_is_not_went_around(self):
+        # The Thor's erase-device attempt looked around with ls, then used install tools and the CLI.
+        trace = [shell("ls /tmp"), mcp("os_install_plan"), mcp("os_install_start"), cli("install", "plan")]
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "missed")
+
+    def test_connecting_and_reading_help_do_not_outweigh_plain_commands(self):
+        trace = [mcp("wendy_status"), mcp("device_connect"), cli("device", "logs", "--help"), cli("--help"),
+                 cli("version"), shell("dmesg | tail")]
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
+
+    def test_as_many_plain_commands_as_wendy_calls_is_went_around(self):
+        trace = [mcp("device_info"), shell("dmesg | tail")]
+        self.assertEqual(g.grade(trace, USB_LOGS, "", True, went_around=True)["outcome"], "went_around")
+
     def test_went_around_beats_asked(self):
         r = g.grade(THOR_TRACE, USB_LOGS, "Which one do you want?", True, went_around=True)
         self.assertEqual(r["outcome"], "went_around")
