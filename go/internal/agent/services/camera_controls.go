@@ -437,6 +437,9 @@ func (c *cameraControlStore) get(path string) []storedControl {
 // localCameraPath validates that devID names a local V4L2 camera and returns
 // its node path. Network cameras are rejected: they expose no V4L2 controls here.
 func localCameraPath(devID uint32) (string, error) {
+	if devID >= ipcam.MCUBandStart && devID <= ipcam.MCUBandEnd {
+		return "", status.Error(codes.Unimplemented, "SensorLink cameras do not expose remote sensor controls through their virtual V4L2 node")
+	}
 	if devID >= ipcam.IDBandStart && devID <= ipcam.IDBandEnd {
 		return "", status.Errorf(codes.InvalidArgument,
 			"camera %d is a network camera; V4L2 controls apply only to local (USB/CSI) cameras", devID)

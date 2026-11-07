@@ -1,6 +1,7 @@
 package services
 
 import (
+	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"path/filepath"
 	"testing"
 
@@ -13,7 +14,13 @@ import (
 func TestSensorCameraIdentityFollowsSourceInsteadOfNode(t *testing.T) {
 	identities := map[uint32]string{96: "sensorlink:source-a:0", 97: "sensorlink:source-b:0"}
 	svc := &VideoService{}
-	svc.SetSensorCameraIdentities(func() map[uint32]string { return identities })
+	svc.SetSensorCameras(func() map[uint32]mcusource.Camera {
+		out := map[uint32]mcusource.Camera{}
+		for id, identity := range identities {
+			out[id] = mcusource.Camera{StableID: identity, Online: true}
+		}
+		return out
+	})
 	req := &agentpb.StreamVideoRequest{DeviceId: 96, StableId: "sensorlink:source-a:0"}
 	got, err := svc.streamDeviceID(req)
 	if err != nil || got != 96 {

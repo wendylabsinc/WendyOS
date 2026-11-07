@@ -651,6 +651,7 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	}
 	campaign.DeployedUnixNanos = time.Now().UnixNano()
 	campaign.Warnings = append(campaign.Warnings, m.legacyAudioSelectorWarnings(campaign)...)
+	campaign.Warnings = append(campaign.Warnings, m.legacyCameraSelectorWarnings(campaign)...)
 	if absent := m.unpublishedROS2Selectors(campaign); len(absent) > 0 {
 		campaign.Warnings = append(campaign.Warnings, "no healthy ROS 2 graph currently publishes these selectors; the campaign still deploys, and a trigger records its other sources and marks the absent one in the episode manifest: "+strings.Join(absent, ", "))
 	}
@@ -842,6 +843,9 @@ func (m *Manager) resolveCampaignSources(campaign Campaign, degradeROS2 bool) ([
 			id, err := resolveCameraSelector(all, requested.Camera)
 			if err != nil {
 				return nil, nil, nil, nil, err
+			}
+			if strings.HasPrefix(id, "sensorlink:") && (strings.HasPrefix(requested.Camera, "v4l2:") || strings.HasPrefix(requested.Camera, "/dev/video")) {
+				m.Warnf("campaign %q: numeric camera selector %q currently resolves to %s and can change after agent restart; verify the camera and redeploy with camera: %s", campaign.Name, requested.Camera, id, id)
 			}
 			selected[id] = true
 			if requested.Capture != nil {
@@ -1036,6 +1040,25 @@ func (m *Manager) checkDeployableAudioSources(campaign Campaign) error {
 	return nil
 }
 
+// legacyCameraSelectorWarnings identifies unstable numeric SensorLink selectors.
+func (m *Manager) legacyCameraSelectorWarnings(campaign Campaign) []string {
+	var warnings []string
+	var all []Source
+	for i, requested := range campaign.Sources {
+		if !strings.HasPrefix(requested.Camera, "v4l2:") && !strings.HasPrefix(requested.Camera, "/dev/video") {
+			continue
+		}
+		if all == nil {
+			all = m.Sources(context.Background())
+		}
+		id, err := resolveCameraSelector(all, requested.Camera)
+		if err == nil && strings.HasPrefix(id, "sensorlink:") {
+			warnings = append(warnings, fmt.Sprintf("sources[%d] camera: %q is a session-local node that can change after an agent restart; it currently resolves to %s; verify the physical camera and redeploy with camera: %s", i, requested.Camera, id, id))
+		}
+	}
+	return warnings
+}
+
 // legacyAudioSelectorWarnings names every audio selector written as an
 // old-style microphone ID ("audio:<n>"). The plan still deploys and the
 // selector still resolves, through the microphone's alias, but only for as long
@@ -1127,6 +1150,17 @@ func resolveCameraSelector(all []Source, selector string) (string, error) {
 				return source.ID, nil
 			}
 		}
+	}
+	for _, source := range healthy {
+		for _, alias := range aliases {
+			if slices.Contains(source.Aliases, alias) {
+				return source.ID, nil
+			}
+		}
+	}
+	// Machine identities must never fall back to fuzzy display-name matching.
+	if strings.HasPrefix(selector, "sensorlink:") {
+		return "", fmt.Errorf("no healthy camera matches %q", selector)
 	}
 	var matches []string
 	for _, source := range healthy {
