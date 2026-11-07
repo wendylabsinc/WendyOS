@@ -5,10 +5,15 @@ import RealityKit
 /// coordinate system; framing moves the viewer camera, never the saved model.
 struct MobileSiteRealityView: View {
     let saved: StoredSite
+    var cameraGeometry: [UUID: SiteCameraGeometry] = [:]
+    var showCoverage = true
+    var colorSources: [UUID: SiteCameraColorSource] = [:]
+    var colorStatus: ([UUID: String]) -> Void = { _ in }
     let select: (UUID) -> Void
     @State private var scene = MobileSiteRealityScene()
     @State private var error: String?
     @State private var loaded = false
+    @State private var projectionToken = UUID()
     @State private var yaw = 0.5
     @State private var pitch = 0.8
     @State private var zoom = 1.0
@@ -21,6 +26,7 @@ struct MobileSiteRealityView: View {
             content.add(scene.root)
             do {
                 try await scene.load(saved)
+                scene.updateCameras(saved.site, geometry: cameraGeometry, coverage: showCoverage)
                 scene.orbit(yaw: yaw, pitch: pitch, zoom: zoom)
                 loaded = true
             } catch is CancellationError { }
@@ -46,13 +52,9 @@ struct MobileSiteRealityView: View {
             if let error { ContentUnavailableView("Model unavailable", systemImage: "cube", description: Text(error)) }
             else if !loaded { ProgressView("Loading 3D model…") }
         }
-        .overlay(alignment: .topTrailing) {
+        .overlay(alignment: .topLeading) {
             Button("Reset view", systemImage: "arrow.counterclockwise") { yaw = 0.5; pitch = 0.8; zoom = 1 }
                 .buttonStyle(.bordered).padding()
-        }
-        .overlay(alignment: .bottomLeading) {
-            Text("Viewer preview · Live projection is available in the standard viewer.")
-                .font(.caption).padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)).padding()
         }
         .background(MobileSitesStyle.background)
         .tint(MobileLensStyle.green)
@@ -60,11 +62,42 @@ struct MobileSiteRealityView: View {
             scene.camera.camera.fieldOfViewOrientation = portrait ? .horizontal : .vertical
         }
         .accessibilityIdentifier("sites.reality.viewer")
-        .onChange(of: saved.site) { _, site in scene.updateCameras(site) }
+        .onChange(of: saved.site) { _, site in scene.updateCameras(site, geometry: cameraGeometry, coverage: showCoverage) }
+        .onChange(of: geometrySignature + "-\(showCoverage)") { _, _ in
+            scene.updateCameras(saved.site, geometry: cameraGeometry, coverage: showCoverage)
+        }
+        .task(id: "\(loaded)-\(projectionSignature)") {
+            guard loaded, let id = colorSources.keys.first, let source = colorSources[id],
+                  let geometry = cameraGeometry[id], let entity = scene.modelEntity else { colorStatus([:]); return }
+            let token = UUID(); projectionToken = token
+            let lease = source.acquire()
+            var renderer: MobileRealityProjection?
+            defer {
+                source.release(lease)
+                if projectionToken == token { renderer?.restore() }
+            }
+            do {
+                scene.projection?.restore()
+                let value = try MobileRealityProjection(model: entity); renderer = value; scene.projection = value
+                while !Task.isCancelled, projectionToken == token {
+                    let status = try value.update(geometry: geometry, source: source, revision: saved.site.modelRevision, now: Date())
+                    colorStatus([id: status])
+                    try await Task.sleep(for: .milliseconds(250))
+                }
+            } catch is CancellationError { }
+            catch { renderer?.restore(); colorStatus([id: "Projection unavailable: " + error.localizedDescription]) }
+        }
+    }
+    private var geometrySignature: String {
+        cameraGeometry.keys.sorted { $0.uuidString < $1.uuidString }.map { "\($0):\(MobileRealityProjection.key(cameraGeometry[$0]!))" }.joined(separator: ";")
+    }
+    private var projectionSignature: String {
+        geometrySignature + colorSources.keys.sorted { $0.uuidString < $1.uuidString }.map { "\($0):\(colorSources[$0]!.id)" }.joined(separator: ";")
     }
 }
 
 @MainActor final class MobileSiteRealityScene {
+    var projection: MobileRealityProjection?
     let root = Entity()
     let camera = PerspectiveCamera()
     private(set) var modelEntity: Entity?
@@ -116,7 +149,7 @@ struct MobileSiteRealityView: View {
         camera.look(at: center, from: center + offset, relativeTo: root)
     }
 
-    func updateCameras(_ site: Site) {
+    func updateCameras(_ site: Site, geometry: [UUID: SiteCameraGeometry] = [:], coverage: Bool = true) {
         markers.children.removeAll()
         for saved in site.cameras {
             guard let point = saved.position, point.isValid else { continue }
@@ -127,7 +160,7 @@ struct MobileSiteRealityView: View {
             marker.components.set(InputTargetComponent())
             marker.generateCollisionShapes(recursive: false)
             markers.addChild(marker)
-            if let geometry = saved.manualAlignment?.geometry(position: point, revision: site.modelRevision, now: Date()),
+            if coverage, let geometry = geometry[saved.id] ?? saved.manualAlignment?.geometry(position: point, revision: site.modelRevision, now: Date()),
                let rays = geometry.lens?.boundaryRays {
                 let origin = marker.position
                 let ends = rays.map { ray -> SIMD3<Float> in

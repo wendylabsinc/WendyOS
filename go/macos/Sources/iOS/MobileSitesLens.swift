@@ -456,12 +456,8 @@ private struct MobileSiteModelViewer: View {
         NavigationStack {
             Group {
                 if let saved {
-                    if realityPreview {
-                        MobileSiteRealityView(saved: saved) { id in preview = saved.site.cameras.first { $0.id == id } }
-                            .id("\(saved.id)-\(saved.site.modelRevision)")
-                    } else {
-                        MobileSiteCoverageScene(model: model, saved: saved, assets: store.sites.first { $0.id == siteID }?.assets ?? [], active: !placingCameras && !savingToDevice && preview == nil, placing: nil, select: { id in preview = saved.site.cameras.first { $0.id == id } }, place: { _, _ in })
-                    }
+                    MobileSiteCoverageScene(model: model, saved: saved, assets: store.sites.first { $0.id == siteID }?.assets ?? [], active: !placingCameras && !savingToDevice && preview == nil, realityPreview: realityPreview, placing: nil, select: { id in preview = saved.site.cameras.first { $0.id == id } }, place: { _, _ in })
+                        .id("\(saved.id)-\(saved.site.modelRevision)")
                 } else if let error { ContentUnavailableView("Model unavailable", systemImage: "cube", description: Text(error)) }
                 else { ProgressView("Loading model…") }
             }.navigationTitle(link.name).navigationBarTitleDisplayMode(.inline)

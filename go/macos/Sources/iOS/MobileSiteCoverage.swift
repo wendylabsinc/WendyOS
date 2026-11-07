@@ -24,6 +24,8 @@ struct MobileSiteCoverageScene: View {
     let saved: StoredSite
     let assets: [MobileSiteAsset]
     var active = true
+    var realityPreview = false
+    @State private var projectedCamera: UUID?
     let placing: UUID?
     let select: (UUID) -> Void
     let place: (UUID, SitePoint) -> Void
@@ -59,6 +61,16 @@ struct MobileSiteCoverageScene: View {
             let matches = model.cameraFeeds.filter { $0.camera.stableID == camera.sourceID }
             if matches.count == 1, let feed = matches.first, !feed.camera.thermal { result[camera.id] = feed.colorSource }
         }
+        if realityPreview, !result.isEmpty {
+            let runningSources = Set(model.cameraFeeds.filter { $0.running }.map { $0.camera.stableID })
+            let runningCameras = Set(saved.site.cameras.filter { runningSources.contains($0.sourceID) }.map(\.id))
+            let selected = projectedCamera.flatMap { result[$0] != nil ? $0 : nil }
+                ?? result.keys.sorted { left, right in
+                    if runningCameras.contains(left) != runningCameras.contains(right) { return runningCameras.contains(left) }
+                    return left.uuidString < right.uuidString
+                }.first!
+            return [selected: result[selected]!]
+        }
         return result
     }
     private var explanation: String {
@@ -73,13 +85,30 @@ struct MobileSiteCoverageScene: View {
         return estimated > 0 ? "\(geometry.count) viewing areas · \(estimated) estimated. Cones show direction, not sensor range." : "\(geometry.count) calibrated viewing areas. Cones show direction, not sensor range."
     }
     var body: some View {
-        SiteScene(modelURL: saved.modelURL, site: saved.site,
-                  cameraGeometry: geometry, showCameraCoverage: coverage, colorSources: sources,
-                  colorStatus: { statuses = $0 }, placingCamera: placing, select: select, place: place)
+        Group {
+            if realityPreview {
+                MobileSiteRealityView(saved: saved, cameraGeometry: geometry, showCoverage: coverage,
+                    colorSources: sources, colorStatus: { statuses = $0 }, select: select)
+            } else {
+                SiteScene(modelURL: saved.modelURL, site: saved.site,
+                    cameraGeometry: geometry, showCameraCoverage: coverage, colorSources: sources,
+                    colorStatus: { statuses = $0 }, placingCamera: placing, select: select, place: place)
+            }
+        }
             .overlay(alignment: .topTrailing) {
                 Menu {
                     Toggle("Camera coverage", isOn: $coverage)
                     Toggle("Live imagery", isOn: $imagery)
+                    if realityPreview {
+                        Section("Project one camera") {
+                            ForEach(saved.site.cameras.filter { geometry[$0.id] != nil }) { camera in
+                                Button { projectedCamera = camera.id } label: {
+                                    if sources[camera.id] != nil { Label(camera.name, systemImage: "checkmark") }
+                                    else { Text(camera.name) }
+                                }
+                            }
+                        }
+                    }
                     if !saved.site.cameras.isEmpty {
                         Section("Open camera") {
                             ForEach(saved.site.cameras) { camera in Button(camera.name) { select(camera.id) } }
