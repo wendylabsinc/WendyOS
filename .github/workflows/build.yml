@@ -137,6 +137,20 @@ jobs:
           mkdir -p ../${{ matrix.artifact-name }}
           go build -ldflags "${LDFLAGS}" -o ../${{ matrix.artifact-name }}/${{ matrix.product }} ./cmd/${{ matrix.cmd }}
 
+      # Shipped in the agent's tarball so an image always gets the supervisor
+      # and the agent from the same release.
+      - name: Build agent supervisor
+        if: matrix.cmd == 'wendy-agent'
+        working-directory: go
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          LDFLAGS="-s -w -X github.com/wendylabsinc/wendy/go/internal/shared/version.Version=${VERSION}"
+          go build -ldflags "${LDFLAGS}" -o ../${{ matrix.artifact-name }}/wendy-agent-supervisor ./cmd/wendy-agent-supervisor
+
       - name: Create archive
         working-directory: .
         run: |
