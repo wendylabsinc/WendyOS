@@ -88,6 +88,10 @@ enum Go2Model {
     private static func quaternion(_ q: [Float]) -> simd_quatf {
         simd_normalize(simd_quatf(ix: q[1], iy: q[2], iz: q[3], r: q[0]))
     }
+    static func heading(_ yaw: Double) -> simd_quatf {
+        simd_quatf(angle: Float(yaw.remainder(dividingBy: 2 * .pi)), axis: SIMD3(0, 1, 0))
+    }
+
     static func pose(_ root: SCNNode, joints: [Double]) {
         for (index, name) in jointNames.enumerated() {
             guard let node = root.childNode(withName: name, recursively: true) else { continue }
