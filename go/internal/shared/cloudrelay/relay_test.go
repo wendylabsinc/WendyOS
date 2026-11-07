@@ -740,3 +740,49 @@ func TestRefusedAdmissionDropsTheLease(t *testing.T) {
 		t.Fatalf("the refused lease survives on disk and would be reloaded at next start (stat err = %v)", err)
 	}
 }
+
+// The agent supervisor approves an automatic agent update only once the new
+// agent is reachable through the relay again.
+func TestAgentReportsAcceptedPresenceOnly(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		verifier := &Verifier{Issuer: "https://cloud.test", fetched: time.Now(), keys: map[string]jwk{"test": {Kid: "test", Kty: "EC", Alg: "ES256", Crv: "P-256", X: b64.EncodeToString(key.X.FillBytes(make([]byte, 32))), Y: b64.EncodeToString(key.Y.FillBytes(make([]byte, 32)))}}}
+		listener, e := net.Listen("tcp", "127.0.0.1:0")
+		if e != nil {
+			t.Fatal(e)
+		}
+		r := &testRelay{t: t, endpoint: listener.Addr().String(), cloudKey: key, verifier: verifier, present: make(chan struct{}), renewOnly: true, renewed: make(chan struct{}), refusePresence: refuse}
+		srv := grpc.NewServer()
+		pb.RegisterTunnelAuthorizationServiceServer(srv, r)
+		pb.RegisterTunnelBrokerV2ServiceServer(srv, r)
+		go srv.Serve(listener)
+		dial := func(endpoint string) (*grpc.ClientConn, error) {
+			return grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		}
+		verifier.relayDial = dial
+		registered := make(chan struct{}, 4)
+		agent := &Agent{Endpoint: r.endpoint, Verifier: verifier, StateDir: t.TempDir(), Credentials: func() (string, string, []byte) { return "", "", nil }, Logger: zap.NewNop(), dialCloud: func(endpoint, _, _ string, _ []byte) (*grpc.ClientConn, error) { return dial(endpoint) },
+			OnRegistered: func() { registered <- struct{}{} }}
+		done := make(chan error, 1)
+		go func() { done <- agent.runOnce(ctx) }()
+		if refuse {
+			<-done
+			if len(registered) != 0 {
+				t.Fatal("a refused presence must not count as reaching the cloud")
+			}
+		} else {
+			select {
+			case <-registered:
+			case err := <-done:
+				t.Fatalf("presence ended before it was reported: %v", err)
+			case <-ctx.Done():
+				t.Fatal("accepted presence was not reported")
+			}
+			cancel()
+			<-done
+		}
+		cancel()
+		srv.Stop()
+	}
+}
