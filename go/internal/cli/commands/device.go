@@ -160,6 +160,11 @@ func newDevicePushAgentCmd() *cobra.Command {
 			}
 			defer conn.Close()
 
+			supervised := false
+			if v, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{}); err == nil {
+				supervised = v.GetSupervision() != nil
+			}
+
 			h := sha256.Sum256(binaryData)
 			sha256Hex := hex.EncodeToString(h[:])
 			fmt.Fprintf(os.Stderr, "Uploading %d bytes to %s...\n", len(binaryData), conn.Host)
@@ -173,6 +178,21 @@ func newDevicePushAgentCmd() *cobra.Command {
 				unconfirmed = true
 			}
 			conn.Close()
+
+			if supervised {
+				// The supervisor's verdict is the outcome; it may already have
+				// fallen back before the CLI reconnects.
+				reconnect := func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+					return reconnectAgentAfterRestart(ctx, conn)
+				}
+				verdict, verdictConn, err := awaitAgentVerdict(ctx, nil, reconnect, sha256Hex, announceAgentCheck(os.Stderr))
+				verdictConn.Close()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "Approved: the device runs the uploaded agent (version %s).\n", verdict.Running)
+				return nil
+			}
 
 			fmt.Fprint(os.Stderr, "Waiting for agent to restart...")
 			newConn, err := reconnectAgentAfterRestart(ctx, conn)
@@ -2740,7 +2760,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// metadata, so an already-current device never downloads the
 				// tarball. Record it so an upload whose confirmation was lost to
 				// a mid-stream agent restart can still be verified.
-				resolvedVer, source, err := resolveAgentVersion(nightly)
+				resolvedVer, source, err := resolveAgentVersionFn(nightly)
 				if err != nil {
 					return fmt.Errorf("resolving agent version: %w", err)
 				}
@@ -2764,7 +2784,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 						fmt.Println(tui.InfoMessage(fmt.Sprintf("Fetching latest %s agent for %s...", releaseType, agentPlatformLabel(osName, arch))))
 					}
 					var actualAgentVersion string
-					binaryData, actualAgentVersion, _, err = resolveAgentArtifact(osName, arch, nightly)
+					binaryData, actualAgentVersion, _, err = resolveAgentArtifactFn(osName, arch, nightly)
 					if err != nil {
 						return fmt.Errorf("resolving agent binary: %w", err)
 					}
@@ -2810,70 +2830,103 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// An unconfirmed upload is not a failure: the agent restarts the
 				// moment the binary lands, which can drop the stream before its
 				// ack arrives. Reconnect below and verify what the device runs.
-				if err := uploadAgentBinary(ctx, conn.AgentService, binaryData, sha256Hash, jsonOutput); err != nil {
-					if !errors.Is(err, errAgentUpdateUnconfirmed) {
-						return err
+				uploadErr := uploadAgentBinary(ctx, conn.AgentService, binaryData, sha256Hash, jsonOutput)
+				var refused *agentCheckRefusedError
+				switch {
+				case errors.As(uploadErr, &refused):
+					// Refused before anything switched. The release can wait;
+					// the OS update need not.
+					if jsonOutput {
+						printRejectedJSON(uploadErr, preUpdateVersion.GetVersion())
+						return uploadErr
 					}
-					if !jsonOutput {
-						fmt.Println(tui.InfoMessage("The connection dropped before the agent confirmed the update — verifying what the device is running..."))
+					if binaryPath != "" {
+						return uploadErr
 					}
+					fmt.Println(tui.WarningMessage(fmt.Sprintf("%v; the device kept agent %s.", uploadErr, preUpdateVersion.GetVersion())))
+				case uploadErr != nil && !errors.Is(uploadErr, errAgentUpdateUnconfirmed):
+					return uploadErr
+				case uploadErr != nil && !jsonOutput:
+					fmt.Println(tui.InfoMessage("The connection dropped before the agent confirmed the update — verifying what the device is running..."))
 				}
 
-				// Keep the connection to the just-restarted agent. maybeCheckOSUpdate
-				// needs a live conn (and its Host/Reconnect) both to drive the OS
-				// update and to re-dial the SAME device after the reboot; passing nil
-				// here would nil-deref once the OS-update gate lets a device through.
-				reconnect := updatedAgentReconnectFunc(ctx, conn)
-				restartTimeout := agentRestartTimeoutForConn(conn, preUpdateVersion.GetOs())
-				if conn != nil {
-					_ = conn.Close()
-					conn = nil
-				}
-				conn, err = awaitAgentRestart(ctx, reconnect, restartTimeout, jsonOutput)
-				if err != nil {
-					return err
-				}
-
-				// A successful reconnect proves reachability, not that the
-				// swap landed — always check what the device actually runs
-				// before claiming success (a silent no-op or rollback still
-				// reports the old binary here). The darwin artifact is an
-				// app-bundle ZIP, so compare the executable inside that ZIP with
-				// the executable hash snapshotted by the Mac agent at launch. This
-				// proves both the swap and the restart; older agents leave it empty.
-				// The verify window
-				// matches the restart budget so a mismatch re-poll can
-				// outlast a lingering old agent.
-				requireHash := strings.EqualFold(preUpdateVersion.GetOs(), "darwin")
-				verified, verifyErr := verifyAgentAfterUpdate(ctx, conn.AgentService, verificationSHA, expectedAgentVersion,
-					agentVerifyWaitOptions{
-						Timeout:     restartTimeout,
-						RequireHash: requireHash,
-					})
-				if verifyErr != nil {
-					return verifyErr
-				}
-				reportedVersion := verified.Version
-
-				if jsonOutput {
-					resp := map[string]string{
-						"status":  "success",
-						"message": "Agent updated successfully.",
-						"version": reportedVersion,
+				if refused == nil {
+					// Keep the connection to the just-restarted agent. maybeCheckOSUpdate
+					// needs a live conn (and its Host/Reconnect) both to drive the OS
+					// update and to re-dial the SAME device after the reboot; passing nil
+					// here would nil-deref once the OS-update gate lets a device through.
+					reconnect := updatedAgentReconnectFunc(ctx, conn)
+					restartTimeout := agentRestartTimeoutForConn(conn, preUpdateVersion.GetOs())
+					if conn != nil {
+						_ = conn.Close()
+						conn = nil
 					}
-					b, err := json.Marshal(resp)
-					if err != nil {
-						return fmt.Errorf("failed to marshal JSON response: %w", err)
+					var reportedVersion string
+					if preUpdateVersion.GetSupervision() != nil {
+						// The supervisor judges the new agent and may already have fallen
+						// back when the CLI reconnects, so its verdict is the outcome. The
+						// polling is also the remote confirm the trial waits for.
+						announce := announceAgentCheck(os.Stdout)
+						if jsonOutput {
+							announce = func() {}
+						}
+						var verdict agentVerdict
+						verdict, conn, err = awaitAgentVerdict(ctx, nil, reconnect, sha256Hash, announce)
+						if err != nil {
+							if jsonOutput {
+								printRejectedJSON(err, verdict.Running)
+							}
+							return err
+						}
+						reportedVersion = verdict.Running
+					} else {
+						conn, err = awaitAgentRestart(ctx, reconnect, restartTimeout, jsonOutput)
+						if err != nil {
+							return err
+						}
+
+						// A successful reconnect proves reachability, not that the
+						// swap landed — always check what the device actually runs
+						// before claiming success (a silent no-op or rollback still
+						// reports the old binary here). The darwin artifact is an
+						// app-bundle ZIP, so compare the executable inside that ZIP with
+						// the executable hash snapshotted by the Mac agent at launch. This
+						// proves both the swap and the restart; older agents leave it empty.
+						// The verify window
+						// matches the restart budget so a mismatch re-poll can
+						// outlast a lingering old agent.
+						requireHash := strings.EqualFold(preUpdateVersion.GetOs(), "darwin")
+						verified, verifyErr := verifyAgentAfterUpdate(ctx, conn.AgentService, verificationSHA, expectedAgentVersion,
+							agentVerifyWaitOptions{
+								Timeout:     restartTimeout,
+								RequireHash: requireHash,
+							})
+						if verifyErr != nil {
+							return verifyErr
+						}
+						reportedVersion = verified.Version
 					}
-					fmt.Println(string(b))
-					// OS update check is skipped in JSON mode to keep output stable.
-					return nil
+
+					if jsonOutput {
+						resp := map[string]string{
+							"status":  "success",
+							"message": "Agent updated successfully.",
+							"version": reportedVersion,
+						}
+						b, err := json.Marshal(resp)
+						if err != nil {
+							return fmt.Errorf("failed to marshal JSON response: %w", err)
+						}
+						fmt.Println(string(b))
+						// OS update check is skipped in JSON mode to keep output stable.
+						return nil
+					}
+					successMsg := "Agent updated successfully."
+					if reportedVersion != "" {
+						successMsg = fmt.Sprintf("Agent updated successfully (agent reports %s).", reportedVersion)
+					}
+					fmt.Println(tui.SuccessMessage(successMsg))
 				}
-				successMsg := "Agent updated successfully."
-				if reportedVersion != "" {
-					successMsg = fmt.Sprintf("Agent updated successfully (agent reports %s).", reportedVersion)
-				}
-				fmt.Println(tui.SuccessMessage(successMsg))
 			}
 
 			var outcome osUpdateOutcome
@@ -2882,7 +2935,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// !isWendyOSUpdateTarget gate rejects a non-"WendyOS-" os_version
 				// and empty device_type before any reconnect/network call, so
 				// `device update` on a Mac only ever updates the agent binary.
-				outcome, err = maybeCheckOSUpdate(ctx, preUpdateVersion, conn, nightly, assumeYes, artifactURL, prNumber)
+				outcome, err = maybeCheckOSUpdateFn(ctx, preUpdateVersion, conn, nightly, assumeYes, artifactURL, prNumber)
 				if err != nil {
 					return err
 				}
@@ -2894,10 +2947,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 			if binaryPath != "" && outcome.applied && !outcome.online {
 				// Cloud path: the reboot is in flight and we did not wait for it,
 				// so we cannot re-apply inline. Tell the user how to restore it.
-				fmt.Println(tui.InfoMessage(fmt.Sprintf(
-					"The OS update is rebooting the device; its new image ships a bundled agent. "+
-						"Re-run 'wendy device update --binary %s' once it is back online to restore your dev agent.",
-					binaryPath)))
+				fmt.Println(tui.InfoMessage(cloudBinaryHint(binaryPath, preUpdateVersion.GetSupervision() != nil)))
 			}
 			if shouldReapplyBinary(binaryPath != "", outcome) {
 				fmt.Println(tui.InfoMessage("Re-applying your --binary agent onto the updated OS..."))
@@ -2905,7 +2955,9 @@ func newDeviceUpdateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("re-applying --binary after OS update: %w", err)
 				}
-				if reapplied.HashVerified {
+				if reapplied.Note != "" {
+					fmt.Println(tui.InfoMessage(reapplied.Note))
+				} else if reapplied.HashVerified {
 					fmt.Println(tui.SuccessMessage(fmt.Sprintf(
 						"Dev agent re-applied; the device is running your binary (version %s).", reapplied.Version)))
 				} else {
@@ -3131,6 +3183,16 @@ func agentRestartTimeoutForConn(conn *grpcclient.AgentConnection, osName string)
 	return timeout
 }
 
+// uploadSpinnerDone keeps "Error:" off the spinner for outcomes the caller
+// goes on from: an unconfirmed upload and a refusal that changed nothing.
+func uploadSpinnerDone(err error) tui.SpinnerDoneMsg {
+	var refused *agentCheckRefusedError
+	if errors.Is(err, errAgentUpdateUnconfirmed) || errors.As(err, &refused) {
+		return tui.SpinnerDoneMsg{Result: err}
+	}
+	return tui.SpinnerDoneMsg{Err: err}
+}
+
 // uploadAgentBinary uploads binaryData to the device, showing a spinner when
 // interactive and a plain status line otherwise (nothing extra in JSON mode).
 // It is the shared upload used by both `device update`'s initial agent update
@@ -3144,8 +3206,7 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 		p := tui.NewProgressProgram(s)
 
 		go func() {
-			uploadErr := deviceUpdateUpload(ctx, agentService, binaryData, sha256Hash)
-			p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
+			p.Send(uploadSpinnerDone(deviceUpdateUpload(ctx, agentService, binaryData, sha256Hash)))
 		}()
 
 		finalModel, runErr := p.Run()
@@ -3153,8 +3214,12 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 			return fmt.Errorf("TUI error: %w", runErr)
 		}
 		model := finalModel.(tui.SpinnerModel)
-		if _, updateErr := model.Result(); updateErr != nil {
+		result, updateErr := model.Result()
+		if updateErr != nil {
 			return updateErr
+		}
+		if err, ok := result.(error); ok {
+			return err
 		}
 		return nil
 	}
@@ -3200,6 +3265,14 @@ func reapplyBinaryAfterOSUpdate(ctx context.Context, priorConn *grpcclient.Agent
 	if conn == nil {
 		return agentVerifyResult{}, errors.New("reconnected to a nil agent connection after the OS update")
 	}
+	nowSupervised := false
+	if resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{}); err == nil {
+		if note, ok := keptAcrossOSUpdate(resp, sha256Hash); ok {
+			_ = conn.Close()
+			return agentVerifyResult{Version: resp.GetVersion(), Note: note}, nil
+		}
+		nowSupervised = resp.GetSupervision() != nil
+	}
 
 	// An unconfirmed upload is expected here too — the agent restarts as the
 	// binary lands — and the verification below checks what actually runs.
@@ -3211,6 +3284,20 @@ func reapplyBinaryAfterOSUpdate(ctx context.Context, priorConn *grpcclient.Agent
 	reconnectAfter := updatedAgentReconnectFunc(ctx, conn)
 	restartTimeout := agentRestartTimeoutForConn(conn, osName)
 	_ = conn.Close()
+	if nowSupervised {
+		// The re-applied agent is on trial, and the supervisor's verdict is
+		// the outcome.
+		announce := announceAgentCheck(os.Stdout)
+		if jsonOutput {
+			announce = func() {}
+		}
+		verdict, verdictConn, err := awaitAgentVerdict(ctx, nil, reconnectAfter, sha256Hash, announce)
+		verdictConn.Close()
+		if err != nil {
+			return agentVerifyResult{}, err
+		}
+		return agentVerifyResult{Version: verdict.Running, HashVerified: true}, nil
+	}
 	readyConn, err := awaitAgentRestart(ctx, reconnectAfter, restartTimeout, jsonOutput)
 	if err != nil {
 		return agentVerifyResult{}, err
@@ -3340,6 +3427,14 @@ func agentUpdateTerminalError(recvErr error) error {
 			return fmt.Errorf("%s — another OS or agent update may still be running; wait for it to finish, then retry. "+
 				"If this repeats with nothing running, reboot the device, then retry", s.Message())
 		}
+		if reason, ok := strings.CutPrefix(s.Message(), checkRefusalPrefix); ok {
+			return &agentCheckRefusedError{reason: reason}
+		}
+		for _, p := range agentUpdatesPausedPrefixes {
+			if strings.HasPrefix(s.Message(), p) {
+				return &agentUpdatesPausedError{reason: s.Message()}
+			}
+		}
 		return errors.New(s.Message())
 	default:
 		return fmt.Errorf("agent rejected the update: %s", s.Message())
@@ -3420,6 +3515,8 @@ func evaluateAgentUpdateOutcome(resp *agentpb.GetAgentVersionResponse, uploadedS
 type agentVerifyResult struct {
 	Version      string
 	HashVerified bool
+	// Note replaces the usual outcome message, e.g. when nothing needed re-applying.
+	Note string
 }
 
 // verifyAgentAfterUpdate polls GetAgentVersion on the freshly restarted agent

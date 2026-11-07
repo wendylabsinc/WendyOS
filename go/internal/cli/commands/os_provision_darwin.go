@@ -19,9 +19,9 @@ import (
 const configPartitionSupported = true
 
 // writeConfigPartition finds, mounts, and populates the FAT32 config partition
-// on d after a dd write. agentBinary is the arm64 agent binary content. creds
+// on d after a dd write. agent is the agent binary for /config. creds
 // and deviceName are written to wendy.conf when non-empty.
-func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
+func writeConfigPartition(d drive, agent configAgent, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
 	partDev, err := findConfigPartition(d.DevicePath)
 	if err != nil {
 		return fmt.Errorf("locating config partition on %s: %w", d.DevicePath, err)
@@ -37,7 +37,7 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 	if m.elevated {
 		target = sudoDirTarget(m.path)
 	}
-	return writeConfigFilesTo(target, agentBinary, creds, deviceName, provisioningJSON)
+	return writeConfigFilesTo(target, agent, creds, deviceName, provisioningJSON)
 }
 
 // darwinPartitionRe matches the slice device nodes diskutil reports for
