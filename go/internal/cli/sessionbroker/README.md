@@ -25,19 +25,22 @@ not a process-wide collection of unrelated operator identities.
 
 ## Carriers and reconnect
 
-Explicit TCP and BLE first-hop recipes authenticate the exact selected
-router with the primary operator certificate, tenant chain and profile pins. The
-same shared node can own additional authenticated carriers. The bounded scheduler
-holds at most 256 candidates, eight connections, two BLE connections and two
-concurrent setup attempts. Automatic discovery supplies LAN TLS and host BLE
-candidates to the same scheduler. macOS and Linux support outgoing BLE; explicit TCP recipes do not
-require radio discovery. The direct first hop may be WendyOS or a PSRAM Lite router with operator-router support;
-Native Lite management uses the signed WendyCom endpoint, including on a Lite first hop.
+The CLI discovers nearby routers over LAN and Bluetooth automatically and
+authenticates them with the primary operator certificate, organization chain
+and profile pins. It does not accept a manually selected first-hop router,
+address, transport or Bluetooth PSM. Legacy pinned recipes migrate to automatic
+discovery while preserving the saved intent to stay connected.
+
+The same shared node can own additional authenticated carriers. The bounded
+scheduler holds at most 256 candidates, eight connections, two BLE connections
+and two concurrent setup attempts. macOS and Linux support outgoing BLE. A nearby
+router may be WendyOS or a PSRAM Lite router with operator-router support.
+Native Lite management uses the signed WendyCom endpoint.
 
 A first-hop failure retains the broker's IPC endpoint and installation identity.
 The carrier scheduler reconnects while the node remains alive; if the participant
 itself ends, the supervisor closes that generation before reopening it. Automatic
-recipes can rediscover a changed LAN address. Existing failed flows end normally;
+discovery can find a changed LAN address. Existing failed flows end normally;
 traffic is never replayed silently. Current credentials and pins are checked again
 for new handshakes. The shared node supports actual packet forwarding after the
 last command lease ends.
