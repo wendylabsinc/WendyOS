@@ -1,6 +1,10 @@
 #ifndef WENDY_DESKTOP_BRIDGE_H
 #define WENDY_DESKTOP_BRIDGE_H
 #include "BridgeTypes.h"
+typedef struct { char *name; int32_t value, minimum, maximum, step; int mutable; } WDCameraControl;
+typedef struct { WDStatus status; WDCameraControl *items; size_t count; } WDCameraControlsResult;
+WDCameraControlsResult *WDCameraControls(uint64_t session, uint32_t camera, char *stable_id, char *name, int32_t value);
+void WDCameraControlsFree(WDCameraControlsResult *value);
 #include "VisualRecognition.h"
 #include "SiteLocalization.h"
 WDCameraMetadataResult *WDCameraMetadataList(uint64_t session);

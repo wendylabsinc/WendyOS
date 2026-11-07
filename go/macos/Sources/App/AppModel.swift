@@ -583,9 +583,12 @@ final class AppModel: ObservableObject {
     }
 
     func showCameraWall(limit: Int? = nil) async {
+        let opening = !cameraWallVisible
         cameraWallVisible = true
         cameraPreviewLimit = limit
-        for feed in cameraFeeds.prefix(limit ?? cameraFeeds.count) { feed.allowAutoplay() }
+        if opening {
+            for feed in cameraFeeds.prefix(limit ?? cameraFeeds.count) { feed.allowAutoplay() }
+        }
         cameraRecoveryGeneration &+= 1
         let generation = cameraRecoveryGeneration
         await playCameras()

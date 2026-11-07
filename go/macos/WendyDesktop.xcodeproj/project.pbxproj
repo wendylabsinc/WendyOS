@@ -26,6 +26,7 @@
 		1088C1EC493B83C2803E7A2A /* SiteAutomaticAlignment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8365356E3DFE9319DA387C60 /* SiteAutomaticAlignment.swift */; };
 		10B131E8F39984EDA6802FF1 /* DeviceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */; };
 		11B6ABF533652F56CCB3E079 /* Go2 in Resources */ = {isa = PBXBuildFile; fileRef = F89DC02C7622D70102441A63 /* Go2 */; };
+		123E5F5B02442E01F8C2C2E2 /* MobileCameraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47D54A45314391201FF3B935 /* MobileCameraTests.swift */; };
 		12E87D30FBA90B9E67946EB6 /* MobileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72B368A49DE636D3D5AD9E35 /* MobileTests.swift */; };
 		130F80B0C99242FFF2D614DE /* CloudManagementClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D780434FF5B2190F955252 /* CloudManagementClient.swift */; };
 		1571389C22196AD11AD63A6B /* BlockingWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBC666362E8AC1DED444AD88 /* BlockingWork.swift */; };
@@ -147,6 +148,7 @@
 		7E4317BA630E69F764675067 /* ThermalCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8B3A78D6205C63AD446D63 /* ThermalCameraView.swift */; };
 		8455994379C39B9DCB041A54 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */; };
 		8488FA42FD8192E0AB5100F7 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00BC44983830F926484A6FE9 /* PacketTunnelProvider.swift */; };
+		85D80828D049329EE13FEBCF /* MobileCameras.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA837B0B3D516DBB577F5548 /* MobileCameras.swift */; };
 		864D2DC52CAFC6D56CD6ACE9 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8FCECB47D77D65A8AD29C6 /* Security.framework */; };
 		86AFBD2BAE00A99C77D170D4 /* NetworkTrafficView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */; };
 		8829846641717B1154A66533 /* SiteRobotLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA098E992CF9B04070ED0F /* SiteRobotLocalizationTests.swift */; };
@@ -417,6 +419,7 @@
 		414F5BCA328D3D1A4C0A5537 /* MobileDeviceApps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDeviceApps.swift; sourceTree = "<group>"; };
 		4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDeviceCardView.swift; sourceTree = "<group>"; };
 		453C94DF8A0078EC17B2D427 /* SiteVisualMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteVisualMap.swift; sourceTree = "<group>"; };
+		47D54A45314391201FF3B935 /* MobileCameraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCameraTests.swift; sourceTree = "<group>"; };
 		49A41BF0F5377D89682F1080 /* DataVisualizerTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerTimelineTests.swift; sourceTree = "<group>"; };
 		4AF0F54AFF335D44D9766EEF /* InstallHardwareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallHardwareView.swift; sourceTree = "<group>"; };
 		4CFA098E992CF9B04070ED0F /* SiteRobotLocalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotLocalizationTests.swift; sourceTree = "<group>"; };
@@ -539,6 +542,7 @@
 		E75A157CBBD32C6A883151B3 /* NearbySetupClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySetupClient.swift; sourceTree = "<group>"; };
 		E9769FE92218D369CAE4C7B1 /* LiteDeviceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteDeviceView.swift; sourceTree = "<group>"; };
 		EA42D986BDD4C2F250B3C32D /* DeviceBluetoothView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBluetoothView.swift; sourceTree = "<group>"; };
+		EA837B0B3D516DBB577F5548 /* MobileCameras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCameras.swift; sourceTree = "<group>"; };
 		EB4ECB73A974D1CD7FE6DE57 /* DeviceOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceOverview.swift; sourceTree = "<group>"; };
 		EBC666362E8AC1DED444AD88 /* BlockingWork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockingWork.swift; sourceTree = "<group>"; };
 		EC9A9E2CB283BE6BA64361DD /* SiteCameraGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteCameraGeometry.swift; sourceTree = "<group>"; };
@@ -797,6 +801,7 @@
 		4FE7BDE560CB2771FA9DF7F8 /* Tests-iOS */ = {
 			isa = PBXGroup;
 			children = (
+				47D54A45314391201FF3B935 /* MobileCameraTests.swift */,
 				0F13D570193EF9CC9CB12330 /* MobileRecordingTests.swift */,
 				72B368A49DE636D3D5AD9E35 /* MobileTests.swift */,
 			);
@@ -857,6 +862,7 @@
 				8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */,
 				6601B40FC3BD51AE9C42CB5B /* DeviceViewfinderController.swift */,
 				26F8B5DECBBAC2EAA7EB1130 /* MobileAppBrowser.swift */,
+				EA837B0B3D516DBB577F5548 /* MobileCameras.swift */,
 				FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */,
 				A42B4C81072A80F34E80568B /* MobileDeviceActivity.swift */,
 				414F5BCA328D3D1A4C0A5537 /* MobileDeviceApps.swift */,
@@ -1473,6 +1479,7 @@
 				8455994379C39B9DCB041A54 /* LogsView.swift in Sources */,
 				5AB57DEAEE38F64FA12A8E29 /* MeshGraphView.swift in Sources */,
 				946DD3354B835B1C67FB270E /* MobileAppBrowser.swift in Sources */,
+				85D80828D049329EE13FEBCF /* MobileCameras.swift in Sources */,
 				E0A29452C11060654C08FD00 /* MobileDataView.swift in Sources */,
 				E380BE80056EF7BB3912DBE9 /* MobileDeviceActivity.swift in Sources */,
 				9BD1857BEA9C23C5DD3B5D17 /* MobileDeviceApps.swift in Sources */,
@@ -1551,6 +1558,7 @@
 			files = (
 				635A18F2E5FC3C3480A85510 /* ConcurrencyTests.swift in Sources */,
 				EAC7F4AADFCE64830C8813C2 /* DeviceRecognitionTests.swift in Sources */,
+				123E5F5B02442E01F8C2C2E2 /* MobileCameraTests.swift in Sources */,
 				775C1B7646882ACB8687D0B9 /* MobileRecordingTests.swift in Sources */,
 				12E87D30FBA90B9E67946EB6 /* MobileTests.swift in Sources */,
 				AF7E4000003DC6763697795B /* SiteTwinTests.swift in Sources */,
