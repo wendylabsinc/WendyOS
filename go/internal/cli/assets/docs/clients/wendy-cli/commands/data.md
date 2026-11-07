@@ -39,6 +39,7 @@ and most recent rounds in `roughtime_observations` and counts the rounds in
 | `wendy data episodes` | List finalized Episodes, with any still in progress at the top. |
 | `wendy data inspect [episode]` | Print the manifest and verify every sealed payload checksum. |
 | `wendy data download [episode]` | Resume a per-file download, verify it, and publish the local directory atomically. |
+| `wendy data delete [episode...]` | Permanently delete finalized Episodes from the device. `--all` deletes every finalized Episode; `--force` skips the confirmation. Alias `rm`. |
 
 Use repeatable `--source` flags to narrow recording or `--exclude-source` to
 remove a default source. `record` also accepts `--name`, repeatable
@@ -838,6 +839,48 @@ When the device storage quota is exceeded, the oldest Episodes that are
 already uploaded or were recorded without an upload policy are evicted first.
 Episodes still awaiting upload are evicted only as a last resort, with a
 warning in the agent log naming the Episode and campaign.
+
+### Deleting Episodes
+
+`wendy data delete <episode-id>...` removes finalized Episodes from the device
+for good: the manifest and every file each one recorded. It cannot be undone,
+and an Episode that has not been uploaded is lost, so the command lists what it
+is about to delete and asks first. `--force` skips the question, and is
+required in non-interactive and `--json` mode. `--all` deletes every finalized
+Episode. With neither IDs nor `--all`, an interactive terminal picks one, as
+`inspect` does.
+
+```console
+$ wendy data delete 20261027T101500Z-6c1f
+EPISODE                NAME            SIZE    STARTED
+20261027T101500Z-6c1f  c920-yolo-live  9.3 MB  2026-10-27 10:15:00
+Delete episode 20261027T101500Z-6c1f? This cannot be undone, and an episode that has not been uploaded is lost for good. [y/N] y
+Deleted episode 20261027T101500Z-6c1f (c920-yolo-live, 9.3 MB).
+
+$ wendy data delete --all --force
+Deleted episode 20261027T104210Z-91ad (c920-yolo-live, 10.0 MB).
+Deleted episode 20261027T103002Z-3e70 (c920-yolo-live, 9.8 MB).
+Deleted 2 episodes, 19.8 MB in all.
+```
+
+- Every ID is checked against the device's list before anything is deleted,
+  so one mistyped ID deletes none of them.
+- A recording still in progress (recording, draining or sealing) is never
+  deleted. Stop it with `wendy data stop`, or wait for it to be sealed. `--all`
+  leaves recordings in progress alone and says how many it left.
+- An Episode that a `download` or the upload worker is reading at that moment
+  is refused; delete it when that has finished. With `--all`, the others are
+  still deleted and the command exits non-zero, naming the ones it could not.
+- The Episode leaves the store in one atomic step and its files are removed
+  after that. A delete interrupted by a crash or power cut is finished when the
+  agent next starts; it is never left half done.
+- Removing a campaign with `wendy data campaign remove` keeps its Episodes.
+  Delete them separately.
+- With `--json`, each deleted Episode is one line of protobuf JSON: the Episode
+  as it was listed, and its `upload_state` (`uploaded` means a copy exists at
+  its upload destination).
+- An agent that predates `delete` answers with
+  `this device's agent does not support \`wendy data delete\`; update it with \`wendy device update\``.
 
 The device-wide quota is the smaller of a fifth of the episode store's
 filesystem and `WENDY_DATA_MAX_BYTES` (default 50 GiB), and eviction preserves
