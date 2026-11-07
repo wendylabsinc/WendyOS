@@ -1,6 +1,10 @@
 package commands
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
+)
 
 // nextStepsError attaches recovery steps to an error. Error() keeps the
 // long-standing layout, the cause followed by each step on its own line
@@ -52,6 +56,8 @@ func (e *nextStepsError) MessageWithoutSteps() string { return e.err.Error() }
 // with a NextSteps() []string method contributes.
 func NextSteps(err error) []string {
 	var steps []string
+	_, operatorSteps := sessionbroker.OperatorRecovery(err)
+	steps = append(steps, operatorSteps...)
 	walkErrorChain(err, func(e error) {
 		if carrier, ok := e.(interface{ NextSteps() []string }); ok {
 			steps = append(steps, carrier.NextSteps()...)

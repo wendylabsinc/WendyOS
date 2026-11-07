@@ -159,14 +159,14 @@ func TestManifestGossipQueueBudgetDoesNotConsumeAnnouncement(t *testing.T) {
 	}
 }
 
-func TestManifestGossipExpiredUnverifiedBodyDoesNotCreateReceipt(t *testing.T) {
+func TestManifestGossipInvalidSignatureDoesNotCreateReceipt(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
 	w, err := SignManifest(routeManifest(device, now), chain, key, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Expiry is rejected before authentication. Even this bad signature must not
-	// become a shared receipt or prevent an independent supplier from being tried.
+	// Receiver TTL no longer classifies signed dates against local UTC. This
+	// invalid signature must fail normal authentication without a shared receipt.
 	w.Signature[0] ^= 1
 	body, _ := netwire.Marshal(w)
 	later := now.Add(MaxLease)
@@ -183,13 +183,14 @@ func TestManifestGossipExpiredUnverifiedBodyDoesNotCreateReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, changed, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: data}, later); err != nil || len(changed) != 0 {
+	if _, changed, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: data}, later); !errors.Is(err, ErrInvalidManifestSignature) || len(changed) != 0 {
 		t.Fatal(changed, err)
 	}
+	receiver.Close() // A fatal authentication error closes and releases its claim.
 	alternate := pool.NewSession(netgossip.Manifest)
 	defer alternate.Close()
 	if next, _, err := alternate.Receive(*have, later); err != nil || next == nil {
-		t.Fatal("unverified expired manifest became a shared receipt", next, err)
+		t.Fatal("invalid signature became a shared receipt", next, err)
 	}
 	if len(d.Records(later)) != 0 {
 		t.Fatal("unverified artifact entered the directory")

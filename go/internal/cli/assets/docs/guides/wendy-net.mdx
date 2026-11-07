@@ -179,6 +179,21 @@ Wendy Net service mode is separate and does not grant an Internet default route.
 Host-networked apps share the host's network access and expose ports they bind;
 use host mode only when the app needs that access.
 
+### Recover after a clock or certificate error
+
+A device whose clock is behind may need Internet access to recover trusted time.
+Keep a reachable mesh gateway with Internet sharing enabled while the device's
+normal time synchronization runs. Mesh joining can use previously saved clock
+trust during recovery, but a selected gateway alone does not prove recovery
+completed.
+
+If certificate verification still fails, keep the exact error and check the CLI,
+agent or firmware versions and the device's clock through an available management
+connection. Do not delete saved mesh identity files or re-enroll to work around
+a clock error; the saved identity also protects against old messages being
+replayed. See [device troubleshooting](/docs/advanced/wendyos/networking/troubleshooting)
+for the next checks.
+
 ## 5. Connect your applications
 
 Applications opt into Wendy Net in `wendy.json` and explicitly publish the ports

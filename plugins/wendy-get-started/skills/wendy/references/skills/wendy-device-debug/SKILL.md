@@ -39,6 +39,29 @@ Prefer fixes in the app container or `wendy.json`. Use documented CLI operations
 for device repair. Do not patch Wendy's agent or OS implementation as part of
 ordinary app debugging, and do not publish credentials or device-specific secrets.
 
+## Mesh connectivity and clock errors
+
+Distinguish a device's ordinary LAN connection from this computer's Wendy Net
+router. A device with mesh participation disabled can still be managed over LAN.
+For mesh problems, inspect `wendy net status --device <target>` and
+`wendy --json net topology --local-cli` separately. A ready local
+connection does not prove that the destination has a current route; verify it
+with a real command to the returned `mesh://...` destination.
+
+If the user explicitly disconnected the local mesh router, preserve that choice.
+Explain how to reconnect rather than enabling it as a side effect of diagnosis.
+Router addresses, Bluetooth identifiers and PSMs are discovered automatically.
+Do not suggest removed manual first-hop flags.
+
+For certificate or clock errors, retain the exact error and inspect versions and
+time state through the available CLI/MCP tools. A device recovering from an old
+clock may need a working mesh path to a gateway with Internet access before its
+normal time synchronization can finish. Keep that path available and check the
+result; do not assume a selected gateway proves time recovery. Do not bypass
+certificate verification, delete mesh identity/history, or re-enroll as a routine
+workaround. Report a missing clock-inspection capability instead of inventing a
+tool or shell access.
+
 ## Jetson GPU checks
 
 Use device info, hardware capabilities, and app logs to check:

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
@@ -422,6 +423,11 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 					if err := operatorRecipeCurrent(spec); err != nil {
 						return err
 					}
+					generation, err := uuid.NewRandom()
+					if err != nil {
+						return err
+					}
+					spec.DiagnosticGeneration = generation.String()
 					return launchOperatorBroker(spec)
 				}()
 				if err != nil {
@@ -432,7 +438,7 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 		}
 		select {
 		case <-wait.Done():
-			return nil, fmt.Errorf("could not join Wendy Net from this computer: %w", errors.Join(wait.Err(), last))
+			return nil, operatorStartupError(spec, errors.Join(wait.Err(), last))
 		case <-ticker.C:
 		}
 	}
