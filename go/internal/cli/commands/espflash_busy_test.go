@@ -23,6 +23,12 @@ func withStubs(t *testing.T, find func(string) []portHolder, kill func(int) erro
 	})
 }
 
+// Every kill is stubbed. Choose holder PIDs above both protected process IDs
+// so a real test-runner PID cannot accidentally turn a holder into "self".
+func holderTestPID(offset int) int {
+	return max(os.Getpid(), os.Getppid()) + 1 + offset
+}
+
 func TestOfferPortBusyRetry_NoHoldersFound(t *testing.T) {
 	var killed []int
 	withStubs(t,
@@ -43,7 +49,7 @@ func TestOfferPortBusyRetry_HolderFound_UserConfirmsKill(t *testing.T) {
 	var killed []int
 	var askedQuestion string
 	withStubs(t,
-		func(string) []portHolder { return []portHolder{{pid: 4242, command: "wendy run"}} },
+		func(string) []portHolder { return []portHolder{{pid: holderTestPID(0), command: "wendy run"}} },
 		killOK(&killed),
 		func(q string) bool { askedQuestion = q; return true },
 	)
@@ -51,8 +57,8 @@ func TestOfferPortBusyRetry_HolderFound_UserConfirmsKill(t *testing.T) {
 	if !offerPortBusyRetry("/dev/ttyFAKE") {
 		t.Error("offerPortBusyRetry() = false, want true (kill confirmed, should retry automatically)")
 	}
-	if len(killed) != 1 || killed[0] != 4242 {
-		t.Errorf("killed = %v, want [4242]", killed)
+	if len(killed) != 1 || killed[0] != holderTestPID(0) {
+		t.Errorf("killed = %v, want [%d]", killed, holderTestPID(0))
 	}
 	if askedQuestion != "Kill this process and retry?" {
 		t.Errorf("question = %q, want singular phrasing", askedQuestion)
@@ -62,7 +68,7 @@ func TestOfferPortBusyRetry_HolderFound_UserConfirmsKill(t *testing.T) {
 func TestOfferPortBusyRetry_HolderFound_UserDeclines(t *testing.T) {
 	var killed []int
 	withStubs(t,
-		func(string) []portHolder { return []portHolder{{pid: 4242, command: "wendy run"}} },
+		func(string) []portHolder { return []portHolder{{pid: holderTestPID(0), command: "wendy run"}} },
 		killOK(&killed),
 		func(string) bool { return false },
 	)
@@ -80,8 +86,7 @@ func TestOfferPortBusyRetry_MultipleHolders_Pluralized(t *testing.T) {
 	var askedQuestion string
 	withStubs(t,
 		func(string) []portHolder {
-			// PID 1 can be a protected ancestor when these tests run in a container.
-			return []portHolder{{pid: 424241, command: "a"}, {pid: 424242, command: ""}}
+			return []portHolder{{pid: holderTestPID(0), command: "a"}, {pid: holderTestPID(1), command: ""}}
 		},
 		killOK(&killed),
 		func(q string) bool { askedQuestion = q; return true },
@@ -136,7 +141,7 @@ func TestOfferPortBusyRetry_SelfFilteredButOtherHolderRemains(t *testing.T) {
 		func(string) []portHolder {
 			return []portHolder{
 				{pid: os.Getpid(), command: "wendy install"},
-				{pid: 4242, command: "screen /dev/ttyFAKE"},
+				{pid: holderTestPID(0), command: "screen /dev/ttyFAKE"},
 			}
 		},
 		killOK(&killed),
@@ -151,8 +156,8 @@ func TestOfferPortBusyRetry_SelfFilteredButOtherHolderRemains(t *testing.T) {
 	if !offerPortBusyRetry("/dev/ttyFAKE") {
 		t.Error("offerPortBusyRetry() = false, want true")
 	}
-	if len(killed) != 1 || killed[0] != 4242 {
-		t.Errorf("killed = %v, want [4242] (never our own pid)", killed)
+	if len(killed) != 1 || killed[0] != holderTestPID(0) {
+		t.Errorf("killed = %v, want [%d] (never our own pid)", killed, holderTestPID(0))
 	}
 }
 
@@ -160,7 +165,7 @@ func TestOfferPortBusyRetry_SelfFilteredButOtherHolderRemains(t *testing.T) {
 // an automatic retry: nothing changed, so the caller should ask the user.
 func TestOfferPortBusyRetry_KillFails(t *testing.T) {
 	withStubs(t,
-		func(string) []portHolder { return []portHolder{{pid: 4242, command: "sudo screen"}} },
+		func(string) []portHolder { return []portHolder{{pid: holderTestPID(0), command: "sudo screen"}} },
 		func(int) error { return errors.New("operation not permitted") },
 		func(string) bool { return true },
 	)
@@ -174,10 +179,10 @@ func TestOfferPortBusyRetry_KillFails(t *testing.T) {
 func TestOfferPortBusyRetry_PartialKillSucceeds(t *testing.T) {
 	withStubs(t,
 		func(string) []portHolder {
-			return []portHolder{{pid: 1, command: "root-owned"}, {pid: 4242, command: "screen"}}
+			return []portHolder{{pid: holderTestPID(0), command: "root-owned"}, {pid: holderTestPID(1), command: "screen"}}
 		},
 		func(pid int) error {
-			if pid == 1 {
+			if pid == holderTestPID(0) {
 				return errors.New("operation not permitted")
 			}
 			return nil

@@ -439,8 +439,9 @@ func xcodeEntrypoint(productPath string, isAppBundle bool) string {
 // container. Architecture and code-signing settings are taken from the project's
 // build settings; this function does not override them.
 func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
-	// Verify CPU architecture matches.
-	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	// Verify CPU architecture matches. runWithAgentRecorded has just fetched
+	// the version, so this reuses it instead of asking the device again.
+	versionResp, err := agentVersionForRun(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("querying device version: %w", err)
 	}
@@ -450,6 +451,12 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 	}
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
+	}
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
 	}
 
 	// Find the .xcodeproj directory.

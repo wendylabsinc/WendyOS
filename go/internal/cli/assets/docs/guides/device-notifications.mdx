@@ -89,6 +89,11 @@ Use Cloud user IDs, not names or email addresses. User and organization role
 selectors have union semantics: a user matching more than one selector receives
 one Notification. Cloud v2 forwarding uses only these selectors.
 
+These examples use `wendy.system.v1.NotificationAudience`. The separate Cloud v2
+message adds `role_ids` and deprecates its enum `roles` field, but the local
+app-facing API does not expose or forward `role_ids`. The WendyKit and gRPC
+examples here continue to use the supported local selectors.
+
 See the
 [wendy-app-sdk README](https://github.com/wendylabsinc/wendy-app-sdk#send-a-notification)
 for WendyKit package details.
