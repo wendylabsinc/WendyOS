@@ -286,3 +286,41 @@ func TestDownloadedModelPrefersReachableRuntime(t *testing.T) {
 		t.Fatalf("model route: %+v, %v", models, err)
 	}
 }
+
+func TestHostedChatNeedsDeviceSessionButNotDeviceModelServer(t *testing.T) {
+	b := webBackend(t)
+	// Stop before inference: this proves startup can prepare cloud chat with no
+	// model port/runtime on the device, without calling a paid provider.
+	b.chatToolsFactory = func(context.Context, string) (desktopChatTools, error) {
+		return nil, errors.New("fixture tools unavailable")
+	}
+	b.conn.RegistryDialer = func(context.Context, int) (net.Conn, error) {
+		t.Error("cloud chat tried the device model port")
+		return nil, errors.New("unexpected device dial")
+	}
+	messages := []chat.Message{{Role: "user", Content: "hello"}}
+	if err := b.StartHostedChat(999, 1, "openai", "test-model", "fake-key", messages); err == nil {
+		t.Fatal("accepted stale device session")
+	}
+	if err := b.StartHostedChat(3, 1, "openai", "test-model", "", messages); err == nil {
+		t.Fatal("accepted missing key")
+	}
+	if err := b.StartHostedChat(3, 1, "openai", "test-model", "fake-key", messages); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		result, err := b.PollChat(3, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Done {
+			if !strings.Contains(result.Error, "fixture tools unavailable") {
+				t.Fatal(result.Error)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("cloud turn did not finish")
+}

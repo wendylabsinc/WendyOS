@@ -110,6 +110,7 @@
 		5AEBF29BA828D490E66E39E5 /* MobileRecordingCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDB6ECAA67E9890B0CF2C13E /* MobileRecordingCards.swift */; };
 		5CDC206FDA8042791A158245 /* DeviceInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25413B13DA07596067522B8C /* DeviceInfoView.swift */; };
 		5F73CFF7F68EEE13F2D99BC4 /* CampaignSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */; };
+		5FBD09FC5D3CC36947C4EE0B /* ChatCloudSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4CBC7C8ABEC458177AA44B /* ChatCloudSettings.swift */; };
 		604357B1B1F9B45D0EB3CB93 /* SiteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC266E17CA48D89E2A7DA57 /* SiteStore.swift */; };
 		604A146A3A9A0202DEF64736 /* SiteVisualMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 453C94DF8A0078EC17B2D427 /* SiteVisualMap.swift */; };
 		60A966F7107F6D27DA94DEC8 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
@@ -170,6 +171,7 @@
 		91056C19DDF1F71E9FE5E969 /* VPNConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6AB0A619B578B06B3173D9 /* VPNConfiguration.swift */; };
 		91304A73F40E332BA0FA844E /* AccountsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */; };
 		913F1A05C9B4169F66DFAA4E /* CameraDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2BBF5239DC522DEC32DDF6 /* CameraDisplayView.swift */; };
+		92B8920DD04474E29475F183 /* ChatCloudSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4CBC7C8ABEC458177AA44B /* ChatCloudSettings.swift */; };
 		93B23A2E3D9EDC9087659488 /* PresentedFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */; };
 		93BDD157A718F2BBA02A98D4 /* SimulatorClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78EF1B380CC110B5531DD514 /* SimulatorClient.swift */; };
 		946DD3354B835B1C67FB270E /* MobileAppBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F8B5DECBBAC2EAA7EB1130 /* MobileAppBrowser.swift */; };
@@ -218,6 +220,7 @@
 		B3F370E0B0F697440772A15C /* DataTimelineViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F0FE01F434594987BCB7D5 /* DataTimelineViewport.swift */; };
 		B47059228CF53913171E4472 /* WendyMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97B878F9B8525136814A1077 /* WendyMobileApp.swift */; };
 		B54454BF9E02F6A2D6B08E8A /* AutomationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B3ADE76629CC299C627F755 /* AutomationClient.swift */; };
+		B55D56471F1D00551BBEB799 /* CloudChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F85C825F391DB90657D2435A /* CloudChatTests.swift */; };
 		B6814F13047D063DDC783CEE /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC609FC5E6A530F493D66E7D /* AppModel.swift */; };
 		B755A7544C278B994D81687B /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */; };
 		B9C57EBD0B7D5276EE374D5B /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD1FE3F2E1DB38F68D72019A /* AudioToolbox.framework */; };
@@ -437,6 +440,7 @@
 		5958890C690A885A313B8C83 /* SitePeopleTrackingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitePeopleTrackingTests.swift; sourceTree = "<group>"; };
 		5B3ADE76629CC299C627F755 /* AutomationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationClient.swift; sourceTree = "<group>"; };
 		5D8FCECB47D77D65A8AD29C6 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		5E4CBC7C8ABEC458177AA44B /* ChatCloudSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCloudSettings.swift; sourceTree = "<group>"; };
 		5E9CE1C6D1084CCB62982FA7 /* DeviceRecognitionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRecognitionTests.swift; sourceTree = "<group>"; };
 		6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignsView.swift; sourceTree = "<group>"; };
 		648A9EBBA886E50CBE873C88 /* UnitreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitreeTests.swift; sourceTree = "<group>"; };
@@ -556,6 +560,7 @@
 		F760FEF4F5630F1E23318F82 /* VPNInternetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNInternetTests.swift; sourceTree = "<group>"; };
 		F77E3BE596D894B863D41817 /* RobotLensCalibrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotLensCalibrationTests.swift; sourceTree = "<group>"; };
 		F7D780434FF5B2190F955252 /* CloudManagementClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudManagementClient.swift; sourceTree = "<group>"; };
+		F85C825F391DB90657D2435A /* CloudChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudChatTests.swift; sourceTree = "<group>"; };
 		F89DC02C7622D70102441A63 /* Go2 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Go2; path = Resources/Go2; sourceTree = SOURCE_ROOT; };
 		FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDataView.swift; sourceTree = "<group>"; };
 		FCBC82FFE9AAFB77D970A52B /* WendyDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WendyDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -659,6 +664,7 @@
 				9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */,
 				2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */,
 				6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */,
+				5E4CBC7C8ABEC458177AA44B /* ChatCloudSettings.swift */,
 				4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */,
 				F7D780434FF5B2190F955252 /* CloudManagementClient.swift */,
 				0735D8E8691C826856A65809 /* CloudManagementModel.swift */,
@@ -801,6 +807,7 @@
 		4FE7BDE560CB2771FA9DF7F8 /* Tests-iOS */ = {
 			isa = PBXGroup;
 			children = (
+				F85C825F391DB90657D2435A /* CloudChatTests.swift */,
 				47D54A45314391201FF3B935 /* MobileCameraTests.swift */,
 				0F13D570193EF9CC9CB12330 /* MobileRecordingTests.swift */,
 				72B368A49DE636D3D5AD9E35 /* MobileTests.swift */,
@@ -1446,6 +1453,7 @@
 				36ABCD2BDD34D7B61468F7C2 /* CampaignRecordingsView.swift in Sources */,
 				5F73CFF7F68EEE13F2D99BC4 /* CampaignSettingsView.swift in Sources */,
 				6FC51A15B6A00B68E69125A4 /* CampaignsView.swift in Sources */,
+				5FBD09FC5D3CC36947C4EE0B /* ChatCloudSettings.swift in Sources */,
 				778C4725BF862E3710BE207E /* ChatDeviceCardView.swift in Sources */,
 				A13C1FEA6CDC52F709271853 /* CloudManagementClient.swift in Sources */,
 				F402B164439271518A77BBC4 /* CloudManagementModel.swift in Sources */,
@@ -1556,6 +1564,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B55D56471F1D00551BBEB799 /* CloudChatTests.swift in Sources */,
 				635A18F2E5FC3C3480A85510 /* ConcurrencyTests.swift in Sources */,
 				EAC7F4AADFCE64830C8813C2 /* DeviceRecognitionTests.swift in Sources */,
 				123E5F5B02442E01F8C2C2E2 /* MobileCameraTests.swift in Sources */,
@@ -1605,6 +1614,7 @@
 				89AD3C60B440A6C2C1488871 /* CampaignModelPicker.swift in Sources */,
 				D17A0FC4CFBE9232DA7F6B34 /* CampaignSettingsView.swift in Sources */,
 				2AE48E3AFC2A12929B38DCFD /* CampaignsView.swift in Sources */,
+				92B8920DD04474E29475F183 /* ChatCloudSettings.swift in Sources */,
 				ABA5D81B189D6224182726FF /* ChatDeviceCardView.swift in Sources */,
 				130F80B0C99242FFF2D614DE /* CloudManagementClient.swift in Sources */,
 				DBF6B64C88771A2105B3D512 /* CloudManagementModel.swift in Sources */,

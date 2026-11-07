@@ -18,6 +18,32 @@ final class DevicesLensUITests: XCTestCase {
         devices.tap()
     }
 
+    func testCloudModelSetupWithoutDeviceModel() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CLOUD_CHAT_FIXTURE"] == "1", "Requires local device fixture; no cloud API calls")
+        launch()
+        _ = openDevice("Devices UI QA", source: "local")
+        XCTAssertTrue(app.buttons["device.segment.Cameras"].waitForExistence(timeout: 30))
+        app.buttons["lens.chat"].tap()
+        XCTAssertTrue(app.navigationBars["Ask Wendy"].waitForExistence(timeout: 5))
+        let inference = app.segmentedControls["chat.inference"]
+        XCTAssertTrue(inference.waitForExistence(timeout: 10))
+        let cloud = inference.buttons["Cloud"]
+        let ready = NSPredicate(format: "enabled == true")
+        expectation(for: ready, evaluatedWith: cloud)
+        waitForExpectations(timeout: 30)
+        cloud.tap()
+        XCTAssertTrue(app.navigationBars["Cloud models"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.secureTextFields.firstMatch.exists)
+        XCTAssertFalse(app.buttons["Save key & find models"].isEnabled)
+        capture("Ask Wendy cloud model setup")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["Connect cloud provider"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Send message"].isEnabled)
+        capture("Ask Wendy cloud empty state")
+        inference.buttons["On device"].tap()
+        XCTAssertTrue(app.buttons["Browse device models"].waitForExistence(timeout: 30))
+    }
+
     func testCameraFullscreenAndSupportedControls() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["WENDY_UI_CAMERAS_FIXTURE"] == "1", "Requires local Cameras fixture")
         launch()

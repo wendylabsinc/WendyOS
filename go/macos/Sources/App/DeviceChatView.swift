@@ -145,11 +145,16 @@ extension GoClient {
 
 @MainActor final class DeviceChatModel: ObservableObject {
     let session: UInt64
+    @Published private(set) var inference: ChatInference = .device
+    @Published private(set) var cloudProvider: ChatCloudProvider = .openai
+    @Published private(set) var hasCloudKey = false
+    private let credentials: any ChatCredentialStore
+    private var discoveryGeneration: UInt64 = 0
     @Published var port = "11434"
     @Published var models: [ChatModelOption] = []
     @Published var model = "" {
         didSet {
-            if let selected = models.first(where: { $0.id == model }) {
+            if inference == .device, let selected = models.first(where: { $0.id == model }) {
                 port = String(selected.port); loadedPort = selected.port
             }
         }
@@ -173,26 +178,38 @@ extension GoClient {
     @Published private(set) var turn: UInt64 = 0
     private var loadedPort: UInt32?
     private let discoverModels: (UInt64, UInt32) async throws -> [ChatModelOption]
-    init(session: UInt64, discoverModels: @escaping (UInt64, UInt32) async throws -> [ChatModelOption] = { try await GoClient.shared.chatModels(session: $0, port: $1) }) {
-        self.session = session; self.discoverModels = discoverModels
+    init(session: UInt64, credentials: any ChatCredentialStore = ChatKeychain(), discoverModels: @escaping (UInt64, UInt32) async throws -> [ChatModelOption] = { try await GoClient.shared.chatModels(session: $0, port: $1) }) {
+        self.session = session; self.credentials = credentials; self.discoverModels = discoverModels
     }
     var portNumber: UInt32? { guard let p = UInt32(port), (1...65535).contains(p) else { return nil }; return p }
     var unavailableReason: String { models.first { $0.id == model }?.unavailableReason ?? "" }
-    var canSend: Bool { unavailableReason.isEmpty && !streaming && !loading && !model.isEmpty && portNumber == loadedPort && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var canSend: Bool { unavailableReason.isEmpty && !streaming && !loading && !model.isEmpty && (inference == .cloud ? hasCloudKey : portNumber == loadedPort) && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     func discoverIfNeeded() async {
-        guard loadedPort == nil, !loading else { return }
+        guard !loading, inference == .cloud ? models.isEmpty : loadedPort == nil else { return }
         await discover()
     }
     func discover() async {
-        guard !streaming, !loading, let port = portNumber else { return }
-        let selectedModel = model
+        guard !streaming, !loading else { return }
+        let selectedModel = model, generation = discoveryGeneration
+        let source = inference, provider = cloudProvider, port = portNumber
         loading = true; error = nil
-        defer { loading = false }
+        defer { if generation == discoveryGeneration { loading = false } }
         do {
-            let result = try await discoverModels(session, port)
-            guard !Task.isCancelled, portNumber == port else { return }
-            models = result; model = result.contains { $0.id == selectedModel } ? selectedModel : (result.first?.id ?? ""); loadedPort = result.isEmpty ? nil : portNumber
-        } catch { if !Task.isCancelled, portNumber == port { self.error = error.localizedDescription } }
+            let result: [ChatModelOption]
+            if source == .cloud {
+                guard let key = try credentials.read(provider) else { hasCloudKey = false; return }
+                hasCloudKey = true
+                result = try await GoClient.shared.hostedChatModels(provider: provider, key: key)
+            } else {
+                guard let port else { return }
+                result = try await discoverModels(session, port)
+            }
+            guard !Task.isCancelled, generation == discoveryGeneration, source == inference,
+                  source == .cloud || portNumber == port else { return }
+            models = result
+            model = result.contains { $0.id == selectedModel } ? selectedModel : (result.first?.id ?? "")
+            if source == .device { loadedPort = result.isEmpty ? nil : portNumber }
+        } catch { if !Task.isCancelled, generation == discoveryGeneration { self.error = error.localizedDescription } }
     }
     func send() {
         guard canSend else { return }
@@ -207,11 +224,12 @@ extension GoClient {
 
     /// SwiftUI owns this task. Stop, device replacement and view removal cancel it.
     func respond() async {
-        guard turn != 0, streaming, let port = portNumber,
+        guard turn != 0, streaming,
               let index = messages.firstIndex(where: { $0.id == activeResponseID }) else { return }
         let request = turn
         let history = messages.filter { $0.isUser || !$0.text.isEmpty }
-        let selectedModel = model
+        let selectedModel = model, source = inference, provider = cloudProvider
+        let port = portNumber
         defer {
             if turn == request {
                 streaming = false; activeResponseID = nil; approval = nil; activity = ""
@@ -219,7 +237,13 @@ extension GoClient {
         }
         do {
             try Task.checkCancellation()
-            try await GoClient.shared.startChat(session: session, turn: request, port: port, model: selectedModel, messages: history)
+            if source == .cloud {
+                guard let key = try credentials.read(provider) else { throw WendyError(message: "Add your API key in Cloud models.") }
+                try await GoClient.shared.startHostedChat(session: session, turn: request, provider: provider, model: selectedModel, key: key, messages: history)
+            } else {
+                guard let port else { throw WendyError(message: "Choose a valid device model port.") }
+                try await GoClient.shared.startChat(session: session, turn: request, port: port, model: selectedModel, messages: history)
+            }
             while !Task.isCancelled && turn == request {
                 let result = try await GoClient.shared.pollChat(session: session, turn: request)
                 guard turn == request, !Task.isCancelled else { break }
@@ -261,7 +285,33 @@ extension GoClient {
         streaming = false; activeResponseID = nil; approval = nil; activity = ""
     }
     func clear() { stop(); messages = []; error = nil; unreadReplies = 0 }
+    func selectInference(_ source: ChatInference) {
+        guard source != inference else { return }
+        resetInference(); inference = source
+        if source == .cloud { refreshCloudKey() }
+    }
+    func selectProvider(_ provider: ChatCloudProvider) {
+        guard provider != cloudProvider else { return }
+        resetInference(); cloudProvider = provider; refreshCloudKey()
+    }
+    private func resetInference() {
+        clear(); prompt = ""; discoveryGeneration &+= 1; loading = false
+        models = []; model = ""; loadedPort = nil
+    }
+    func refreshCloudKey() {
+        do { hasCloudKey = try credentials.read(cloudProvider) != nil }
+        catch { hasCloudKey = false; self.error = error.localizedDescription }
+    }
+    func saveCloudKey(_ key: String) -> Bool {
+        do { try credentials.save(key, for: cloudProvider); resetInference(); hasCloudKey = true; return true }
+        catch { self.error = error.localizedDescription; return false }
+    }
+    func removeCloudKey() {
+        do { try credentials.remove(cloudProvider); resetInference(); hasCloudKey = false }
+        catch { self.error = error.localizedDescription }
+    }
     func useModel(_ name: String, port: UInt32) {
+        selectInference(.device)
         clear(); self.port = String(port); loadedPort = port
         models.removeAll { $0.id == name }
         models.append(ChatModelOption(id: name, name: name, port: port))
@@ -274,6 +324,7 @@ struct DeviceChatView: View {
     let deviceName: String
     @ObservedObject var chat: DeviceChatModel
     var ownsResponse = true
+    @State private var showingCloud = false
     @State private var showingLibrary = false
     @State private var showingConnection = false
     @State private var showingConnectionDetails = false
@@ -284,6 +335,9 @@ struct DeviceChatView: View {
         // repeatedly grow and remeasure the window when this tab appears.
         GeometryReader { viewport in
             actionContent.frame(width: viewport.size.width, height: viewport.size.height)
+                #if os(iOS)
+                .tint(MobileLensStyle.green)
+                #endif
         }.task { await actions.run() }
             .sheet(isPresented: $showingConnectionDetails) {
                 VStack(alignment: .leading, spacing: 16) {
@@ -300,6 +354,14 @@ struct DeviceChatView: View {
 
     @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
+            Picker("Inference", selection: Binding(get: { chat.inference }, set: { source in
+                chat.selectInference(source)
+                if source == .cloud { showingCloud = true }
+                else { actions.submit { await chat.discover() } }
+            })) {
+                ForEach(ChatInference.allCases, id: \.self) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 10)
+                .disabled(chat.streaming || chat.loading).accessibilityIdentifier("chat.inference")
             #if os(iOS)
             HStack(spacing: 12) {
                 Menu {
@@ -308,8 +370,12 @@ struct DeviceChatView: View {
                         ForEach(chat.models) { Text($0.displayName).tag($0.id) }
                     }
                     Divider()
-                    Button("Browse models", systemImage: "square.stack.3d.up") { showingLibrary = true }
-                    Button("Connection settings", systemImage: "network") { showingConnection = true }
+                    if chat.inference == .device {
+                        Button("Browse models", systemImage: "square.stack.3d.up") { showingLibrary = true }
+                        Button("Connection settings", systemImage: "network") { showingConnection = true }
+                    } else {
+                        Button("Cloud models & API key", systemImage: "cloud") { showingCloud = true }
+                    }
                     Button("Refresh models", systemImage: "arrow.clockwise") { actions.submit { await chat.discover() } }
                 } label: {
                     HStack(spacing: 6) {
@@ -329,10 +395,14 @@ struct DeviceChatView: View {
                     Text(chat.models.isEmpty ? "Find a model" : "Choose a model").tag("")
                     ForEach(chat.models) { Text($0.displayName).tag($0.id) }
                 }.frame(maxWidth: 260).disabled(chat.streaming || chat.loading)
-                Button("Browse models") { showingLibrary = true }.disabled(chat.streaming)
+                Button(chat.inference == .device ? "Browse models" : "Cloud models & API key") {
+                    if chat.inference == .device { showingLibrary = true } else { showingCloud = true }
+                }.disabled(chat.streaming)
                 Button { chat.clear() } label: { Label("New chat", systemImage: "square.and.pencil") }.help("New chat")
                 Menu {
-                    Button("Connection settings") { showingConnection = true }
+                    Button(chat.inference == .device ? "Connection settings" : "Cloud settings") {
+                        if chat.inference == .device { showingConnection = true } else { showingCloud = true }
+                    }
                     Button("Refresh models") { actions.submit { await chat.discover() } }
                 } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).fixedSize().help("Chat options").disabled(chat.streaming)
@@ -351,14 +421,14 @@ struct DeviceChatView: View {
             #endif
             #if os(iOS)
             HStack(spacing: 6) {
-                Image(systemName: "cpu")
-                Text("Runs on \(deviceName)").lineLimit(1).truncationMode(.middle)
+                Image(systemName: chat.inference == .device ? "cpu" : "cloud")
+                Text(inferenceLocation).lineLimit(1).truncationMode(.middle)
             }.font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
                 .accessibilityIdentifier("chat.deviceContext")
             #endif
             #if os(macOS)
-            Text("Runs on \(deviceName) · Wendy skills and MCP tools")
+            Text("\(inferenceLocation) · Wendy skills and MCP tools")
                 .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28)
             if chat.loading { ProgressView("Finding models").padding() }
             #endif
@@ -368,10 +438,12 @@ struct DeviceChatView: View {
                         if chat.messages.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("How can I help with \(deviceName)?").font(.title3.bold())
-                                Text(chat.loading ? "Finding models on this device…" : chat.error != nil ? "Wendy could not check the model server. Review the connection below." : chat.model.isEmpty ? "This device needs an installed, running model. Browse models to download and run one on \(deviceName). There is no automatic hosted AI fallback." : "Ask about apps, recordings, or recent logs. Device changes need your confirmation.")
+                                Text(emptyExplanation)
                                     .font(.subheadline).foregroundStyle(.secondary)
-                                if !chat.loading && chat.error == nil && chat.model.isEmpty {
-                                    Button("Browse models", systemImage: "square.stack.3d.up") { showingLibrary = true }
+                                if !chat.loading && chat.model.isEmpty {
+                                    Button(chat.inference == .device ? "Browse device models" : "Connect cloud provider", systemImage: chat.inference == .device ? "square.stack.3d.up" : "cloud") {
+                                        if chat.inference == .device { showingLibrary = true } else { showingCloud = true }
+                                    }
                                         .buttonStyle(.borderedProminent).accessibilityIdentifier("chat.browseModels")
                                 }
                                 ForEach(["Which apps are running?", "Explain recent device errors", "Show recent recordings"], id: \.self) { suggestion in
@@ -459,6 +531,7 @@ struct DeviceChatView: View {
         .task(id: chat.turn) { if ownsResponse { await chat.respond() } }
         .onAppear { if ownsResponse { chat.setPresented(true) } }
         .onDisappear { if ownsResponse { chat.setPresented(false); chat.stop() } }
+            .sheet(isPresented: $showingCloud) { ChatCloudSettings(chat: chat) }
             .sheet(isPresented: $showingLibrary) {
                 ModelLibraryView(session: chat.session, deviceName: deviceName, port: chat.port) { model, port in chat.useModel(model, port: port) }
             }
@@ -487,6 +560,21 @@ struct DeviceChatView: View {
             .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !chat.loading && !chat.streaming, perform: { actions.submit { await chat.discover() } }))
     }
 
+    private var inferenceLocation: String {
+        chat.inference == .device ? "Runs on \(deviceName)" : "Runs in \(chat.cloudProvider.title) cloud · Device: \(deviceName)"
+    }
+    private var emptyExplanation: String {
+        if chat.loading { return "Finding available models…" }
+        if chat.inference == .cloud {
+            if !chat.hasCloudKey { return "Connect your provider with your own API key. No model needs to be installed on \(deviceName)." }
+            if chat.error != nil { return "The cloud provider could not be reached. Check your API key, account access and connection." }
+            if chat.model.isEmpty { return "Choose an available model in Cloud models." }
+            return "Messages and requested device context are sent to \(chat.cloudProvider.title). API usage is billed by your provider. Device changes need your confirmation."
+        }
+        if chat.error != nil { return "Wendy could not check the device model server. Review the connection below, or choose Cloud." }
+        if chat.model.isEmpty { return "Download and run a model on \(deviceName), or choose Cloud to use your own provider API key." }
+        return "Ask about apps, recordings, or recent logs. Device changes need your confirmation."
+    }
     private var connectionNotice: some View {
         let unavailable = !chat.unavailableReason.isEmpty
         let title = unavailable ? "Model server unavailable" : chat.messages.isEmpty ? "Could not load models" : "Chat request failed"
@@ -497,12 +585,16 @@ struct DeviceChatView: View {
                 Text(title).font(.headline)
                 Text(unavailable
                      ? "\(modelName) is downloaded on \(deviceName), but Wendy could not reach its server. Check that the model app is running, then retry."
+                     : chat.inference == .cloud
+                     ? "Check your provider API key, account credits and internet connection. Cloud models do not require a model installed on your device."
                      : "The request could not finish. Check the connection to \(deviceName) and try again. Your conversation is still here.")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
                     Button(chat.loading ? "Checking…" : "Retry connection") { actions.submit { await chat.discover() } }
                         .buttonStyle(.bordered).disabled(chat.loading || chat.streaming)
-                    Button("Connection settings") { showingConnection = true }
+                    Button(chat.inference == .device ? "Connection settings" : "Cloud settings") {
+                        if chat.inference == .device { showingConnection = true } else { showingCloud = true }
+                    }
                         .buttonStyle(.borderless).disabled(chat.streaming)
                 }
                 Button("Technical details") { showingConnectionDetails = true }
