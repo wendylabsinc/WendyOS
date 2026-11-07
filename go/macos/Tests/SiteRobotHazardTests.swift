@@ -96,3 +96,13 @@ import Testing
     #expect(SiteRobotHazardRenderer.isFresh(receivedAt: received, now: rendered))
     #expect(!SiteRobotHazardRenderer.isFresh(receivedAt: received, now: received.addingTimeInterval(0.76)))
 }
+
+@MainActor @Test func robotHeadingIsContinuousAcrossWrappedTelemetry() {
+    for boundary in [0.0, Double.pi, 2 * Double.pi] {
+        let before = Go2Model.heading(boundary - 0.001).act(SIMD3<Float>(1, 0, 0))
+        let after = Go2Model.heading(boundary + 0.001).act(SIMD3<Float>(1, 0, 0))
+        #expect(simd_distance(before, after) < 0.003)
+    }
+    let heading = Go2Model.heading(.pi / 2).act(SIMD3<Float>(1, 0, 0))
+    #expect(simd_distance(heading, SIMD3<Float>(0, 0, -1)) < 0.0001)
+}
