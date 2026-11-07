@@ -19,7 +19,7 @@ type dataChatTool struct {
 }
 
 func dataChatTools() []dataChatTool {
-	return []dataChatTool{eventHistoryTool, recordingsTool, recordingTool, trendsTool, samplesTool}
+	return []dataChatTool{eventHistoryTool, recordingsTool, recordingTool, trendsTool, samplesTool, healthTool}
 }
 
 // All data queries remain pinned to the original native chat session, even if

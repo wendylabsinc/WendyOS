@@ -130,3 +130,19 @@ and `ros2_topic_hz`. Discover offered schemas rather than inventing arguments.
 Label these observations as current. Never substitute current values for a past
 recording or assume live telemetry replay covers the requested historical window.
 A missing custom ROS decoder means unknown payload, not a healthy robot.
+
+## Sensor health, coverage, storage, and uploads
+
+Use `device_data_health` with the relevant campaign and episode. Current source
+health answers whether a camera is available now; episode source counts, drops,
+discontinuities and pre-roll accounting answer what that recording retained.
+Unknown drops stay unknown. Check intentional capture sampling and missing
+sources before calling a gap a fault. File verification is optional and may take
+time; a manifest read alone does not verify file contents.
+
+Read actual episode upload state, attempts and last error separately from the
+campaign upload policy. A destination is not proof of current Cloud availability.
+A local quota does not provide a deletion deadline. Report advisory retention
+warnings. The current campaign state does not prove it was armed all night;
+historical arming coverage is unavailable unless independent recorded evidence
+establishes it. Never manufacture uptime or an expiration date.
