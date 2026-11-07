@@ -179,6 +179,14 @@ class EachCategory(unittest.TestCase):
         self.assertIn("run", f["excerpt"])
         self.assertNotIn("device_info", f["excerpt"])
 
+    def test_cli_excerpt_finds_a_call_hidden_behind_timeout(self):
+        argv = ["run", "--detach"]
+        events = [{"type": "tool_start", "id": "a", "tool": "workspace_exec", "arguments": {"command": "timeout 90 /x/wendy run --detach"}},
+                  {"type": "tool_start", "id": "b", "tool": "device_info", "arguments": {}}]
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("device_info")], cli=[{"argv": argv, "exit_code": 6}], events=events)
+        self.assertNotIn("device_info", p.classify()[0]["excerpt"])
+
     def test_a_failing_command_in_a_container_is_not_the_tools_fault(self):
         p = Pass(self)
         p.attempt(outcome="right", trace=[

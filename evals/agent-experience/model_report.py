@@ -190,8 +190,10 @@ def classify(row, directory, tool_names, guards, previous=None):
 
     def add(section, item, detail, index=None, argv=None):
         # The excerpt is cut, in transcript order, at trace position `index` or at the CLI call `argv`.
-        if argv is not None:
-            at = next((i for i, e in enumerate(ordered) if e.get("channel") == "cli" and e.get("arguments") == argv), None)
+        if argv is not None:  # the transcript misses a CLI call hidden behind `timeout`; the shell line still shows it
+            at = next((i for i, e in enumerate(ordered) if e.get("channel") == "cli" and e.get("arguments") == argv),
+                      next((i for i, e in enumerate(ordered)
+                            if e.get("channel") == "shell" and " ".join(argv) in str(e.get("arguments"))), None))
         elif index is not None:
             at = next((i for i, e in enumerate(ordered) if e is trace[index] or _key(e) == _key(trace[index])), None)
         else:
