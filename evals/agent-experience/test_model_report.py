@@ -143,6 +143,21 @@ class EachCategory(unittest.TestCase):
             "ls /opt/harnesses; curl http://host/results; /usr/local/bin/wendy-agent --help; ls ./results")])
         self.assertEqual(p.classify(), [])
 
+    def test_reading_the_benchmark_through_container_exec_counts(self):
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("run"), call(
+            "container_exec", {"app_name": APP, "command": ["sh", "-c", "cat /opt/harness/scenarios.json"]})])
+        self.assertEqual([f["item"] for f in p.classify()], ["Read the benchmark"])
+
+    def test_unusable_benchmark_paths_fall_back_or_are_skipped(self):
+        # A string, "/" or a relative CLI name would match nearly every command.
+        p = Pass(self)
+        p.attempt(outcome="right", trace=[call("run"), shell("ls /usr; wendy device info; cat /srv/h/x")])
+        (p.dir / "on_device.json").write_text(json.dumps({"benchmark_paths": {"files": "/srv/h", "real_cli": "wendy"}}))
+        self.assertEqual(mr.load_run(p.dir)["groups"], [])
+        (p.dir / "on_device.json").write_text(json.dumps({"benchmark_paths": {"files": ["/", "/srv/h"]}}))
+        self.assertEqual([g["detail"] for g in mr.load_run(p.dir)["groups"]], ["read the harness's own files (/srv/h)"])
+
     def test_benchmark_paths_come_from_on_device_json(self):
         p = Pass(self)
         p.attempt(outcome="right", trace=[call("run"), shell("cat /srv/h/scenarios.json; /opt/harness/x")])

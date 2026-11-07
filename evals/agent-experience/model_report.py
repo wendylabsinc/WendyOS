@@ -40,6 +40,22 @@ BENCHMARK_FILES = ("/opt/harness", "/results")
 REAL_CLI = "/usr/local/bin/wendy"
 
 
+def _command_text(entry):
+    """The command a shell entry or a container_exec call ran, as text; None for any other call."""
+    if entry.get("channel") == "shell":
+        return str(entry.get("arguments"))
+    arguments = entry.get("arguments")
+    if entry.get("channel") == "mcp" and entry.get("name") == "container_exec" and isinstance(arguments, dict):
+        command = arguments.get("command")
+        return " ".join(map(str, command)) if isinstance(command, list) else str(command or "")
+    return None
+
+
+def _usable_path(path):
+    """Absolute and not the root: a relative name or `/` would match nearly every command."""
+    return isinstance(path, str) and path.startswith("/") and path.strip("/") != ""
+
+
 def _names_path(command, path):
     """`command` names `path` itself or something under it, not a longer name or a URL ending the same way."""
     return re.search(rf"(?<![\w.:/-]){re.escape(path.rstrip('/'))}(?![\w.-])", command) is not None
@@ -299,8 +315,8 @@ def classify(row, directory, tool_names, guards, previous=None, benchmark_files=
                 add("tool", "Tool error", f"{e.get('name')} [{_error_code(text)}]", i)
     for paths, detail in ((benchmark_files, f"read the harness's own files ({', '.join(benchmark_files)})"),
                           ((real_cli,), f"went past the recording wrapper to the real CLI at {real_cli}")):
-        hit = next((i for i, e in enumerate(trace) if e.get("channel") == "shell"
-                    and any(_names_path(str(e.get("arguments")), p) for p in paths if p)), None)
+        hit = next((i for i, e in enumerate(trace) if _command_text(e) is not None
+                    and any(_names_path(_command_text(e), p) for p in paths)), None)
         if blame and hit is not None:  # once per attempt: the excerpt shows the first time
             add("model", "Read the benchmark", detail, hit)
     for record in cli_records:
@@ -377,8 +393,9 @@ def load_run(directory):
     tool_names = tool_names or None  # unreadable or empty: any name would look made up
     guards = sc.guard_matchers(info.get("app_id") or sc.BENCHMARK_APP)
     paths = _dict(info.get("benchmark_paths"))
-    files = [p for p in paths.get("files") or () if isinstance(p, str) and p] or BENCHMARK_FILES
-    real_cli = paths.get("real_cli") if isinstance(paths.get("real_cli"), str) else REAL_CLI
+    files = paths.get("files") if isinstance(paths.get("files"), list) else []
+    files = [p for p in files if _usable_path(p)] or BENCHMARK_FILES
+    real_cli = paths.get("real_cli") if _usable_path(paths.get("real_cli")) else REAL_CLI
     findings, previous = [], None
     if tool_names is None and rows:
         findings.append({"section": "undetermined", "item": "Undetermined", "task": "", "expected": "",
