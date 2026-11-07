@@ -2,7 +2,7 @@ name: API Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -16,7 +16,8 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  # Unrelated label events must not cancel an active requested review.
+  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: api' && github.run_id || 'review' }}"
   cancel-in-progress: true
 
 jobs:
@@ -26,6 +27,8 @@ jobs:
     # their PR code or give them a credentialed model-review fallback.
     if: >-
       github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'review: api') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'review: api') &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
@@ -67,6 +70,8 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/workflows/api-review.yml
+            .github/workflows/docs-review.yml
+            .github/workflows/integration-test-review.yml
           persist-credentials: false
 
       - name: Bootstrap batched review automation when absent from base
@@ -90,7 +95,7 @@ jobs:
           # application code is never checked out, compiled, or executed.
           echo "::notice::Bootstrapping API review automation from the same-repository PR"
           bootstrap_dir="$(mktemp -d)"
-          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py review_diff.py review_diff_test.py; do
+          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py review_diff.py review_diff_test.py review_sources.py; do
             gh api --method GET \
               "repos/$REPO/contents/.github/scripts/$filename" \
               -f ref="$EXPECTED_HEAD_SHA" --jq '.content' \
@@ -111,6 +116,9 @@ jobs:
           python3 review-automation/.github/scripts/api_review_test.py
           python3 review-automation/.github/scripts/api_review_comment_test.py
           python3 review-automation/.github/scripts/review_diff_test.py
+          if [[ -f review-automation/.github/scripts/review_sources_test.py ]]; then
+            python3 review-automation/.github/scripts/review_sources_test.py
+          fi
           workflow_test="review-automation/.github/scripts/api_review_workflow_test.py"
           if [[ -f "$workflow_test" ]]; then
             python3 "$workflow_test"
@@ -261,6 +269,7 @@ jobs:
           python3 .github/scripts/api_review_comment_test.py
           python3 .github/scripts/review_diff_test.py
           python3 .github/scripts/api_review_run_test.py
+          python3 .github/scripts/review_sources_test.py
           python3 .github/scripts/api_review_workflow_test.py
 
   validate-candidate:

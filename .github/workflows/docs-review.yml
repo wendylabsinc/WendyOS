@@ -2,23 +2,50 @@ name: Docs Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
+
+concurrency:
+  # Unrelated label events must not cancel an active requested review.
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: docs' && github.run_id || 'review' }}"
+  cancel-in-progress: true
 
 jobs:
   docs-review:
     name: Review docs coverage
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'review: docs') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'review: docs') &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
+      - name: Resolve current trusted main automation
+        id: trusted-automation
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          script: |
+            // SECURITY: PR base.sha can retain an old target snapshot that lacks
+            // this job's scripts. Select only this repository's current main,
+            // never PR-controlled source.
+            const {data} = await github.rest.git.getRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: "heads/main"
+            });
+            const sha = data.object?.sha;
+            if (data.object?.type !== "commit" || typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) {
+              throw new Error("Could not resolve an immutable trusted main commit");
+            }
+            core.info(`Trusted docs automation commit: ${sha}`);
+            core.setOutput("sha", sha);
+
+      - name: Check out pinned trusted main review automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trusted-automation.outputs.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Get PR diff
         env:
@@ -52,6 +79,9 @@ jobs:
         run: |
           python3 .github/scripts/review_diff_test.py
           python3 .github/scripts/docs_review_test.py
+          if [[ -f .github/scripts/review_sources_test.py ]]; then
+            python3 .github/scripts/review_sources_test.py
+          fi
 
       - name: Review docs with Claude
         env:
@@ -70,6 +100,7 @@ jobs:
           import os
           import pathlib
           import re
+          import subprocess
           import sys
 
           sys.path.insert(0, str(pathlib.Path('.github/scripts').resolve()))
@@ -92,6 +123,12 @@ jobs:
                   print('WARNING: Cannot run docs review — API credit balance too low')
                   raise SystemExit(0)
               raise
+          manifest = pathlib.Path('docs-input-manifest.json')
+          if manifest.is_file() and json.loads(manifest.read_text()).get('skipped_generated_only'):
+              with open(os.environ['GITHUB_ENV'], 'a') as output:
+                  output.write('SOURCE_ONLY_REVIEW=true\n')
+              print('Only generated protocol output changed; no AI review was performed')
+              raise SystemExit(0)
           response_text = json.dumps(payload)
 
           def _is_no_changes_response(text):
@@ -155,7 +192,10 @@ jobs:
                   candidate.relative_to(docs_root)
               except ValueError:
                   return ''
-              if not candidate.is_file():
+              # The model reads documents from the PR head, not this checkout.
+              blob = subprocess.run(['git', 'cat-file', '-t', f'{os.environ["EXPECTED_HEAD_SHA"]}:{docs_prefix}{path}'],
+                                    capture_output=True, text=True)
+              if blob.stdout.strip() != 'blob':
                   return ''
               return f'{docs_prefix}{path}'
 
@@ -430,6 +470,16 @@ jobs:
                   raise RuntimeError(f'Failed to delete docs review comments: {failed}')
 
           existing = [comment for comment in list_comments() if is_docs_review_comment(comment)]
+
+          if os.environ.get('SOURCE_ONLY_REVIEW') == 'true':
+              if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
+                  raise RuntimeError(
+                      'Generated-only review skipped; prior documentation blockers remain open. A later push '
+                      'with a non-generated change gets a normal review, or a maintainer can delete the bot '
+                      'comment after triage.'
+                  )
+              print('Generated-only review skipped; prior comments preserved')
+              raise SystemExit(0)
 
           if not comment_path.exists():
               for comment in existing:

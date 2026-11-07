@@ -13,9 +13,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const VendorQualcomm = 0x05c6
-const ProductEDL = 0x9008
-
 func Supported() bool { return true }
 
 // Windows uses inbox WinUSB, with a separately versioned Qualcomm binding.
