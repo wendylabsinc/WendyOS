@@ -445,6 +445,7 @@ private struct MobileSiteModelViewer: View {
     @ObservedObject var store: MobileSitesStore
     let siteID: UUID
     let link: MobileSiteModelLink
+    @State private var realityPreview = false
     @State private var savingToDevice = false
     @State private var preview: SiteCamera?
     @State private var placingCameras = false
@@ -455,11 +456,21 @@ private struct MobileSiteModelViewer: View {
         NavigationStack {
             Group {
                 if let saved {
-                    MobileSiteCoverageScene(model: model, saved: saved, assets: store.sites.first { $0.id == siteID }?.assets ?? [], active: !placingCameras && !savingToDevice && preview == nil, placing: nil, select: { id in preview = saved.site.cameras.first { $0.id == id } }, place: { _, _ in })
+                    if realityPreview {
+                        MobileSiteRealityView(saved: saved) { id in preview = saved.site.cameras.first { $0.id == id } }
+                            .id("\(saved.id)-\(saved.site.modelRevision)")
+                    } else {
+                        MobileSiteCoverageScene(model: model, saved: saved, assets: store.sites.first { $0.id == siteID }?.assets ?? [], active: !placingCameras && !savingToDevice && preview == nil, placing: nil, select: { id in preview = saved.site.cameras.first { $0.id == id } }, place: { _, _ in })
+                    }
                 } else if let error { ContentUnavailableView("Model unavailable", systemImage: "cube", description: Text(error)) }
                 else { ProgressView("Loading model…") }
             }.navigationTitle(link.name).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Toggle("New 3D viewer (preview)", isOn: $realityPreview)
+                        } label: { Label("Viewer options", systemImage: "ellipsis.circle") }
+                    }
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                     ToolbarItem(placement: .topBarLeading) { Button("Cameras", systemImage: "camera") { placingCameras = true }.disabled(saved == nil) }
                 }

@@ -1,10 +1,51 @@
 import XCTest
+import SwiftUI
 import Metal
 import QuickLookThumbnailing
 @preconcurrency import SceneKit
 @testable import WendyMobile
 
 @MainActor final class MobileSitesTests: XCTestCase {
+    func testRealityViewDisplaysImportedModel() async throws {
+        let base = try directory(); defer { try? FileManager.default.removeItem(at: base) }
+        let input = try model(in: base)
+        let site = Site(name: "RealityKit preview")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let controller = UIHostingController(rootView: MobileSiteRealityView(saved: StoredSite(site: site, modelURL: input), select: { _ in }))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .seconds(3))
+        controller.view.layoutIfNeeded()
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "RealityView imported model"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+    func testRealityViewerPreservesMetricCoordinatesAndSavedCameraIdentity() async throws {
+        let base = try directory(); defer { try? FileManager.default.removeItem(at: base) }
+        let input = try model(in: base)
+        var site = Site(name: "RealityKit room", metresPerModelUnit: 2)
+        let camera = SiteCamera(gatewayID: "gateway", sourceID: "camera", name: "Door", position: SitePoint(x: 1, y: 2, z: 3))
+        site.cameras = [camera]
+        let before = try Data(contentsOf: input)
+        let scene = MobileSiteRealityScene()
+        try await scene.load(StoredSite(site: site, modelURL: input))
+        let loaded = try XCTUnwrap(scene.modelEntity)
+        XCTAssertEqual(loaded.scale, SIMD3<Float>(repeating: 2))
+        let marker = try XCTUnwrap(scene.markers.findEntity(named: camera.id.uuidString))
+        XCTAssertEqual(marker.position, SIMD3<Float>(1, 2, 3), "Camera placements are already in metres and must not be scaled twice")
+        XCTAssertGreaterThan(scene.radius, 0)
+        scene.orbit(yaw: 0.5, pitch: 100, zoom: 0)
+        XCTAssertTrue((0..<3).allSatisfy { scene.camera.position[$0].isFinite })
+        XCTAssertEqual(try Data(contentsOf: input), before, "Preview must not rewrite the saved model")
+        site.cameras = []
+        scene.updateCameras(site)
+        XCTAssertTrue(scene.markers.children.isEmpty)
+    }
     func testManualAlignmentPersistsAndRejectsOtherModel() throws {
         var site = Site(name: "Room")
         var camera = SiteCamera(gatewayID: "gateway", sourceID: "camera", name: "Camera", position: SitePoint(x: 1, y: 2, z: 3))
