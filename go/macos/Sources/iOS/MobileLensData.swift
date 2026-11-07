@@ -25,6 +25,7 @@ struct MobileRecordingTarget: Hashable {
 struct RecordingSources: Hashable {
     var targets: [MobileRecordingTarget] = []
     var unavailable = 0
+    var inventory: [MobileRecordingTarget] = []
 
     @MainActor init(model: AppModel) {
         guard model.mobileScopeIsCurrent else { return }
@@ -44,6 +45,12 @@ struct RecordingSources: Hashable {
            device.transport != .cloud, !device.selector.hasPrefix("vm:"),
            routes[recordingDeviceID(device)] == nil { routes[recordingDeviceID(device)] = [device] }
         unavailable = unreachable.subtracting(routes.keys).count
+        var knownRoutes = routes
+        for row in fleet?.0.devices ?? [] where !row.lite {
+            let id = recordingDeviceID(row.device)
+            if knownRoutes[id] == nil { knownRoutes[id] = [row.device] }
+        }
+        inventory = knownRoutes.map { MobileRecordingTarget(id: $0.key, routes: $0.value) }.sorted { $0.id < $1.id }
         targets = routes.map { id, devices in
             MobileRecordingTarget(id: id, routes: devices.sorted {
                 if ($0.transport == .cloud) != ($1.transport == .cloud) { return $1.transport == .cloud }
@@ -100,8 +107,8 @@ struct RecordingRead: Sendable {
     func load(_ targets: [MobileRecordingTarget], refresh: Int, priority: String?, consumer: String = "data", retaining inventory: [MobileRecordingTarget]? = nil) async {
         generation += 1
         let run = generation
-        let knownTargets = Set(inventory ?? targets)
-        reads = reads.filter { knownTargets.contains($0.value.target) }
+        let knownIDs = Set((inventory ?? targets).map(\.id))
+        reads = reads.filter { knownIDs.contains($0.key) }
         refreshedAt = refreshedAt.filter { reads[$0.key] != nil }
         let force = lastRefresh[consumer].map { $0 != refresh } ?? (refresh != 0)
         if force { attempted = [:]; detailProblems = [:] }
@@ -199,7 +206,7 @@ struct MobileLensData: View {
     @Binding var picker: MobileEpisodeRoute?
     @Environment(\.scenePhase) private var phase
     @EnvironmentObject private var catalog: RecordingCatalog
-    @State private var posters = RecordingPosters()
+    @Environment(\.recordingPosters) private var posters
     @State private var refresh = 0
     @State private var showingProblems = false
     @State private var kind: MobileRecordingKind?
@@ -273,7 +280,7 @@ struct MobileLensData: View {
             }.padding(.horizontal, 16).padding(.bottom, 20).frame(maxWidth: 700).frame(maxWidth: .infinity)
         }
         .background(MobileLensStyle.background).navigationTitle("Data").navigationBarTitleDisplayMode(.large)
-        .task(id: key) { if key.active { await catalog.load(targets, refresh: refresh, priority: key.priority) } }
+        .task(id: key) { if key.active { await catalog.load(targets, refresh: refresh, priority: key.priority, retaining: sources.inventory) } }
         .onChange(of: phase) { old, new in if old == .background && new != .background { refresh += 1 } }
         .refreshable {
             async let nearby: Void = model.refreshNearby()

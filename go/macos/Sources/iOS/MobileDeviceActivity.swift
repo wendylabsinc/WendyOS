@@ -2,8 +2,9 @@ import SwiftUI
 
 struct MobileRecordingScope<Content: View>: View {
     @StateObject private var catalog = RecordingCatalog()
+    @State private var posters = RecordingPosters()
     @ViewBuilder let content: () -> Content
-    var body: some View { content().environmentObject(catalog) }
+    var body: some View { content().environmentObject(catalog).environment(\.recordingPosters, posters) }
 }
 
 enum MobileActivitySegment: String, CaseIterable { case alerts = "Alerts", events = "Events", archived = "Archived" }

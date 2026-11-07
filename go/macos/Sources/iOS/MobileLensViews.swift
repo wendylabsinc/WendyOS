@@ -242,15 +242,39 @@ struct MobileLensChat: View {
     @ObservedObject var model: AppModel
     let chooseDevice: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var phase
+    @State private var showingSuggestions = false
+    @State private var selection: AISelection?
+    @State private var selectionError: String?
+    private struct AISelection: Identifiable {
+        let id = UUID()
+        let record: RememberedAIDevice
+        let device: Device
+        let scope: String
+    }
     var body: some View {
         NavigationStack {
             Group {
-                if model.mobileScopeIsCurrent, model.selectedDeviceReady, let device = model.connected, !model.connectedLite {
-                    DeviceChatView(deviceName: device.title, chat: model.deviceChat, ownsResponse: false).id(model.deviceSession)
+                if selection != nil {
+                    VStack(spacing: 16) {
+                        ProgressView("Checking device and models…")
+                        Button("Cancel") { selection = nil }
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !showingSuggestions, model.mobileScopeIsCurrent, model.selectedDeviceReady, let device = model.connected, !model.connectedLite {
+                    DeviceChatView(deviceName: device.title, chat: model.deviceChat, ownsResponse: false,
+                                   chooseAIDevice: { showingSuggestions = true }).id(model.deviceSession)
                 } else {
-                    ContentUnavailableView {
-                        Label("Choose a device", systemImage: "sparkles")
-                    } description: { Text("Open a device to ask Wendy about it.") } actions: { Button("Choose device", action: chooseDevice) }
+                    VStack(spacing: 0) {
+                        if let selectionError { Text(selectionError).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20) }
+                        MobileAIDeviceSuggestions(model: model, remembered: model.rememberedAIDevices,
+                            chooseDevice: chooseDevice, select: { record, device in
+                                selectionError = nil
+                                selection = AISelection(record: record, device: device, scope: model.mobileCloudSelectionKey)
+                            }, excludedID: showingSuggestions ? model.connected.map(recordingDeviceID) : nil)
+                        if showingSuggestions, model.selectedDeviceReady {
+                            Button("Back to chat") { showingSuggestions = false }.padding(.bottom, 12)
+                        }
+                    }
                 }
             }.navigationTitle("").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -270,8 +294,33 @@ struct MobileLensChat: View {
                     }
                 }
                 .background(MobileLensStyle.background)
+                .task(id: selection?.id) {
+                    guard let request = selection else { return }
+                    await connectSuggestion(request)
+                }
+                .onChange(of: phase) { _, value in if value != .active { selection = nil } }
+                .onChange(of: model.mobileCloudSelectionKey) { _, _ in
+                    selection = nil; selectionError = nil; showingSuggestions = false
+                }
         }
     }
+    private func connectSuggestion(_ request: AISelection) async {
+        await model.connect(request.device)
+        guard !Task.isCancelled, selection?.id == request.id, request.scope == model.mobileCloudSelectionKey,
+              model.mobileScopeIsCurrent, phase == .active else { return }
+        guard model.selectedDeviceReady, model.connected.map(recordingDeviceID) == request.record.id else {
+            selectionError = model.detailError.map { PresentedFailure($0).message } ?? "Could not connect. Try another device."
+            showingSuggestions = true; selection = nil; return
+        }
+        let chat = model.deviceChat
+        // A remembered model is a suggestion, never a ready-to-send connection.
+        await chat.verifySuggestedModel(request.record.preferred?.id, port: request.record.preferred?.port)
+        guard !Task.isCancelled, selection?.id == request.id, request.scope == model.mobileCloudSelectionKey,
+              model.deviceSession == chat.session, model.mobileScopeIsCurrent, phase == .active else { return }
+        // Show the freshly checked result (including empty/error), never silently try another device.
+        showingSuggestions = false; selection = nil
+    }
+
 }
 
 // The lens owns generation so dismissing the sheet does not cancel a reply.

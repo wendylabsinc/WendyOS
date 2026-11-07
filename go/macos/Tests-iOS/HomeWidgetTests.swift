@@ -130,3 +130,19 @@ extension HomeWidgetTests {
         XCTAssertFalse(HomeWidget(kind: .camera).valid)
     }
 }
+
+
+extension HomeWidgetTests {
+    @MainActor func testRecordingCacheSurvivesRouteChangesAndUnavailableDevice() async {
+        let first = MobileRecordingTarget(id: "board", routes: [Device(id: "board", name: "Board", selector: "old:50051", transport: .lan, address: "")])
+        let changed = MobileRecordingTarget(id: "board", routes: [Device(id: "board", name: "Board renamed", selector: "new:50051", transport: .lan, address: "")])
+        let fixture = HomeCatalogFixture()
+        let catalog = RecordingCatalog(fetch: { await fixture.fetch($0) }, details: { _, episodes in episodes })
+        await catalog.load([first], refresh: 0, priority: nil)
+        await catalog.load([], refresh: 0, priority: nil, retaining: [changed])
+        XCTAssertNotNil(catalog.reads["board"]?.library, "An unavailable known device keeps saved recordings")
+        await catalog.load([changed], refresh: 0, priority: nil, consumer: "home.widgets", retaining: [changed])
+        let count = await fixture.count()
+        XCTAssertEqual(count, 1, "Route/name changes must not invalidate fresh recording data")
+    }
+}

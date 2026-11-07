@@ -38,6 +38,12 @@ The episode list has no labels or kinds; only in-progress recordings identify
 the campaign that started them. The mobile memory cache helps repeat visits,
 but does not solve the first load.
 
+**Mobile progress (7 Nov):** Home and Data now share the thumbnail cache within
+the account/org session. Recording metadata survives route/name changes and known
+Cloud devices becoming unavailable. Seven widget tests passed; the signed build
+was installed on Christos's iPhone. Phone navigation acceptance remains pending.
+This is a memory cache, not a persistent offline index.
+
 **Done when:** The index or a summary API supplies reliable kinds, labels and
 counts; filtered results and exports remain correct as episodes change. Measure
 first-load request count and latency on a large library. Preserve explicit
@@ -93,6 +99,13 @@ exists. Cloud removal is not a local device reset.
 shell. OS update and local reset need complete mobile flows using the existing
 APIs, not new backend implementations.
 
+**Mobile progress (7 Nov):** Both integrations are implemented in draft PR #2715.
+OS update accepts an artifact URL and tracks staging and committed/rollback
+status; restarting the device remains manual. Local reset requires direct mTLS
+and explicit successful acknowledgement before clearing matching credentials.
+Fixture and Swift checks passed, and the signed build is installed on the phone.
+The checkboxes remain open until approved hardware acceptance verifies each flow.
+
 **Done when:** Each action has a supported backend path, clear consequences,
 appropriate confirmation, observable progress/recovery, and post-action
 verification. OS updates need preflight, reboot/reconnect, version verification,
@@ -111,6 +124,11 @@ connection, including Cloud access.
 **Gap:** The mobile flow must use that service. Bluetooth deliberately rejects
 post-enrollment Wi-Fi changes because it is a first-time setup path; this is not
 a missing Agent capability or a new bug.
+
+**Mobile progress (7 Nov):** Authenticated connect, forget and priority/readback
+flows are implemented in draft PR #2715. Validation and fixture checks passed.
+Real-device network changes and recovery remain unverified; enterprise credential
+entry is still outside the implemented mobile form.
 
 **Done when:** An authorized owner can change Wi-Fi after enrollment through a
 supported management path, with credential protection, clear connection feedback,

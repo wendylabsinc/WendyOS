@@ -19,7 +19,8 @@ struct HomeWidgetDeck: View {
     @State private var connectingCamera: UUID?
     @State private var cameraProblem: (UUID, String)?
     @State private var actions = AsyncActions()
-    @State private var posters = RecordingPosters()
+    @Environment(\.recordingPosters) private var posters
+    @State private var expandedCamera: HomeWidget?
     @State private var refresh = 0
     @State private var dragged: UUID?
     @State private var selectedEpisode: String?
@@ -68,8 +69,11 @@ struct HomeWidgetDeck: View {
         }.task { await actions.run() }
         .onChange(of: editing) { _, value in if value { activeCamera = nil } }
         .onDisappear { activeCamera = nil }
-        .task(id: LoadKey(targets: targets, inventory: RecordingSources(model: model).targets, active: phase == .active, refresh: refresh)) {
-            if phase == .active { await catalog.load(targets, refresh: refresh, priority: nil, consumer: "home.widgets", retaining: RecordingSources(model: model).targets) }
+        .task(id: LoadKey(targets: targets, inventory: RecordingSources(model: model).inventory, active: phase == .active, refresh: refresh)) {
+            if phase == .active { await catalog.load(targets, refresh: refresh, priority: nil, consumer: "home.widgets", retaining: RecordingSources(model: model).inventory) }
+        }
+        .fullScreenCover(item: $expandedCamera) { widget in
+            HomeWidgetSession(widget: widget, model: model)
         }
         .sheet(item: $active) { widget in
             if widget.kind == .gallery, let id = galleryDevice ?? widget.devices.first?.id,
@@ -209,6 +213,7 @@ struct HomeWidgetDeck: View {
         let offline = device.map { HomeWidgetInventory.status($0, model: model) == "Offline" } ?? true
         VStack(alignment: .leading, spacing: 6) {
             if widget.kind == .camera {
+                Group {
                 if activeCamera == widget.id, model.selectedDeviceReady, model.connected?.id == device?.id,
                    let feed = model.cameraFeeds.first(where: { $0.camera.stableID == widget.resource }) {
                     HomeWidgetCamera(feed: feed, model: model, compact: true)
@@ -221,6 +226,20 @@ struct HomeWidgetDeck: View {
                             VStack { Spacer(); Text(widget.resourceTitle).font(.caption2).lineLimit(1).foregroundStyle(.white).padding(6) }
                         }.frame(maxWidth: .infinity, maxHeight: .infinity).clipShape(.rect(cornerRadius: 12))
                     }.buttonStyle(.plain).disabled(offline || connectingCamera != nil).accessibilityLabel("Watch " + widget.resourceTitle)
+                }
+                }.overlay(alignment: .bottomTrailing) {
+                    Button {
+                        activeCamera = nil
+                        expandedCamera = widget
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 30, height: 30)
+                            .background(.black.opacity(0.6), in: .circle)
+                            .frame(width: 44, height: 44)
+                    }.buttonStyle(.plain).foregroundStyle(.white)
+                        .disabled(offline || connectingCamera != nil)
+                        .accessibilityLabel("Open camera full screen")
                 }
             } else {
                 Text(widget.resourceTitle).font(.subheadline.weight(.semibold)).lineLimit(2)

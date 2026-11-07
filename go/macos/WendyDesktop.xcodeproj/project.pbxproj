@@ -261,6 +261,7 @@
 		C7ADFC1823E822B835BAF008 /* NearbySetupPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B07768E5B406DF7B749C81 /* NearbySetupPrompt.swift */; };
 		C7B60DB501FFCF266A403AC0 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */; };
 		C87E391590DEABE5D6A4774F /* DeviceAppearanceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B56520CF79ECE46F7DFFBA /* DeviceAppearanceUITests.swift */; };
+		C9D9BECCE15D083BC7E353A2 /* MobileAIDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10F3BCEDF884071A0FB021E1 /* MobileAIDevices.swift */; };
 		CAD5B2B85F11FD7F6FD25A86 /* DataVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ACFB977D993156FC29A021C /* DataVisualizerView.swift */; };
 		CB95B7C465AB92F998A08000 /* DeviceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */; };
 		CBD2403F787423BA3A541EAE /* SiteFogOfWar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C1822E9898ED00F382F90EF /* SiteFogOfWar.swift */; };
@@ -298,6 +299,7 @@
 		E92C51A67945AB4B0FB7D320 /* MobileSiteRobotPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260E7E75A8408A81F9E17304 /* MobileSiteRobotPanel.swift */; };
 		E9984245AD4F36B113F66BF8 /* DeviceExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = 724FA372281245EAD9AD9B7C /* DeviceExperience.swift */; };
 		EA0B28F708A603CE1318916D /* SiteFogOfWar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C1822E9898ED00F382F90EF /* SiteFogOfWar.swift */; };
+		EA45271F574840B94264193E /* RememberedAIDeviceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B0E3F194BE38E6E52C85C51 /* RememberedAIDeviceTests.swift */; };
 		EAC7F4AADFCE64830C8813C2 /* DeviceRecognitionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9CE1C6D1084CCB62982FA7 /* DeviceRecognitionTests.swift */; };
 		EAD484C0EC6C015E36A6E88B /* SiteScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4D2D6DE0D1E37980887965 /* SiteScene.swift */; };
 		EAE7C22DFFF4B0E3A8F9AE2B /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC609FC5E6A530F493D66E7D /* AppModel.swift */; };
@@ -410,6 +412,7 @@
 		1097F49EB713F0CFB90322DB /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		10A956DDF27C46E379646AA3 /* SiteWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteWorkspace.swift; sourceTree = "<group>"; };
 		10ABDA820D872A8026204A1D /* MobileLoadingPlaceholder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileLoadingPlaceholder.swift; sourceTree = "<group>"; };
+		10F3BCEDF884071A0FB021E1 /* MobileAIDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileAIDevices.swift; sourceTree = "<group>"; };
 		11989D9F81DE33926C6744D5 /* MobileLensData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileLensData.swift; sourceTree = "<group>"; };
 		12719292A8185A6D6C4C2306 /* MobileRecordingPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRecordingPicker.swift; sourceTree = "<group>"; };
 		16082719BD2BF75BBBF59D09 /* VPNControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNControls.swift; sourceTree = "<group>"; };
@@ -495,6 +498,7 @@
 		7657AD677FD62BAD21CB002E /* SiteReferenceCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteReferenceCapture.swift; sourceTree = "<group>"; };
 		7669EC933A46EBA4067A3592 /* MobileAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MobileAssets.xcassets; sourceTree = "<group>"; };
 		78EF1B380CC110B5531DD514 /* SimulatorClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorClient.swift; sourceTree = "<group>"; };
+		7B0E3F194BE38E6E52C85C51 /* RememberedAIDeviceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RememberedAIDeviceTests.swift; sourceTree = "<group>"; };
 		7B10FC85047A5E2FEDBDDE41 /* NetworkTrafficTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkTrafficTests.swift; sourceTree = "<group>"; };
 		7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncActions.swift; sourceTree = "<group>"; };
 		7DEAEE88B9129990D3810958 /* SimulatorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorsView.swift; sourceTree = "<group>"; };
@@ -850,6 +854,7 @@
 				0F13D570193EF9CC9CB12330 /* MobileRecordingTests.swift */,
 				72B368A49DE636D3D5AD9E35 /* MobileTests.swift */,
 				2345545B53969E5C11A54A84 /* OSUpdateTests.swift */,
+				7B0E3F194BE38E6E52C85C51 /* RememberedAIDeviceTests.swift */,
 				4749AF6EB1435827581A9E20 /* SetupConnectivityTests.swift */,
 			);
 			path = "Tests-iOS";
@@ -908,6 +913,7 @@
 				A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */,
 				8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */,
 				6601B40FC3BD51AE9C42CB5B /* DeviceViewfinderController.swift */,
+				10F3BCEDF884071A0FB021E1 /* MobileAIDevices.swift */,
 				26F8B5DECBBAC2EAA7EB1130 /* MobileAppBrowser.swift */,
 				EA837B0B3D516DBB577F5548 /* MobileCameras.swift */,
 				FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */,
@@ -1534,6 +1540,7 @@
 				E579923407BEABBBAD39BE70 /* LiteTemperatureView.swift in Sources */,
 				8455994379C39B9DCB041A54 /* LogsView.swift in Sources */,
 				5AB57DEAEE38F64FA12A8E29 /* MeshGraphView.swift in Sources */,
+				C9D9BECCE15D083BC7E353A2 /* MobileAIDevices.swift in Sources */,
 				946DD3354B835B1C67FB270E /* MobileAppBrowser.swift in Sources */,
 				85D80828D049329EE13FEBCF /* MobileCameras.swift in Sources */,
 				E0A29452C11060654C08FD00 /* MobileDataView.swift in Sources */,
@@ -1627,6 +1634,7 @@
 				775C1B7646882ACB8687D0B9 /* MobileRecordingTests.swift in Sources */,
 				12E87D30FBA90B9E67946EB6 /* MobileTests.swift in Sources */,
 				7871C2F62F3B005FE5A4533B /* OSUpdateTests.swift in Sources */,
+				EA45271F574840B94264193E /* RememberedAIDeviceTests.swift in Sources */,
 				BEF50250E18D26E944E8FA3C /* SetupConnectivityTests.swift in Sources */,
 				AF7E4000003DC6763697795B /* SiteTwinTests.swift in Sources */,
 				00038EEF3EBF0704734DA832 /* ThermalCameraTests.swift in Sources */,

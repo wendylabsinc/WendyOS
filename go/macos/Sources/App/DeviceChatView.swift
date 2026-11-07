@@ -145,6 +145,8 @@ extension GoClient {
 
 @MainActor final class DeviceChatModel: ObservableObject {
     let session: UInt64
+    var onDeviceDiscovery: (([ChatModelOption]) -> Void)?
+    var onDeviceModelUsed: ((String) -> Void)?
     @Published private(set) var inference: ChatInference = .device
     @Published private(set) var cloudProvider: ChatCloudProvider = .openai
     @Published private(set) var hasCloudKey = false
@@ -208,11 +210,15 @@ extension GoClient {
                   source == .cloud || portNumber == port else { return }
             models = result
             model = result.contains { $0.id == selectedModel } ? selectedModel : (result.first?.id ?? "")
-            if source == .device { loadedPort = result.isEmpty ? nil : portNumber }
+            if source == .device {
+                loadedPort = result.isEmpty ? nil : portNumber
+                onDeviceDiscovery?(result)
+            }
         } catch { if !Task.isCancelled, generation == discoveryGeneration { self.error = error.localizedDescription } }
     }
     func send() {
         guard canSend else { return }
+        if inference == .device { onDeviceModelUsed?(model) }
         // Each request owns its history and cannot switch models mid-generation.
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         prompt = ""; error = nil; streaming = true
@@ -298,6 +304,16 @@ extension GoClient {
         clear(); prompt = ""; discoveryGeneration &+= 1; loading = false
         models = []; model = ""; loadedPort = nil
     }
+    /// Explicit suggestion selection starts a fresh check, invalidating any older discovery.
+    func verifySuggestedModel(_ name: String?, port: UInt32?) async {
+        resetInference()
+        inference = .device
+        if let port { self.port = String(port) }
+        await discover()
+        if !Task.isCancelled, let name, models.contains(where: { $0.id == name && $0.unavailableReason.isEmpty }) {
+            model = name
+        }
+    }
     func refreshCloudKey() {
         do { hasCloudKey = try credentials.read(cloudProvider) != nil }
         catch { hasCloudKey = false; self.error = error.localizedDescription }
@@ -324,6 +340,7 @@ struct DeviceChatView: View {
     let deviceName: String
     @ObservedObject var chat: DeviceChatModel
     var ownsResponse = true
+    var chooseAIDevice: (() -> Void)? = nil
     @State private var showingCloud = false
     @State private var showingLibrary = false
     @State private var showingConnection = false
@@ -453,6 +470,9 @@ struct DeviceChatView: View {
                                         if chat.inference == .device { showingLibrary = true } else { showingCloud = true }
                                     }
                                         .buttonStyle(.borderedProminent).accessibilityIdentifier("chat.browseModels")
+                                }
+                                if chat.inference == .device && !chat.loading && chat.model.isEmpty, let chooseAIDevice {
+                                    Button("Use another AI device", action: chooseAIDevice).buttonStyle(.bordered)
                                 }
                                 ForEach(["Which apps are running?", "Explain recent device errors", "Show recent recordings"], id: \.self) { suggestion in
                                     Button(suggestion) { chat.prompt = suggestion }

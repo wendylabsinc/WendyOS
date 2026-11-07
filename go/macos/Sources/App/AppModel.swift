@@ -89,6 +89,7 @@ final class AppModel: ObservableObject {
     @Published var vpnError: String?
     @Published var loginURL: URL?
     #if os(iOS)
+    let rememberedAIDevices = RememberedAIDevices()
     @Published var webpage: MobileAppWebpage?
     @Published var mobileCloudAccounts: [SavedAccount] = []
     @Published var mobileCloudOrganizations: [CloudOrganization] = []
@@ -308,6 +309,20 @@ final class AppModel: ObservableObject {
             var resolvedDevice = device
             resolvedDevice.lite = connection.lite
             selection = resolvedDevice; connected = resolvedDevice
+            #if os(iOS)
+            let aiAccount = mobileCloudAccount, aiOrg = mobileCloudOrganization
+            let aiDevice = resolvedDevice
+            deviceChat.onDeviceDiscovery = { [weak self] models in
+                guard let self, self.deviceSession == newSession, self.mobileScopeIsCurrent,
+                      self.mobileCloudAccount == aiAccount, self.mobileCloudOrganization == aiOrg else { return }
+                self.rememberedAIDevices.discovered(device: aiDevice, models: models, account: aiAccount, organization: aiOrg)
+            }
+            deviceChat.onDeviceModelUsed = { [weak self] name in
+                guard let self, self.deviceSession == newSession, self.mobileScopeIsCurrent,
+                      self.mobileCloudAccount == aiAccount, self.mobileCloudOrganization == aiOrg else { return }
+                self.rememberedAIDevices.used(deviceID: recordingDeviceID(aiDevice), model: name, account: aiAccount, organization: aiOrg)
+            }
+            #endif
             recordExperience("Connected", symbol: "checkmark.circle", device: resolvedDevice)
             detailError = nil; appsError = nil; camerasError = nil; logError = nil
             connectingDevice = nil

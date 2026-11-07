@@ -518,6 +518,37 @@ private struct MobileAccountsView: View {
     @ViewBuilder private var actionContent: some View {
         NavigationStack {
             List {
+                if !model.mobileCloudOrganizations.isEmpty {
+                    Section {
+                        VStack(spacing: 0) {
+                            ForEach(model.mobileCloudOrganizations) { organization in
+                                Button { model.mobileCloudOrganization = organization.id } label: {
+                                    HStack(spacing: 16) {
+                                        Text(String(organization.name.prefix(1)).uppercased())
+                                            .font(.headline).foregroundStyle(.white)
+                                            .frame(width: 48, height: 48)
+                                            .background(RecordingAppearance.ink, in: .circle)
+                                        Text(organization.name).font(.headline)
+                                            .foregroundStyle(.primary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        if organization.id == model.mobileCloudOrganization {
+                                            Image(systemName: "checkmark")
+                                                .font(.body.weight(.semibold))
+                                                .foregroundStyle(MobileLensStyle.green)
+                                        }
+                                    }.padding(.horizontal, 20).padding(.vertical, 16)
+                                        .contentShape(.rect)
+                                }.buttonStyle(.plain)
+                                    .accessibilityAddTraits(organization.id == model.mobileCloudOrganization ? .isSelected : [])
+                                    .disabled(model.mobileCloudSelectionLoading)
+                            }
+                        }.background(MobileLensStyle.card, in: .rect(cornerRadius: 28))
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
+                    } header: {
+                        Text("Organization").font(.subheadline.weight(.semibold))
+                    }
+                }
                 Section {
                     Picker("Primary lens", selection: $primaryLens) {
                         ForEach(MobileLens.allCases) { Text($0.rawValue).tag($0.rawValue) }
@@ -543,20 +574,14 @@ private struct MobileAccountsView: View {
                         }.buttonStyle(.plain).disabled(model.mobileCloudSelectionLoading)
                     }
                     }
-                    if !model.mobileCloudOrganizations.isEmpty {
-                        Section("Organization") {
-                            Picker("Organization", selection: $model.mobileCloudOrganization) {
-                                ForEach(model.mobileCloudOrganizations) { Text($0.name).tag($0.id) }
-                            }.labelsHidden().pickerStyle(.menu).disabled(model.mobileCloudSelectionLoading)
-                        }
-                    }
                 }
                 if model.mobileCloudSelectionLoading { ProgressView() }
                 if let error = model.mobileCloudSelectionError { FailureNote(message: error) }
             }
             .scrollContentBackground(.hidden)
-            .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("Accounts").navigationBarTitleDisplayMode(.inline)
+            .background(MobileLensStyle.background)
+            .navigationTitle("Settings").navigationBarTitleDisplayMode(.large)
+            .tint(MobileLensStyle.green)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Add account", systemImage: "plus") { signIn(false) }
@@ -569,7 +594,7 @@ private struct MobileAccountsView: View {
             .refreshable { await refresh() }
             .task { await refresh() }
         }
-        .presentationBackground(Color(uiColor: .systemGroupedBackground))
+        .presentationBackground(MobileLensStyle.background)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
