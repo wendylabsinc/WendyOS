@@ -151,6 +151,20 @@ borrowing, set `--roam=false` on the travelling device. Changes are saved across
 agent restarts. Existing Internet sessions may be interrupted when a gateway or
 uplink changes.
 
+### Keep Cloud access working over the mesh
+
+A WendyOS device can use the shared Internet path for Cloud management too.
+Bluetooth paths can take longer to establish and renew than Ethernet or WiFi.
+Keep the gateway reachable while the agent connects or retries. A working local
+mesh route alone does not confirm Cloud access: run `wendy cloud discover` and
+try a device command through Cloud.
+
+If the device is reachable locally but not through Cloud, check its gateway and
+Internet-sharing state first. See [Cloud connectivity](/docs/cloud/connectivity)
+for network changes, DNS failures and recovery. Sharing and roaming remain
+separate settings; this does not enable Internet access for Lite profiles that
+do not support it.
+
 ### Give an app outbound Internet access
 
 Use this entitlement in the app's `wendy.json`, then redeploy with `wendy run`:
