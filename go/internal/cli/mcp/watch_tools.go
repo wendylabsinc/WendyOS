@@ -28,7 +28,7 @@ func (s *mcpServer) registerWatchTools(srv *server.MCPServer) {
 		mcpgo.WithDescription("List what a camera watch can use: healthy cameras on the connected device (id, name), the detectors watches can run (id, model, class labels), and free watch slots. Call before watch_start."),
 	}, readOnly()...)...)
 	add("watch_start", openWorld(), s.handleWatchStart, append([]mcpgo.ToolOption{
-		mcpgo.WithDescription("Watch a camera on the connected device for some classes of object, for example a person at the door. A detector runs on the device and this session is notified when a watched class appears; nothing is recorded or uploaded. At most two watches run per session, and they end when the session ends. Returns when the watch is READY, ERROR or ENDED, or after 30 s while it is still PREPARING: a first watch on a device installs the detector, which takes minutes. ENDED means the device connection changed during the start."),
+		mcpgo.WithDescription("Watch a camera on the connected device for some classes of object, for example a person at the door. A detector runs on the device and this session is notified when a watched class appears; nothing is recorded or uploaded. At most two watches run per session. A watch ends when the session ends, or about a minute after the device stops hearing from the session. Returns when the watch is READY, ERROR or ENDED, or after 30 s while it is still PREPARING: a first watch on a device installs the detector, which takes minutes. ENDED means the device connection changed during the start."),
 		mcpgo.WithString("camera", mcpgo.Description("Camera id from watch_sources"), mcpgo.Required()),
 		mcpgo.WithArray("classes", mcpgo.Description(`1-10 class labels from one detector's labels in watch_sources, for example ["person"]`), mcpgo.Required(), mcpgo.WithStringItems(), mcpgo.MinItems(1), mcpgo.MaxItems(10)),
 		mcpgo.WithNumber("min_confidence", mcpgo.Description("Minimum detection score, 0.3 to 0.95; default 0.5"), mcpgo.Min(0.3), mcpgo.Max(0.95)),
@@ -193,8 +193,16 @@ func (s *mcpServer) handleWatchStart(ctx context.Context, req mcpgo.CallToolRequ
 	if err != nil {
 		return watchErrorResult(err), nil
 	}
-	return okResult(map[string]any{"watch_id": view.WatchID, "label": view.Label, "state": view.State, "reason": view.Reason, "next_step": watchNextStep(view.State)}), nil
+	result := map[string]any{"watch_id": view.WatchID, "label": view.Label, "state": view.State, "reason": view.Reason, "next_step": watchNextStep(view.State)}
+	if watchState(view.State) != watchEnded {
+		result["lifetime"] = watchLifetime
+	}
+	return okResult(result), nil
 }
+
+// watchLifetime tells the client, and through it the user, that a watch is no
+// standing alert: it lives on this session's lease (design §6.5).
+const watchLifetime = "The watch runs only while this session is open and can reach the device: it ends when the session ends, or about a minute after the device stops hearing from it (this computer sleeps or loses the connection). Tell the user before they rely on it while away."
 
 func watchNextStep(state string) string {
 	switch watchState(state) {

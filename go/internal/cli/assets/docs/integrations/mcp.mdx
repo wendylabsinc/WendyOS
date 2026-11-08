@@ -80,8 +80,11 @@ app-provided tools remain visible. Restart the MCP process after upgrading the C
 
 The `hardware` group includes camera watches. A watch runs a detector on the
 connected device's camera and tells the session when a watched class appears,
-for example a person at the door. Nothing is recorded or uploaded, and watches
-end when the MCP session ends or the device connection changes.
+for example a person at the door. Nothing is recorded or uploaded. A watch is
+not a standing alert: it ends when the MCP session ends or the device connection
+changes, and about a minute after the device stops hearing from the session, for
+example while the computer sleeps or is offline. `watch_start` says so in its
+`lifetime` field, and the watch then ends with that reason.
 
 | Tool | What it does |
 |---|---|
