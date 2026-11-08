@@ -60,7 +60,7 @@ func newIntegrationClient(t *testing.T) (*Client, context.Context) {
 		t.Skipf("set %s to a containerd socket to run", containerdIntegrationEnv)
 	}
 	if os.Geteuid() != 0 {
-		t.Skip("mounting snapshots requires root")
+		t.Fatal("integration socket was configured, but mounting snapshots requires root")
 	}
 	cc, err := containerd.New(address)
 	if err != nil {

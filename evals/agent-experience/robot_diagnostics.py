@@ -115,15 +115,21 @@ def observations(args):
                             "--", "python3", "-c", code))
 
 
+def robot_vm_commands(wendy, vm_name, kind, agent_binary, port):
+    """(phase, argv, timeout) that create and start a robot VM; the scenario runner's robot VM uses them too."""
+    return [("vm-create", [wendy, "vm", "--yes", "create", vm_name, "--profile", kind], 600),
+            ("vm-start", [wendy, "vm", "--yes", "start", vm_name, "--detach", "--port", str(port)], 180),
+            ("vm-agent", [wendy, "--device", "vm:" + vm_name, "device", "update", "--binary", agent_binary], 180),
+            ("vm-robot", [wendy, "vm", "--yes", "robot", "start", vm_name], 1800)]
+
+
 def prepare(args):
     f.prepare(args)
-    f.cli(args, "vm", "--yes", "create", args.vm_name, "--profile", args.kind, timeout=600)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    f.cli(args, "vm", "--yes", "start", args.vm_name, "--detach", "--port", str(port), timeout=180)
-    f.cli(args, "--device", args.device, "device", "update", "--binary", args.agent_binary, timeout=180)
-    f.cli(args, "vm", "--yes", "robot", "start", args.vm_name, timeout=1800)
+    for _, argv, timeout in robot_vm_commands(args.wendy, args.vm_name, args.kind, args.agent_binary, port):
+        f.cli(args, *argv[1:], timeout=timeout)
     robot.verify(args, f.cli)
     if args.case == "camera":
         validate_camera(camera_samples(args))

@@ -49,6 +49,7 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 - A service with an empty or missing `context`.
 - A `context` that is an absolute path.
 - A `context` that contains `..` path components.
+- On Windows, a `context` that is drive-relative (`C:camera`), root-relative (`\camera`), or a reserved device name (`NUL`).
 - A `dependsOn` entry that references a service name not present in the `services` map.
 - A service `entitlements` entry with an unknown or missing type.
 - A service `persist` entitlement missing `name` or `path`, or with a non-absolute or `..`-containing `path`.
@@ -207,6 +208,7 @@ All standard `wendy run` flags apply. The following are particularly relevant fo
 |------|-------------|
 | `--service <name>` | Build and run only the named service and its transitive `dependsOn` dependencies. |
 | `--build-host <device>` | Build the selected services on another device, which delivers each image to the target. See [Remote build host](#remote-build-host). |
+| `--build-arg KEY=VALUE` | Repeatable. Override device defaults for every built service targeting a WendyOS device, including remote build-host builds; the last occurrence wins. Incompatible with `--stagefile-backend=llb`. See [Image build-args](../clients/wendy-cli/commands/run.md#image-build-args). |
 | `--deploy` | Build and create all containers but do not start them. |
 | `--detach` | Start all containers but do not stream logs. See [Attached vs. detached](#attached-vs-detached). |
 | `--keep-going` | Deploy services that build successfully instead of aborting the whole group on the first build/push failure. |

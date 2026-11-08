@@ -789,7 +789,7 @@ const file_wendy_agent_services_v2_file_sync_service_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\"\x12\n" +
 	"\x10FileSyncComplete2|\n" +
 	"\x14WendyFileSyncService\x12d\n" +
-	"\tSyncFiles\x12(.wendy.agent.services.v2.FileSyncRequest\x1a).wendy.agent.services.v2.FileSyncResponse(\x010\x01B>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\tSyncFiles\x12(.wendy.agent.services.v2.FileSyncRequest\x1a).wendy.agent.services.v2.FileSyncResponse(\x010\x01BAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_file_sync_service_proto_rawDescOnce sync.Once

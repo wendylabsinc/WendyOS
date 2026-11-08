@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 )
 
 func TestNormalizeImageBuilder_Buildkit(t *testing.T) {
@@ -381,5 +383,46 @@ func TestShouldUseBuildkitOnDevice(t *testing.T) {
 	imageBuilderLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	if shouldUseBuildkitOnDevice() {
 		t.Error("off-device must not auto-select buildkit")
+	}
+}
+
+// Inside an admin container there is no docker, so a compose service has to
+// build with the device's BuildKit, as a Dockerfile project already does. An
+// explicit --builder buildkit takes the same path anywhere.
+func TestComposeServiceBuildsWithBuildkit(t *testing.T) {
+	for name, tc := range map[string]struct{ builder, socket string }{
+		"unset builder on the device": {"", "/run/wendy/agent/agent.sock"},
+		"explicit buildkit":           {"buildkit", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			t.Setenv("WENDY_AGENT_SOCKET", tc.socket)
+			origLook, origBuildctl := imageBuilderLookPath, localBuildkitCommandContext
+			t.Cleanup(func() { imageBuilderLookPath, localBuildkitCommandContext = origLook, origBuildctl })
+			imageBuilderLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+
+			called := false
+			localBuildkitCommandContext = func(ctx context.Context, name string, _ ...string) *exec.Cmd {
+				if name != "buildctl" {
+					t.Fatalf("command = %q, want buildctl", name)
+				}
+				called = true
+				return exec.CommandContext(ctx, "false")
+			}
+
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nRUN true\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			conn := &grpcclient.AgentConnection{ContainerService: allChunksMissing(), Host: "unix:/run/wendy/agent/agent.sock"}
+			err := buildAndPrepareComposeImageForAgent(context.Background(), conn, 0, "linux", tc.builder, dir, "proj-web", "linux/arm64", "Dockerfile", nil, "proj-web", &bytes.Buffer{}, &bytes.Buffer{})
+			if !called {
+				t.Fatalf("buildctl was not run; err = %v", err)
+			}
+			if err == nil || strings.Contains(err.Error(), "docker") || strings.Contains(err.Error(), "unsupported image builder") {
+				t.Fatalf("err = %v, want buildctl's own failure", err)
+			}
+		})
 	}
 }

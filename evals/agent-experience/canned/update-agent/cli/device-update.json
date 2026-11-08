@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "update"
+  ],
+  "stdout": "{\"message\": \"Agent is already up to date.\", \"status\": \"up-to-date\", \"version\": \"2026.10.17-123916\"}",
+  "stderr": "Connecting to simulator {{vm_name}}...\n",
+  "exit_code": 0
+}

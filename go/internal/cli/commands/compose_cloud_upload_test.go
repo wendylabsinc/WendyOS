@@ -135,9 +135,9 @@ func TestComposeCloudV2AppleContainerKeepsRegistryRoute(t *testing.T) {
 	}
 }
 
-func TestComposeCloudV2BuildkitRemainsUnsupported(t *testing.T) {
+func TestComposeCloudV2BuildkitRegistryRemainsUnsupported(t *testing.T) {
 	conn := &grpcclient.AgentConnection{Host: "jetson", IsCloudV2: true}
-	err := buildAndPrepareComposeImageForAgent(t.Context(), conn, 5000, "linux", imageBuilderBuildkit, t.TempDir(), "app", "linux/arm64", "", nil, "", io.Discard, io.Discard)
+	err := buildAndPushImageForAgent(t.Context(), conn, 5000, "linux", imageBuilderBuildkit, t.TempDir(), "app", "linux/arm64", "", nil, "", io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), `unsupported image builder "buildkit"`) {
 		t.Fatalf("error=%v", err)
 	}

@@ -1,0 +1,30 @@
+{
+  "tool": "device_update_agent",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"connection\": \"connected\", \"message\": \"Agent is already up to date.\", \"os_update\": \"not_requested\", \"output_truncated\": false, \"status\": \"up-to-date\", \"target\": {\"device\": \"{{device}}\", \"transport\": \"direct\"}, \"version\": \"2026.10.17-123916\"}"
+        }
+      ],
+      "structuredContent": {
+        "connection": "connected",
+        "message": "Agent is already up to date.",
+        "os_update": "not_requested",
+        "output_truncated": false,
+        "status": "up-to-date",
+        "target": {
+          "device": "{{device}}",
+          "transport": "direct"
+        },
+        "version": "2026.10.17-123916"
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  }
+}

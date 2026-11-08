@@ -40,7 +40,7 @@ transport failure. Use `--chunking=off` to upload through the registry, subject 
 the usual authorization. Old Agents without the chunk RPCs keep their registry
 fallback in `auto`.
 Set `WENDY_TLS_DEBUG=1` to print the underlying upload and reconnect diagnostics
-to stderr. The Compose and multi-service chunk-upload path uses `--builder docker`.
+to stderr. The Compose and multi-service chunk-upload path supports `--builder docker` and `--builder buildkit`.
 Apple Container keeps its direct registry route; use
 `--builder apple-container --chunking=off` to select it explicitly. In `force`,
 a missing capability requires an Agent update. See [Cloud v2 uploads](/docs/advanced/clients/wendy-cli/commands/run#uploads-over-cloud-v2).

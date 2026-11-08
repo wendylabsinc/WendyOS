@@ -24,6 +24,7 @@ Runs your app on a Wendy-enabled device:
 | `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
 | `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. Cannot be combined with `--build-host`. |
+| `--build-arg KEY=VALUE` | Repeatable build argument for container builds targeting WendyOS devices. Overrides device defaults and Compose build args for every built service; the last occurrence wins. See [Image build-args](#image-build-args) for examples and restrictions. |
 | `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
 | `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
 | `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
@@ -73,6 +74,18 @@ When another deployment replaces the app (for example `wendy run --detach` from 
 > Devices whose agent reports neither how apps exit nor restart counts (WendyOS agents that predate exit reporting, and the Mac agent) list an app that crashed and was restarted by its restart policy the way they list a replacement: stopped with no exit recorded, then running with no restart counted, or crash-looping with no restart counted. Until the run has seen a record with an exit recorded or a restart counted, it cannot tell the two apart: a run that started the app prints `Application <app> stopped; the device did not report how it exited, so it may have crashed and been restarted by its restart policy, or another deployment may have replaced it.` and exits 0, and with `--wait-ready` the check fails as `not_ready` and does not stop the app. A current device reads the same way when the run sees no exit or restart recorded during a fast replacement.
 
 When the image build fails, `wendy run` prints the build failure details, including the builder's own error and the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last informative line of the step's output, skipping generic closing lines such as make's `make: *** [...] Error 1` or pip's closing notes, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
+
+## Checks before the build
+
+Before it builds on this computer, `wendy run` checks the free space on the disks the build writes to: the one holding your user cache directory, where Wendy keeps the exported image and its build cache; on Linux, the one holding Docker's data directory (`/var/lib/docker`); and for Swift and Xcode projects, the one holding the project. With less than 3 GiB free on any of them, the run stops before building with the error class `disk_full`, names the disk, and lists ways to free space, such as `docker system prune`, `wendy cache clear` or `--build-host`. With less than 10 GiB free it warns and builds. A disk whose free space cannot be read is skipped.
+
+Runs that build nothing, because the app's image is already on the device, skip the check, and so do `--build-host` runs, which check the build host's disk instead. On macOS and Windows, Docker Desktop keeps its data in a virtual disk with a size limit of its own, which the check does not read.
+
+The device needs room for the image too. Before the build, the run stops with `disk_full` when the disk that holds the device's container images has less than 512 MiB free, and suggests `wendy device cache prune` and removing apps the device no longer needs. Above that, a device disk more than 85% full only prints a warning, since a re-deploy sends only the layers that changed. `--build-host` runs check the device too, because the build host delivers the image to it. After the build, the default chunked deploy asks the device which layers it lacks before sending any. It stops with `disk_full` when those layers' compressed size alone is more than the device's free space, and warns when their unpacked size, estimated at three times the compressed size, may be more. Registry pushes (Mac agents, `--chunking off`, `--deploy`) get only the check before the build. A Compose project with nothing to build, because its services are unchanged or use prebuilt images, skips the checks on both disks. These checks need an agent that reports where it keeps container images (`containerStorage` in `wendy device info`); older agents are not checked.
+
+If Docker has no Buildx plugin, the run stops when it first sets up its builder, with the error class `builder_unavailable` and a link to install Buildx.
+
+An agent ignores an entitlement type it does not know and starts the app without that access. When the device's agent reports the entitlement types it supports, the run checks every entitlement in `wendy.json` (each service's, for multi-service and Compose projects) against that list before building, including when the app's image is already on the device. On a type the agent does not support it stops with `project_target_mismatch` (exit status 4), names the type, and suggests `wendy device update`. Agents that predate this report are not checked.
 
 ## Detached output
 
@@ -224,7 +237,19 @@ The error explains the project/target mismatch and tells you to set `platform: "
 
 ## Image build-args
 
-When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as `--build-arg` values so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`:
+When building a Dockerfile or Containerfile project, `wendy run` passes the target device's hardware parameters as build arguments so the build file can branch on platform, GPU vendor, or CUDA version. Declare any arg you want to use with `ARG`.
+
+Pass your own values with repeatable `--build-arg KEY=VALUE` flags:
+
+```sh
+wendy run --device my-wendy.local --build-arg WENDY_VERSION=2026.11.03-074612 --build-arg 'OPTIONS=a,b=c with spaces' --build-arg EMPTY=
+```
+
+Explicit values override device-reported defaults and Compose `build.args` for every built service. Repeating a key uses its last value. Arguments apply to single-container, multi-service and Compose builds on WendyOS devices, including supported `--build-host` builds. Changing an argument invalidates the build-input cache.
+
+Empty values are allowed, and commas, spaces and additional `=` characters stay in the value; quote shell arguments as needed. Keys must start with a letter or underscore and contain only letters, digits and underscores. Values cannot start with `-` or contain control characters. Invalid arguments fail before project setup without printing their values.
+
+`--build-arg` is incompatible with `--stagefile-backend=llb` (including when selected through `WENDY_STAGEFILE_BACKEND`); use `--stagefile-backend=dockerfile` instead. External provider targets such as `--device docker` or `--device apple-container`, native Swift builds, Xcode projects and `run.command` apps do not support this flag.
 
 On Apple silicon Macs with Apple's `container` runtime, Wendy tries
 Apple Container first when `--builder` is omitted. If Apple Container is
@@ -493,7 +518,7 @@ existing authorized registry route. Image preparation refusals and other
 non-transport failures are reported separately. `force` keeps registry fallback
 off, including for missing capabilities; update the Agent to use that mode.
 
-The Compose and multi-service **chunk-upload path** requires `--builder docker`.
+The Compose and multi-service **chunk-upload path** supports `--builder docker` and `--builder buildkit`.
 Apple Container keeps its existing direct registry route in `auto`; existing
 Apple Container setups can also select it explicitly with
 `--builder apple-container --chunking=off`. This does not add BuildKit Compose
