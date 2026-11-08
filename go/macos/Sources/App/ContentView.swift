@@ -118,12 +118,12 @@ struct ContentView: View {
                         Text(error).font(.caption).foregroundStyle(.secondary)
                     }
                     if deviceSource == "nearby" {
-                        if let message = model.nearbyError { FailureNote(message: message) }
+                        if let message = model.nearbyErrorFailure { FailureNote(message: message) }
                         if model.nearby.isEmpty && model.nearbyUnitree.isEmpty && !model.discovering {
                             Text("No nearby devices found").foregroundStyle(.secondary)
                         }
                     } else {
-                        if let message = model.cloudError { FailureNote(message: message) }
+                        if let message = model.cloudErrorFailure { FailureNote(message: message) }
                         if model.cloud.isEmpty && !model.discovering {
                             if model.account?.signedIn == true {
                                 Text("No cloud devices found").foregroundStyle(.secondary)
@@ -276,20 +276,27 @@ struct ContentView: View {
         } message: { target in
             Text("Delete \"\(target.app)\" from \"\(target.device)\"? This stops and removes the app and its services. Persistent data and container images are kept.")
         }
+        .environment(\.failureSignIn, { actions.submit { await model.signIn() } })
         .alert("Could not complete the action", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
+            if PresentedFailure(model.alertFailure ?? WendyError(message: "")).offersDeviceSignIn {
+                Button("Sign in again") { model.alert = nil; actions.submit { await model.signIn() } }
+            }
             Button("Technical details") { errorDetails = model.alert; model.alert = nil }
-        } message: { Text(PresentedFailure(model.alert ?? "").message) }
-        .alert(PresentedFailure(model.connectionError ?? "").title ?? "Could not connect", isPresented: Binding(get: { model.connectionError != nil }, set: { if !$0 { model.connectionError = nil } })) {
+        } message: { Text(PresentedFailure(model.alertFailure ?? WendyError(message: "")).message) }
+        .alert(PresentedFailure(model.connectionError ?? WendyError(message: "")).title ?? "Could not connect", isPresented: Binding(get: { model.connectionError != nil }, set: { if !$0 { model.connectionError = nil } })) {
             Button("OK", role: .cancel) { model.connectionError = nil }
-            if let device = model.failedConnection {
+            if PresentedFailure(model.connectionError ?? WendyError(message: "")).offersDeviceSignIn {
+                Button("Sign in again") { model.connectionError = nil; actions.submit { await model.signIn() } }
+            }
+            if let device = model.failedConnection, !PresentedFailure(model.connectionError ?? WendyError(message: "")).offersDeviceSignIn {
                 Button("Try again") { actions.submit { await model.connect(device) } }
                 if model.canForgetIdentity {
                     Button("Forget saved identity and retry") { actions.submit { await model.connect(device, forgetIdentity: true) } }
                 }
             }
-            Button("Technical details") { errorDetails = model.connectionError; model.connectionError = nil }
-        } message: { Text(PresentedFailure(model.connectionError ?? "").message) }
+            Button("Technical details") { errorDetails = model.connectionError?.message; model.connectionError = nil }
+        } message: { Text(PresentedFailure(model.connectionError ?? WendyError(message: "")).message) }
         .sheet(isPresented: Binding(get: { errorDetails != nil }, set: { if !$0 { errorDetails = nil } })) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Technical details").font(.title2)
@@ -484,6 +491,6 @@ struct ContentView: View {
     private var logsPane: some View { LogsView(model: model) }
 
     private func unavailable(_ title: String, error: String) -> some View {
-        FailureView(title: title, error: error) { actions.submit { await model.refreshDetails() } }
+        FailureView(title: title, error: model.appsErrorFailure ?? WendyError(message: error)) { actions.submit { await model.refreshDetails() } }
     }
 }

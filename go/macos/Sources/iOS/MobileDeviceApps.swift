@@ -215,7 +215,7 @@ private struct MobileAppsList: View {
                     }.padding(.vertical, 4).contentShape(.rect)
                 }.buttonStyle(.plain).accessibilityIdentifier("device.apps.row." + app.appName)
             }
-            if let error = model.appsError { FailureNote(message: error).padding(16) }
+            if let error = model.appsErrorFailure { FailureNote(message: error).padding(16) }
             else if model.visibleApps.isEmpty && model.appsInitialLoading {
                 MobileLoadingPlaceholder(label: "Loading apps…").padding(16)
             }

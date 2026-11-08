@@ -250,10 +250,14 @@ struct MobileRootView: View {
                 select(Device(id: value, name: value, selector: value, transport: .lan, address: value))
             }
         }
+        .environment(\.failureSignIn, { actions.submit { await model.signIn() } })
         .alert("Could not complete request", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
+            if PresentedFailure(model.alertFailure ?? WendyError(message: "")).offersDeviceSignIn {
+                Button("Sign in again") { model.alert = nil; actions.submit { await model.signIn() } }
+            }
             Button("Details") { details = model.alert; model.alert = nil }
             Button("OK", role: .cancel) { model.alert = nil }
-        } message: { Text(PresentedFailure(model.alert ?? "").message) }
+        } message: { Text(PresentedFailure(model.alertFailure ?? WendyError(message: "")).message) }
         .sheet(isPresented: Binding(get: { details != nil }, set: { if !$0 { details = nil } })) {
             NavigationStack { ScrollView { Text(PresentedFailure(details ?? "").details).font(.caption.monospaced()).textSelection(.enabled).padding() }.navigationTitle("Details").toolbar { Button("Done") { details = nil } } }
         }
@@ -298,9 +302,9 @@ enum MobileLensStyle {
         guard model.mobileScopeIsCurrent else { return [] }
         return self == .local ? model.nearby : model.cloud
     }
-    func error(_ model: AppModel) -> String? {
+    func error(_ model: AppModel) -> WendyError? {
         guard model.mobileScopeIsCurrent else { return nil }
-        return self == .local ? model.nearbyError : model.cloudError
+        return self == .local ? model.nearbyErrorFailure : model.cloudErrorFailure
     }
     func count(_ model: AppModel) -> Int? {
         guard model.mobileScopeIsCurrent else { return nil }
@@ -429,7 +433,7 @@ private struct MobileInventorySection: View {
               Date().timeIntervalSince(snapshot.1) < 60 else { return false }
         return snapshot.0.devices.first { $0.selector == device.selector }?.online == false
     }
-    private var error: String? { source.error(model) ?? (source == .cloud ? model.mobileCloudSelectionError : nil) }
+    private var error: WendyError? { source.error(model) ?? (source == .cloud ? model.mobileCloudSelectionError.map { WendyError(message: $0) } : nil) }
     private var loading: Bool {
         !model.initialized || (source == .local ? model.nearbyLoading : model.cloudLoading || model.mobileCloudSelectionLoading)
     }

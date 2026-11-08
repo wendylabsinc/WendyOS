@@ -364,7 +364,7 @@ final class DesktopTests: XCTestCase {
     func testTypedErrorPreservesRecoveryFlag() {
         let message = strdup("identity changed")
         defer { free(message) }
-        XCTAssertThrowsError(try GoClient.check(WDStatus(message: message, can_forget_identity: 1))) {
+        XCTAssertThrowsError(try GoClient.check(WDStatus(message: message, can_forget_identity: 1, error_code: 5, remedy: 7))) {
             XCTAssertTrue(($0 as? WendyError)?.canForgetIdentity == true)
         }
     }

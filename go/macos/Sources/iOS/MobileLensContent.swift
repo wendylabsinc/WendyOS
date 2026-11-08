@@ -57,7 +57,7 @@ struct MobileHomeAttention: View {
     let openDevices: () -> Void
     var body: some View {
         LensSection(title: "Needs attention") {
-            if let issue = model.nearbyError ?? model.cloudError ?? model.mobileCloudSelectionError {
+            if let issue = model.nearbyErrorFailure ?? model.cloudErrorFailure ?? model.mobileCloudSelectionError.map({ WendyError(message: $0) }) {
                 FailureNote(message: issue).padding(16)
             } else if model.mobileScopeIsCurrent, model.selectedDeviceReady,
                       let app = model.apps.first(where: { $0.runningState == .crashLooping }), let device = model.connected {

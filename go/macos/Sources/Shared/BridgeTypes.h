@@ -14,7 +14,25 @@ typedef enum {
 // All returned memory is C-owned. Free the root with its matching Free function.
 // Nested pointers live until that call; clients must copy anything they retain.
 // Input strings/arrays are borrowed for the duration of the call, never mutated.
-typedef struct { char *message; int32_t can_forget_identity; } WDStatus;
+// Stable ABI values, mirrored by internal/shared/failure and Swift's failure enums.
+// Zero is the fallback for an unknown value. Never renumber existing values.
+enum {
+    WD_ERROR_UNKNOWN = 0, WD_ERROR_AUTHENTICATION_REQUIRED = 1,
+    WD_ERROR_CREDENTIALS_EXPIRED = 2, WD_ERROR_ACCOUNT_MISMATCH = 3,
+    WD_ERROR_ACCESS_DENIED = 4, WD_ERROR_IDENTITY_MISMATCH = 5,
+    WD_ERROR_SECURE_CONNECTION_REJECTED = 6, WD_ERROR_NETWORK_UNAVAILABLE = 7,
+    WD_ERROR_LOCAL_NETWORK_DENIED = 8, WD_ERROR_AGENT_UPDATE_REQUIRED = 9,
+    WD_ERROR_STORAGE_FULL = 10, WD_ERROR_PORT_IN_USE = 11,
+    WD_ERROR_SERVICE_BUSY = 12, WD_ERROR_CANCELLED = 13
+};
+enum {
+    WD_REMEDY_NONE = 0, WD_REMEDY_RETRY = 1, WD_REMEDY_SIGN_IN = 2,
+    WD_REMEDY_CHOOSE_ACCOUNT = 3, WD_REMEDY_OPEN_NETWORK_SETTINGS = 4,
+    WD_REMEDY_CHECK_CLOCK = 5, WD_REMEDY_UPDATE_AGENT = 6,
+    WD_REMEDY_REVIEW_IDENTITY = 7, WD_REMEDY_FREE_STORAGE = 8,
+    WD_REMEDY_CHOOSE_PORT = 9, WD_REMEDY_WAIT = 10
+};
+typedef struct { char *message; int32_t can_forget_identity; int32_t error_code, remedy; } WDStatus;
 typedef struct { char *state; char *detail; } WDMeshSummary;
 typedef struct { char *id, *name, *selector, *address; WDTransport transport; int32_t lite, requires_mtls; } WDDevice;
 typedef struct { char *name; WDAppState state; } WDService;
@@ -72,6 +90,7 @@ typedef struct {
     WDLogRecord log;
     WDEventKind kind;
     uint64_t session, stream;
+    int32_t error_code, remedy; // Stable failure codes, zero for non-error events.
     char *text;                 // Text events only; NULL for video/login-done.
     uint8_t *bytes; size_t byte_count; // H.264 for WD_EVENT_VIDEO; complete JPEG for WD_EVENT_JPEG.
 } WDEvent;

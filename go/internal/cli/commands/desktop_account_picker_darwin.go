@@ -5,6 +5,7 @@ package commands
 import (
 	"fmt"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 )
 
 type DesktopAccountChoice struct {
@@ -38,10 +39,10 @@ func DesktopUseAccount(name string) error {
 	return config.Update(func(cfg *config.Config) (bool, error) {
 		selected, ok := cfg.ContextByName(name)
 		if !ok {
-			return false, fmt.Errorf("this saved account is no longer available; sign in again")
+			return false, failure.Wrap(fmt.Errorf("this saved account is no longer available; sign in again"), failure.AuthenticationRequired, failure.SignIn)
 		}
 		if len(selected.Certificates) == 0 {
-			return false, fmt.Errorf("this account needs to sign in again before it can be selected")
+			return false, failure.Wrap(fmt.Errorf("this account needs to sign in again before it can be selected"), failure.AuthenticationRequired, failure.SignIn)
 		}
 		changed := cfg.CurrentContext != selected.Name
 		cfg.CurrentContext = selected.Name

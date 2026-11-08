@@ -13,7 +13,7 @@ final class MobileTests: XCTestCase {
                 for event in try await client.poll() {
                     switch event.payload {
                     case .loginURL(let value): loginURL = URL(string: value)
-                    case .loginError(let message): throw WendyError(message: message)
+                    case .loginError(let error): throw error
                     default: break
                     }
                 }

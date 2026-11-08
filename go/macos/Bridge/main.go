@@ -32,7 +32,8 @@ func status(err error) C.WDStatus {
 	if err == nil {
 		return C.WDStatus{}
 	}
-	s := C.WDStatus{message: C.CString(err.Error())}
+	info := commands.DesktopFailure(err)
+	s := C.WDStatus{message: C.CString(err.Error()), error_code: C.int32_t(info.Code), remedy: C.int32_t(info.Remedy)}
 	var recovery *backend.IdentityRecoveryError
 	if errors.As(err, &recovery) {
 		s.can_forget_identity = 1
@@ -245,6 +246,12 @@ func events(items []backend.Event) *C.WDEvents {
 			}
 		} else if e.Kind != backend.EventLoginDone {
 			out.text = C.CString(e.Text)
+			if e.Err != nil {
+				free(out.text)
+				out.text = C.CString(e.Err.Error())
+				info := commands.DesktopFailure(e.Err)
+				out.error_code, out.remedy = C.int32_t(info.Code), C.int32_t(info.Remedy)
+			}
 		}
 	}
 	return p
