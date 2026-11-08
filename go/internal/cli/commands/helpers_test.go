@@ -773,7 +773,7 @@ func TestConnectResolvedAgent_NoAuthProvisionedAgentRequiresLogin(t *testing.T) 
 	}
 }
 
-func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
+func TestConnectResolvedAgent_ExpectedDevicePreservesMTLSError(t *testing.T) {
 	origInteractive := isInteractiveTerminalFn
 	origJSON := jsonOutput
 	defer func() {
@@ -784,6 +784,7 @@ func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
 	isInteractiveTerminalFn = func() bool { return false }
 	jsonOutput = false
 	setTempConfig(t, &config.Config{
+		DevicePins: map[string]config.DevicePin{"127.0.0.1": {OrgID: 7, AssetID: "42"}},
 		Auth: []config.AuthConfig{
 			{
 				Certificates: []config.CertificateInfo{
@@ -807,13 +808,10 @@ func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
 		conn.Close()
 		t.Fatal("connectResolvedAgent() returned a connection for an auth-only agent")
 	}
-	if !errors.Is(err, errProvisionedAgentUnauthorized) {
-		t.Fatalf("connectResolvedAgent() error = %v, want %v", err, errProvisionedAgentUnauthorized)
+	if !errors.Is(err, errNoAuthenticatedEndpoint) {
+		t.Fatalf("connectResolvedAgent() error = %v, want authenticated endpoint failure", err)
 	}
-	if errors.Unwrap(err) == nil {
-		t.Fatalf("connectResolvedAgent() error = %v, want wrapped mTLS cause", err)
-	}
-	if !strings.Contains(err.Error(), "Last mTLS error:") || !strings.Contains(err.Error(), "loading TLS cert") {
+	if !strings.Contains(err.Error(), "loading TLS cert") {
 		t.Fatalf("connectResolvedAgent() message = %q, want mTLS diagnostic", err.Error())
 	}
 }

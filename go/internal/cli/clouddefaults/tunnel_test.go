@@ -24,7 +24,7 @@ import (
 func tunnelHealthServer(t *testing.T) (*bufconn.Listener, *tls.Config) {
 	t.Helper()
 	clientInfo, ca := testCertInfo(t)
-	serverPEM, keyPEM := ca.leafPEM(t, "agent", 3, x509.ExtKeyUsageServerAuth)
+	serverPEM, keyPEM := ca.leafPEM(t, "sh/wendy/7/42", 3, x509.ExtKeyUsageServerAuth)
 	serverCert, err := tls.X509KeyPair([]byte(serverPEM), []byte(keyPEM))
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func tunnelHealthServer(t *testing.T) (*bufconn.Listener, *tls.Config) {
 	listener := bufconn.Listen(1024 * 1024)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
-	verify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: ca.pem})
+	verify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: ca.pem, ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -68,7 +68,7 @@ func TestUnresolvedCloudNameSelectsPinnedSessionBeforeCurrentContext(t *testing.
 				Principal: "spiffe://wendy.sh/tenant/" + tenant + "/device/" + asset},
 		},
 		{
-			name: "cloud pin under cached alias governs over direct LAN pin",
+			name: "selected pin governs over conflicting discovery alias",
 			pin:  config.DevicePin{OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42", Source: config.PinSourceCloud}, selector: "42",
 			expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, alias: true,
 		},
@@ -80,8 +80,8 @@ func TestUnresolvedCloudNameSelectsPinnedSessionBeforeCurrentContext(t *testing.
 			if tc.alias {
 				setPinCache(t, discoverycache.Entry{ID: "device-42", Hostname: "ci-mesh-2.local", DisplayName: "saved-device"})
 				pins = map[string]config.DevicePin{
-					"ci-mesh-2":    {OrgID: 9, CloudGRPC: "grpc.b.sh:443", AssetID: "99", Source: config.PinSourceLAN},
-					"saved-device": tc.pin,
+					"ci-mesh-2":    tc.pin,
+					"saved-device": {OrgID: 9, CloudGRPC: "grpc.b.sh:443", AssetID: "99", Source: config.PinSourceCloud},
 				}
 			} else {
 				setPinCache(t)
