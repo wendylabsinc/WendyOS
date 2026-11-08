@@ -67,13 +67,6 @@ final class SiteAutomaticAlignment {
             for camera in cameras { statuses[camera.sourceID] = "Automatic alignment needs a room reference scan." }
             return
         }
-        let engine = SiteLocalizationEngine()
-        do { try await SiteCameraAlignment.load(site, into: engine) }
-        catch {
-            guard !Task.isCancelled, generation == token else { return }
-            for camera in cameras { statuses[camera.sourceID] = error.localizedDescription }
-            return
-        }
         var schedule = SiteAlignmentSchedule()
         while !Task.isCancelled, generation == token, model.deviceSession == context.session {
             for camera in cameras {
@@ -94,7 +87,7 @@ final class SiteAutomaticAlignment {
                 statuses[camera.sourceID] = "Checking camera position…"
                 do {
                     let result = try await align(model: model, feed: feed, site: site, camera: camera,
-                        context: context, token: token, engine: engine)
+                        context: context, token: token)
                     guard !Task.isCancelled, generation == token else { return }
                     candidates.values[camera.sourceID] = nil
                     statuses[camera.sourceID] = result.lens.measured ? "Position checked automatically" : "Approximate position checked automatically"
@@ -116,8 +109,7 @@ final class SiteAutomaticAlignment {
     }
 
     private func align(model: AppModel, feed: CameraFeed, site: StoredSite, camera: SiteCamera,
-                       context: SiteAutomaticAlignmentContext, token: UUID,
-                       engine: SiteLocalizationEngine) async throws -> SiteLocalizationResult {
+                       context: SiteAutomaticAlignmentContext, token: UUID) async throws -> SiteLocalizationResult {
         let lease = feed.decoder.calibrationFrames.acquire()
         var ownedStream: UInt64 = 0
         defer {
@@ -127,7 +119,7 @@ final class SiteAutomaticAlignment {
         }
         if !feed.running { ownedStream = await model.playOwnedCamera(feed, inline: true) }
         let request = SiteAlignmentRequest(site: site, camera: camera, gatewayID: context.gatewayID, session: context.session, gatewayAliases: context.gatewayAliases)
-        return try await SiteCameraAlignment.align(model: model, request: request, feed: feed, engine: engine,
+        return try await SiteCameraAlignment.align(model: model, request: request, feed: feed,
             automatic: true, isCurrent: { self.generation == token })
     }
 }

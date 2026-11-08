@@ -391,3 +391,22 @@ func (s *Store) SaveReferences(frame, serial string, points []sitenav.Surface) e
 	r.Revision++
 	return s.write(r)
 }
+
+// withFrame prevents a room being removed between validation and committing an
+// alignment for it. Camera metadata has its own independent CAS revision.
+func (s *Store) withFrame(frame string, commit func() error) error {
+	parts := strings.Split(frame, "/")
+	if len(parts) != 2 {
+		return errors.New("invalid room frame")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, err := s.read(parts[0])
+	if err != nil {
+		return err
+	}
+	if r.Removed || !strings.EqualFold(r.Site.ModelRevision, parts[1]) {
+		return errors.New("room frame changed")
+	}
+	return commit()
+}
