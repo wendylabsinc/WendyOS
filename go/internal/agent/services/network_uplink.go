@@ -112,7 +112,7 @@ func defaultRouteMetrics(ipv4, ipv6 string) map[string]uint32 {
 // device holding a default route, so its answer is only used when the check
 // is enabled. nmcli does not expose that flag; NM's D-Bus property does.
 func nmConnectivity(ctx context.Context) map[string]agentpb.NetworkConnectivity {
-	conn, err := dbus.ConnectSystemBus()
+	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
 	if err != nil {
 		return nil
 	}
