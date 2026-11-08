@@ -300,8 +300,10 @@ replies to is added to the conversation, so a long watch adds up; use `/clear`
 if it grows large.
 
 Use `/watches` to list them and `/watches stop all` to stop them without
-asking Wendy. At most two run at once. Watches end when chat exits, when setup
-restarts the connection, or when you switch devices.
+asking Wendy. At most two run at once. A watch is not a standing alert: it
+ends when chat exits, when setup restarts the connection, when you switch
+devices, and about a minute after your computer sleeps or loses the connection.
+Wendy says so when it starts one, and tells you when a watch ended without you.
 
 In `wendy chat --prompt` there are no live reports: the command exits after one
 turn and its watches end with it. Wendy starts a watch only when you ask it to

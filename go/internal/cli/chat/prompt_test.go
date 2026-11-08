@@ -3,6 +3,8 @@ package chat
 import (
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/assets"
 )
 
 func TestSystemPromptDescribesConnectedTargetRun(t *testing.T) {
@@ -47,5 +49,26 @@ func TestHeadlessSessionIsToldWatchesCannotReportLater(t *testing.T) {
 	}
 	if strings.Contains(systemPrompt(""), "single headless request") {
 		t.Fatal("the interactive session was told it is headless")
+	}
+}
+
+// A watch is no standing alert: the model tells the user, when it starts one,
+// that it runs only while this chat is open and online (#2210 review).
+func TestSystemPromptTellsTheUserHowLongAWatchLives(t *testing.T) {
+	prompt := SystemPrompt("/workspace", "")
+	const want = "When you start a watch, tell the user it runs only while this chat is open and online: it ends when the chat exits, or about a minute after this computer sleeps or loses the connection."
+	if !strings.Contains(prompt, want) {
+		t.Fatalf("system prompt lacks %q", want)
+	}
+}
+
+// The chat guide says the same to the person reading it.
+func TestChatGuideSaysAWatchIsNoStandingAlert(t *testing.T) {
+	doc, err := assets.FS.ReadFile("docs/guides/chat.mdx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flat := strings.Join(strings.Fields(string(doc)), " "); !strings.Contains(flat, "about a minute after your computer sleeps or loses the connection") {
+		t.Fatal("chat.mdx does not say a watch ends when the computer sleeps or goes offline")
 	}
 }

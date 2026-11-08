@@ -184,8 +184,9 @@ func (m *chatModel) startEventTurn(prompt string) tea.Cmd {
 
 // watchEventPrompt is an event turn's prompt (design §7.3). The label, the
 // classes and the camera name come from the model, the user or the device, so
-// they are JSON-quoted like the event itself. omitted counts the queued notices the cap
-// dropped.
+// every one of them goes inside the untrusted block with the event, and the
+// text around the block is fixed (#2210 review). omitted counts the queued
+// notices the cap dropped.
 func (m *chatModel) watchEventPrompt(items []WatchNotice, omitted int) string {
 	ask := "\n"
 	if omitted > 0 {
@@ -193,59 +194,38 @@ func (m *chatModel) watchEventPrompt(items []WatchNotice, omitted int) string {
 	}
 	ask += "Tell the user what happened in one or two sentences, as an alert (for example: \"Someone is at the front door.\" or \"The front door watch has a problem: the camera is unavailable.\").\nTools that need approval are not available in this turn."
 	if len(items) == 1 {
-		return m.watchPromptHeader(items[0]) + UntrustedJSONBlock(watchNoticeData(items[0])) + ask
+		return "Your watch reported:\n" + UntrustedJSONBlock(m.watchNoticeData(items[0])) + ask
 	}
 	payload := make([]map[string]any, 0, len(items))
 	for _, n := range items {
-		payload = append(payload, watchNoticeData(n))
+		payload = append(payload, m.watchNoticeData(n))
 	}
 	return "Your watches reported:\n" + UntrustedJSONBlock(payload) + ask
 }
 
-// watchPromptHeader names the watch that reported n, leaving out its classes
-// or camera when they are not known: Your watch "front door" ("person", camera
-// "Brio 101") reported:
-func (m *chatModel) watchPromptHeader(n WatchNotice) string {
-	d := m.watches[n.WatchID]
-	if d == nil {
-		d = &watchDisplay{label: n.Label}
-	}
-	header := "Your watch"
-	if d.label != "" {
-		header += " " + jsonQuote(d.label)
-	}
-	var about []string
-	if len(d.classes) > 0 {
-		// Classes come from the device and the model like the label: quoted,
-		// so none can end the header and pose as instructions (#2210 review).
-		quoted := make([]string, len(d.classes))
-		for i, class := range d.classes {
-			quoted[i] = jsonQuote(class)
+// watchNoticeData is one report for the untrusted block: the notice, with the
+// watch's camera and classes when they are known.
+func (m *chatModel) watchNoticeData(n WatchNotice) map[string]any {
+	label := n.Label
+	data := map[string]any{"watch_id": n.WatchID}
+	if d := m.watches[n.WatchID]; d != nil {
+		if label == "" {
+			label = d.label
 		}
-		about = append(about, strings.Join(quoted, ", "))
+		if d.camera != "" {
+			data["camera"] = d.camera
+		}
+		if len(d.classes) > 0 {
+			data["watching"] = d.classes
+		}
 	}
-	if d.camera != "" {
-		about = append(about, "camera "+jsonQuote(d.camera))
-	}
-	if len(about) > 0 {
-		header += " (" + strings.Join(about, ", ") + ")"
-	}
-	return header + " reported:\n"
-}
-
-func watchNoticeData(n WatchNotice) map[string]any {
-	data := map[string]any{"watch_id": n.WatchID, "watch": n.Label}
+	data["watch"] = label
 	if n.Method == watchEventMethod {
 		data["kind"], data["classes"], data["occurred_at"] = n.Kind, n.Classes, n.OccurredAt
 	} else {
 		data["state"], data["reason"] = n.State, n.Reason
 	}
 	return data
-}
-
-func jsonQuote(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
 }
 
 // noteWatchStart records what watch_start returned, from its tool result, so
