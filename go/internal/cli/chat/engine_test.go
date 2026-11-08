@@ -304,7 +304,7 @@ func TestApprovalRefusalIsTheToolResultInChildrenToo(t *testing.T) {
 func TestTurnRefusesAppToolsOnlyWhenAsked(t *testing.T) {
 	const reason = "Not run: app tools are not available in this turn."
 	for _, refuse := range []bool{true, false} {
-		executor := &engineTestExecutor{tools: []Tool{{Name: "robot__move", AppProvided: true}, {Name: "camera_list"}}}
+		executor := &engineTestExecutor{tools: []Tool{{Name: "robot__move", AppProvided: true}, {Name: "camera_list", Unattended: true}}}
 		var results map[string]string
 		provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
 			if messages[len(messages)-1].Role == "tool" {
@@ -327,7 +327,7 @@ func TestTurnRefusesAppToolsOnlyWhenAsked(t *testing.T) {
 		}
 		opts := TurnOptions{}
 		if refuse {
-			opts.AppToolRefusal = reason
+			opts.UnattendedRefusal = reason
 		}
 		if err := NewEngine(provider, executor, "x").TurnWithOptions(context.Background(), "go", nil, approver, opts); err != nil {
 			t.Fatal(err)

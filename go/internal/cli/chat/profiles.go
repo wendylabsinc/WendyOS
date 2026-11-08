@@ -134,7 +134,7 @@ func toolGroup(name string) string {
 	return ""
 }
 
-var profileSkillTool = Tool{Name: "profile_skill", Description: "List or read bundled skills available to this profile, including its already-loaded startup skill. Omit path to list files; supply a listed relative path to read a skill or reference.", Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","maxLength":500}},"additionalProperties":false}`)}
+var profileSkillTool = Tool{Name: "profile_skill", Unattended: true, Description: "List or read bundled skills available to this profile, including its already-loaded startup skill. Omit path to list files; supply a listed relative path to read a skill or reference.", Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","maxLength":500}},"additionalProperties":false}`)}
 
 // ProfileTools applies both the child's and parent's tool policies. Checks also
 // happen on execution, so a hidden tool cannot be called by name.

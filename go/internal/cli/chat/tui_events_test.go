@@ -529,7 +529,7 @@ func TestUIEventTurnRefusesToolsThatNeedApproval(t *testing.T) {
 					{ID: "list", Name: "camera_list", Arguments: json.RawMessage(`{}`)},
 				}}, nil
 			})
-			executor := &uiExecutor{tools: []Tool{{Name: "camera_snapshot", RequiresApproval: true}, {Name: "camera_list"}}}
+			executor := &uiExecutor{tools: []Tool{{Name: "camera_snapshot", RequiresApproval: true}, {Name: "camera_list", Unattended: true}}}
 			m, _, _ := uiWatchModel(t, provider, executor)
 			m.opts.AutoApprove = autoApprove
 			m.composer.SetValue("half a sente")
@@ -805,7 +805,7 @@ func TestUIEventTurnRefusesAppProvidedToolsEvenWhenReadOnly(t *testing.T) {
 			{ID: "list", Name: "camera_list", Arguments: json.RawMessage(`{}`)},
 		}}, nil
 	})
-	executor := &uiExecutor{tools: []Tool{{Name: "pilot__move", AppProvided: true}, {Name: "camera_list"}}}
+	executor := &uiExecutor{tools: []Tool{{Name: "pilot__move", AppProvided: true}, {Name: "camera_list", Unattended: true}}}
 	m, _, _ := uiWatchModel(t, provider, executor)
 	deliver(m, watchEntered(0.9))
 	if !m.active {

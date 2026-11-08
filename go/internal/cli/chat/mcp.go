@@ -158,13 +158,17 @@ func (t *Tools) ListTools(ctx context.Context) ([]Tool, error) {
 					return nil, fmt.Errorf("encoding schema for %s: %w", remote.Name, err)
 				}
 			}
+			readOnly := remote.Annotations.ReadOnlyHint != nil && *remote.Annotations.ReadOnlyHint
 			tool := Tool{
 				Name: remote.Name, Description: remote.Description, Parameters: parameters,
-				RequiresApproval: remote.Annotations.ReadOnlyHint == nil || !*remote.Annotations.ReadOnlyHint,
+				RequiresApproval: !readOnly,
 				// Built-in tool names never contain the separator (pinned by
 				// a test in the mcp package).
 				AppProvided: strings.Contains(remote.Name, appToolSeparator),
 			}
+			// The server's read-only built-in tools are a pinned list
+			// (readOnlyTools in the mcp package); an app's hint is its own.
+			tool.Unattended = readOnly && !tool.AppProvided
 			available = append(available, tool)
 			known[tool.Name] = tool
 		}

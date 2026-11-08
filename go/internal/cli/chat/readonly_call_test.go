@@ -35,7 +35,7 @@ func TestWatchTurnMarksItsMCPCallsReadOnly(t *testing.T) {
 		return Message{ToolCalls: []ToolCall{{ID: "info", Name: "device_info", Arguments: json.RawMessage(`{}`)}}}, nil
 	})
 	engine := NewEngine(provider, executor, "test")
-	if err := engine.TurnWithOptions(context.Background(), "watch report", func(Event) {}, nil, TurnOptions{AppToolRefusal: "refused"}); err != nil {
+	if err := engine.TurnWithOptions(context.Background(), "watch report", func(Event) {}, nil, TurnOptions{UnattendedRefusal: "refused"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.Turn(context.Background(), "a user turn", func(Event) {}, nil); err != nil {

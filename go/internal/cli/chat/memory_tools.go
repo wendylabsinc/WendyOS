@@ -12,7 +12,7 @@ import (
 
 var memoryTools = []Tool{
 	{
-		Name: "memory_search", Description: "Search persistent lessons, verified procedures, facts, and user preferences. Search before repeating a task; use device to recall notes for a named device. Historical notes can be stale: verify current state and permissions.",
+		Name: "memory_search", Unattended: true, Description: "Search persistent lessons, verified procedures, facts, and user preferences. Search before repeating a task; use device to recall notes for a named device. Historical notes can be stale: verify current state and permissions.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","maxLength":1000},"device":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`),
 	},
 	{

@@ -293,8 +293,9 @@ watches run. With voice on, these replies are shown, not spoken.
 
 A reply that a report started cannot run tools that need approval, or tools
 that apps on the device provide, even with `--yes`: Wendy says what it would
-do, and you can ask it to. The tools it can run may only read the device: the
-CLI refuses any request from them that would change it. Each report Wendy
+do, and you can ask it to. It can run only tools that change nothing, such as
+listing watches or reading the device's state, and the CLI also refuses any
+request from them that would change the device. Each report Wendy
 replies to is added to the conversation, so a long watch adds up; use `/clear`
 if it grows large.
 

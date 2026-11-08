@@ -27,7 +27,9 @@ import (
 //
 // The list covers built-in tools only. A tool a device app provides
 // (<app>__<tool>) carries the app's own hint, which nothing here vouches for,
-// so chat refuses those in turns a watch event starts.
+// so chat refuses those in turns a watch event starts. Chat's own tools have
+// their pinned list too (unattendedChatTools in the chat package); in those
+// turns chat runs nothing outside the two lists.
 var readOnlyTools = []string{
 	"app_inspect", "bluetooth_scan", "camera_controls", "camera_list", "cloud_discover", "cloud_ping",
 	"cloud_tunnel_list", "compute_status", "container_list", "container_stats", "device_info", "device_list",

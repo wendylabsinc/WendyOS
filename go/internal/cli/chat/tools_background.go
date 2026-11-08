@@ -27,6 +27,7 @@ var backgroundTools = []Tool{
 	},
 	{
 		Name:        "background_process_list",
+		Unattended:  true,
 		Description: "List this chat's background camera viewers and audio listeners, including job_id, process state, device and exit status. Provide job_id for recent bounded output and failure diagnostics. Running means the child process exists, not that playback has started. Completed history is bounded to 16 jobs.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","minLength":1,"maxLength":64}},"additionalProperties":false}`),
 	},

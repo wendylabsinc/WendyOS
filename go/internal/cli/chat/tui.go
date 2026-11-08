@@ -750,7 +750,7 @@ func (m *chatModel) beginTurn(prompt string, fromEvent bool) tea.Cmd {
 		}
 		turnOptions := TurnOptions{SkipMemory: fromEvent}
 		if fromEvent {
-			turnOptions.AppToolRefusal = watchTurnRefusal
+			turnOptions.UnattendedRefusal = watchTurnRefusal
 		}
 		err := engine.TurnWithOptions(ctx, prompt, emit, approve, turnOptions)
 		// Completion uses the session context: canceling a turn must still notify

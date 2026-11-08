@@ -39,11 +39,11 @@ type Tools struct {
 
 var localTools = append([]Tool{
 	{
-		Name: "workspace_list", Description: "List entries in a local project directory. Paths are relative to the workspace; returns at most 1000 entries.",
+		Name: "workspace_list", Unattended: true, Description: "List entries in a local project directory. Paths are relative to the workspace; returns at most 1000 entries.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative directory, default ."}},"additionalProperties":false}`),
 	},
 	{
-		Name: "workspace_read", Description: "Read a UTF-8 local project file, with 1-based line numbers. Use offset and limit for long files; output is limited to 32 KiB.",
+		Name: "workspace_read", Unattended: true, Description: "Read a UTF-8 local project file, with 1-based line numbers. Use offset and limit for long files; output is limited to 32 KiB.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","minLength":1},"offset":{"type":"integer","minimum":1,"maximum":1000000},"limit":{"type":"integer","minimum":1,"maximum":500}},"required":["path"],"additionalProperties":false}`),
 	},
 	{
@@ -55,7 +55,7 @@ var localTools = append([]Tool{
 		Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","minLength":1},"cwd":{"type":"string","description":"Workspace-relative working directory, default ."},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}`),
 	},
 	{
-		Name: "wendy_docs", Description: "Read the Wendy documentation bundled with this CLI. With no path, list available documentation paths; provide a listed path to read it. Output is capped at 32 KiB; offset and limit select lines.",
+		Name: "wendy_docs", Unattended: true, Description: "Read the Wendy documentation bundled with this CLI. With no path, list available documentation paths; provide a listed path to read it. Output is capped at 32 KiB; offset and limit select lines.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"maximum":1000000},"limit":{"type":"integer","minimum":1,"maximum":500}},"additionalProperties":false}`),
 	},
 }, backgroundTools...)

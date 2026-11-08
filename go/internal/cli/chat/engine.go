@@ -82,19 +82,21 @@ type TurnOptions struct {
 	// SkipMemory turns off memory recall and learning for the turn. Use it for
 	// text that is not a statement from the user, such as a watch's report.
 	SkipMemory bool
-	// AppToolRefusal, when set, refuses every tool a device app provides,
-	// whatever its read-only hint says, with this text as the call's result,
-	// and marks the turn's Wendy MCP calls read-only (ReadOnlyCallMeta). It
-	// applies to delegated children too. Use it for a turn nobody is present
-	// for, such as one a watch report started.
-	AppToolRefusal string
+	// UnattendedRefusal, when set, makes the turn one nobody is present for,
+	// such as one a watch report started. Only tools marked Unattended run;
+	// every other call, whoever provides the tool and whether or not it needs
+	// approval, gets this text as its result without asking the approver. The
+	// turn's Wendy MCP calls are also marked read-only (ReadOnlyCallMeta), so
+	// the device refuses any write a mismarked tool would make. It applies to
+	// delegated children too.
+	UnattendedRefusal string
 }
 
 // unattendedTurn reports whether ctx belongs to a turn nobody is present for:
-// one run with TurnOptions.AppToolRefusal, or a child it delegated to.
+// one run with TurnOptions.UnattendedRefusal, or a child it delegated to.
 func unattendedTurn(ctx context.Context) bool {
 	runtime, _ := ctx.Value(turnRuntimeKey{}).(*turnRuntime)
-	return runtime != nil && runtime.appToolRefusal != ""
+	return runtime != nil && runtime.unattendedRefusal != ""
 }
 
 func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), approve ApproveFunc) error {
@@ -121,7 +123,7 @@ func (e *Engine) TurnWithOptions(ctx context.Context, prompt string, emit func(E
 		// Children delegated in this turn start without memory.
 		memoryEnabled = func() bool { return false }
 	}
-	ctx = context.WithValue(ctx, turnRuntimeKey{}, &turnRuntime{approve: approve, emit: emit, memoryEnabled: memoryEnabled, skipMemory: opts.SkipMemory, appToolRefusal: opts.AppToolRefusal})
+	ctx = context.WithValue(ctx, turnRuntimeKey{}, &turnRuntime{approve: approve, emit: emit, memoryEnabled: memoryEnabled, skipMemory: opts.SkipMemory, unattendedRefusal: opts.UnattendedRefusal})
 	if e.memory != nil && !opts.SkipMemory {
 		e.memory.beginTurn()
 		defer e.learnMemory(ctx, prompt, emit)
@@ -232,8 +234,8 @@ func (e *Engine) TurnWithOptions(ctx context.Context, prompt string, emit func(E
 			default:
 				allowed := !byName[call.Name].RequiresApproval
 				var refusal *ToolRefusal
-				if opts.AppToolRefusal != "" && byName[call.Name].AppProvided {
-					allowed, refusal = false, &ToolRefusal{Reason: opts.AppToolRefusal}
+				if opts.UnattendedRefusal != "" && !byName[call.Name].Unattended {
+					allowed, refusal = false, &ToolRefusal{Reason: opts.UnattendedRefusal}
 				} else if !allowed && approve != nil {
 					emit(Event{Type: "status", Text: "Waiting for approval…", Call: &call})
 					allowed, turnErr = approve(ctx, call)
