@@ -33,8 +33,9 @@ connected target and transport instead of relying on the default device.
 
 The MCP server uses `wendy_status`, `device_list`, and `device_connect`.
 Inspect its actual tool list. General campaign/episode management uses the CLI,
-and `wendy_tools` has no `data` group. Do not invent tool names. A skill update
-does not update a running server.
+and `wendy_tools` has no `data` group. For an alert during this MCP session, the
+`hardware` group's `watch_*` tools record nothing and end with the session. Do
+not invent tool names. A skill update does not update a running server.
 
 Without a terminal, prepare the files, explain the missing execution access,
 and provide exact operator commands. A file write or an app deployment does not deploy campaign YAML; do
