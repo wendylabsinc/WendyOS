@@ -7,6 +7,25 @@ it is ready.
 
 [Documentation](https://docs.wendy.dev) · [Discord](https://discord.gg/wendylabsinc) · [Examples](Examples)
 
+## Why Wendy?
+
+Getting a container to start is only part of building a robot or edge app.
+You also need to build for the device, transfer changes, configure hardware
+access, and find out why the app failed. Wendy connects those steps in one
+workflow, so you spend less time maintaining deployment scripts.
+
+| If you use... | What Wendy adds |
+| --- | --- |
+| Docker or Compose | `wendy run` builds for your target, transfers the app, starts it, and attaches logs. `wendy run --watch` repeats the loop after edits. Bring your Dockerfile or a supported Compose project. |
+| Ubuntu or JetPack | Install Wendy Agent to get deployment and inspection tools while keeping your OS. Choose WendyOS on supported boards for a supplied OS image and its A/B OS update path. |
+| Separate hardware and robotics tools | Declare hardware permissions in `wendy.json`, inspect ROS 2 nodes and topics, and connect a coding agent through MCP. |
+
+Local development needs no Wendy Cloud account. Wendy Cloud adds remote access
+and fleet management. Installing the Agent on Ubuntu does not add WendyOS OS updates.
+
+[Compare Wendy with Docker, Ubuntu, balena, and OTA tools](https://docs.wendy.dev/latest/concepts/why-wendy/)
+and see where each is a good fit.
+
 ## What Wendy does
 
 - [Simulation](https://docs.wendy.dev/latest/integrations/sim-to-real/): run WendyOS in a local VM with simulated Unitree Go2 and G1, SO-101 and ROSMASTER R2 robots, then deploy the same app to hardware.
