@@ -9,19 +9,28 @@ Wendy builds your code, deploys it to a robot or edge device, and streams its lo
 back to your computer. Start by watching a simulated Go2 move in your browser.
 You do not need physical hardware or a Wendy Cloud account for the tour.
 
+## Choose your first project
+
+<Cards>
+  <Card title="Try a simulated robot" href="#try-the-robot-tour">Watch a Go2 walk, change its movement, and run it again. No physical hardware or Cloud account needed. Requires macOS or Linux.</Card>
+  <Card title="Deploy and change an app" href="#2-set-up-a-device">Run a web server on your Linux device or a local VM, then edit its response and redeploy. Use macOS, Linux, or Windows with WSL2.</Card>
+</Cards>
+
+Both paths start with the CLI installation below. Keep your existing Linux OS
+with Wendy Agent, or use WendyOS on a supported board. You can keep your Dockerfiles
+and standard ROS 2 code; Stagefiles are optional.
+
+Want remote access? Wendy Cloud is free for up to 10 devices.
+[Try it for free](https://cloud.wendy.dev/login), then follow the
+[Cloud setup guide](/docs/cloud) to enroll your device.
+
 Wendy has three parts:
 
 - **On your device: WendyOS**, an open source Linux operating system for NVIDIA Jetson and Raspberry Pi. Already running Linux? Install Wendy Agent instead.
 - **On your computer: the `wendy` CLI**, which sets up devices and deploys your apps.
-- **Optional: Wendy Cloud**, for deploying to and managing devices from anywhere.
+- **Optional: Wendy Cloud**, for deploying to and managing devices from anywhere. Free for up to 10 devices.
 
 Write your app in Python, Swift, Rust, C++, TypeScript, or anything else that runs in a container.
-
-Install the CLI below, then take the robot tour. If you already have hardware,
-you can go straight to [device setup](#2-set-up-a-device) and deploy a small app.
-
-Already using Docker or Ubuntu? [See what Wendy adds](/docs/concepts/why-wendy),
-including the difference between installing Wendy Agent and choosing WendyOS.
 
 ## 1. Install the Wendy CLI
 
