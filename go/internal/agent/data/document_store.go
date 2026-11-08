@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,7 @@ import (
 
 var (
 	ErrInvalidDocumentName = errors.New("invalid document name")
-	ErrNotStoredKind       = errors.New("only inference and watch documents are stored as documents; a collection is a campaign")
+	ErrNotStoredKind       = errors.New("only " + strings.Join(StoredKinds(), " and ") + " documents are stored as documents; a collection is a campaign")
 )
 
 // StoredDocument is an inference or watch document as the agent keeps it, in
@@ -55,7 +56,7 @@ func (d StoredDocument) Watch() (Watch, error) {
 	return watch, err
 }
 
-func storedKind(kind string) bool { return kind == KindInference || kind == KindWatch }
+func storedKind(kind string) bool { return slices.Contains(StoredKinds(), kind) }
 
 func (m *Manager) documentsDir(kind string) string {
 	return filepath.Join(filepath.Dir(m.root), "documents", kind)

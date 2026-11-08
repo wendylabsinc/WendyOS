@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,16 +34,18 @@ func (s *DataService) DocumentApply(ctx context.Context, req *agentpbv2.DataDocu
 		}
 		return &agentpbv2.DataDocumentApplyResponse{Document: collectionMessage(campaign)}, nil
 	}
-	if s.inference == nil || s.watches == nil || (document.Header.Kind == data.KindInference && s.video == nil) {
+	handler, ok := documentKindHandlers[document.Header.Kind]
+	if !ok {
+		return nil, status.Errorf(codes.Unimplemented, "this agent cannot run %s documents", document.Header.Kind)
+	}
+	if !handler.ready(s) {
 		return nil, status.Error(codes.FailedPrecondition, "agent inference and watch runtime is unavailable")
 	}
 	stored, err := s.applyDocument(document)
 	if err != nil {
 		return nil, err
 	}
-	if stored.Kind == data.KindInference {
-		s.inference.wakeNow()
-	}
+	handler.applied(s)
 	return &agentpbv2.DataDocumentApplyResponse{Document: s.documentMessage(stored)}, nil
 }
 
@@ -95,11 +98,10 @@ func (s *DataService) applyDocument(document datadoc.Document) (data.StoredDocum
 // DocumentRemove removes an inference or watch document and what it owns,
 // then waits, at most removalWait, for their inference to stop.
 func (s *DataService) DocumentRemove(ctx context.Context, req *agentpbv2.DataDocumentRemoveRequest) (*agentpbv2.DataDocumentRemoveResponse, error) {
-	switch req.GetKind() {
-	case datadoc.DefaultKind:
+	if req.GetKind() == datadoc.DefaultKind {
 		return nil, status.Error(codes.FailedPrecondition, "remove a collection with `wendy data campaign remove`")
-	case data.KindInference, data.KindWatch:
-	default:
+	}
+	if !slices.Contains(data.StoredKinds(), req.GetKind()) {
 		return nil, status.Errorf(codes.InvalidArgument, "unknown document kind %q", req.GetKind())
 	}
 	removed, err := s.removeDocumentTree(req.GetKind(), req.GetName())
@@ -159,14 +161,12 @@ func (s *DataService) DocumentRenew(_ context.Context, req *agentpbv2.DataDocume
 
 // Documents lists documents of every kind, or one, with their status.
 func (s *DataService) Documents(_ context.Context, req *agentpbv2.DataDocumentsRequest) (*agentpbv2.DataDocumentsResponse, error) {
-	kinds := []string{datadoc.DefaultKind, data.KindInference, data.KindWatch}
+	kinds := data.DocumentKinds()
 	if req.GetKind() != "" {
-		switch req.GetKind() {
-		case datadoc.DefaultKind, data.KindInference, data.KindWatch:
-			kinds = []string{req.GetKind()}
-		default:
+		if !slices.Contains(kinds, req.GetKind()) {
 			return nil, status.Errorf(codes.InvalidArgument, "unknown document kind %q", req.GetKind())
 		}
+		kinds = []string{req.GetKind()}
 	}
 	var documents []*agentpbv2.DataDocument
 	for _, kind := range kinds {
@@ -209,36 +209,70 @@ func collectionMessage(campaign *agentpbv2.DataCampaign) *agentpbv2.DataDocument
 		State: campaign.GetState(), DeployedUnixNanos: campaign.GetDeployedUnixNanos(), DocumentJson: campaign.GetPlanJson(), Warnings: campaign.GetWarnings()}
 }
 
-// documentMessage presents a stored inference or watch document with its
-// status (spec §6.6).
+// documentKindHandler is what the service does with one stored kind beyond
+// storing, listing and removing it, which follow the data registry.
+type documentKindHandler struct {
+	// ready reports whether the kind's runner can take a document.
+	ready func(s *DataService) bool
+	// applied tells the kind's runner that a document was stored.
+	applied func(s *DataService)
+	// status fills in a stored document's state and status (spec §6.6).
+	status func(s *DataService, stored data.StoredDocument, message *agentpbv2.DataDocument)
+}
+
+// documentKindHandlers has one entry per kind in data.StoredKinds;
+// TestEveryStoredKindHasAHandler fails when a registered kind has none. The
+// inference loop runs inference documents (campaignInferenceManager.reconcile)
+// and startWatches runs watches.
+var documentKindHandlers = map[string]documentKindHandler{
+	data.KindInference: {
+		// A watch on the document needs the watch runtime too.
+		ready:   func(s *DataService) bool { return s.inference != nil && s.watches != nil && s.video != nil },
+		applied: func(s *DataService) { s.inference.wakeNow() },
+		status:  (*DataService).inferenceDocumentStatus,
+	},
+	data.KindWatch: {
+		ready: func(s *DataService) bool { return s.inference != nil && s.watches != nil },
+		// The watch runner reads the stored watches on every pass.
+		applied: func(*DataService) {},
+		status:  (*DataService).watchDocumentStatus,
+	},
+}
+
+// documentMessage presents a stored document with its status.
 func (s *DataService) documentMessage(stored data.StoredDocument) *agentpbv2.DataDocument {
 	message := &agentpbv2.DataDocument{Kind: stored.Kind, Version: uint32(stored.Version), Name: stored.Name, Owner: stored.Owner, Revision: stored.Revision,
 		DeployedUnixNanos: stored.DeployedUnixNanos, DocumentJson: stored.Body, Warnings: stored.Warnings}
-	switch stored.Kind {
-	case data.KindInference:
-		snapshot := s.inferenceStatus(stored)
-		message.State, message.StateDetail = snapshot.State, snapshot.Error
-		message.StatusJson, _ = json.Marshal(snapshot)
-	case data.KindWatch:
-		watch, err := stored.Watch()
-		if err != nil {
-			message.State, message.StateDetail = "error", err.Error()
-			return message
-		}
-		state, detail, inference := s.watchState(watch)
-		message.State, message.StateDetail = state, detail
-		if watch.Leased() {
-			if deadline, ok := s.leases.deadline(watch.Name); ok {
-				message.ExpiresUnixNanos = deadline.UnixNano()
-			}
-		}
-		deliveryError := ""
-		if s.watches != nil {
-			deliveryError = s.watches.deliveryError(watch.Name)
-		}
-		message.StatusJson, _ = json.Marshal(map[string]string{"inference_state": inference.State, "inference_error": inference.Error, "delivery_error": deliveryError})
+	if handler, ok := documentKindHandlers[stored.Kind]; ok {
+		handler.status(s, stored, message)
 	}
 	return message
+}
+
+func (s *DataService) inferenceDocumentStatus(stored data.StoredDocument, message *agentpbv2.DataDocument) {
+	snapshot := s.inferenceStatus(stored)
+	message.State, message.StateDetail = snapshot.State, snapshot.Error
+	message.StatusJson, _ = json.Marshal(snapshot)
+}
+
+func (s *DataService) watchDocumentStatus(stored data.StoredDocument, message *agentpbv2.DataDocument) {
+	watch, err := stored.Watch()
+	if err != nil {
+		message.State, message.StateDetail = "error", err.Error()
+		return
+	}
+	state, detail, inference := s.watchState(watch)
+	message.State, message.StateDetail = state, detail
+	if watch.Leased() {
+		if deadline, ok := s.leases.deadline(watch.Name); ok {
+			message.ExpiresUnixNanos = deadline.UnixNano()
+		}
+	}
+	deliveryError := ""
+	if s.watches != nil {
+		deliveryError = s.watches.deliveryError(watch.Name)
+	}
+	message.StatusJson, _ = json.Marshal(map[string]string{"inference_state": inference.State, "inference_error": inference.Error, "delivery_error": deliveryError})
 }
 
 // inferenceStatus is an inference document's status: disabled when it is not
