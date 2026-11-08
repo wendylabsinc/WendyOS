@@ -141,15 +141,11 @@ struct AppVisibilityMenu: View {
     @ObservedObject var model: AppModel
     let app: String
     var body: some View {
-        Menu {
+        OverflowMenu {
             AppHideButton(model: model, app: app)
             Divider()
             AppDeleteMenu(model: model, app: app)
-        } label: { Image(systemName: "ellipsis") }
-            #if os(macOS)
-            .menuStyle(.borderlessButton)
-            #endif
-            .fixedSize()
+        }
             .accessibilityLabel("Actions for \(app)")
     }
 }
