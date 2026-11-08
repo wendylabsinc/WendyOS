@@ -74,7 +74,10 @@ func (f *fakeROS2Runtime) ExecROS2(ctx context.Context, opts ROS2ExecOptions, st
 
 func newTestROS2Service(t *testing.T, runtime ROS2Runtime, bagDir string) *ROS2Service {
 	t.Helper()
-	return NewROS2Service(zaptest.NewLogger(t), runtime, bagDir)
+	svc := NewROS2Service(zaptest.NewLogger(t), runtime, bagDir)
+	// Keep tests off whatever listens on the device's pulse-export port.
+	svc.pulseExportURL = ""
+	return svc
 }
 
 func TestROS2Service_ListNodes(t *testing.T) {
