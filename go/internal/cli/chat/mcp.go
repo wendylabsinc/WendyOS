@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -69,7 +70,15 @@ func (t *Tools) startMCP(ctx context.Context, executable, device string) error {
 	if device != "" {
 		args = append(args, "--device", device)
 	}
-	stdio := transport.NewStdioWithOptions(executable, nil, args,
+	command := executable
+	// WENDY_CHAT_MCP_COMMAND exists for the agent-experience benchmark, which points chat's MCP child at its recording shim.
+	if override := os.Getenv("WENDY_CHAT_MCP_COMMAND"); override != "" {
+		if !filepath.IsAbs(override) {
+			return fmt.Errorf("WENDY_CHAT_MCP_COMMAND must be an absolute path, got %q", override)
+		}
+		command = override
+	}
+	stdio := transport.NewStdioWithOptions(command, nil, args,
 		transport.WithCommandLogger(quietMCPLogger{}),
 		transport.WithCommandFunc(func(childCtx context.Context, command string, env, args []string) (*exec.Cmd, error) {
 			cmd := exec.CommandContext(childCtx, command, args...)

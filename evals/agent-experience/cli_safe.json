@@ -1,0 +1,19 @@
+{"read_only": [
+  ["help"], ["docs"], ["info"],
+  ["device", "list"], ["device", "info"], ["device", "apps", "list"], ["device", "ps"],
+  ["device", "hardware", "list"], ["device", "wifi", "list"], ["device", "wifi", "status"],
+  ["device", "camera", "list"], ["device", "camera", "controls"], ["device", "audio", "list"],
+  ["device", "volumes", "list"], ["device", "drivers", "list"],
+  ["device", "bluetooth", "list"], ["device", "bt", "list"],
+  ["device", "ros2", "topics"], ["device", "ros2", "topic", "info"], ["device", "ros2", "lidar", "sample"],
+  ["cloud", "device", "wifi", "list"], ["cloud", "device", "camera", "list"],
+  ["cloud", "device", "camera", "controls"], ["cloud", "device", "bluetooth", "list"],
+  ["cloud", "device", "bt", "list"],
+  ["vm", "list"], ["vm", "robot", "status"],
+  ["cloud", "discover"], ["cloud", "status"],
+  ["project", "entitlements", "list"],
+  ["json", "validate"], ["doctor"],
+  ["os", "install", "plan"], ["install", "plan"], ["os", "list-drives"], ["os", "update-status"],
+  ["data", "sources"], ["data", "episodes"],
+  ["cache", "list"], ["analytics", "status"]
+]}

@@ -79,3 +79,6 @@ web-client/release/
 
 # Agent-generated design specs; keep out of git
 /specs/
+
+# On-device benchmark build inputs (stage-on-device.sh)
+evals/agent-experience/.stage/

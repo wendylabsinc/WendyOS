@@ -89,6 +89,15 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 		})
 	}
 
+	if inDeviceContainer() && !s.relay {
+		devices = append(devices, map[string]any{
+			"device":  localDeviceSelector,
+			"address": localDeviceSelector,
+			"type":    "local",
+			"source":  "agent-socket",
+		})
+	}
+
 	if scan {
 		found, err := s.discoverLANFn(ctx, 3*time.Second)
 		if err == nil {
@@ -242,6 +251,9 @@ func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolR
 	}
 	if strings.TrimSpace(address) == "" {
 		return errResult(errCodeInvalidArgument, "device is required (legacy address is also accepted)"), nil
+	}
+	if inDeviceContainer() && !isLocalSelector(address) {
+		return errResultf(errCodeUnsupported, "inside a device container only the local device is reachable (the agent socket overrides %q); connect to %q", address, localDeviceSelector), nil
 	}
 	if err := s.ConnectTo(ctx, address); err != nil {
 		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", address, err.Error()), nil

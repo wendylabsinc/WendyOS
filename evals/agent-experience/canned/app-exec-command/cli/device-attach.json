@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "attach"
+  ],
+  "stdout": "Python 3.12.15\n",
+  "stderr": "Connecting to simulator {{vm_name}}...\n",
+  "exit_code": 0
+}
