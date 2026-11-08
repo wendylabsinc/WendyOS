@@ -14,8 +14,11 @@ by discovery can expire after five minutes without command activity or recent
 transit; explicit connect retains it until disconnect or credential invalidation.
 Explicit disconnect cancels and joins that participant.
 The non-secret recipe and installation state remain in the selected persistent
-profile; later explicit preparation can rejoin. Observational reads never start
-or enable a context. Credential replacement drains the old owner before rejoin.
+profile, marked disconnected until an explicit `wendy net connect`.
+Ordinary mesh selections and Nearby discovery do not undo an explicit disconnect.
+Connect enables automatic discovery; saved first-hop choices are ignored.
+Observational reads never start or enable a context. Credential replacement
+drains the old owner before rejoin.
 
 Private startup and principal-scoped lifetime locks serialize concurrent callers.
 macOS and Linux use private Unix sockets; Windows uses per-user named pipes,

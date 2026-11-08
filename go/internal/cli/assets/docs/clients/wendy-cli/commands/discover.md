@@ -61,8 +61,10 @@ available as a router between commands, enable it explicitly:
 wendy net connect
 ```
 
-Stop the current router and its connections with `wendy net disconnect`.
-Later requested discovery can start it again. Credential changes or expiry also
+Stop this computer's mesh router and its connections with
+`wendy net disconnect`. Discovery and device commands leave it
+disconnected until you explicitly run `wendy net connect` again.
+Ordinary LAN discovery remains available. Credential changes or expiry also
 end a session. Each installation has an independent, persistent router identity,
 so multiple computers can participate with the same operator account. Routing
 stays inside the private session; it does not install host routes or change DNS.

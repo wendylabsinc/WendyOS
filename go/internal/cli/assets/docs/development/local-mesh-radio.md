@@ -40,11 +40,14 @@ wendy net disconnect
 
 Disconnecting closes this computer's mesh connections and stops it forwarding
 traffic. Your saved sign-in and mesh identity remain available for reconnecting.
+Discovery and device commands leave the mesh disconnected until you explicitly
+run `wendy net connect` again. Ordinary LAN management remains
+available while this computer is disconnected from the mesh.
 
 A requested Nearby or mesh discovery can also start a temporary router using the
 selected sign-in profile. Unless explicitly enabled with
 `connect`, an automatic router can stop after five minutes without command
-activity or transit traffic. Later discovery can start it again. Reading local
+activity or transit traffic. Later discovery can start it again unless you explicitly disconnected. Reading local
 router status or opening the Wendy Client Networks view only observes an
 existing router.
 
