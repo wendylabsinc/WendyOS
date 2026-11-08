@@ -72,6 +72,7 @@ struct MobileRootView: View {
     private var tabs: some View {
         tabContent
             .navigationTitle(homeTab == .home ? "Devices" : homeTab.rawValue)
+            .navigationBarTitleDisplayMode(.inline)
             .tint(MobileLensStyle.accent)
             .toolbar {
                 if homeTab == .home {
@@ -379,7 +380,6 @@ private struct MobileDevicesHome: View {
                 .frame(maxWidth: .infinity)
         }
         .background(MobileLensStyle.background)
-        .navigationTitle("Devices")
         .refreshable {
             await model.refreshNearby()
             if !model.mobileCloudOrganization.isEmpty { await model.refreshCloud() }
