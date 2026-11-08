@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "vm",
+    "rm"
+  ],
+  "stdout": "Deleted VM \"old-bench\".\n",
+  "stderr": "",
+  "exit_code": 0
+}

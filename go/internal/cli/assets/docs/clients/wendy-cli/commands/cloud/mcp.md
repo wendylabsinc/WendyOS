@@ -48,6 +48,15 @@ If pairing reports an incompatible tool catalog, update the Wendy CLI and restar
 the session. The chat receives the tools supported by the hosted service; it may
 not expose every tool in a newer CLI yet.
 
+## Device connections
+
+MCP Cloud connections verify the device against its authenticated Cloud
+inventory identity, including on reconnect. Both current device identities and
+older organisation/asset identities are supported. If the inventory cannot
+provide an expected identity, the connection fails instead of learning it
+from the device's certificate. Local LAN and Bluetooth connections need a
+saved binding for the selected name; see [device identity and recovery](../../device-selection.md#device-identity).
+
 ## Flags
 
 | Flag | Default | Description |

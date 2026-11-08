@@ -25,6 +25,62 @@ fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobu
   typealias Version = _2
 }
 
+/// Internet reachability of one interface, as NetworkManager's connectivity
+/// check reports it.
+public nonisolated enum Wendy_Agent_Services_V1_NetworkConnectivity: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case unknown // = 0
+
+  /// No connectivity: the check fails or the interface is not connected.
+  case none // = 1
+
+  /// A captive portal intercepts traffic.
+  case portal // = 2
+
+  /// Connected to a network that does not reach the internet.
+  case limited // = 3
+
+  /// The check endpoint answered: the interface reaches the internet.
+  case full // = 4
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unknown
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unknown
+    case 1: self = .none
+    case 2: self = .portal
+    case 3: self = .limited
+    case 4: self = .full
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unknown: return 0
+    case .none: return 1
+    case .portal: return 2
+    case .limited: return 3
+    case .full: return 4
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendy_Agent_Services_V1_NetworkConnectivity] = [
+    .unknown,
+    .none,
+    .portal,
+    .limited,
+    .full,
+  ]
+
+}
+
 /// Security type advertised by or used for a WiFi network.
 public nonisolated enum Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
@@ -746,9 +802,32 @@ public nonisolated struct Wendy_Agent_Services_V1_NetworkInterface: Sendable {
   /// CIDR prefix suffix (e.g. "192.168.1.42").
   public var ipAddresses: [String] = []
 
+  /// True on the one interface the kernel routes traffic for a public
+  /// address through: the interface carrying internet traffic now. False on
+  /// every interface for agents predating this field.
+  public var isDefaultRoute: Bool = false
+
+  /// Lowest metric among the interface's IPv4 and IPv6 default routes.
+  /// Absent when the interface has no default route, and on older agents.
+  public var routeMetric: UInt32 {
+    get {_routeMetric ?? 0}
+    set {_routeMetric = newValue}
+  }
+  /// Returns true if `routeMetric` has been explicitly set.
+  public var hasRouteMetric: Bool {self._routeMetric != nil}
+  /// Clears the value of `routeMetric`. Subsequent reads from it will return its default value.
+  public mutating func clearRouteMetric() {self._routeMetric = nil}
+
+  /// NetworkManager's per-interface connectivity check result (best of IPv4
+  /// and IPv6). UNKNOWN when NetworkManager runs no check (no check URI, or
+  /// built without one), is absent, or the agent predates this field.
+  public var connectivity: Wendy_Agent_Services_V1_NetworkConnectivity = .unknown
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _routeMetric: UInt32? = nil
 }
 
 /// Usage information for a single mounted filesystem.
@@ -2044,6 +2123,10 @@ public nonisolated struct Wendy_Agent_Services_V1_GpuCapabilities: Sendable {
 
 fileprivate nonisolated let _protobuf_package = "wendy.agent.services.v1"
 
+nonisolated extension Wendy_Agent_Services_V1_NetworkConnectivity: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0NETWORK_CONNECTIVITY_UNKNOWN\0\u{1}NETWORK_CONNECTIVITY_NONE\0\u{1}NETWORK_CONNECTIVITY_PORTAL\0\u{1}NETWORK_CONNECTIVITY_LIMITED\0\u{1}NETWORK_CONNECTIVITY_FULL\0")
+}
+
 nonisolated extension Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0WIFI_SECURITY_TYPE_UNSPECIFIED\0\u{1}WIFI_SECURITY_TYPE_OPEN\0\u{1}WIFI_SECURITY_TYPE_WEP\0\u{1}WIFI_SECURITY_TYPE_WPA_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA2_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA3_SAE\0\u{1}WIFI_SECURITY_TYPE_WPA2_ENTERPRISE\0")
 }
@@ -3037,7 +3120,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
 
 nonisolated extension Wendy_Agent_Services_V1_NetworkInterface: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".NetworkInterface"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{3}ip_addresses\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}name\0\u{3}ip_addresses\0\u{3}is_default_route\0\u{3}route_metric\0\u{1}connectivity\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -3047,17 +3130,33 @@ nonisolated extension Wendy_Agent_Services_V1_NetworkInterface: SwiftProtobuf.Me
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.name) }()
       case 2: try { try decoder.decodeRepeatedStringField(value: &self.ipAddresses) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.isDefaultRoute) }()
+      case 4: try { try decoder.decodeSingularUInt32Field(value: &self._routeMetric) }()
+      case 5: try { try decoder.decodeSingularEnumField(value: &self.connectivity) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.name.isEmpty {
       try visitor.visitSingularStringField(value: self.name, fieldNumber: 1)
     }
     if !self.ipAddresses.isEmpty {
       try visitor.visitRepeatedStringField(value: self.ipAddresses, fieldNumber: 2)
+    }
+    if self.isDefaultRoute != false {
+      try visitor.visitSingularBoolField(value: self.isDefaultRoute, fieldNumber: 3)
+    }
+    try { if let v = self._routeMetric {
+      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 4)
+    } }()
+    if self.connectivity != .unknown {
+      try visitor.visitSingularEnumField(value: self.connectivity, fieldNumber: 5)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -3065,6 +3164,9 @@ nonisolated extension Wendy_Agent_Services_V1_NetworkInterface: SwiftProtobuf.Me
   public static func ==(lhs: Wendy_Agent_Services_V1_NetworkInterface, rhs: Wendy_Agent_Services_V1_NetworkInterface) -> Bool {
     if lhs.name != rhs.name {return false}
     if lhs.ipAddresses != rhs.ipAddresses {return false}
+    if lhs.isDefaultRoute != rhs.isDefaultRoute {return false}
+    if lhs._routeMetric != rhs._routeMetric {return false}
+    if lhs.connectivity != rhs.connectivity {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

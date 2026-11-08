@@ -2,7 +2,7 @@ name: API Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -16,7 +16,8 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  # Unrelated label events must not cancel an active requested review.
+  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'review: api' && github.run_id || 'review' }}"
   cancel-in-progress: true
 
 jobs:
@@ -26,6 +27,8 @@ jobs:
     # their PR code or give them a credentialed model-review fallback.
     if: >-
       github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'review: api') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'review: api') &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'

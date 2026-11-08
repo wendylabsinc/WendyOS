@@ -785,7 +785,14 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatingDeviceName = item.info.Name
 			m.flashMessage = "Checking " + item.info.Name + "..."
 			m.flashIsError = false
-			return m, m.startDeviceUpdateCmd(addr, item.info.Name)
+			var pinKey string
+			for _, dev := range m.collection.LANDevices {
+				if strings.EqualFold(dev.DisplayName, item.lanName) {
+					pinKey = pinKeyForLANDevice(&dev)
+					break
+				}
+			}
+			return m, m.startDeviceUpdateCmd(addr, item.info.Name, pinKey)
 		case "d":
 			items := m.tableItems
 			cursor := m.table.Cursor()
@@ -1200,14 +1207,18 @@ func lanDeviceAddr(collection *models.DevicesCollection, displayName string) str
 	return ""
 }
 
-func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
+func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...string) tea.Cmd {
 	ctx := m.ctx
+	pinKey := pinKeyForAddr(addr)
+	if len(selectedKeys) > 0 && selectedKeys[0] != "" {
+		pinKey = selectedKeys[0]
+	}
 	return func() tea.Msg {
 		latestVer, _, err := resolveAgentVersion(false)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
-		conn, err := connectWithAutoTLS(ctx, addr)
+		conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, pinKey)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
 		}
@@ -1246,7 +1257,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 		}
 		conn.Close() // agent is restarting
 
-		newConn, err := waitForAgentRestart(ctx, addr)
+		newConn, err := waitForAgentRestartKeyed(ctx, addr, pinKey)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
 		}

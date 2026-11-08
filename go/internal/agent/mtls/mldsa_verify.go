@@ -198,9 +198,10 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 
 // NewPeerCertificateVerifier verifies against configured CA trust and returns
 // the expiry of the path that actually verified. Unlike the general mTLS
-// loopback policy, the local leaf is not an independent trust anchor.
-// Current time and checkRevocation's leaf validity-window policy are checked on
-// every call; this verifier does not query a Cloud revocation service. A bounded,
+// loopback policy, the local leaf is not an independent trust anchor. Peer leaves
+// must be non-CA certificates with explicit clientAuth usage. The leaf profile,
+// current time and checkRevocation's validity-window policy are checked on every
+// call; this verifier does not query a Cloud revocation service. A bounded,
 // short-lived cache reuses only signature/path verification for exact chains.
 // New roots or policy require a new verifier and therefore a fresh cache.
 func NewPeerCertificateVerifier(chainPEM string, logger *zap.Logger, notBeforeFloor time.Time) (func([][]byte, time.Time) (time.Time, error), error) {
@@ -267,6 +268,22 @@ func buildPeerCertificateVerifierWithCache(caPool *x509.CertPool, caCerts []*x50
 		leaf, err := x509.ParseCertificate(rawCerts[0])
 		if err != nil {
 			return time.Time{}, fmt.Errorf("parsing client certificate: %w", err)
+		}
+		// Apply the leaf profile before consulting the path cache, including
+		// when a mesh transport revalidates a chain restored from a TLS ticket.
+		// Issuer certificates may remain unrestricted; these are leaf checks.
+		if leaf.IsCA {
+			return time.Time{}, fmt.Errorf("peer certificate must not be a CA certificate")
+		}
+		hasClientAuth := false
+		for _, usage := range leaf.ExtKeyUsage {
+			if usage == x509.ExtKeyUsageClientAuth {
+				hasClientAuth = true
+				break
+			}
+		}
+		if !hasClientAuth {
+			return time.Time{}, fmt.Errorf("peer certificate requires explicit clientAuth usage")
 		}
 		effectiveNow := effectiveVerificationTime(realNow, notBeforeFloor, leaf.NotBefore)
 		// These checks also run when the cryptographic path is reused. A clock

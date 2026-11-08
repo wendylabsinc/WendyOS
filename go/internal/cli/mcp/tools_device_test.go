@@ -426,9 +426,10 @@ func TestDeviceList_OmitsSimulatorsWithoutAHostServer(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		setup func(*mcpServer)
+		local bool
 	}{
-		{"agent socket", func(*mcpServer) { t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock") }},
-		{"relay", func(s *mcpServer) { s.relay = true }},
+		{"agent socket", func(*mcpServer) { t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock") }, true},
+		{"relay", func(s *mcpServer) { s.relay = true }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := New(&config.Config{}, nil)
@@ -441,10 +442,40 @@ func TestDeviceList_OmitsSimulatorsWithoutAHostServer(t *testing.T) {
 			if err != nil || result.IsError {
 				t.Fatalf("device_list: %v %v", result, err)
 			}
-			if devices := listPayload(t, result, "devices"); len(devices) != 0 {
-				t.Fatalf("expected no devices, got %v", devices)
+			devices := listPayload(t, result, "devices")
+			if !tc.local {
+				if len(devices) != 0 {
+					t.Fatalf("expected no devices, got %v", devices)
+				}
+				return
+			}
+			if len(devices) != 1 || devices[0]["device"] != "local" || devices[0]["type"] != "local" || devices[0]["source"] != "agent-socket" {
+				t.Fatalf("expected only the local device, got %v", devices)
 			}
 		})
+	}
+}
+
+func TestDeviceConnectInsideContainerRejectsOtherDevice(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+	srv := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		t.Fatal("connectFn must not be called for a non-local device")
+		return nil, nil
+	})
+	r, err := srv.handleDeviceConnect(context.Background(), callToolReq("device_connect", map[string]any{"device": "other"}))
+	if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != string(errCodeUnsupported) {
+		t.Fatalf("got %v %v", r, err)
+	}
+}
+
+func TestDeviceConnectInsideContainerAcceptsLocal(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "/run/wendy/agent.sock")
+	srv := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		return &grpcclient.AgentConnection{Host: "unix:/run/wendy/agent.sock"}, nil
+	})
+	r, err := srv.handleDeviceConnect(context.Background(), callToolReq("device_connect", map[string]any{"device": "local"}))
+	if err != nil || r.IsError || !strings.Contains(fmt.Sprint(r.Content), "connected to local") {
+		t.Fatalf("got %v %v", r, err)
 	}
 }
 

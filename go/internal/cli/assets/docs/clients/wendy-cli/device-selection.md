@@ -84,13 +84,52 @@ before running commands that need a target.
 > **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 > If the terminal is interactive, a prompt will be made to update the device right now.
 
+## Device identity
+
+Every enrolled-device connection needs a trusted expected device identity.
+The CLI checks the certificate against the selected device, including its
+organisation and asset or device ID. Older organisation/asset certificate
+identities remain supported. This applies to LAN, Bluetooth, Cloud tunnels,
+and MCP connections.
+
+Cloud connections use the selected device's authenticated inventory record.
+For local connections, the CLI needs a saved binding for the selected name.
+`wendy cloud discover` refreshes bindings under the inventory's device names;
+verified enrollment also saves a binding under the selected hostname and
+enrollment name. Finding a nearby device or resolving its address does not
+establish its identity. An IP address is a route to the device, and a different
+LAN or Bluetooth name needs its own trusted binding.
+
+If the CLI reports that the expected device identity is missing:
+
+- For an enrolled Cloud device, sign in to its organisation and run
+  `wendy cloud discover`, then select its inventory name or Cloud selector.
+  Refreshing inventory does not bind an arbitrary local alias or IP address.
+- For a new or reset, unprovisioned device, use `wendy device enroll` over its
+  LAN or USB network connection. This explicit setup flow verifies the enrolled
+  identity before saving the binding.
+- If the device is already enrolled under a different local name, use a name
+  with an existing trusted binding or its Cloud selector.
+
+Retrying, refreshing client certificates, and synchronizing the device clock
+do not supply a missing device identity. The CLI does not retry this failure
+with weaker certificate checks.
+
+`wendy device unpin <hostname>` clears saved trust for an intentional reset or
+replacement. Setting a LAN or VM default also clears its saved pin. Neither
+action authorizes learning an identity from the next connection: refresh the
+trusted inventory binding, or complete enrollment if the device is
+unprovisioned. Keep the pin and verify the device if the change was unexpected.
+See [certificate pinning](./commands/device/set-default.md#certificate-pinning)
+for default-device behavior.
+
 ## Simulator startup and authentication failures
 
 While waiting for a simulator to boot, the CLI retries connection failures
 such as an agent that is not yet listening. It stops immediately if the
 connection fails because of a TLS authentication rejection, a device identity
-refusal, an organization mismatch, or a gRPC `Unauthenticated` or
-`PermissionDenied` response.
+refusal, a [missing expected device identity](#device-identity), an organization
+mismatch, or a gRPC `Unauthenticated` or `PermissionDenied` response.
 
 A TLS authentication failure can mean a wrong device clock or incompatible
 credentials. If the device clock may be wrong, run `wendy device sync-time`

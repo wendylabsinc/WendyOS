@@ -109,162 +109,40 @@ func TestPinCandidateKeysAddsMeshThenDisplayName(t *testing.T) {
 	}
 }
 
-// TestExpectedIdentityForFindsPinUnderMeshName is the defect this task closes:
-// a pin recorded under a name that is not the mDNS hostname — cloud seeding
-// writes the asset name, and mesh addressing uses the mesh name — was inert
-// because every dial path looked up the hostname alone.
-func TestExpectedIdentityForFindsPinUnderMeshName(t *testing.T) {
-	setPinCache(t, discoverycache.Entry{
-		ID:          "dev-1",
-		DisplayName: "calm-zinnia",
-		Hostname:    "wendyos-calm-zinnia.local",
-		MeshName:    "calm-zinnia.acme.mesh.wendy.internal",
-	})
-	setPinConfig(t, map[string]config.DevicePin{
-		"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud},
-	})
-
-	got := expectedIdentityFor("wendyos-calm-zinnia.local")
-	if got == nil {
-		t.Fatal("expectedIdentityFor = nil for a host pinned under its mesh name; the pin is inert and enforcement is off")
+// Discovery aliases cannot authenticate a different name, even when the
+// alias has a valid Cloud inventory binding of its own.
+func TestExpectedIdentityIgnoresDiscoveryAliases(t *testing.T) {
+	setPinCache(t, discoverycache.Entry{Hostname: "wendyos-calm-zinnia.local", DisplayName: "calm-zinnia", MeshName: "calm-zinnia.acme.mesh.wendy.internal"})
+	setPinConfig(t, map[string]config.DevicePin{"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud}})
+	if got := expectedIdentityFor("wendyos-calm-zinnia.local"); got != nil {
+		t.Fatalf("discovery alias supplied an identity for an unbound hostname: %+v", got)
 	}
-	want := certs.WendyIdentity{OrgID: 7, EntityType: "asset", EntityID: "42"}
-	if *got != want {
-		t.Fatalf("expectedIdentityFor = %+v, want %+v", *got, want)
+	if target := newDialTarget("wendyos-calm-zinnia.local", "10.0.0.9:50051"); target.Expected != nil || target.pinned() {
+		t.Fatalf("discovery alias supplied a selected-name binding: %+v", target)
 	}
-	if !newDialTarget("wendyos-calm-zinnia.local", "10.0.0.9:50051").pinned() {
-		t.Fatal("dialTarget.pinned = false for a host pinned under its mesh name; the ladder would offer it the plaintext rung")
+	if got := expectedIdentityFor("calm-zinnia.acme.mesh.wendy.internal"); got == nil || got.EntityID != "42" {
+		t.Fatalf("explicitly selected Cloud name lost its binding: %+v", got)
 	}
 }
 
-// TestLookupPinCloudBeatsEarlierLAN: cloud spoke to the org over an
-// authenticated session, a LAN sighting did not — so a cloud pin under a later
-// candidate outranks a LAN pin under an earlier one. Among equal sources the
-// earliest candidate still wins.
-func TestLookupPinCloudBeatsEarlierLAN(t *testing.T) {
-	entry := discoverycache.Entry{
-		ID:          "dev-1",
-		DisplayName: "calm-zinnia",
-		Hostname:    "wendyos-calm-zinnia.local",
-		MeshName:    "calm-zinnia.acme.mesh.wendy.internal",
+func TestLookupPinUsesOnlySelectedName(t *testing.T) {
+	for _, source := range []string{config.PinSourceLAN, config.PinSourceCloud} {
+		for _, asset := range []string{"", "1"} {
+			t.Run(source+"/"+asset, func(t *testing.T) {
+				setPinCache(t, discoverycache.Entry{Hostname: "robot-a.local", DisplayName: "robot-b", MeshName: "robot-c.mesh.wendy.internal"})
+				want := config.DevicePin{OrgID: 7, AssetID: asset, Source: source}
+				setPinConfig(t, map[string]config.DevicePin{"robot-a": want, "robot-b": {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud}, "robot-c.mesh.wendy.internal": {OrgID: 7, AssetID: "43", Source: config.PinSourceCloud}})
+				cfg, err := loadConfigForPinFn()
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, key, ok := lookupPin(cfg, "robot-a.local")
+				if !ok || got != want || key != "robot-a.local" {
+					t.Fatalf("discovery replaced selected-name binding: got=%+v key=%q found=%v", got, key, ok)
+				}
+			})
+		}
 	}
-
-	t.Run("cloud under display name beats lan under the dialled key", func(t *testing.T) {
-		setPinCache(t, entry)
-		setPinConfig(t, map[string]config.DevicePin{
-			"wendyos-calm-zinnia":                  {OrgID: 7, AssetID: "1", Source: config.PinSourceLAN},
-			"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "2", Source: config.PinSourceLAN},
-			"calm-zinnia":                          {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud},
-		})
-		cfg, err := loadConfigForPinFn()
-		if err != nil {
-			t.Fatalf("loadConfigForPinFn: %v", err)
-		}
-
-		pin, key, ok := lookupPin(cfg, "wendyos-calm-zinnia.local")
-		if !ok {
-			t.Fatal("lookupPin found nothing despite three matching pins")
-		}
-		if key != "calm-zinnia" || pin.AssetID != "42" {
-			t.Fatalf("lookupPin = %+v under %q, want the cloud pin (asset 42) under \"calm-zinnia\"; cloud is authority regardless of candidate position", pin, key)
-		}
-		if got := expectedIdentityFor("wendyos-calm-zinnia.local"); got == nil || got.EntityID != "42" {
-			t.Fatalf("expectedIdentityFor = %+v, want the cloud pin's asset 42", got)
-		}
-	})
-
-	t.Run("equal sources keep the earliest candidate", func(t *testing.T) {
-		setPinCache(t, entry)
-		setPinConfig(t, map[string]config.DevicePin{
-			"wendyos-calm-zinnia":                  {OrgID: 7, AssetID: "1", Source: config.PinSourceLAN},
-			"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "2", Source: config.PinSourceLAN},
-			"calm-zinnia":                          {OrgID: 7, AssetID: "3", Source: config.PinSourceLAN},
-		})
-		cfg, err := loadConfigForPinFn()
-		if err != nil {
-			t.Fatalf("loadConfigForPinFn: %v", err)
-		}
-
-		pin, key, ok := lookupPin(cfg, "wendyos-calm-zinnia.local")
-		if !ok {
-			t.Fatal("lookupPin found nothing despite three matching pins")
-		}
-		if key != "wendyos-calm-zinnia.local" || pin.AssetID != "1" {
-			t.Fatalf("lookupPin = %+v under %q, want the dialled key's pin (asset 1); among equal sources the earliest candidate wins", pin, key)
-		}
-	})
-
-	// Where rule 2 (cloud is authority) and rule 4 (consulting more candidates
-	// can only ever FIND a pin, never discard one) collide, the invariant wins.
-	// An asset-less cloud pin displacing an asset-bearing LAN pin would leave
-	// expectedIdentityFor nil — no exact-identity constraint at all — which is
-	// precisely the same-CA-host redirect dialTarget exists to stop. The state
-	// is contemplated by the data model: EvaluateDevicePin carries a dedicated
-	// Source==cloud && AssetID=="" branch.
-	t.Run("asset-less cloud pin does not displace an asset-bearing lan pin", func(t *testing.T) {
-		setPinCache(t, entry)
-		setPinConfig(t, map[string]config.DevicePin{
-			"wendyos-calm-zinnia": {OrgID: 7, AssetID: "1", Source: config.PinSourceLAN},
-			"calm-zinnia":         {OrgID: 7, AssetID: "", Source: config.PinSourceCloud},
-		})
-		cfg, err := loadConfigForPinFn()
-		if err != nil {
-			t.Fatalf("loadConfigForPinFn: %v", err)
-		}
-
-		pin, key, ok := lookupPin(cfg, "wendyos-calm-zinnia.local")
-		if !ok {
-			t.Fatal("lookupPin found nothing despite two matching pins")
-		}
-		if key != "wendyos-calm-zinnia.local" || pin.AssetID != "1" {
-			t.Fatalf("lookupPin = %+v under %q, want the LAN pin (asset 1) under the dialled key; an asset-less cloud pin must not erase an exact-identity constraint", pin, key)
-		}
-		if got := expectedIdentityFor("wendyos-calm-zinnia.local"); got == nil || got.EntityID != "1" {
-			t.Fatalf("expectedIdentityFor = %+v, want asset 1 — consulting an extra candidate must never discard a constraint that was already there", got)
-		}
-	})
-
-	// The exception above is confined to the case where it protects a
-	// constraint: with nothing to lose, cloud precedence still applies.
-	t.Run("asset-less cloud pin still wins over an asset-less lan pin", func(t *testing.T) {
-		setPinCache(t, entry)
-		setPinConfig(t, map[string]config.DevicePin{
-			"wendyos-calm-zinnia": {OrgID: 7, CloudGRPC: "lan.example:443", Source: config.PinSourceLAN},
-			"calm-zinnia":         {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443", Source: config.PinSourceCloud},
-		})
-		cfg, err := loadConfigForPinFn()
-		if err != nil {
-			t.Fatalf("loadConfigForPinFn: %v", err)
-		}
-
-		pin, key, ok := lookupPin(cfg, "wendyos-calm-zinnia.local")
-		if !ok {
-			t.Fatal("lookupPin found nothing despite two matching pins")
-		}
-		if key != "calm-zinnia" || pin.Source != config.PinSourceCloud {
-			t.Fatalf("lookupPin = %+v under %q, want the cloud pin under \"calm-zinnia\"; neither pin carries an asset, so nothing is lost and cloud is still authority", pin, key)
-		}
-	})
-
-	t.Run("first cloud pin wins over a later cloud pin", func(t *testing.T) {
-		setPinCache(t, entry)
-		setPinConfig(t, map[string]config.DevicePin{
-			"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "2", Source: config.PinSourceCloud},
-			"calm-zinnia":                          {OrgID: 7, AssetID: "3", Source: config.PinSourceCloud},
-		})
-		cfg, err := loadConfigForPinFn()
-		if err != nil {
-			t.Fatalf("loadConfigForPinFn: %v", err)
-		}
-
-		pin, key, ok := lookupPin(cfg, "wendyos-calm-zinnia.local")
-		if !ok {
-			t.Fatal("lookupPin found nothing despite two matching cloud pins")
-		}
-		if key != "calm-zinnia.acme.mesh.wendy.internal" || pin.AssetID != "2" {
-			t.Fatalf("lookupPin = %+v under %q, want the mesh-name cloud pin (asset 2); it is the earlier candidate", pin, key)
-		}
-	})
 }
 
 // TestLookupPinCacheFailureDegradesToSingleKey is the regression that matters
@@ -302,35 +180,22 @@ func TestLookupPinCacheFailureDegradesToSingleKey(t *testing.T) {
 	}
 }
 
-// TestPinnedAnyCandidate: a pin under any candidate makes the host pinned,
-// even when it carries no asset id (so it constrains nothing) — the pin's mere
-// existence is what forbids the plaintext rung.
-func TestPinnedAnyCandidate(t *testing.T) {
-	setPinCache(t, discoverycache.Entry{
-		ID:          "dev-1",
-		DisplayName: "calm-zinnia",
-		Hostname:    "wendyos-calm-zinnia.local",
-		MeshName:    "calm-zinnia.acme.mesh.wendy.internal",
-	})
-
-	for _, key := range []string{"wendyos-calm-zinnia", "calm-zinnia.acme.mesh.wendy.internal", "calm-zinnia"} {
-		t.Run("pinned under "+key, func(t *testing.T) {
+// Only the selected name's saved binding makes a target pinned. Discovery
+// aliases cannot lend their pins to an otherwise unbound name.
+func TestPinnedSelectedName(t *testing.T) {
+	setPinCache(t, discoverycache.Entry{ID: "dev-1", DisplayName: "calm-zinnia", Hostname: "wendyos-calm-zinnia.local", MeshName: "calm-zinnia.acme.mesh.wendy.internal"})
+	for _, key := range []string{"wendyos-calm-zinnia", "calm-zinnia.acme.mesh.wendy.internal", "calm-zinnia", "some-other-device"} {
+		t.Run(key, func(t *testing.T) {
 			setPinConfig(t, map[string]config.DevicePin{key: {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443"}})
-			if !newDialTarget("wendyos-calm-zinnia.local", "10.0.0.9:50051").pinned() {
-				t.Fatalf("dialTarget.pinned = false with a pin recorded under %q, want true", key)
+			want := key == "wendyos-calm-zinnia"
+			if got := newDialTarget("wendyos-calm-zinnia.local", "10.0.0.9:50051").pinned(); got != want {
+				t.Fatalf("pinned=%v, want %v for binding under %q", got, want, key)
 			}
 			if got := expectedIdentityFor("wendyos-calm-zinnia.local"); got != nil {
-				t.Fatalf("expectedIdentityFor = %+v, want nil — an asset-less pin constrains nothing", *got)
+				t.Fatalf("organization-only binding supplied device identity: %+v", got)
 			}
 		})
 	}
-
-	t.Run("no candidate pinned", func(t *testing.T) {
-		setPinConfig(t, map[string]config.DevicePin{"some-other-device": {OrgID: 7}})
-		if newDialTarget("wendyos-calm-zinnia.local", "10.0.0.9:50051").pinned() {
-			t.Fatal("dialTarget.pinned = true with no pin under any candidate key")
-		}
-	})
 }
 
 func TestExpectedIdentityFor(t *testing.T) {
@@ -602,23 +467,17 @@ func TestWrongDeviceAbortsLadder(t *testing.T) {
 	}
 }
 
-// TestRefusalNamesTheKeyTheGoverningPinIsFiledUnder is the escape hatch's other
-// half. lookupPin resolves the governing pin across every name a device answers
-// to, so a dial to the mDNS hostname can be refused by a pin filed under the
-// cloud roster's asset name — and the refusal has to hand the user a key that
-// `wendy device unpin` can act on. Naming the DIALLED key instead points at a
-// command that clears nothing, and the next dial refuses identically.
+// Refusals must identify the saved selected-name binding.
 func TestRefusalNamesTheKeyTheGoverningPinIsFiledUnder(t *testing.T) {
 	setUp := func(t *testing.T) {
 		t.Helper()
 		setTempConfig(t, &config.Config{DevicePins: map[string]config.DevicePin{
-			// Filed under the display name, as cloud seeding writes it — never
-			// under the hostname the user dials.
-			"calm-zinnia": {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443", AssetID: "42", Source: config.PinSourceCloud},
+			// A verified saved binding for the selected hostname.
+			"wendyos-calm-zinnia": {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443", AssetID: "42", Source: config.PinSourceCloud},
 		}})
 		setPinCache(t, discoverycache.Entry{
 			ID:          "dev-1",
-			DisplayName: "calm-zinnia",
+			DisplayName: "wendyos-calm-zinnia",
 			Hostname:    "wendyos-calm-zinnia.local",
 		})
 	}
@@ -626,14 +485,14 @@ func TestRefusalNamesTheKeyTheGoverningPinIsFiledUnder(t *testing.T) {
 	t.Run("the target carries the matched key", func(t *testing.T) {
 		setUp(t)
 		target := newDialTarget("wendyos-calm-zinnia.local", "10.0.0.9:50051")
-		if target.PinnedKey != "calm-zinnia" {
-			t.Fatalf("PinnedKey = %q, want \"calm-zinnia\" — the key the pin is actually filed under", target.PinnedKey)
+		if target.PinnedKey != "wendyos-calm-zinnia.local" {
+			t.Fatalf("PinnedKey = %q, want \"wendyos-calm-zinnia.local\" — the key the pin is actually filed under", target.PinnedKey)
 		}
-		if target.refusalKey() != "calm-zinnia" {
-			t.Fatalf("refusalKey = %q, want \"calm-zinnia\"", target.refusalKey())
+		if target.refusalKey() != "wendyos-calm-zinnia.local" {
+			t.Fatalf("refusalKey = %q, want \"wendyos-calm-zinnia.local\"", target.refusalKey())
 		}
 		if target.Expected == nil || target.Expected.EntityID != "42" {
-			t.Fatalf("Expected = %v, want the alias pin's asset 42 still enforced", target.Expected)
+			t.Fatalf("Expected = %v, want the selected name's asset 42 still enforced", target.Expected)
 		}
 	})
 
@@ -660,8 +519,8 @@ func TestRefusalNamesTheKeyTheGoverningPinIsFiledUnder(t *testing.T) {
 		if err == nil {
 			t.Fatal("no error for a wrong-device rejection")
 		}
-		if !strings.Contains(err.Error(), "wendy device unpin calm-zinnia") {
-			t.Fatalf("err = %v, want it to name 'wendy device unpin calm-zinnia' — the key that actually holds the pin", err)
+		if !strings.Contains(err.Error(), "wendy device unpin wendyos-calm-zinnia") {
+			t.Fatalf("err = %v, want it to name 'wendy device unpin wendyos-calm-zinnia' — the key that actually holds the pin", err)
 		}
 	})
 
@@ -684,13 +543,8 @@ func TestRefusalNamesTheKeyTheGoverningPinIsFiledUnder(t *testing.T) {
 		if err == nil {
 			t.Fatal("no error for a pinned host whose mTLS rungs all failed")
 		}
-		// This refusal offers no unpin command — nothing answered, so nothing
-		// about the identity is in question. It must still name the alias the
-		// pin is filed under rather than the dialled name, because that key is
-		// what any follow-up (including an eventual deliberate unpin) has to
-		// act on, and naming the dialled name sends the user to a command that
-		// clears nothing.
-		if !strings.Contains(err.Error(), "calm-zinnia") {
+		// A reachability failure names the selected device without suggesting unpin.
+		if !strings.Contains(err.Error(), "wendyos-calm-zinnia") {
 			t.Fatalf("err = %v, want it to name 'calm-zinnia' — the key that actually holds the pin", err)
 		}
 		if strings.Contains(err.Error(), "device unpin") {
@@ -739,7 +593,10 @@ func TestSPKIMismatchAbortsLadderAndNamesUnpin(t *testing.T) {
 
 	// Two certs × two ports = four rungs if the ladder kept going.
 	allCerts := []config.CertificateInfo{selfSignedCLICert(t, 7), selfSignedCLICert(t, 9)}
-	conn, mtlsErr, err := dialAgentLadderWithCerts(ctx, newDialTarget("orin.local", deadAgentAddr(t)), allCerts)
+	target := newDialTarget("orin.local", deadAgentAddr(t))
+	// An explicit inventory expectation exists even without a local config pin.
+	target.Expected = &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}
+	conn, mtlsErr, err := dialAgentLadderWithCerts(ctx, target, allCerts)
 	if conn != nil {
 		conn.Close()
 	}
