@@ -2,8 +2,9 @@
 set -euo pipefail
 app="$1"; platform="$2"
 cache="$app/Build/VisualRecognition"
-version=4.12.0
-sha=44c106d5bb47efec04e531fd93008b3fcd1d27138985c5baf4eafac0e1ec9e9d
+. "$app/../internal/twinvision/native/opencv.lock"
+version="$OPENCV_VERSION"
+sha="$OPENCV_SHA256"
 archive="$cache/opencv-$version.tar.gz"
 source="$cache/opencv-$version"
 output="$cache/$platform"

@@ -1,0 +1,27 @@
+{
+  "appId": "sh.wendy.go2-camera-search",
+  "version": "0.1.0",
+  "platform": "linux",
+  "env": {
+    "PORT": "18993"
+  },
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    },
+    {
+      "type": "http",
+      "port": 18993
+    },
+    {
+      "type": "admin"
+    }
+  ],
+  "readiness": {
+    "tcpSocket": {
+      "port": 18993
+    },
+    "timeoutSeconds": 60
+  }
+}

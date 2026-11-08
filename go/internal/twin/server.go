@@ -12,12 +12,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/twinrobot"
+	"github.com/wendylabsinc/wendy/go/internal/twinvision"
 	"google.golang.org/grpc"
 )
+
+var ErrRobotBusy = errors.New("robot is controlled by another session; close it or wait 15 seconds after it disconnects")
 
 type robotSession struct {
 	robot                      robotControl
 	serial                     string
+	lastActivity               time.Time
 	pendingMu                  sync.Mutex
 	pending                    twinrobot.SiteFusionReport
 	pendingFrame               string
@@ -31,20 +35,27 @@ type robotSession struct {
 	searchReport               json.RawMessage
 }
 type Server struct {
-	Store     *Store
-	Conn      grpc.ClientConnInterface
-	Context   context.Context
-	mu        sync.Mutex
-	openMu    sync.Mutex
-	robots    map[string]*robotSession
-	observers map[string]*robotSession
-	people    People
+	Store        *Store
+	Conn         grpc.ClientConnInterface
+	Context      context.Context
+	mu           sync.Mutex
+	openMu       sync.Mutex
+	robots       map[string]*robotSession
+	observers    map[string]*robotSession
+	people       People
+	cameraMu     sync.Mutex
+	cameras      map[string]*cameraAlignment
+	cameraWorker chan struct{}
+	cameraSolver func(context.Context, []byte, twinvision.Frame, [9]float64, int32, bool) (twinvision.Result, error)
 }
 
 func (s *Server) Handler() http.Handler {
 	s.robots = map[string]*robotSession{}
 	s.observers = map[string]*robotSession{}
+	s.cameras = map[string]*cameraAlignment{}
+	s.cameraWorker = make(chan struct{}, 1)
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/camera-alignment", s.cameraRequest)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /v1/rooms", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.List(); respond(w, v, e) })
 	mux.HandleFunc("GET /v1/rooms/{id}", func(w http.ResponseWriter, r *http.Request) { v, e := s.Store.Get(r.PathValue("id")); respond(w, v, e) })
@@ -114,7 +125,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 func respond(w http.ResponseWriter, v any, e error) {
 	if e != nil {
 		code := 400
-		if errors.Is(e, ErrConflict) {
+		if errors.Is(e, ErrConflict) || errors.Is(e, ErrRobotBusy) {
 			code = 409
 		}
 		http.Error(w, e.Error(), code)
@@ -130,11 +141,31 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	var out twinrobot.Response
 	var err error
+	// Observers read the existing stream without acquiring or replacing control.
+	if q.Operation == "observe" {
+		s.mu.Lock()
+		session := s.observers[q.Serial]
+		s.mu.Unlock()
+		if session == nil {
+			respond(w, nil, errors.New("robot observation is not available"))
+			return
+		}
+		out.Snapshot = session.robot.Status()
+		respond(w, out, nil)
+		return
+	}
 	if q.Operation == "open" {
 		s.openMu.Lock()
 		defer s.openMu.Unlock()
 		s.mu.Lock()
 		previous := s.observers[q.Serial]
+		for _, v := range s.robots {
+			if v.serial == q.Serial && (v.lastActivity.IsZero() || time.Since(v.lastActivity) < 15*time.Second) {
+				s.mu.Unlock()
+				respond(w, nil, ErrRobotBusy)
+				return
+			}
+		}
 		for key, v := range s.robots {
 			if v.serial == q.Serial {
 				delete(s.robots, key)
@@ -156,7 +187,7 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			out.Handle = uuid.NewString()
 			s.mu.Lock()
-			session := &robotSession{robot: robot, serial: q.Serial}
+			session := &robotSession{robot: robot, serial: q.Serial, lastActivity: time.Now()}
 			s.robots[out.Handle] = session
 			s.observers[q.Serial] = session
 			s.mu.Unlock()
@@ -166,6 +197,9 @@ func (s *Server) robotRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	session, ok := s.robots[q.Handle]
+	if ok {
+		session.lastActivity = time.Now()
+	}
 	s.mu.Unlock()
 	if !ok {
 		respond(w, nil, errors.New("robot session expired"))

@@ -1,0 +1,6 @@
+.venv
+__pycache__
+.pytest_cache
+tests
+*.onnx
+*_pb2*.py

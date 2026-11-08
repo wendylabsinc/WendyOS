@@ -1,0 +1,46 @@
+name: Digital twin parity
+on:
+  pull_request:
+    paths:
+      - 'go/internal/twin/**'
+      - 'go/internal/twinvision/**'
+      - 'go/internal/twinrobot/**'
+      - 'go/macos/Sources/App/SiteTwin/**'
+      - 'go/macos/Sources/App/SiteLocalization.cpp'
+      - 'go/macos/Sources/Shared/SiteLocalization.h'
+      - 'go/macos/Scripts/bundle-twin.py'
+      - 'go/macos/Scripts/build-vision-locked.sh'
+      - 'go/apps/digital-twin/**'
+      - 'Examples/Go2CameraSearch/**'
+      - '.github/workflows/digital-twin-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-linux:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build worker and run the shared native calibration tests
+        run: docker build go/internal/twinvision/native
+  native-apple:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: brew install cmake ninja
+      - name: Run the same calibration tests on Apple
+        run: bash go/macos/Scripts/test-localization.sh
+  service:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v6
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./go/internal/twin ./go/internal/twinvision ./go/internal/twinrobot/...

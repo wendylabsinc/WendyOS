@@ -1,0 +1,13 @@
+Arrival bark audio
+
+Source: dog bark.wav by fennelliott
+https://freesound.org/people/fennelliott/sounds/347364/
+License: Creative Commons Zero 1.0
+https://creativecommons.org/publicdomain/zero/1.0/
+Downloaded high-quality MP3 preview, 2026-10-01:
+https://cdn.freesound.org/previews/347/347364_6207707-hq.mp3
+
+Edits: trimmed 0.65 seconds of quiet lead-in, removed low-frequency rumble,
+raised level by 4 dB, applied brief edge fades, converted to mono 24kHz PCM.
+The recording contains three natural barks and lasts 1.45 seconds after trimming.
+Playback begins at the actual arrived_and_barked event.

@@ -33,6 +33,13 @@ open go/macos/Build/DerivedData/Build/Products/Debug/WendyDesktop.app
 
 The default build is unsigned. Device discovery, cloud access, cameras, and logs work without activating the VPN. macOS will only activate the Network Extension from a properly signed and provisioned app.
 
+The bundled Linux digital twin also requires a running Docker/BuildKit engine.
+`Scripts/bundle-twin.py` builds the camera worker for Linux arm64 and amd64,
+runs the shared native tests, and packages its runtime alongside the Go service.
+The first build compiles OpenCV; later builds reuse Docker's cache. Apple scan
+capture and the Linux worker read the same checksum pin from
+`internal/twinvision/native/opencv.lock` relative to the Go directory.
+
 The build produces native binaries for the build Mac. It links `libwendydesktop.a` into the app and `libwendyvpn.a` into the extension. It also bundles the repository's `wendy` executable for the CLI's detached mesh worker and includes libusb, with no Homebrew runtime dependency. Generated binaries and DerivedData stay in the ignored `Build/` directory.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
@@ -1243,3 +1250,12 @@ do not feed robot navigation or collision avoidance.
 Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+
+### Shared fixed-camera alignment
+
+Room-reference alignment runs through the Linux twin's camera-alignment API.
+Apple clients supply two fresh luminance frames and display the result. The
+service selects the lens, validates pose agreement and saves metadata with a
+revision check. The web example uses the same API and worker. See
+[the alignment contract](../internal/twinvision/README.md) for provenance,
+expiry, replay testing and the remaining robot-localization migration.
