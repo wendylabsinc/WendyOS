@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,18 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 )
+
+const resumptionTestTenant = "11111111-1111-4111-8111-111111111111"
+const resumptionTestDevice = "22222222-2222-4222-8222-222222222222"
+
+func resumptionExpectedIdentity(t *testing.T) *certs.WendyIdentity {
+	t.Helper()
+	identity, err := certs.ParsePrincipal(certs.DeviceSPIFFEURI(resumptionTestTenant, resumptionTestDevice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &identity
+}
 
 // versionService records the TLS resumption state of each call's transport.
 type versionService struct {
@@ -49,9 +62,9 @@ func TestConnectWithTLSResumesAcrossConnections(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("WENDY_TLS_SESSION_STORE", "file")
 
-	pki := newIntegrationPKI(t) // same generator as Task 7, PEM for client too
+	pki := newIntegrationPKI(t)
 	srv, err := mtls.NewServer(pki.serverCertPEM, pki.caPEM, pki.serverKeyPEM,
-		zap.NewNop(), time.Time{}, certs.Scope{}, interceptor.OrgModeOff)
+		zap.NewNop(), time.Time{}, certs.Scope{TenantUUID: resumptionTestTenant}, interceptor.OrgModeStrict)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -70,7 +83,7 @@ func TestConnectWithTLSResumesAcrossConnections(t *testing.T) {
 		PemCertificateChain: pki.caPEM,
 	}
 	call := func() {
-		conn, err := grpcclient.ConnectWithTLSExpecting(context.Background(), ln.Addr().String(), certInfo, nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"})
+		conn, err := grpcclient.ConnectWithTLSExpecting(context.Background(), ln.Addr().String(), certInfo, nil, resumptionExpectedIdentity(t))
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
@@ -158,7 +171,11 @@ func integrationPKIWithIntermediate(t *testing.T, intermediate bool) integration
 		caKey = issuerKey
 		chainPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerDER})) + chainPEM
 	}
-	leaf := func(cn string, eku x509.ExtKeyUsage) (certPEM, keyPEM string) {
+	leaf := func(cn, principal string, eku x509.ExtKeyUsage) (certPEM, keyPEM string) {
+		uri, err := url.Parse(principal)
+		if err != nil {
+			t.Fatalf("parse principal: %v", err)
+		}
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("gen key: %v", err)
@@ -170,6 +187,7 @@ func integrationPKIWithIntermediate(t *testing.T, intermediate bool) integration
 			NotAfter:     time.Now().Add(24 * time.Hour),
 			KeyUsage:     x509.KeyUsageDigitalSignature,
 			ExtKeyUsage:  []x509.ExtKeyUsage{eku},
+			URIs:         []*url.URL{uri},
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
 		if err != nil {
@@ -183,8 +201,10 @@ func integrationPKIWithIntermediate(t *testing.T, intermediate bool) integration
 			string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 	}
 
-	serverCertPEM, serverKeyPEM := leaf("sh/wendy/7/42", x509.ExtKeyUsageServerAuth)
-	clientCertPEM, clientKeyPEM := leaf("resumption-e2e-client", x509.ExtKeyUsageClientAuth)
+	serverCertPEM, serverKeyPEM := leaf("resumption-e2e-server", certs.DeviceSPIFFEURI(resumptionTestTenant, resumptionTestDevice), x509.ExtKeyUsageServerAuth)
+	// The production server requires a recognized operator identity for
+	// GetAgentVersion, on both the full and resumed connections.
+	clientCertPEM, clientKeyPEM := leaf("resumption-e2e-client", "spiffe://wendy.sh/tenant/"+resumptionTestTenant+"/operator/resumption-e2e", x509.ExtKeyUsageClientAuth)
 	return integrationPKI{
 		serverCertPEM: serverCertPEM,
 		serverKeyPEM:  serverKeyPEM,
@@ -213,7 +233,7 @@ func TestNormalAgentRPCKnownIssuers(t *testing.T) {
 	t.Cleanup(server.Stop)
 	identity := &config.CertificateInfo{PemCertificate: pki.clientCertPEM, PemPrivateKey: pki.clientKeyPEM, PemCertificateChain: pki.caPEM}
 	for range 2 {
-		conn, err := grpcclient.ConnectWithTLSExpecting(context.Background(), listener.Addr().String(), identity, nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"})
+		conn, err := grpcclient.ConnectWithTLSExpecting(context.Background(), listener.Addr().String(), identity, nil, resumptionExpectedIdentity(t))
 		if err != nil {
 			t.Fatal(err)
 		}

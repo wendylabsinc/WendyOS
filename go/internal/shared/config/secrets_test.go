@@ -177,9 +177,8 @@ func TestAccountDerivationDeterministic(t *testing.T) {
 
 // TestAccountDerivationDashboardVariance is the regression test for the
 // missing-CloudDashboard finding: AddAuth dedups auth entries on
-// (CloudDashboard, CloudGRPC, orgID), so a browser login (CloudDashboard
-// set) and an --api-key login (CloudDashboard empty, see performLocalLogin
-// in auth.go) against the same endpoint+org coexist as two distinct
+// (CloudDashboard, CloudGRPC, orgID), so stored sessions with different
+// CloudDashboard values against the same endpoint+org coexist as distinct
 // entries. tokenAccount must include CloudDashboard or those two entries'
 // dehydrated tokens collide on one Keychain account.
 func TestAccountDerivationDashboardVariance(t *testing.T) {
@@ -191,7 +190,7 @@ func TestAccountDerivationDashboardVariance(t *testing.T) {
 }
 
 // TestAccountDerivationAssetVariance is the regression test for the
-// missing-AssetID finding: asset certs minted by performLocalLogin carry no
+// missing-AssetID finding: legacy asset certs carry no
 // UserID, only an AssetID, so two asset certs on the same endpoint+org with
 // different AssetID must not collide on one key account.
 func TestAccountDerivationAssetVariance(t *testing.T) {
@@ -429,10 +428,9 @@ func TestSaveTokenAccountPerOrgOnSharedEndpoint(t *testing.T) {
 
 // TestSaveTokenAccountPerDashboardOnSharedEndpoint is the sibling regression
 // test for the missing-CloudDashboard finding at the Save/Load level:
-// AddAuth dedups on (CloudDashboard, CloudGRPC, orgID), so a browser login
-// (CloudDashboard set) and an --api-key login (CloudDashboard empty, see
-// performLocalLogin in auth.go) against the same endpoint+org coexist as two
-// separate entries. Before the fix, tokenAccount ignored CloudDashboard, so
+// AddAuth dedups on (CloudDashboard, CloudGRPC, orgID), so stored sessions
+// with different CloudDashboard values against the same endpoint+org coexist
+// as separate entries. Before the fix, tokenAccount ignored CloudDashboard, so
 // dehydrating the second entry's token would Put it under the first
 // entry's account, destroying the first token even though both references
 // still looked distinct on disk.
@@ -453,9 +451,9 @@ func TestSaveTokenAccountPerDashboardOnSharedEndpoint(t *testing.T) {
 			Certificates:   []CertificateInfo{{OrganizationID: 1}},
 		},
 		{
-			CloudDashboard: "", // --api-key login leaves this empty
+			CloudDashboard: "", // Persisted sessions may have no dashboard
 			CloudGRPC:      "grpc.wendy.com:443",
-			APIKey:         "tok-apikey",
+			APIKey:         "tok-legacy",
 			Certificates:   []CertificateInfo{{OrganizationID: 1}},
 		},
 	}}
@@ -471,7 +469,7 @@ func TestSaveTokenAccountPerDashboardOnSharedEndpoint(t *testing.T) {
 		t.Fatalf("expected both APIKeys to be dehydrated refs, got %q and %q", loaded.Auth[0].APIKey, loaded.Auth[1].APIKey)
 	}
 	if loaded.Auth[0].APIKey == loaded.Auth[1].APIKey {
-		t.Fatalf("browser login and --api-key login on the shared endpoint got the same keychain reference: %q", loaded.Auth[0].APIKey)
+		t.Fatalf("sessions with different dashboards on the shared endpoint got the same keychain reference: %q", loaded.Auth[0].APIKey)
 	}
 
 	// Cold cache: resolutions must come from the fake store itself, proving
@@ -481,14 +479,14 @@ func TestSaveTokenAccountPerDashboardOnSharedEndpoint(t *testing.T) {
 	if err != nil || tokBrowser != "tok-browser" {
 		t.Errorf("browser-login BearerToken = %q, %v, want %q", tokBrowser, err, "tok-browser")
 	}
-	tokAPIKey, err := loaded.Auth[1].BearerToken()
-	if err != nil || tokAPIKey != "tok-apikey" {
-		t.Errorf("api-key-login BearerToken = %q, %v, want %q", tokAPIKey, err, "tok-apikey")
+	tokLegacy, err := loaded.Auth[1].BearerToken()
+	if err != nil || tokLegacy != "tok-legacy" {
+		t.Errorf("legacy-session BearerToken = %q, %v, want %q", tokLegacy, err, "tok-legacy")
 	}
 }
 
 // TestSaveKeyAccountPerAssetOnEmptyUserID is the sibling regression test for
-// the missing-AssetID finding: asset certs minted by performLocalLogin
+// the missing-AssetID finding: legacy asset certs
 // (device/asset identities) carry no UserID, only an AssetID. Before the
 // fix, keyAccount ignored AssetID, so two asset certs on the same
 // endpoint+org would dehydrate their private keys to the same Keychain

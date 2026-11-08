@@ -1,0 +1,18 @@
+{
+  "argv_prefix": [
+    "device",
+    "ps"
+  ],
+  "stdout": "[{\"name\": \"sh.wendy.evals.model-tool-report\", \"version\": \"0.0.0-capture\", \"runningState\": \"RUNNING\"}]",
+  "stderr": "",
+  "exit_code": 0,
+  "after": {
+    "actions": [
+      "tool:run",
+      "cli:run"
+    ],
+    "stdout": "[{\"name\": \"sensor-dashboard\", \"version\": \"latest\", \"runningState\": \"RUNNING\", \"httpPort\": 8080, \"services\": [{\"name\": \"web\", \"runningState\": \"RUNNING\"}]}, {\"name\": \"sh.wendy.evals.model-tool-report\", \"version\": \"0.0.0-capture\", \"runningState\": \"RUNNING\"}]",
+    "stderr": "",
+    "exit_code": 0
+  }
+}

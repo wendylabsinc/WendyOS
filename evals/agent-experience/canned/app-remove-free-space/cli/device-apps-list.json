@@ -1,0 +1,19 @@
+{
+  "argv_prefix": [
+    "device",
+    "apps",
+    "list"
+  ],
+  "stdout": "[{\"name\": \"sensor-dashboard\", \"version\": \"latest\", \"runningState\": \"RUNNING\", \"httpPort\": 8080, \"services\": [{\"name\": \"web\", \"runningState\": \"RUNNING\"}]}]",
+  "stderr": "Connecting to simulator {{vm_name}}...\n",
+  "exit_code": 0,
+  "after": {
+    "actions": [
+      "tool:container_delete",
+      "cli:device apps remove"
+    ],
+    "stdout": "[]",
+    "stderr": "Connecting to simulator {{vm_name}}...\n",
+    "exit_code": 0
+  }
+}

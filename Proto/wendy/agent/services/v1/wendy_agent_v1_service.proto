@@ -206,7 +206,8 @@ message GetAgentVersionResponse {
     optional string jetpack_version = 10;
     // CUDA version string (e.g. "12.2.0"). Only present when CUDA is installed.
     optional string cuda_version = 11;
-    // STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+    // Medium of the disk backing / ("nvme", "emmc", "sd", "ufs", "usb"); when not recognised, the
+    // STORAGE value from /etc/wendyos/device-type (e.g. "disk"). Only present on WendyOS.
     optional string storage_medium = 12;
     // Root filesystem bytes currently used by the device. Only present when the agent can inspect disk usage.
     optional int64 disk_used_bytes = 13;
@@ -270,6 +271,11 @@ message GetAgentVersionResponse {
     // Current Jetson power mode (nvpmodel). Absent on devices that are not a
     // Jetson, when the mode cannot be read, and on agents predating this field.
     optional PowerMode power_mode = 28;
+    // Entitlement types (wendy.json "entitlements[].type") this agent
+    // understands. An agent ignores a type it does not know and starts the app
+    // without that access, so a CLI can refuse such a project before building
+    // it. Empty on agents predating this field, which are not checked.
+    repeated string entitlement_types = 29;
 }
 
 // A network interface on the device and the IP addresses assigned to it.
@@ -279,6 +285,31 @@ message NetworkInterface {
     // Routable IPv4 and IPv6 addresses assigned to the interface, without any
     // CIDR prefix suffix (e.g. "192.168.1.42").
     repeated string ip_addresses = 2;
+    // True on the one interface the kernel routes traffic for a public
+    // address through: the interface carrying internet traffic now. False on
+    // every interface for agents predating this field.
+    bool is_default_route = 3;
+    // Lowest metric among the interface's IPv4 and IPv6 default routes.
+    // Absent when the interface has no default route, and on older agents.
+    optional uint32 route_metric = 4;
+    // NetworkManager's per-interface connectivity check result (best of IPv4
+    // and IPv6). UNKNOWN when NetworkManager runs no check (no check URI, or
+    // built without one), is absent, or the agent predates this field.
+    NetworkConnectivity connectivity = 5;
+}
+
+// Internet reachability of one interface, as NetworkManager's connectivity
+// check reports it.
+enum NetworkConnectivity {
+    NETWORK_CONNECTIVITY_UNKNOWN = 0;
+    // No connectivity: the check fails or the interface is not connected.
+    NETWORK_CONNECTIVITY_NONE = 1;
+    // A captive portal intercepts traffic.
+    NETWORK_CONNECTIVITY_PORTAL = 2;
+    // Connected to a network that does not reach the internet.
+    NETWORK_CONNECTIVITY_LIMITED = 3;
+    // The check endpoint answered: the interface reaches the internet.
+    NETWORK_CONNECTIVITY_FULL = 4;
 }
 
 // Usage information for a single mounted filesystem.

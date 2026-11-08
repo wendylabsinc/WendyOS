@@ -360,7 +360,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 					}
 					fmt.Println("Please select the correct device type to continue.")
 					fmt.Println()
-					picked, pickErr := pickDeviceTypeAndGetLatestOTA(nightly)
+					picked, pickErr := pickDeviceTypeAndGetLatestOTA(storageMedium, nightly)
 					if pickErr != nil {
 						return pickErr
 					}
@@ -587,7 +587,8 @@ func artifactURLPath(filePath string) string {
 // pickDeviceTypeAndGetLatestOTA shows a device-type picker and returns the OTA
 // artifact URL for the latest stable release (or latest nightly when nightly is
 // true). No version picker is shown — the version is chosen automatically.
-func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
+// storageMedium is the device's reported medium, which picks the NVMe variant.
+func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, error) {
 	fmt.Println("Fetching available devices...")
 
 	devices, err := getAvailableDevices()
@@ -630,7 +631,7 @@ func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
 		return "", err
 	}
 
-	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, "", nightly)
+	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, storageMedium, nightly)
 	if err != nil {
 		return "", fmt.Errorf("resolving OTA artifact for %q: %w", key, err)
 	}

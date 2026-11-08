@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"cuelabs.dev/go/oci/ociregistry"
-	"cuelabs.dev/go/oci/ociregistry/ociserver"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -91,7 +90,7 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		Interface: reg,
 	}
 
-	ociHandler := ociserver.New(backend, nil)
+	ociHandler := newOCIHandler(backend)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", readyzHandler(client, logger))

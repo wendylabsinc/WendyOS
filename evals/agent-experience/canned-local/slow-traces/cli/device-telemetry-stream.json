@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "telemetry-stream"
+  ],
+  "stdout": "",
+  "stderr": "",
+  "exit_code": 0
+}

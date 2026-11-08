@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -75,6 +77,12 @@ type AgentService struct {
 	// process was started from; see binarySHA256.
 	binaryHashOnce sync.Once
 	binaryHash     string
+
+	// Settable within-package so tests need neither a WendyOS image nor its disks.
+	deviceTypePath string
+	rootMedium     func() (medium, disk string, err error)
+	rootMediumOnce sync.Once
+	rootMediumName string
 }
 
 func NewAgentService(
@@ -114,6 +122,9 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		CpuArchitecture: runtime.GOARCH,
 		Featureset:      detectFeatureset(),
 		BinarySha256:    s.binarySHA256(),
+		// Every type the agent's app config parsing knows. It ignores any
+		// other, so the CLI refuses a project that uses one (WDY-4049).
+		EntitlementTypes: slices.Clone(appconfig.ValidEntitlementTypes),
 	}
 
 	if hn, err := os.Hostname(); err == nil {
@@ -126,12 +137,12 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		resp.OsVersion = &distroVer
 	}
 
-	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		deviceType, storageMedium := parseDeviceType(string(data))
+	if data, err := os.ReadFile(s.deviceTypeFile()); err == nil {
+		deviceType, imageMedium := parseDeviceType(string(data))
 		if deviceType != "" {
 			resp.DeviceType = &deviceType
 		}
-		if storageMedium != "" {
+		if storageMedium := pickStorageMedium(s.bootMedium(), imageMedium); storageMedium != "" {
 			resp.StorageMedium = &storageMedium
 		}
 	}
@@ -190,6 +201,7 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 	}
 
 	resp.NetworkInterfaces = listNetworkInterfaces()
+	addUplinkInfo(ctx, resp.NetworkInterfaces)
 
 	// sysfs when the host has its own pack, else a registered fallback (a
 	// robot's BMS read over DDS). nil on the mains-powered devices that make up
