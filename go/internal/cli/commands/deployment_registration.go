@@ -3,8 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"github.com/wendylabsinc/wendy/go/internal/agent/data"
-	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -143,7 +141,7 @@ func registerAppsWithCloud(ctx context.Context, auth *config.AuthConfig, device 
 			Id: id, OrganizationId: device.GetOrganizationId(),
 		})
 		if status.Code(err) == codes.NotFound {
-			name := strings.TrimPrefix(id, data.CampaignAppPrefix)
+			name := managedAppName(id)
 			app, err = client.UpsertApp(cloudCtx, &cloudpb.UpsertAppRequest{
 				Id: id, OrganizationId: device.GetOrganizationId(), Name: &name,
 			})

@@ -37,6 +37,10 @@ const (
 	DataService_CampaignArm_FullMethodName                = "/wendy.agent.services.v2.DataService/CampaignArm"
 	DataService_CampaignDisarm_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignDisarm"
 	DataService_CampaignRemove_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignRemove"
+	DataService_DocumentApply_FullMethodName              = "/wendy.agent.services.v2.DataService/DocumentApply"
+	DataService_DocumentRemove_FullMethodName             = "/wendy.agent.services.v2.DataService/DocumentRemove"
+	DataService_DocumentRenew_FullMethodName              = "/wendy.agent.services.v2.DataService/DocumentRenew"
+	DataService_Documents_FullMethodName                  = "/wendy.agent.services.v2.DataService/Documents"
 )
 
 // DataServiceClient is the client API for DataService service.
@@ -103,6 +107,21 @@ type DataServiceClient interface {
 	// CampaignDisarm does, and reports a worker still stopping after 10 s the
 	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(ctx context.Context, in *DataCampaignRemoveRequest, opts ...grpc.CallOption) (*DataCampaignRemoveResponse, error)
+	// Data documents (specs/2026-10-12-data-documents-design.md §9.2).
+	// DocumentApply validates and stores a document of any kind and hands it to
+	// its runner. A collection takes the CampaignDeploy path.
+	DocumentApply(ctx context.Context, in *DataDocumentApplyRequest, opts ...grpc.CallOption) (*DataDocumentApplyResponse, error)
+	// DocumentRemove removes an inference or watch document and everything it
+	// owns, owned documents first, and returns once their inference has stopped
+	// (at most 10 s, then DEADLINE_EXCEEDED). NOT_FOUND if absent;
+	// FAILED_PRECONDITION for a collection.
+	DocumentRemove(ctx context.Context, in *DataDocumentRemoveRequest, opts ...grpc.CallOption) (*DataDocumentRemoveResponse, error)
+	// DocumentRenew pushes a leased watch's deadline to now + lease. NOT_FOUND
+	// once removed or expired; FAILED_PRECONDITION for a document without a lease.
+	DocumentRenew(ctx context.Context, in *DataDocumentRenewRequest, opts ...grpc.CallOption) (*DataDocumentRenewResponse, error)
+	// Documents lists documents of every kind with their status; kind and name
+	// narrow it. NOT_FOUND when a named document does not exist.
+	Documents(ctx context.Context, in *DataDocumentsRequest, opts ...grpc.CallOption) (*DataDocumentsResponse, error)
 }
 
 type dataServiceClient struct {
@@ -301,6 +320,46 @@ func (c *dataServiceClient) CampaignRemove(ctx context.Context, in *DataCampaign
 	return out, nil
 }
 
+func (c *dataServiceClient) DocumentApply(ctx context.Context, in *DataDocumentApplyRequest, opts ...grpc.CallOption) (*DataDocumentApplyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataDocumentApplyResponse)
+	err := c.cc.Invoke(ctx, DataService_DocumentApply_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) DocumentRemove(ctx context.Context, in *DataDocumentRemoveRequest, opts ...grpc.CallOption) (*DataDocumentRemoveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataDocumentRemoveResponse)
+	err := c.cc.Invoke(ctx, DataService_DocumentRemove_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) DocumentRenew(ctx context.Context, in *DataDocumentRenewRequest, opts ...grpc.CallOption) (*DataDocumentRenewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataDocumentRenewResponse)
+	err := c.cc.Invoke(ctx, DataService_DocumentRenew_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataServiceClient) Documents(ctx context.Context, in *DataDocumentsRequest, opts ...grpc.CallOption) (*DataDocumentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataDocumentsResponse)
+	err := c.cc.Invoke(ctx, DataService_Documents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataServiceServer is the server API for DataService service.
 // All implementations must embed UnimplementedDataServiceServer
 // for forward compatibility.
@@ -365,6 +424,21 @@ type DataServiceServer interface {
 	// CampaignDisarm does, and reports a worker still stopping after 10 s the
 	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error)
+	// Data documents (specs/2026-10-12-data-documents-design.md §9.2).
+	// DocumentApply validates and stores a document of any kind and hands it to
+	// its runner. A collection takes the CampaignDeploy path.
+	DocumentApply(context.Context, *DataDocumentApplyRequest) (*DataDocumentApplyResponse, error)
+	// DocumentRemove removes an inference or watch document and everything it
+	// owns, owned documents first, and returns once their inference has stopped
+	// (at most 10 s, then DEADLINE_EXCEEDED). NOT_FOUND if absent;
+	// FAILED_PRECONDITION for a collection.
+	DocumentRemove(context.Context, *DataDocumentRemoveRequest) (*DataDocumentRemoveResponse, error)
+	// DocumentRenew pushes a leased watch's deadline to now + lease. NOT_FOUND
+	// once removed or expired; FAILED_PRECONDITION for a document without a lease.
+	DocumentRenew(context.Context, *DataDocumentRenewRequest) (*DataDocumentRenewResponse, error)
+	// Documents lists documents of every kind with their status; kind and name
+	// narrow it. NOT_FOUND when a named document does not exist.
+	Documents(context.Context, *DataDocumentsRequest) (*DataDocumentsResponse, error)
 	mustEmbedUnimplementedDataServiceServer()
 }
 
@@ -425,6 +499,18 @@ func (UnimplementedDataServiceServer) CampaignDisarm(context.Context, *DataCampa
 }
 func (UnimplementedDataServiceServer) CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CampaignRemove not implemented")
+}
+func (UnimplementedDataServiceServer) DocumentApply(context.Context, *DataDocumentApplyRequest) (*DataDocumentApplyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DocumentApply not implemented")
+}
+func (UnimplementedDataServiceServer) DocumentRemove(context.Context, *DataDocumentRemoveRequest) (*DataDocumentRemoveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DocumentRemove not implemented")
+}
+func (UnimplementedDataServiceServer) DocumentRenew(context.Context, *DataDocumentRenewRequest) (*DataDocumentRenewResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DocumentRenew not implemented")
+}
+func (UnimplementedDataServiceServer) Documents(context.Context, *DataDocumentsRequest) (*DataDocumentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Documents not implemented")
 }
 func (UnimplementedDataServiceServer) mustEmbedUnimplementedDataServiceServer() {}
 func (UnimplementedDataServiceServer) testEmbeddedByValue()                     {}
@@ -739,6 +825,78 @@ func _DataService_CampaignRemove_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataService_DocumentApply_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataDocumentApplyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).DocumentApply(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_DocumentApply_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).DocumentApply(ctx, req.(*DataDocumentApplyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_DocumentRemove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataDocumentRemoveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).DocumentRemove(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_DocumentRemove_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).DocumentRemove(ctx, req.(*DataDocumentRemoveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_DocumentRenew_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataDocumentRenewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).DocumentRenew(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_DocumentRenew_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).DocumentRenew(ctx, req.(*DataDocumentRenewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataService_Documents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataDocumentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).Documents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_Documents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).Documents(ctx, req.(*DataDocumentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataService_ServiceDesc is the grpc.ServiceDesc for DataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -805,6 +963,22 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CampaignRemove",
 			Handler:    _DataService_CampaignRemove_Handler,
+		},
+		{
+			MethodName: "DocumentApply",
+			Handler:    _DataService_DocumentApply_Handler,
+		},
+		{
+			MethodName: "DocumentRemove",
+			Handler:    _DataService_DocumentRemove_Handler,
+		},
+		{
+			MethodName: "DocumentRenew",
+			Handler:    _DataService_DocumentRenew_Handler,
+		},
+		{
+			MethodName: "Documents",
+			Handler:    _DataService_Documents_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

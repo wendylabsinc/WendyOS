@@ -50,6 +50,13 @@ func newModelIO() ModelIO {
 // Callers record a sample only after it has actually been handed to the model,
 // so the ledger never claims a delivery that did not happen.
 func (m *Manager) RecordModelInput(input ModelInput) error {
+	return m.RecordModelInputFor(input, nil)
+}
+
+// RecordModelInputFor is RecordModelInput limited to an audience of episode
+// keys: a nil audience reaches every open episode, a non-nil one only the open
+// episodes whose key it names (an empty one reaches none).
+func (m *Manager) RecordModelInputFor(input ModelInput, audience map[string]bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var errs []error
@@ -57,6 +64,9 @@ func (m *Manager) RecordModelInput(input ModelInput) error {
 	// for records, and before the drain gave up its campaign key they were
 	// literally in m.active, so this keeps the ledger's contents unchanged.
 	for _, a := range m.openEpisodesLocked() {
+		if audience != nil && !audience[a.key] {
+			continue
+		}
 		// The summary counters are folded into the in-memory manifest and
 		// written when the episode is sealed, exactly like the per-source
 		// capture counters: rewriting manifest.json once per sample would mean

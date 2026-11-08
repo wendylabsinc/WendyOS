@@ -1,6 +1,17 @@
 package data
 
-import "github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
+import (
+	"slices"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
+)
+
+// The document kinds this agent stores and runs itself. A collection is a
+// campaign and keeps its own storage.
+const (
+	KindInference = "inference"
+	KindWatch     = "watch"
+)
 
 // documentKinds are the data document kinds this build understands. A
 // collection is a campaign: its decoder is ParseCampaign, so collections parse,
@@ -17,7 +28,21 @@ var documentKinds = datadoc.NewRegistry(
 			return campaign, campaign.Revision, nil, nil
 		},
 	},
+	datadoc.Kind{Name: KindInference, Versions: []int{InferenceDocumentVersion}, Ownable: true, Decode: decodeInferenceDocument},
+	datadoc.Kind{Name: KindWatch, Versions: []int{WatchVersion}, Ownable: true, Decode: decodeWatch},
 )
+
+// DocumentKinds returns every document kind this build understands, sorted.
+func DocumentKinds() []string { return documentKinds.Kinds() }
+
+// StoredKinds returns the kinds kept in the document store: every kind but a
+// collection, which is a campaign and keeps its own storage.
+func StoredKinds() []string {
+	return slices.DeleteFunc(documentKinds.Kinds(), func(kind string) bool { return kind == datadoc.DefaultKind })
+}
+
+// OwnableKinds returns the kinds that may have an owner, sorted.
+func OwnableKinds() []string { return documentKinds.OwnableKinds() }
 
 // ParseDocument parses any data document this build knows. A file without
 // kind is a collection.

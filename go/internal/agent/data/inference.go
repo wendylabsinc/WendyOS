@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // CampaignInference is executed by the agent, not by a user application.
@@ -116,6 +118,10 @@ func (i *CampaignInference) validate() error {
 	}
 	seen := map[string]bool{}
 	for _, label := range i.Labels {
+		// Labels reach notifications and chat prompts as text.
+		if !utf8.ValidString(label) || strings.ContainsFunc(label, unicode.IsControl) {
+			return fmt.Errorf("inference.labels must be text without control characters, such as newlines or tabs")
+		}
 		if len(label) == 0 || len(label) > 128 || strings.TrimSpace(label) != label || seen[label] {
 			return fmt.Errorf("inference.labels must be unique, nonempty labels of at most 128 bytes")
 		}

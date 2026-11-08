@@ -72,7 +72,7 @@ func TestCampaignDeployFileMissingPathGuidance(t *testing.T) {
 	}
 	writePickerFiles(t, map[string]string{"watch.yaml": "kind: watch\nversion: 1\nname: w\n"})
 	_, err = resolveCampaignDeployFile(nil, true, neverPick)
-	if err == nil || !strings.Contains(err.Error(), `watch.yaml (unknown kind "watch"`) {
+	if err == nil || !strings.Contains(err.Error(), `watch.yaml (kind watch)`) {
 		t.Fatalf("kind reason missing = %v", err)
 	}
 	if !strings.Contains(err.Error(), "compose.yml (") {
