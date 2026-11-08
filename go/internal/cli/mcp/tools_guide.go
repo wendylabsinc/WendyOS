@@ -115,9 +115,11 @@ status changes arrive as the notifications notifications/wendy/watch_event and
 notifications/wendy/watch_status. A client that does not show them can call
 watch_events with wait_seconds, passing the previous result's next_sequence as
 after_sequence; without it, every call returns the same events at once. ERROR
-is not final: the device retries. Watches end with watch_stop, when the session
-ends, or when the device connection changes; a watch whose device restarted
-ends with that reason. An agent without leased watch documents reports UNSUPPORTED:
+is not final: the device retries. A watch is not a standing alert: it ends with
+watch_stop, when the session ends, when the device connection changes, or about
+a minute after the device stops hearing from the session (this computer sleeps
+or loses the connection), with that reason. Tell the user so when the watch
+starts. An agent without leased watch documents reports UNSUPPORTED:
 update it with ` + "`wendy device update`" + `.
 
 

@@ -319,14 +319,14 @@ func TestDocumentPollerCapsAResponse(t *testing.T) {
 	h := startDocumentTestWatch(t, b, f, "chat-a-1")
 	// These entries sit before the oversized response's cursor, so the poller
 	// must have moved past them: they are never delivered afterwards.
-	f.publishThenOversize("chat-a-1", 3, data.NotificationDetection{Label: "stale", Score: 0.9},
+	f.publishThenOversize("chat-a-1", 3, data.NotificationDetection{Label: "person", Score: 0.61},
 		[]byte(`[`+strings.Repeat(`{"watch":"chat-a-1"},`, 220_000)+`{}]`))
 	if u := nextEvent(t, h); u.Gap == "" {
 		t.Fatalf("update = %+v; an oversized response must become a gap", u)
 	}
 	f.publish("chat-a-1", data.NotificationDetection{Label: "person", Score: 0.9})
 	u := nextEvent(t, h)
-	if u.Event == nil || u.Event.Classes[0].Label != "person" {
+	if u.Event == nil || u.Event.Classes[0].Score != 0.9 {
 		t.Fatalf("update = %+v; the poller must move on after the cap, past the entries it skipped", u)
 	}
 }
@@ -339,7 +339,7 @@ func TestDocumentPollerKeepsTheLast512Entries(t *testing.T) {
 		sequence := uint64(i)
 		f.journal = append(f.journal, data.CampaignNotification{
 			ID: strconv.Itoa(i), Watch: "chat-a-1", Leased: true, Count: 1, Sequence: sequence,
-			Detections: []data.NotificationDetection{{Label: "n" + strconv.Itoa(i), Score: 0.9}},
+			Detections: []data.NotificationDetection{{Label: "person", Score: float64(i) / 1000}},
 			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}
@@ -347,15 +347,16 @@ func TestDocumentPollerKeepsTheLast512Entries(t *testing.T) {
 	if u := nextEvent(t, h); u.Gap == "" {
 		t.Fatalf("update = %+v; 513 entries must report a gap first", u)
 	}
-	var labels []string
-	for len(labels) < 512 {
+	// Each entry's score is its sequence / 1000.
+	var scores []float64
+	for len(scores) < 512 {
 		u := nextUpdate(t, h)
 		if u.Event != nil {
-			labels = append(labels, u.Event.Classes[0].Label)
+			scores = append(scores, u.Event.Classes[0].Score)
 		}
 	}
-	if labels[0] != "n2" || labels[511] != "n513" {
-		t.Fatalf("kept %s..%s; want the last 512 (n2..n513)", labels[0], labels[511])
+	if scores[0] != 0.002 || scores[511] != 0.513 {
+		t.Fatalf("kept %v..%v; want the last 512 (0.002..0.513)", scores[0], scores[511])
 	}
 	select {
 	case u := <-h.Updates():
@@ -397,8 +398,8 @@ func TestDocumentPollerKeepsRunningForAStartInFlight(t *testing.T) {
 		t.Fatal(r.err)
 	}
 	t.Cleanup(func() { _ = r.h.Stop(context.Background()) })
-	f.publish("chat-a-2", data.NotificationDetection{Label: "dog", Score: 0.8})
-	if u := nextEvent(t, r.h); u.Event == nil || u.Event.Classes[0].Label != "dog" {
+	f.publish("chat-a-2", data.NotificationDetection{Label: "person", Score: 0.8})
+	if u := nextEvent(t, r.h); u.Event == nil || u.Event.Classes[0].Score != 0.8 {
 		t.Fatalf("got %+v", u)
 	}
 }
@@ -540,10 +541,11 @@ func TestDocumentPollerRoutesAnEntryToItsOwnWatch(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		target, other watchHandle
-		name, label   string
-	}{{back, front, "chat-a-2", "dog"}, {front, back, "chat-a-1", "person"}} {
-		f.publish(tc.name, data.NotificationDetection{Label: tc.label, Score: 0.9})
-		if u := nextEvent(t, tc.target); u.Event == nil || u.Event.Classes[0].Label != tc.label {
+		name          string
+		score         float64
+	}{{back, front, "chat-a-2", 0.81}, {front, back, "chat-a-1", 0.92}} {
+		f.publish(tc.name, data.NotificationDetection{Label: "person", Score: tc.score})
+		if u := nextEvent(t, tc.target); u.Event == nil || u.Event.Classes[0].Score != tc.score {
 			t.Fatalf("%s: event = %+v", tc.name, u)
 		}
 		expectNothing(tc.other, "the other watch after "+tc.name)

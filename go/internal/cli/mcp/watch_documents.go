@@ -30,7 +30,9 @@ const (
 	// The agent applies documents under the lock a recording campaign holds
 	// while it starts a capture, which can take over 20 s.
 	watchDeployTimeout = 30 * time.Second
-	watchGoneReason    = "the device restarted or the watch expired"
+	// The lease lapses when the device hears nothing from this session for a
+	// minute: this computer slept, or lost the network or the device.
+	watchGoneReason = "the device dropped the watch: it restarted, or it heard nothing from this session for over a minute (this computer slept or lost the connection)"
 	// The gateway reader's bounds on one journal response (spec §11.1).
 	maxWatchJournalBytes   = 4 << 20
 	maxWatchJournalEntries = 512
@@ -108,7 +110,10 @@ func (b *documentWatchBackend) Start(ctx context.Context, conn *grpcclient.Agent
 		return fail(err)
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
-	w := &documentWatch{backend: b, client: client, name: spec.Name, ctx: watchCtx, cancel: cancel, updates: make(chan watchUpdate, 32), done: make(chan struct{})}
+	w := &documentWatch{backend: b, client: client, name: spec.Name, classes: map[string]bool{}, ctx: watchCtx, cancel: cancel, updates: make(chan watchUpdate, 32), done: make(chan struct{})}
+	for _, class := range spec.Classes {
+		w.classes[class] = true
+	}
 	b.mu.Lock()
 	b.watches[spec.Name] = w
 	delete(b.pending, spec.Name)
@@ -336,9 +341,17 @@ func (b *documentWatchBackend) route(entries []data.CampaignNotification, gap bo
 		if err != nil {
 			occurred = time.Now()
 		}
+		// Labels come from the device and, through the model's config, from
+		// whoever published the model. Only the classes the watch asked for
+		// go on, so no other text reaches the session.
 		classes := make([]watchClass, 0, len(entry.Detections))
 		for _, detection := range entry.Detections {
-			classes = append(classes, watchClass{Label: detection.Label, Score: detection.Score})
+			if w.classes[detection.Label] {
+				classes = append(classes, watchClass{Label: detection.Label, Score: detection.Score})
+			}
+		}
+		if len(entry.Detections) > 0 && len(classes) == 0 {
+			continue
 		}
 		w.send(watchUpdate{Event: &watchEventUpdate{Kind: "entered", Classes: classes, OccurredAt: occurred}})
 	}
@@ -349,6 +362,8 @@ type documentWatch struct {
 	backend *documentWatchBackend
 	client  agentpbv2.DataServiceClient
 	name    string
+	// classes are the watch's own; route reports no other label.
+	classes map[string]bool
 	ctx     context.Context
 	cancel  context.CancelFunc
 	done    chan struct{}
