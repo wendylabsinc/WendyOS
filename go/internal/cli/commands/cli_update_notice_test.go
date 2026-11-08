@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -347,6 +348,85 @@ func TestVerifiedCLIUpdateInformsAnOlderMCPProcess(t *testing.T) {
 	cfg, _ := config.Load()
 	if cfg.LatestCLIRelease != "2026.10.05-134249" || cfg.AvailableCLIUpdate != "" {
 		t.Fatal("verified version was not retained for an older process")
+	}
+}
+
+// runUpdateNotice poses as the binary at exe, records the release
+// 2026.02.01-000000 over a 2026.01.01-000000 CLI, and returns whether
+// notifyCLIUpdate showed a notice and what it printed. Detection reports a
+// supported Homebrew install, and an update popup fails the test.
+func runUpdateNotice(t *testing.T, exe string, interactive bool) (bool, string) {
+	t.Helper()
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	t.Setenv("WENDY_ANALYTICS", "false")
+	t.Setenv("SUDO_UID", "")
+	oldJSON, oldVersion := jsonOutput, version.Version
+	jsonOutput, version.Version = false, "2026.01.01-000000"
+	oldExe, oldDetect, oldConfirm := cliExecutable, detectCLIUpdate, confirmCLIUpdate
+	cliExecutable = func() (string, error) { return exe, nil }
+	detectCLIUpdate = func(context.Context) (cliupdate.Plan, error) {
+		return cliupdate.Plan{Method: "brew", Channel: "stable", Supported: true}, nil
+	}
+	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
+		t.Error("the notice opened an update popup")
+		return false, nil
+	}
+	t.Cleanup(func() {
+		jsonOutput, version.Version = oldJSON, oldVersion
+		cliExecutable, detectCLIUpdate, confirmCLIUpdate = oldExe, oldDetect, oldConfirm
+	})
+	if interactive {
+		stubInteractive(t)
+	} else {
+		stubNonInteractive(t)
+	}
+	setAvailableCLIUpdate(t, "2026.02.01-000000")
+	return runNotifyCLIUpdate(t)
+}
+
+func TestNotifyCLIUpdate_PluginManagedCLI(t *testing.T) {
+	home := isolateAIToolHome(t)
+	managed := filepath.Join(home, ".wendy", "cli", "2026.01.01-000000", "wendy")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// wendy update recognizes no updater for the launcher's copy, so even an
+	// interactive terminal gets advice rather than a prompt. The plugin pins
+	// its CLI version, which can trail the latest release, and its launcher
+	// runs an installed wendy ahead of its own copy: the notice names both
+	// ways to update and promises no version from the plugin.
+	shown, out := runUpdateNotice(t, managed, true)
+	if !shown || !strings.Contains(out, cliupdate.PluginAdvice(runtime.GOOS)) {
+		t.Errorf("notice lacks the plugin advice: shown=%v\n%s", shown, out)
+	}
+	if strings.Contains(out, "Update with:") || strings.Contains(out, "to get 2026.02.01-000000") {
+		t.Errorf("notice points at wendy update or promises the new version from the plugin:\n%s", out)
+	}
+
+	// Like the non-interactive notice, it shows once per release.
+	if shown, again := runUpdateNotice(t, managed, true); shown || again != "" {
+		t.Errorf("second run repeated the plugin notice: shown=%v out=%q", shown, again)
+	}
+}
+
+// WENDY_PLUGIN alone does not make a CLI plugin-managed: a user whose PATH
+// wendy (Homebrew) is new enough runs that binary under the plugin, and
+// wendy update still updates it.
+func TestNotifyCLIUpdate_HomebrewCLIUnderPluginKeepsUpdateAdvice(t *testing.T) {
+	home := isolateAIToolHome(t)
+	t.Setenv(pluginmode.EnvVar, "claude")
+	brew := filepath.Join(home, "homebrew", "bin", "wendy")
+
+	_, out := runUpdateNotice(t, brew, false)
+	if strings.Contains(out, "came with the Wendy plugin") {
+		t.Errorf("a Homebrew CLI was reported as plugin-managed:\n%s", out)
+	}
+	if !strings.Contains(out, "Update with: wendy update") {
+		t.Errorf("notice lost its wendy update advice:\n%s", out)
 	}
 }
 

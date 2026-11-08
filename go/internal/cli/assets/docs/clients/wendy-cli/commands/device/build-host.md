@@ -61,6 +61,9 @@ device, so a build for one target cannot deliver to another.
 A device whose agent predates chunked delivery receives a registry push instead,
 as does a build run with `--chunking=off`. The build log says which route it took.
 
+These delivery modes apply to the build host's own connection to the target.
+They are unchanged by the separate [CLI upload rules for Cloud v2](../run.md#uploads-over-cloud-v2).
+
 ## Delivery credentials
 
 On the registry-push route, the agent exposes a loopback endpoint for BuildKit to

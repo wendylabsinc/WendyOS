@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -51,6 +52,7 @@ type mcpServer struct {
 	toolGroups           []string
 	toolProfile          string
 	discoverLANFn        func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
+	meshDirectoryFn      func(context.Context) (sessionbroker.OperatorDirectory, error)
 	usbSetupNoticeFn     func() string
 	mu                   sync.RWMutex
 	proxyDiag            []proxyDiagEntry
@@ -69,6 +71,11 @@ type mcpServer struct {
 	binding              *BindingPolicy // set by wendy cloud mcp; nil for the local stdio server
 	relay                bool           // serving a hosted chat through the relay: the published manifest only
 	relayProfile         *relayManifestProfile
+	// The device certificate watch (device_certificate.go), guarded by mu.
+	transientConnectErrFn func(error) bool
+	renewLoginFn          func(context.Context, config.CertificateInfo) error
+	certWatchRetrying     *grpcclient.AgentConnection // the connection whose failed reconnect is already noted
+	certWatchRenewed      *grpcclient.AgentConnection // the connection whose login renewal has run
 }
 
 // Server is the wendy MCP server, named for callers that configure it before
@@ -87,10 +94,11 @@ func (s *mcpServer) SetStartupConnect(fn func(context.Context)) {
 
 func New(cfg *config.Config, connectFn ConnectFunc) *mcpServer {
 	return &mcpServer{
-		cfg:           cfg,
-		connectFn:     connectFn,
-		cloudTunnels:  make(map[string]*mcpCloudTunnel),
-		discoverLANFn: discovery.DiscoverLAN,
+		cfg:             cfg,
+		connectFn:       connectFn,
+		cloudTunnels:    make(map[string]*mcpCloudTunnel),
+		discoverLANFn:   discovery.DiscoverLAN,
+		meshDirectoryFn: sessionbroker.ReadOperatorDirectoryAutomatic,
 	}
 }
 
@@ -365,6 +373,7 @@ func (s *mcpServer) run(ctx context.Context, serve func(*server.MCPServer) error
 	defer stopContainerMCP()
 	go s.runStartupConnect(startupCtx)
 	go s.runCLIUpdateChecks(startupCtx, time.Hour)
+	go s.runDeviceCertificateWatch(startupCtx, deviceCertificateCheckInterval)
 
 	return serve(srv)
 }

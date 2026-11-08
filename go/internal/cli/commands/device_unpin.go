@@ -65,8 +65,8 @@ func newDeviceUnpinCmd() *cobra.Command {
 		Hidden: true,
 		Use:    "unpin <hostname|identity>",
 		Short:  "Clear the recorded identity pin for a device",
-		Long: "Clear the recorded identity pin for a device, so the next connection to it\n" +
-			"records a fresh identity instead of being challenged against the old one.\n" +
+		Long: "Clear the recorded identity pin for a device. Refresh the binding from trusted\n" +
+			"Cloud inventory or enrollment before connecting to an enrolled device again.\n" +
 			"Accepts either the hostname you connect to or the identity a refusal\n" +
 			"prints (spiffe://wendy.sh/tenant/<uuid>/device/<id>, or the legacy\n" +
 			"urn:wendy:org:<org>:asset:<id>).\n" +
@@ -108,7 +108,7 @@ func newDeviceUnpinCmd() *cobra.Command {
 			_ = sessionbroker.InvalidateAll()
 
 			printClearedPins(cmd.OutOrStdout(), cleared)
-			fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %q. The next connection to it will record a fresh identity.\n", target)
+			fmt.Fprintf(cmd.OutOrStdout(), "Unpinned %q. Use trusted Cloud inventory or enrollment to save its expected identity again.\n", target)
 			return nil
 		},
 	}

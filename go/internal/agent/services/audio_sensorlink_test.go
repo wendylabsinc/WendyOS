@@ -192,9 +192,16 @@ func TestDataSourcesListSensorLinkMicOnPipeWire(t *testing.T) {
 	if len(matches) != 1 {
 		t.Fatalf("audio selector esp32-cam matches %+v, want exactly one source", matches)
 	}
-	devID, ok := audioDeviceID(matches[0].ID)
+	if got, want := matches[0].ID, "audio:sensor-link:esp32-cam:microphone"; got != want {
+		t.Errorf("sensor-link source ID = %q, want %q (named for the pairing, not the subdevice)", got, want)
+	}
+	devices, err := adapter.resolveAudioDeviceIDs(context.Background(), matches)
+	if err != nil {
+		t.Fatalf("resolving %q to a capture node: %v", matches[0].ID, err)
+	}
+	devID, ok := devices[matches[0].ID]
 	if !ok {
-		t.Fatalf("selected source %q is not an audio device ID", matches[0].ID)
+		t.Fatalf("selected source %q did not resolve to a capture node", matches[0].ID)
 	}
 	src, ok := sensorLinkCaptureSource(devID)
 	if !ok || src.alsaDevice != "plughw:1,1,0" {

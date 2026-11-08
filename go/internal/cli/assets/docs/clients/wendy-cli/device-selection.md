@@ -62,28 +62,48 @@ running commands that need a target.
 > **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 > If the terminal is interactive, a prompt will be made to update the device right now.
 
-## Device identity pinning
+## Device identity
 
-On the first successful connection to a named device, the CLI **pins** the
-device's identity — the organisation and cloud host its TLS certificate belongs
-to. On every later connection under that name, the CLI checks that the device
-still presents that same organisation and cloud host.
+Every enrolled-device connection needs a trusted expected device identity.
+The CLI checks the certificate against the selected device, including its
+organisation and asset or device ID. Older organisation/asset certificate
+identities remain supported. This applies to LAN, Bluetooth, Cloud tunnels,
+and MCP connections.
 
-A routine certificate **renewal or re-enrollment** keeps the same organisation
-and cloud, so it is accepted silently. A change of organisation or cloud host —
-which can indicate a man-in-the-middle or a swapped device — **refuses the
-connection**. So does a device that was pinned while enrolled but now answers
-with no identity at all, which means it was reflashed, factory reset, or
-replaced by something squatting its name.
+Cloud connections use the selected device's authenticated inventory record.
+For local connections, the CLI needs a saved binding for the selected name.
+`wendy cloud discover` refreshes bindings under the inventory's device names;
+verified enrollment also saves a binding under the selected hostname and
+enrollment name. Finding a nearby device or resolving its address does not
+establish its identity. An IP address is a route to the device, and a different
+LAN or Bluetooth name needs its own trusted binding.
 
-Both refusals are **unconditional**: they read identically in interactive,
-`--json`, and non-interactive runs, and there is deliberately **no "trust this
-anyway?" prompt** — a man-in-the-middle warning that can be dismissed gets
-dismissed. Clearing the pin is a separate, deliberate act:
+If the CLI reports that the expected device identity is missing:
 
-```sh
-wendy device unpin <host>
-```
+- For an enrolled Cloud device, sign in to its organisation and run
+  `wendy cloud discover`, then select its inventory name or Cloud selector.
+  Refreshing inventory does not bind an arbitrary local alias or IP address.
+- For a new or reset, unprovisioned device, use `wendy device enroll` over its
+  LAN or USB network connection. This explicit setup flow verifies the enrolled
+  identity before saving the binding.
+- If the device is already enrolled under a different local name, use a name
+  with an existing trusted binding or its Cloud selector.
+
+Retrying, refreshing client certificates, and synchronizing the device clock
+do not supply a missing device identity. The CLI does not retry this failure
+with weaker certificate checks.
+
+Routine certificate renewal is accepted when the device identity stays the
+same. A different organisation, issuing Cloud, asset, or device identity is
+refused. A previously pinned device that no longer presents an enrolled
+identity is also refused. These checks apply in interactive, `--json`, and
+non-interactive runs, without a trust override prompt.
+
+`wendy device unpin <hostname>` clears saved trust for an intentional reset or
+replacement. It does not authorize learning an identity from the next
+connection: refresh the trusted inventory binding, or complete enrollment if
+the device is unprovisioned. Keep the pin and verify the device if the change
+was unexpected.
 
 Loopback addresses share the pin of their bare host, whatever the port:
 `127.0.0.1:50051` and `127.0.0.1:50061` are both checked against the
@@ -98,8 +118,8 @@ vm:<name>` clears only that VM's pin, never the shared `127.0.0.1` pin.
 While waiting for a simulator to boot, the CLI retries connection failures
 such as an agent that is not yet listening. It stops immediately if the
 connection fails because of a TLS authentication rejection, a device identity
-refusal, an organization mismatch, or a gRPC `Unauthenticated` or
-`PermissionDenied` response.
+refusal, a [missing expected device identity](#device-identity), an organization
+mismatch, or a gRPC `Unauthenticated` or `PermissionDenied` response.
 
 A TLS authentication failure can mean a wrong device clock or incompatible
 credentials. If the device clock may be wrong, run `wendy device sync-time`
@@ -113,14 +133,38 @@ diagnose guest startup problems.
 
 ## Automatic connection recovery
 
-After a possible clock-related TLS failure, the CLI attempts to broadcast a
-signed time proof on the LAN and retries the connection. It reports whether
-sending failed and whether the retry connected; sending a proof does not confirm
-that the device received it or changed its clock.
+After a possible clock-related TLS failure, the CLI broadcasts a signed time
+proof on the LAN and retries the connection, sending the proof again before
+each of three retries over about 10 seconds. This applies to a device named
+with `--device` or `WENDY_DEVICE`, and to a device chosen in the picker.
+Nothing acknowledges the proof, so the CLI counts it as accepted only when the
+device accepts the connection. If the device still rejects it, the CLI says so
+and names the next step: give the device internet access so it sets its own
+clock, or, when no time server answered and the CLI sent a saved proof, give
+this computer internet access.
+
+A device's certificate names the organization it belongs to. If your login for
+that organization has expired, the CLI says so and does not send a time proof:
+the device clock is not the problem. A login from `wendy auth login` renews
+itself and the CLI retries the connection once. If it cannot renew, run
+`wendy auth login` and sign in to that organization, then retry.
 
 The CLI offers to refresh certificates when it has evidence that the client
 credentials need renewal. A timeout or generic TLS rejection alone does not
 trigger that offer.
+
+`wendy mcp serve` keeps its device connection for as long as it runs and
+checks it every 30 seconds. When the connection's certificate has expired and
+the connection has dropped, for example after a device reboot, the server
+connects to the same device again with the stored login. Before it reconnects
+a LAN or USB device, it renews an expired login from `wendy auth login`, once
+per connection. A Cloud device's connection renews its own login. While the
+device does not answer, the server keeps the connection and tries again at
+each check. If the device refuses the login, or no current login can be
+offered (a service-account login, or a renewal that failed), the server closes
+the connection and its tools report that no device is connected: run
+`wendy auth login`, then connect again. The server never reconnects a
+simulator this way, because connecting to a simulator starts it.
 
 ## Local Targets
 

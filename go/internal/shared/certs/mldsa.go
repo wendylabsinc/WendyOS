@@ -109,9 +109,9 @@ type BlockingPinError interface {
 // returned by BuildServerVerifyConnection.
 type ServerVerifyOpts struct {
 	ChainPEM      string     // required: PEM-encoded CA chain for ML-DSA-aware chain verification
-	ExpectedOrgID int32      // 0 = accept any org (still extracted for pinning key); never compared against a pki-core leaf, which carries no org
+	ExpectedOrgID int32      // optional additional legacy org check; exact expected identity is always required
 	PinStore      PinChecker // nil = skip pinning
-	// ExpectedIdentity, when non-nil, requires the server leaf to name this
+	// ExpectedIdentity is required and requires the server leaf to name this
 	// exact Wendy identity (SameEntity: SPIFFE principals when both sides
 	// carry one, legacy org+asset otherwise). This is the CLI-side counterpart
 	// of agent/mtls.NewClientTLSConfigExpectingIdentity:
@@ -119,8 +119,8 @@ type ServerVerifyOpts struct {
 	// not that it is the device the caller asked for, so any other same-CA cert
 	// could otherwise answer at an mDNS-advertised address.
 	//
-	// Grace mode does not apply when this is set — a cert with no Wendy
-	// identity is a mismatch, not a legacy device to be tolerated.
+	// A certificate without a matching identity is rejected. Older org/asset
+	// identities remain supported; omission is never a compatibility mode.
 	ExpectedIdentity *WendyIdentity
 	// OnServerIdentity, when non-nil, is called with the server leaf's Wendy
 	// identity BEFORE chain verification and the org-mismatch check — so the
@@ -247,17 +247,38 @@ func verifyMLDSASignature(issuer, cert *x509.Certificate) error {
 	return nil
 }
 
+// ErrExpectedDeviceIdentity means the caller has no trusted device binding.
+// Do not retry this configuration failure over an unauthenticated transport.
+var ErrExpectedDeviceIdentity = errors.New("expected device identity required; obtain it from trusted enrollment, Cloud inventory, or an existing saved device binding")
+
 // BuildServerVerifyConnection returns a VerifyConnection callback that:
 //  1. Verifies the server cert chain with ML-DSA fallback (see mldsa.go)
 //  2. Extracts the server's Wendy org identity (IdentityFromCert)
-//  3. Returns OrgMismatchError if opts.ExpectedOrgID != 0 and orgs differ
-//  4. Calls opts.PinStore.CheckAndUpdate if PinStore is non-nil, failing the
+//  3. Requires the exact expected device identity, including legacy org/asset identities
+//  4. Returns OrgMismatchError if opts.ExpectedOrgID != 0 and orgs differ
+//  5. Calls opts.PinStore.CheckAndUpdate if PinStore is non-nil, failing the
 //     handshake only on a BlockingPinError
 //
 // InsecureSkipVerify must be true on the tls.Config — this callback is the
 // actual verification. Go's built-in verifier cannot parse ML-DSA chain certs
 // and there is no TLS hostname over L2CAP or passthrough gRPC targets.
 func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionState) error, error) {
+	if opts.ExpectedIdentity == nil {
+		return nil, ErrExpectedDeviceIdentity
+	}
+	// Retain a value snapshot so changing caller-owned options cannot change
+	// the identity accepted by an established transport or a resumed session.
+	expected := *opts.ExpectedIdentity
+	if expected.EntityType != EntityAsset || expected.EntityID == "" || !expected.Scope().Known() {
+		return nil, ErrExpectedDeviceIdentity
+	}
+	if expected.Principal != "" {
+		parsed, err := ParsePrincipal(expected.Principal)
+		if err != nil || parsed.EntityType != EntityAsset || parsed.TenantUUID != expected.TenantUUID || parsed.EntityID != expected.EntityID {
+			return nil, ErrExpectedDeviceIdentity
+		}
+	}
+	opts.ExpectedIdentity = &expected
 	if opts.ChainPEM == "" {
 		return nil, fmt.Errorf("chain PEM is required to verify device server certificate")
 	}
@@ -300,6 +321,8 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		})
 		if stdErr != nil {
+			now := time.Now()
+			stdErr = ClassifyIssuerFailure(stdErr, leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now)
 			sigOID, oidErr := mldsaCertSigAlgOID(leaf)
 			if oidErr != nil {
 				return stdErr
@@ -307,7 +330,6 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			if _, schemeErr := mldsaScheme(sigOID); schemeErr != nil {
 				return stdErr
 			}
-			now := time.Now()
 			if err := VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now); err != nil {
 				return err
 			}
@@ -318,17 +340,9 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		if idErr != nil {
 			return fmt.Errorf("extracting server cert identity: %w", idErr)
 		}
-		// Grace mode: only reject when the server cert carries a Wendy identity AND it
-		// belongs to a different org. A cert with no Wendy identity (e.g. a legacy
-		// device not yet re-provisioned) is accepted, mirroring the server-side
-		// OrgModeGrace behaviour in interceptor/mtls.go.
-		// identity.OrgID == 0 is a pki-core-issued leaf: it carries a tenant
-		// SPIFFE principal and no urn:wendy org, so there is no org to compare
-		// against this session's. Refusing it here would break every renewed or
-		// ACME-enrolled device against a session that knows only an int org, and
-		// asserting a match would be a claim neither side can support. The
-		// tenant-scoped checks that DO apply to such a leaf are Step 2b's
-		// principal pin below and the agent-side interceptor.
+		// The legacy numeric organization is an additional check when both sides
+		// carry it. SPIFFE-only certificates have no numeric org; the mandatory
+		// exact identity comparison below verifies their tenant and device.
 		if hasIdentity && opts.ExpectedOrgID != 0 && identity.OrgID != 0 && identity.OrgID != opts.ExpectedOrgID {
 			return &OrgMismatchError{Want: opts.ExpectedOrgID, Got: identity.OrgID}
 		}
@@ -336,29 +350,27 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		// Step 2b: exact device identity check. Deliberately after the org check
 		// so a cross-org impostor still reports OrgMismatchError, whose remedy
 		// (fetch that org's cert) differs from this one's (wrong device).
-		if opts.ExpectedIdentity != nil {
-			if !hasIdentity || identity.EntityType != EntityAsset {
-				return &IdentityMismatchError{
-					WantOrg:       opts.ExpectedIdentity.OrgID,
-					WantAsset:     opts.ExpectedIdentity.EntityID,
-					WantPrincipal: opts.ExpectedIdentity.Principal,
-					GotOrg:        identity.OrgID,
-					GotPrincipal:  identity.Principal,
-				}
+		if !hasIdentity || identity.EntityType != EntityAsset {
+			return &IdentityMismatchError{
+				WantOrg:       opts.ExpectedIdentity.OrgID,
+				WantAsset:     opts.ExpectedIdentity.EntityID,
+				WantPrincipal: opts.ExpectedIdentity.Principal,
+				GotOrg:        identity.OrgID,
+				GotPrincipal:  identity.Principal,
 			}
-			// SameEntity compares principals when both sides have one and falls
-			// back to the legacy scope+id triple otherwise, so a pin recorded
-			// before the SPIFFE cutover and one recorded after each compare in
-			// their own terms rather than across them.
-			if !identity.SameEntity(*opts.ExpectedIdentity) {
-				return &IdentityMismatchError{
-					WantOrg:       opts.ExpectedIdentity.OrgID,
-					WantAsset:     opts.ExpectedIdentity.EntityID,
-					WantPrincipal: opts.ExpectedIdentity.Principal,
-					GotOrg:        identity.OrgID,
-					GotAsset:      identity.EntityID,
-					GotPrincipal:  identity.Principal,
-				}
+		}
+		// SameEntity compares principals when both sides have one and falls
+		// back to the legacy scope+id triple otherwise, so a pin recorded
+		// before the SPIFFE cutover and one recorded after each compare in
+		// their own terms rather than across them.
+		if !identity.SameEntity(*opts.ExpectedIdentity) {
+			return &IdentityMismatchError{
+				WantOrg:       opts.ExpectedIdentity.OrgID,
+				WantAsset:     opts.ExpectedIdentity.EntityID,
+				WantPrincipal: opts.ExpectedIdentity.Principal,
+				GotOrg:        identity.OrgID,
+				GotAsset:      identity.EntityID,
+				GotPrincipal:  identity.Principal,
 			}
 		}
 

@@ -34,6 +34,53 @@ func TestFormatNetworkInterfaces(t *testing.T) {
 	}
 }
 
+func TestFormatNetworkInterfacesUplink(t *testing.T) {
+	metric := func(v uint32) *uint32 { return &v }
+	tests := []struct {
+		name   string
+		ifaces []*agentpb.NetworkInterface
+		want   string
+	}{
+		{
+			name: "older agent: no notes, no trailing padding",
+			ifaces: []*agentpb.NetworkInterface{
+				{Name: "eth0", IpAddresses: []string{"192.168.1.42"}},
+				{Name: "wlan0", IpAddresses: []string{"10.0.0.5"}},
+			},
+			want: "Network:\n  eth0   192.168.1.42\n  wlan0  10.0.0.5\n",
+		},
+		{
+			name: "concheck off: default route and metrics only",
+			ifaces: []*agentpb.NetworkInterface{
+				{Name: "eth0", IpAddresses: []string{"192.168.1.42"}, IsDefaultRoute: true, RouteMetric: metric(100)},
+				{Name: "wlan0", IpAddresses: []string{"10.0.0.5"}, RouteMetric: metric(300)},
+				{Name: "usb0", IpAddresses: []string{"10.42.0.2"}},
+			},
+			want: "Network:\n" +
+				"  eth0   192.168.1.42  default route, metric 100\n" +
+				"  wlan0  10.0.0.5      metric 300\n" +
+				"  usb0   10.42.0.2\n",
+		},
+		{
+			name: "concheck on",
+			ifaces: []*agentpb.NetworkInterface{
+				{Name: "eth0", IpAddresses: []string{"192.168.1.42"}, RouteMetric: metric(20100), Connectivity: agentpb.NetworkConnectivity_NETWORK_CONNECTIVITY_LIMITED},
+				{Name: "wlan0", IpAddresses: []string{"10.0.0.5"}, IsDefaultRoute: true, RouteMetric: metric(300), Connectivity: agentpb.NetworkConnectivity_NETWORK_CONNECTIVITY_FULL},
+			},
+			want: "Network:\n" +
+				"  eth0   192.168.1.42  metric 20100, internet: limited\n" +
+				"  wlan0  10.0.0.5      default route, metric 300, internet: full\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatNetworkInterfaces(tt.ifaces); got != tt.want {
+				t.Errorf("formatNetworkInterfaces() =\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBestReachableIP(t *testing.T) {
 	cases := []struct {
 		name   string

@@ -28,10 +28,11 @@ func connectUnresolvedCloudName(ctx context.Context, device string, cause error,
 			err = &cloudNameResolutionError{err}
 		}
 	}()
+	missingExpected := errors.Is(cause, certs.ErrExpectedDeviceIdentity)
 	if device == "" || strings.ContainsAny(device, ".:/[]") || net.ParseIP(device) != nil ||
 		cause == nil || ctx.Err() != nil || cloudFallbackDisabled("") ||
-		stopConnectionRecovery(cause) || errors.Is(cause, errProvisionedAgentUnauthorized) ||
-		errors.Is(cause, errTLSHandshakeRejected) || !isResolverMiss(cause) {
+		(stopConnectionRecovery(cause) && !missingExpected) || errors.Is(cause, errProvisionedAgentUnauthorized) ||
+		errors.Is(cause, errTLSHandshakeRejected) || (!isResolverMiss(cause) && !missingExpected) {
 		return nil, cause, false
 	}
 	if _, cloud := cloudDeviceConfigFromContext(ctx); cloud {

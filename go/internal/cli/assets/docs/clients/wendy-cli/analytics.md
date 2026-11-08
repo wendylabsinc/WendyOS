@@ -139,13 +139,14 @@ categories across commands, including `run`, `watch`, `build`, and device comman
 | `device_auth_required` | A provisioned agent requires authentication that the CLI could not satisfy. |
 | `auth_required`, `auth_session_ambiguous` | Cloud login is missing, or multiple sessions require an explicit choice. |
 | `auth_certificate_failed` | Cloud certificate issuance/renewal returned a structured failure. |
+| `auth_login_expired` | The device refused this computer's login because it has expired. Either renewing it failed, or the CLI did not try: the login has no refresh token (a service account), the command is read-only monitoring, or the command already tried one renewal, for another device. |
 | `registry_auth`, `registry_unavailable` | Required registry credentials/transport are unavailable, or the Mac agent has no reachable registry. |
 | `transfer_failed` | Chunk upload, file sync, or a separate image push failed. |
 | `container_start_failed` | The agent's create/start stream ended before confirming completion. |
 | `readiness_timeout` | The application's TCP readiness probe did not succeed in time. |
 | `user_cancelled`, `context_canceled`, `context_deadline` | A picker or operation was cancelled, or its context deadline expired. |
 | `network_dns`, `network_timeout`, `network_refused`, `network_unreachable`, `connection_closed` | A typed network error identifies DNS, timeout, refused connection, unreachable network/host, or reset/broken pipe. |
-| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. |
+| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. `disk_full` also covers `wendy run` refusing a run when this computer or the device has too little free disk space. |
 | `unexpected_eof`, `process_failed` | An unclassified operation ended with a truncated stream or a subprocess exit failure. |
 | `other` | The error has no recognized category or typed cause. Its message is still never sent. |
 

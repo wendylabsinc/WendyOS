@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -107,5 +108,52 @@ func TestAcceptLoopHonorsConfiguredPeerCapacity(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatalf("configured peer %d of %d was not attached", i+1, target)
 		}
+	}
+}
+
+// A client may offer a recognized alias without its ordinary fallback. TLS
+// negotiates that alias, so admission must reserve the same physical budget.
+func TestKnownIssuerAliasReservesIncomingCapacity(t *testing.T) {
+	high, low := issuerCredentials(t, true, ecdsaDeviceKey)
+	for _, aliasOnly := range []bool{false, true} {
+		name := "ordinary-fallback"
+		if aliasOnly {
+			name = "alias-only"
+		}
+		t.Run(name, func(t *testing.T) {
+			node := &capacityTestNode{attached: make(chan meshid.Device, 1)}
+			policy := localmesh.NewConnectionPolicy(low.Device, false, localmesh.ConnectionLimits{Total: 1})
+			r := &runtime{cfg: Config{Credentials: low, Node: node, Policy: policy, Logger: zap.NewNop()}, advertisementRefresh: make(chan struct{}, 1)}
+			r.serverTLS = r.makeServerTLS()
+			config, _ := bleClientConfig(t, &runtime{cfg: Config{Credentials: high}}, issuerPeer(low))
+			if aliasOnly {
+				config.NextProtos = config.NextProtos[:1]
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			left, right := net.Pipe()
+			defer left.Close()
+			defer right.Close()
+			done := make(chan struct{})
+			go func() { defer close(done); r.acceptLink(ctx, left) }()
+			defer func() { cancel(); right.Close(); <-done }()
+			client := tls.Client(right, config)
+			if err := client.HandshakeContext(ctx); err != nil {
+				t.Fatal(err)
+			}
+			go func() { _, _ = io.Copy(io.Discard, client) }()
+			select {
+			case <-node.attached:
+			case <-ctx.Done():
+				t.Fatal("authenticated alias did not attach")
+			}
+			if got := policy.Counts().Total; got != 1 {
+				t.Fatalf("authenticated link consumed %d physical connection slots, want 1", got)
+			}
+			if extra := policy.Reserve("extra", meshid.Device{}, false); extra != nil {
+				extra.Release()
+				t.Fatal("alias bypassed the configured physical capacity")
+			}
+		})
 	}
 }

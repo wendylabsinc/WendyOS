@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"os"
 	"strings"
 
@@ -16,6 +17,10 @@ import (
 
 // Child messages are tagged so background commands keep updating the correct
 // page after the user changes tabs.
+type devicePickerMeshMsg struct {
+	snapshot sessionbroker.OperatorDirectory
+}
+
 type devicePickerLocalMsg struct{ msg tea.Msg }
 type devicePickerSimulatorMsg struct{ msg tea.Msg }
 type devicePickerCloudMsg struct{ msg tea.Msg }
@@ -197,6 +202,8 @@ func (m devicePickerModel) updateCloud(msg tea.Msg) (devicePickerModel, tea.Cmd)
 
 func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case devicePickerMeshMsg:
+		return reconcileMeshPicker(m, msg.snapshot)
 	case devicePickerLocalMsg:
 		return m.updateLocal(msg.msg)
 	case devicePickerSimulatorMsg:

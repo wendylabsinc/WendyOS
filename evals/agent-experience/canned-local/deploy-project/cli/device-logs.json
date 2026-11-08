@@ -1,0 +1,18 @@
+{
+  "argv_prefix": [
+    "device",
+    "logs"
+  ],
+  "stdout": "{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard_web\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:37:53.065238328Z\"}\n{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:41:10.283515378Z\"}\n{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:46:39.679119877Z\"}\n{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:47:00.799928123Z\"}\n",
+  "stderr": "",
+  "exit_code": 0,
+  "after": {
+    "actions": [
+      "tool:run",
+      "cli:run"
+    ],
+    "stdout": "{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard_web\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:37:53.065238328Z\"}\n{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:41:10.283515378Z\"}\n{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:46:39.679119877Z\"}\n{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:47:00.799928123Z\"}\n{\"attributes\":{\"stream\":\"stdout\"},\"body\":\"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\",\"service\":\"sensor-dashboard_web\",\"severity\":\"INFO\",\"timestamp\":\"2026-11-07T00:47:17.496895545Z\"}\n",
+    "stderr": "",
+    "exit_code": 0
+  }
+}

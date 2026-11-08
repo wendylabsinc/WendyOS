@@ -39,7 +39,7 @@ func newDiscoverCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "discover",
-		Short: "Discover local and cloud WendyOS devices",
+		Short: "Discover nearby, mesh, and Cloud Wendy devices",
 		Long:  "Continuously discover WendyOS devices in Nearby, Simulator, and Cloud tabs until Ctrl+C. Use --timeout to scan local devices once for a fixed duration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var opts discovery.DiscoveryOptions
@@ -51,18 +51,22 @@ func newDiscoverCmd() *cobra.Command {
 				opts.Types = []models.InterfaceType{models.InterfaceLAN}
 			case "bluetooth":
 				opts.Types = []models.InterfaceType{models.InterfaceBluetooth}
+			case "mesh":
+				opts.Types = []models.InterfaceType{models.InterfaceMesh}
 			case "external":
 				opts.Types = []models.InterfaceType{models.InterfaceExternal}
 			case "all", "":
 				// discover all types
 			default:
-				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, all)", discoverType)
+				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, mesh, all)", discoverType)
 			}
 
-			// Pre-flight: on Linux, if a USB-C Wendy device is tethered but its
+			// Pre-flight: on Linux, if a Wendy USB device is tethered but its
 			// host link isn't configured, offer to set it up so it shows up in
 			// the scan below. No-op on other platforms / non-interactive runs.
-			_ = maybeOfferUSBSetup(cmd.Context())
+			if discoverType != "mesh" {
+				_ = maybeOfferUSBSetup(cmd.Context())
+			}
 
 			timeoutSet := cmd.Flags().Changed("timeout")
 
@@ -91,7 +95,7 @@ func newDiscoverCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, all")
+	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, mesh, all")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "Scan once for this duration then exit")
 
 	return cmd
@@ -281,11 +285,11 @@ func noDevicesHint() string {
 		return "Hints:\n" +
 			"  • Is avahi-daemon running?   systemctl status avahi-daemon\n" +
 			"  • Firewall blocking mDNS?    sudo ufw allow 5353/udp   (if ufw is active)\n" +
-			"  • USB-C tethered device?     re-run 'wendy discover' and accept the USB setup prompt\n" +
+			"  • USB-tethered device?       re-run 'wendy discover' and accept the USB setup prompt\n" +
 			"  • Or connect directly by IP: wendy device connect <ip>:50051"
 	}
 	return "Hints:\n" +
-		"  • Device powered on and on the same network (or USB-C tethered).\n" +
+		"  • Device powered on and on the same network (or USB-tethered).\n" +
 		"  • mDNS uses UDP 5353 — make sure a firewall isn't blocking it.\n" +
 		"  • Or connect directly by IP: wendy device connect <ip>:50051"
 }
@@ -500,6 +504,7 @@ func waitExternalSnapshot(p providers.DeviceProvider, ch <-chan []models.Externa
 
 // discoverDeviceInfo is the JSON structure copied to the clipboard.
 type discoverDeviceInfo struct {
+	Mesh         *models.MeshDevice   `json:"mesh,omitempty"`
 	ProbeFailure *models.ProbeFailure `json:"probeFailure,omitempty"`
 	ID           int32                `json:"id,omitempty"`
 	Name         string               `json:"name"`
@@ -692,6 +697,9 @@ func (m discoverModel) scanExternalProvider(p providers.DeviceProvider) tea.Cmd 
 
 func (m discoverModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if includeMeshDiscovery(m.opts) {
+		cmds = append(cmds, m.startMeshStream())
+	}
 	if m.shouldDiscover(models.InterfaceUSB) {
 		cmds = append(cmds, m.scanUSB())
 	}
@@ -776,11 +784,26 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatingDeviceName = item.info.Name
 			m.flashMessage = "Checking " + item.info.Name + "..."
 			m.flashIsError = false
-			return m, m.startDeviceUpdateCmd(addr, item.info.Name)
+			var pinKey string
+			for _, dev := range m.collection.LANDevices {
+				if strings.EqualFold(dev.DisplayName, item.lanName) {
+					pinKey = pinKeyForLANDevice(&dev)
+					break
+				}
+			}
+			return m, m.startDeviceUpdateCmd(addr, item.info.Name, pinKey)
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
 		return m, cmd
+	case meshSnapshotMsg:
+		m.hasResults = true
+		m.collection.MeshDevices, m.collection.MeshDiscovery = meshCollection(msg.snapshot)
+		m.refreshTable()
+		if msg.ch != nil {
+			return m, waitMeshSnapshot(msg.ch)
+		}
+		return m, nil
 	case usbScanMsg:
 		m.collection.USBDevices = msg.devices
 		m.hasResults = true
@@ -950,6 +973,13 @@ func (m discoverModel) View() string {
 		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, q quit")) + "\n")
 	}
 
+	if state := m.collection.MeshDiscovery; state != nil && state.State != "not-connected" {
+		suffix := ""
+		if state.Truncated {
+			suffix = " (incomplete snapshot)"
+		}
+		sb.WriteString(m.viewLine(dimStyle.Render("  Wendy Net: "+state.State+suffix)) + "\n")
+	}
 	if warning := m.bleWarningLine(); warning != "" {
 		sb.WriteString(m.viewLine(dimStyle.Render("  Bluetooth: "+warning)) + "\n")
 	}
@@ -1162,14 +1192,18 @@ func lanDeviceAddr(collection *models.DevicesCollection, displayName string) str
 	return ""
 }
 
-func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
+func (m discoverModel) startDeviceUpdateCmd(addr, name string, selectedKeys ...string) tea.Cmd {
 	ctx := m.ctx
+	pinKey := pinKeyForAddr(addr)
+	if len(selectedKeys) > 0 && selectedKeys[0] != "" {
+		pinKey = selectedKeys[0]
+	}
 	return func() tea.Msg {
 		latestVer, _, err := resolveAgentVersion(false)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
-		conn, err := connectWithAutoTLS(ctx, addr)
+		conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, pinKey)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
 		}
@@ -1208,7 +1242,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 		}
 		conn.Close() // agent is restarting
 
-		newConn, err := waitForAgentRestart(ctx, addr)
+		newConn, err := waitForAgentRestartKeyed(ctx, addr, pinKey)
 		if err != nil {
 			return discoverUpdateDoneMsg{deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
 		}
@@ -1521,6 +1555,14 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			lanKey = discoverycache.Key(d.LAN.ID, d.LAN.DisplayName)
 			address = preferredLANAddress(*d.LAN)
 		}
+		hint := lanProbeHint(d.LAN)
+		key := d.DisplayName
+		if d.Mesh != nil {
+			key = d.Mesh.Principal
+			if d.LAN == nil {
+				hint = meshPathHint(d.Mesh)
+			}
+		}
 		provisioned := lanProvisionedDisplay(d.LAN)
 		var failure *models.ProbeFailure
 		probe := tui.ProbeNone
@@ -1538,16 +1580,17 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address:       address,
 				AgentVersion:  discovery.SanitiseDisplayName(d.AgentVersion),
 				AgentOutdated: agentBehindCLI(version.Version, d.AgentVersion),
-				OS:            d.OS,
+				OS:            d.DisplayOS(),
 				OSVersion:     d.OSVersion,
 				Provisioned:   provisioned,
-				Hint:          lanProbeHint(d.LAN),
+				Hint:          hint,
 				Probe:         probe,
-				DedupKey:      d.DisplayName,
+				DedupKey:      key,
 				SortKey:       deviceSortKey(d.DisplayName, usb),
 			},
 			info: discoverDeviceInfo{
 				Name:         d.DisplayName,
+				Mesh:         d.Mesh,
 				Type:         deviceType,
 				USB:          usb,
 				Address:      address,

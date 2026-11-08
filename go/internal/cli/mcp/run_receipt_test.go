@@ -53,8 +53,9 @@ func TestRunReadinessDefault(t *testing.T) {
 		{"explicit opt out", map[string]any{"wait_ready": false}, false, false},
 		{"create only", map[string]any{"start": false}, false, false},
 		{"legacy create only", map[string]any{"deploy": true}, false, false},
-		{"docker requires opt out", map[string]any{"device": "docker"}, false, true},
-		{"podman requires opt out", map[string]any{"device": "podman"}, false, true},
+		{"docker skips the wait", map[string]any{"device": "docker"}, false, false},
+		{"podman skips the wait", map[string]any{"device": "podman"}, false, false},
+		{"docker deadline still waits", map[string]any{"device": "docker", "readiness_timeout_seconds": 20}, false, true},
 		{"docker opt out", map[string]any{"device": "docker", "wait_ready": false}, false, false},
 		{"podman opt out", map[string]any{"device": "podman", "wait_ready": false}, false, false},
 	} {
@@ -80,6 +81,70 @@ func TestRunReadinessDefault(t *testing.T) {
 				t.Fatalf("incorrect readiness: %v", result)
 			}
 		})
+	}
+}
+
+// An omitted wait_ready must not turn a deploy `wendy run` (or `wendy cloud
+// run`) would accept into one it refuses; an explicit request still reaches
+// the CLI, which explains the refusal.
+func TestRunWaitReadyDefaultFollowsCLISupport(t *testing.T) {
+	refusal := errors.New("--wait-ready is not supported for Compose projects yet")
+	for _, tc := range []struct {
+		name            string
+		unsupported     error
+		args            map[string]any
+		wait, consulted bool
+	}{
+		{"supported project waits", nil, map[string]any{"device": "vm:test"}, true, true},
+		{"unsupported project skips the wait", refusal, map[string]any{"device": "vm:test"}, false, true},
+		{"explicit wait reaches the CLI", refusal, map[string]any{"device": "vm:test", "wait_ready": true}, true, false},
+		{"deadline reaches the CLI", refusal, map[string]any{"device": "vm:test", "readiness_timeout_seconds": 20}, true, false},
+		{"cloud run has no wait", nil, map[string]any{"device_name": "robot"}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := runProject(t)
+			s := New(&config.Config{}, nil)
+			var checked []string
+			s.SetProjectBackend(ProjectBackend{WaitReadyUnsupported: func(path, buildType string) error {
+				checked = append(checked, path, buildType)
+				return tc.unsupported
+			}})
+			var argv []string
+			s.runCommandFn = func(_ context.Context, args []string, _ commandTarget, _ int) (string, bool, error) {
+				argv = args
+				if slices.Contains(args, "--wait-ready") {
+					return encodeRunReceipt([]byte(`{"status":"ready","app":"robot","readiness":"passed"}`), ""), false, nil
+				}
+				return encodeRunReceipt([]byte(`{"status":"started","app":"robot","readiness":"not_checked"}`), ""), false, nil
+			}
+			args := map[string]any{"project_path": project, "build_type": "docker"}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			r, err := s.handleRun(context.Background(), callToolReq("run", args))
+			if err != nil || r.IsError {
+				t.Fatalf("run: %+v %v", r, err)
+			}
+			if slices.Contains(argv, "--wait-ready") != tc.wait {
+				t.Fatalf("--wait-ready = %v, want %v: %v", !tc.wait, tc.wait, argv)
+			}
+			if want := map[bool]string{true: "passed", false: "not_checked"}[tc.wait]; structuredMap(t, r)["readiness"] != want {
+				t.Fatalf("readiness: %+v", structuredMap(t, r))
+			}
+			if tc.consulted && !slices.Equal(checked, []string{project, "docker"}) || !tc.consulted && checked != nil {
+				t.Fatalf("support check got %v (consulted=%v)", checked, tc.consulted)
+			}
+		})
+	}
+
+	s := New(&config.Config{}, nil)
+	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+		t.Fatal("wait_ready on a device_name deploy started `wendy cloud run`, which has no --wait-ready")
+		return "", false, nil
+	}
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device_name": "robot", "wait_ready": true}))
+	if err != nil || !r.IsError || structuredMap(t, r)["error_code"] != string(errCodeUnsupported) {
+		t.Fatalf("explicit wait on a device_name deploy: %+v %v", r, err)
 	}
 }
 

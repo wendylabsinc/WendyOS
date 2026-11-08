@@ -39,6 +39,13 @@ func newCloudDiscoverCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if authCertExpired(auth) {
+				if jsonOutput || !isInteractiveTerminal() {
+					return fmt.Errorf("%w; sign in again to get a new one: wendy auth login", errCertExpired)
+				}
+				// pickAuthEntry printed the warning and remedy; the view would hide them.
+				return &ReportedExitError{}
+			}
 			if jsonOutput || !isInteractiveTerminal() {
 				return cloudDiscoverJSON(ctx, auth, all)
 			}
@@ -95,6 +102,17 @@ type cloudDiscoverModel struct {
 	windowHeight   int
 	err            error
 	hasResults     bool
+	certExpired    bool
+}
+
+// authCertExpired reports whether the session's certificate is past NotAfter.
+// An unparseable certificate counts as unexpired so the connection still runs.
+func authCertExpired(auth *config.AuthConfig) bool {
+	if auth == nil || len(auth.Certificates) == 0 {
+		return false
+	}
+	notAfter, err := leafNotAfterFn(auth.Certificates[0].PemCertificate)
+	return err == nil && timeNowFn().After(notAfter)
 }
 
 func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerURL string, all, pickerMode bool, initialAssets []*cloudpb.Asset) cloudDiscoverModel {
@@ -108,6 +126,7 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 		versions:       make(map[string]*agentpb.GetAgentVersionResponse),
 		versionPending: make(map[string]bool),
 		versionSem:     make(chan struct{}, 5),
+		certExpired:    authCertExpired(auth),
 	}
 	if initialAssets != nil {
 		m.devices = legacyDiscoveryDevices(initialAssets)
@@ -298,6 +317,12 @@ func (m cloudDiscoverModel) View() string {
 
 	sb.WriteString("\n")
 
+	// The view owns the terminal, so the expiry warning has to live in it.
+	if m.certExpired {
+		for _, line := range strings.Split(staleCertificateWarning(errCertExpired), "\n") {
+			sb.WriteString(m.viewLine(line) + "\n")
+		}
+	}
 	if m.err != nil {
 		sb.WriteString(m.viewLine(fmt.Sprintf("Error: %v", m.err)) + "\n")
 	}
@@ -306,7 +331,7 @@ func (m cloudDiscoverModel) View() string {
 		if legend := tui.DeviceWarningLegend(cloudDiscoveryLegendItems(m.devices, m.versions)); legend != "" {
 			sb.WriteString(m.viewLine(dimStyle.Render("  "+legend)) + "\n")
 		}
-	} else if m.err == nil {
+	} else if m.err == nil && !m.certExpired {
 		if m.hasResults {
 			if m.all {
 				sb.WriteString(m.viewLine(dimStyle.Render("No enrolled devices found.")) + "\n")
@@ -366,7 +391,6 @@ func cloudDiscoveryTableRows(assets []cloudDiscoveryDevice, versions map[string]
 		ver := "—"
 		if a.isLite() {
 			// No agent to probe, and the firmware's version is not the CLI's.
-			devType = liteDeviceType(devType)
 			if v := a.v2.GetOsVersion(); v != "" {
 				ver = v
 			}

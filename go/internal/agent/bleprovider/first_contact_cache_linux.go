@@ -36,5 +36,15 @@ func (c *firstContactSessionCache) Put(_ string, session *tls.ClientSessionState
 func (c *firstContactSessionCache) bind(config *tls.Config) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cache, c.serverName = config.ClientSessionCache, config.ServerName
+	cache := config.ClientSessionCache
+	for {
+		wrapper, ok := cache.(interface{ Underlying() tls.ClientSessionCache })
+		if !ok {
+			break
+		}
+		cache = wrapper.Underlying()
+	}
+	// This collector is itself wrapped by the live handshake. Do not retain
+	// snapshots from the unhandshaken config used only to obtain its cache key.
+	c.cache, c.serverName = cache, config.ServerName
 }

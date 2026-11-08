@@ -9,7 +9,9 @@ import (
 )
 
 var (
-	connectPickerEnrollmentFn    = connectLocalPickerChoice
+	connectPickerEnrollmentFn = func(ctx context.Context, item *tui.PickerItem, suppressUpdateCheck bool) (*SelectedDevice, error) {
+		return connectLocalPickerChoice(withEnrollmentSelection(ctx), item, suppressUpdateCheck)
+	}
 	promptPickerEnrollmentWifiFn = promptWifiIfNeeded
 	runPickerEnrollmentFn        = runEnrollDevice
 )
@@ -34,6 +36,9 @@ func enrollLocalPickerDevice(ctx context.Context, item *tui.PickerItem, auth *co
 		}
 		if err := promptPickerEnrollmentWifiFn(ctx, conn); err != nil {
 			return err
+		}
+		if target.recordEnrollmentBinding != nil {
+			ctx = context.WithValue(ctx, enrollmentBindingRecorderKey{}, target.recordEnrollmentBinding)
 		}
 		return runPickerEnrollmentFn(ctx, conn, auth, "", 0)
 	})

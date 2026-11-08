@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -359,7 +360,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 					}
 					fmt.Println("Please select the correct device type to continue.")
 					fmt.Println()
-					picked, pickErr := pickDeviceTypeAndGetLatestOTA(nightly)
+					picked, pickErr := pickDeviceTypeAndGetLatestOTA(storageMedium, nightly)
 					if pickErr != nil {
 						return pickErr
 					}
@@ -478,6 +479,9 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 // progress: a spinner when interactive, a silent drain otherwise. It does not
 // wait for the post-update reboot.
 func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artifactURL, updaterBackend string) error {
+	// Cancelling the stream once Completed arrives tells the agent it can reboot.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := conn.AgentService.UpdateOS(ctx, &agentpb.UpdateOSRequest{
 		ArtifactUrl:    artifactURL,
 		UpdaterBackend: updaterBackend,
@@ -487,35 +491,33 @@ func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artif
 	}
 
 	if !isInteractiveTerminal() {
-		return drainOSUpdateStream(stream)
+		err = drainOSUpdateStream(stream)
+	} else {
+		err = spinOSUpdateStream(stream)
 	}
+	if errors.Is(err, errOSUpdateLostAfterInstall) {
+		fmt.Fprintln(os.Stderr, tui.WarningMessage("Lost the connection after the update was installed; the device is rebooting to apply it."))
+		return nil
+	}
+	return err
+}
 
+var osUpdateProgressProgram = func(model tea.Model) *tea.Program { return tui.NewProgressProgram(model) }
+
+func spinOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 	spin := tui.NewSpinner("Downloading update...")
-	p := tui.NewProgressProgram(spin)
+	p := osUpdateProgressProgram(spin)
 
+	result := make(chan error, 1)
 	go func() {
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("OS update stream ended without completion: %w", io.ErrUnexpectedEOF)})
-				return
-			}
-			if err != nil {
-				p.Send(tui.SpinnerDoneMsg{Err: err})
-				return
-			}
-			if progress := resp.GetProgress(); progress != nil {
-				p.Send(tui.SpinnerUpdateMsg{Label: progressLabel(progress.GetPhase(), progress.GetPercent())})
-			}
-			if completed := resp.GetCompleted(); completed != nil {
-				p.Send(tui.SpinnerDoneMsg{})
-				return
-			}
-			if failed := resp.GetFailed(); failed != nil {
-				p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("update failed: %s", failed.GetErrorMessage())})
-				return
-			}
+		err := receiveOSUpdate(stream, func(phase string, percent int32) {
+			p.Send(tui.SpinnerUpdateMsg{Label: progressLabel(phase, percent)})
+		})
+		result <- err
+		if errors.Is(err, errOSUpdateLostAfterInstall) {
+			err = nil
 		}
+		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
 	finalModel, err := p.Run()
@@ -529,10 +531,7 @@ func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artif
 	if !spinModel.Done() {
 		return ErrUserCancelled
 	}
-	if _, spinErr := spinModel.Result(); spinErr != nil {
-		return spinErr
-	}
-	return nil
+	return <-result
 }
 
 // resolveArtifactPath resolves a local file path or directory to an OS update
@@ -588,7 +587,8 @@ func artifactURLPath(filePath string) string {
 // pickDeviceTypeAndGetLatestOTA shows a device-type picker and returns the OTA
 // artifact URL for the latest stable release (or latest nightly when nightly is
 // true). No version picker is shown — the version is chosen automatically.
-func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
+// storageMedium is the device's reported medium, which picks the NVMe variant.
+func pickDeviceTypeAndGetLatestOTA(storageMedium string, nightly bool) (string, error) {
 	fmt.Println("Fetching available devices...")
 
 	devices, err := getAvailableDevices()
@@ -631,7 +631,7 @@ func pickDeviceTypeAndGetLatestOTA(nightly bool) (string, error) {
 		return "", err
 	}
 
-	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, "", nightly)
+	otaURL, latestVer, err := getLatestOTAInfoForDeviceType(key, storageMedium, nightly)
 	if err != nil {
 		return "", fmt.Errorf("resolving OTA artifact for %q: %w", key, err)
 	}
@@ -660,7 +660,8 @@ func dialOSUpdateAgent(ctx context.Context, prior *grpcclient.AgentConnection) (
 	if addr == "" {
 		addr = hostPort(prior.Host, defaultAgentPort)
 	}
-	return connectWithAutoTLS(ctx, addr)
+	conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, prior.DevicePinKey)
+	return conn, err
 }
 
 // pollDeviceOnline blocks until the same device responds to GetAgentVersion or
@@ -1480,23 +1481,43 @@ func ipForURL(ip string) string {
 func drainOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 	var lastPhase string
 	lastDecile := int32(-1)
+	return receiveOSUpdate(stream, func(phase string, percent int32) {
+		// Print on every phase change, and at each 10% step within a phase,
+		// so non-interactive logs show steady progress without flooding.
+		decile := percent / 10
+		if phase != lastPhase || (percent > 0 && decile != lastDecile) {
+			fmt.Fprintln(os.Stderr, progressLabel(phase, percent))
+			lastPhase = phase
+			lastDecile = decile
+		}
+	})
+}
+
+// errOSUpdateLostAfterInstall reports a stream that broke after the device said
+// the install was done: the update is staged and the device is rebooting.
+var errOSUpdateLostAfterInstall = errors.New("OS update stream lost after the install finished")
+
+// receiveOSUpdate reads an UpdateOS stream until Completed or Failed, passing
+// each progress frame to onProgress.
+func receiveOSUpdate(stream agentpb.WendyAgentService_UpdateOSClient, onProgress func(phase string, percent int32)) error {
+	installed := false
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
 			return fmt.Errorf("OS update stream ended without completion: %w", io.ErrUnexpectedEOF)
 		}
 		if err != nil {
+			// Agents that reboot straight after the last frames can lose them.
+			if installed && status.Code(err) == codes.Unavailable {
+				return fmt.Errorf("%w: %w", errOSUpdateLostAfterInstall, err)
+			}
 			return err
 		}
 		if progress := resp.GetProgress(); progress != nil {
-			phase, percent := progress.GetPhase(), progress.GetPercent()
-			// Print on every phase change, and at each 10% step within a phase,
-			// so non-interactive logs show steady progress without flooding.
-			decile := percent / 10
-			if phase != lastPhase || (percent > 0 && decile != lastDecile) {
-				fmt.Fprintln(os.Stderr, progressLabel(phase, percent))
-				lastPhase = phase
-				lastDecile = decile
+			onProgress(progress.GetPhase(), progress.GetPercent())
+			// wendyos-update reports done only after a successful install.
+			if phase := progress.GetPhase(); phase == "done" || phase == "finalizing" {
+				installed = true
 			}
 		}
 		if resp.GetCompleted() != nil {
@@ -1628,18 +1649,13 @@ func serveLocalArtifact(localPath, localIP string) (string, func(), error) {
 
 // downloadArtifactToTemp downloads a remote artifact URL to a temporary file,
 // showing a progress bar only on an interactive terminal outside JSON mode.
-// The caller is responsible for removing the file.
+// The caller is responsible for removing the file. Like OS images, the
+// multi-gigabyte artifact has no whole-transfer deadline and resumes after a
+// dropped or stalled connection (see downloadToFile).
 func downloadArtifactToTemp(artifactURL string) (string, error) {
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(artifactURL) //nolint:noctx
-	if err != nil {
-		return "", fmt.Errorf("downloading: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	img := &imageInfo{DownloadURL: artifactURL}
 
 	cacheDir, err := osCacheDir()
 	if err != nil {
@@ -1657,7 +1673,7 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 	// transfer errors are returned directly and no background writer outlives
 	// cleanup of a failed download.
 	if jsonOutput || !isInteractiveTerminal() {
-		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		if err := downloadToFile(ctx, img, tmpFile, func(int64, int64) {}); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
 			return "", fmt.Errorf("downloading: %w", err)
@@ -1669,38 +1685,12 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 		return tmpFile.Name(), nil
 	}
 
-	total := resp.ContentLength
 	prog := tui.NewProgress("Downloading artifact...")
 	p := tui.NewProgressProgram(prog)
+	sendProgress := throttledProgress(p, 33*time.Millisecond)
 
 	go func() {
-		var downloaded int64
-		buf := make([]byte, 64*1024)
-		for {
-			n, readErr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: writeErr})
-					return
-				}
-				downloaded += int64(n)
-				if total > 0 {
-					p.Send(tui.ProgressUpdateMsg{
-						Percent: float64(downloaded) / float64(total),
-						Written: downloaded,
-						Total:   total,
-					})
-				}
-			}
-			if readErr == io.EOF {
-				p.Send(tui.ProgressDoneMsg{})
-				return
-			}
-			if readErr != nil {
-				p.Send(tui.ProgressDoneMsg{Err: readErr})
-				return
-			}
-		}
+		p.Send(tui.ProgressDoneMsg{Err: downloadToFile(ctx, img, tmpFile, sendProgress)})
 	}()
 
 	finalModel, err := p.Run()

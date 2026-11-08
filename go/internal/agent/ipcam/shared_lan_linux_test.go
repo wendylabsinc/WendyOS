@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 // Run as root inside a disposable network AND mount namespace:
@@ -45,8 +46,13 @@ func TestDHCPLinuxSharedLANClient(t *testing.T) {
 	}
 	// /sys belongs to the namespace in which it was mounted. Refresh it in
 	// this private mount namespace so production carrier reads see our veths.
-	if out, err := exec.Command("mount", "-t", "sysfs", "-o", "ro,nosuid,nodev,noexec", "sysfs", "/sys").CombinedOutput(); err != nil {
-		t.Fatalf("mount isolated sysfs: %s: %v", out, err)
+	// Detach the inherited mount first: CI may already have mounted sysfs for
+	// the other lifecycle tests, and mounting it twice can return EBUSY.
+	if err := unix.Unmount("/sys", unix.MNT_DETACH); err != nil {
+		t.Fatalf("detach inherited sysfs: %v", err)
+	}
+	if err := unix.Mount("sysfs", "/sys", "sysfs", unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+		t.Fatalf("mount isolated sysfs: %v", err)
 	}
 	for _, command := range []string{"ip", "dnsmasq", "busybox"} {
 		if _, err := exec.LookPath(command); err != nil {

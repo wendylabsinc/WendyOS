@@ -169,6 +169,216 @@ type UpdateAgentResponse_Updated_ struct {
 
 func (*UpdateAgentResponse_Updated_) isUpdateAgentResponse_ResponseType() {}
 
+type CheckOnlineUpdateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckOnlineUpdateRequest) Reset() {
+	*x = CheckOnlineUpdateRequest{}
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckOnlineUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckOnlineUpdateRequest) ProtoMessage() {}
+
+func (x *CheckOnlineUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckOnlineUpdateRequest.ProtoReflect.Descriptor instead.
+func (*CheckOnlineUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_agent_update_service_proto_rawDescGZIP(), []int{2}
+}
+
+type GetOnlineUpdateStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetOnlineUpdateStatusRequest) Reset() {
+	*x = GetOnlineUpdateStatusRequest{}
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetOnlineUpdateStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetOnlineUpdateStatusRequest) ProtoMessage() {}
+
+func (x *GetOnlineUpdateStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetOnlineUpdateStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetOnlineUpdateStatusRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_agent_update_service_proto_rawDescGZIP(), []int{3}
+}
+
+type StartOnlineUpdateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Version displayed to the user. Reject if the release changed since checking.
+	Version       string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartOnlineUpdateRequest) Reset() {
+	*x = StartOnlineUpdateRequest{}
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartOnlineUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartOnlineUpdateRequest) ProtoMessage() {}
+
+func (x *StartOnlineUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartOnlineUpdateRequest.ProtoReflect.Descriptor instead.
+func (*StartOnlineUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_agent_update_service_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *StartOnlineUpdateRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+type OnlineUpdateStatus struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	InstalledVersion string                 `protobuf:"bytes,1,opt,name=installed_version,json=installedVersion,proto3" json:"installed_version,omitempty"`
+	LatestVersion    string                 `protobuf:"bytes,2,opt,name=latest_version,json=latestVersion,proto3" json:"latest_version,omitempty"`
+	UpdateAvailable  bool                   `protobuf:"varint,3,opt,name=update_available,json=updateAvailable,proto3" json:"update_available,omitempty"`
+	// idle, checking, available, current, downloading, installing, restarting, failed
+	Phase           string `protobuf:"bytes,4,opt,name=phase,proto3" json:"phase,omitempty"`
+	Detail          string `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
+	DownloadedBytes int64  `protobuf:"varint,6,opt,name=downloaded_bytes,json=downloadedBytes,proto3" json:"downloaded_bytes,omitempty"`
+	TotalBytes      int64  `protobuf:"varint,7,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *OnlineUpdateStatus) Reset() {
+	*x = OnlineUpdateStatus{}
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OnlineUpdateStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OnlineUpdateStatus) ProtoMessage() {}
+
+func (x *OnlineUpdateStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OnlineUpdateStatus.ProtoReflect.Descriptor instead.
+func (*OnlineUpdateStatus) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_agent_update_service_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *OnlineUpdateStatus) GetInstalledVersion() string {
+	if x != nil {
+		return x.InstalledVersion
+	}
+	return ""
+}
+
+func (x *OnlineUpdateStatus) GetLatestVersion() string {
+	if x != nil {
+		return x.LatestVersion
+	}
+	return ""
+}
+
+func (x *OnlineUpdateStatus) GetUpdateAvailable() bool {
+	if x != nil {
+		return x.UpdateAvailable
+	}
+	return false
+}
+
+func (x *OnlineUpdateStatus) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *OnlineUpdateStatus) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *OnlineUpdateStatus) GetDownloadedBytes() int64 {
+	if x != nil {
+		return x.DownloadedBytes
+	}
+	return 0
+}
+
+func (x *OnlineUpdateStatus) GetTotalBytes() int64 {
+	if x != nil {
+		return x.TotalBytes
+	}
+	return 0
+}
+
 type UpdateAgentRequest_Chunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
@@ -178,7 +388,7 @@ type UpdateAgentRequest_Chunk struct {
 
 func (x *UpdateAgentRequest_Chunk) Reset() {
 	*x = UpdateAgentRequest_Chunk{}
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[2]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -190,7 +400,7 @@ func (x *UpdateAgentRequest_Chunk) String() string {
 func (*UpdateAgentRequest_Chunk) ProtoMessage() {}
 
 func (x *UpdateAgentRequest_Chunk) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[2]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -225,7 +435,7 @@ type UpdateAgentRequest_ControlCommand struct {
 
 func (x *UpdateAgentRequest_ControlCommand) Reset() {
 	*x = UpdateAgentRequest_ControlCommand{}
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[3]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -237,7 +447,7 @@ func (x *UpdateAgentRequest_ControlCommand) String() string {
 func (*UpdateAgentRequest_ControlCommand) ProtoMessage() {}
 
 func (x *UpdateAgentRequest_ControlCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[3]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -289,7 +499,7 @@ type UpdateAgentRequest_ControlCommand_Update struct {
 
 func (x *UpdateAgentRequest_ControlCommand_Update) Reset() {
 	*x = UpdateAgentRequest_ControlCommand_Update{}
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[4]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -301,7 +511,7 @@ func (x *UpdateAgentRequest_ControlCommand_Update) String() string {
 func (*UpdateAgentRequest_ControlCommand_Update) ProtoMessage() {}
 
 func (x *UpdateAgentRequest_ControlCommand_Update) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[4]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -339,7 +549,7 @@ type UpdateAgentResponse_Updated struct {
 
 func (x *UpdateAgentResponse_Updated) Reset() {
 	*x = UpdateAgentResponse_Updated{}
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[5]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -351,7 +561,7 @@ func (x *UpdateAgentResponse_Updated) String() string {
 func (*UpdateAgentResponse_Updated) ProtoMessage() {}
 
 func (x *UpdateAgentResponse_Updated) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[5]
+	mi := &file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -387,9 +597,25 @@ const file_wendy_agent_services_v2_agent_update_service_proto_rawDesc = "" +
 	"\x13UpdateAgentResponse\x12P\n" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v2.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
-	"\rresponse_type2\x87\x01\n" +
+	"\rresponse_type\"\x1a\n" +
+	"\x18CheckOnlineUpdateRequest\"\x1e\n" +
+	"\x1cGetOnlineUpdateStatusRequest\"4\n" +
+	"\x18StartOnlineUpdateRequest\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"\x8d\x02\n" +
+	"\x12OnlineUpdateStatus\x12+\n" +
+	"\x11installed_version\x18\x01 \x01(\tR\x10installedVersion\x12%\n" +
+	"\x0elatest_version\x18\x02 \x01(\tR\rlatestVersion\x12)\n" +
+	"\x10update_available\x18\x03 \x01(\bR\x0fupdateAvailable\x12\x14\n" +
+	"\x05phase\x18\x04 \x01(\tR\x05phase\x12\x16\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\x12)\n" +
+	"\x10downloaded_bytes\x18\x06 \x01(\x03R\x0fdownloadedBytes\x12\x1f\n" +
+	"\vtotal_bytes\x18\a \x01(\x03R\n" +
+	"totalBytes2\xee\x03\n" +
 	"\x17WendyAgentUpdateService\x12l\n" +
-	"\vUpdateAgent\x12+.wendy.agent.services.v2.UpdateAgentRequest\x1a,.wendy.agent.services.v2.UpdateAgentResponse(\x010\x01B>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\vUpdateAgent\x12+.wendy.agent.services.v2.UpdateAgentRequest\x1a,.wendy.agent.services.v2.UpdateAgentResponse(\x010\x01\x12s\n" +
+	"\x11CheckOnlineUpdate\x121.wendy.agent.services.v2.CheckOnlineUpdateRequest\x1a+.wendy.agent.services.v2.OnlineUpdateStatus\x12s\n" +
+	"\x11StartOnlineUpdate\x121.wendy.agent.services.v2.StartOnlineUpdateRequest\x1a+.wendy.agent.services.v2.OnlineUpdateStatus\x12{\n" +
+	"\x15GetOnlineUpdateStatus\x125.wendy.agent.services.v2.GetOnlineUpdateStatusRequest\x1a+.wendy.agent.services.v2.OnlineUpdateStatusB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_agent_update_service_proto_rawDescOnce sync.Once
@@ -403,24 +629,34 @@ func file_wendy_agent_services_v2_agent_update_service_proto_rawDescGZIP() []byt
 	return file_wendy_agent_services_v2_agent_update_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_agent_update_service_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_wendy_agent_services_v2_agent_update_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_wendy_agent_services_v2_agent_update_service_proto_goTypes = []any{
 	(*UpdateAgentRequest)(nil),                       // 0: wendy.agent.services.v2.UpdateAgentRequest
 	(*UpdateAgentResponse)(nil),                      // 1: wendy.agent.services.v2.UpdateAgentResponse
-	(*UpdateAgentRequest_Chunk)(nil),                 // 2: wendy.agent.services.v2.UpdateAgentRequest.Chunk
-	(*UpdateAgentRequest_ControlCommand)(nil),        // 3: wendy.agent.services.v2.UpdateAgentRequest.ControlCommand
-	(*UpdateAgentRequest_ControlCommand_Update)(nil), // 4: wendy.agent.services.v2.UpdateAgentRequest.ControlCommand.Update
-	(*UpdateAgentResponse_Updated)(nil),              // 5: wendy.agent.services.v2.UpdateAgentResponse.Updated
+	(*CheckOnlineUpdateRequest)(nil),                 // 2: wendy.agent.services.v2.CheckOnlineUpdateRequest
+	(*GetOnlineUpdateStatusRequest)(nil),             // 3: wendy.agent.services.v2.GetOnlineUpdateStatusRequest
+	(*StartOnlineUpdateRequest)(nil),                 // 4: wendy.agent.services.v2.StartOnlineUpdateRequest
+	(*OnlineUpdateStatus)(nil),                       // 5: wendy.agent.services.v2.OnlineUpdateStatus
+	(*UpdateAgentRequest_Chunk)(nil),                 // 6: wendy.agent.services.v2.UpdateAgentRequest.Chunk
+	(*UpdateAgentRequest_ControlCommand)(nil),        // 7: wendy.agent.services.v2.UpdateAgentRequest.ControlCommand
+	(*UpdateAgentRequest_ControlCommand_Update)(nil), // 8: wendy.agent.services.v2.UpdateAgentRequest.ControlCommand.Update
+	(*UpdateAgentResponse_Updated)(nil),              // 9: wendy.agent.services.v2.UpdateAgentResponse.Updated
 }
 var file_wendy_agent_services_v2_agent_update_service_proto_depIdxs = []int32{
-	2, // 0: wendy.agent.services.v2.UpdateAgentRequest.chunk:type_name -> wendy.agent.services.v2.UpdateAgentRequest.Chunk
-	3, // 1: wendy.agent.services.v2.UpdateAgentRequest.control:type_name -> wendy.agent.services.v2.UpdateAgentRequest.ControlCommand
-	5, // 2: wendy.agent.services.v2.UpdateAgentResponse.updated:type_name -> wendy.agent.services.v2.UpdateAgentResponse.Updated
-	4, // 3: wendy.agent.services.v2.UpdateAgentRequest.ControlCommand.update:type_name -> wendy.agent.services.v2.UpdateAgentRequest.ControlCommand.Update
+	6, // 0: wendy.agent.services.v2.UpdateAgentRequest.chunk:type_name -> wendy.agent.services.v2.UpdateAgentRequest.Chunk
+	7, // 1: wendy.agent.services.v2.UpdateAgentRequest.control:type_name -> wendy.agent.services.v2.UpdateAgentRequest.ControlCommand
+	9, // 2: wendy.agent.services.v2.UpdateAgentResponse.updated:type_name -> wendy.agent.services.v2.UpdateAgentResponse.Updated
+	8, // 3: wendy.agent.services.v2.UpdateAgentRequest.ControlCommand.update:type_name -> wendy.agent.services.v2.UpdateAgentRequest.ControlCommand.Update
 	0, // 4: wendy.agent.services.v2.WendyAgentUpdateService.UpdateAgent:input_type -> wendy.agent.services.v2.UpdateAgentRequest
-	1, // 5: wendy.agent.services.v2.WendyAgentUpdateService.UpdateAgent:output_type -> wendy.agent.services.v2.UpdateAgentResponse
-	5, // [5:6] is the sub-list for method output_type
-	4, // [4:5] is the sub-list for method input_type
+	2, // 5: wendy.agent.services.v2.WendyAgentUpdateService.CheckOnlineUpdate:input_type -> wendy.agent.services.v2.CheckOnlineUpdateRequest
+	4, // 6: wendy.agent.services.v2.WendyAgentUpdateService.StartOnlineUpdate:input_type -> wendy.agent.services.v2.StartOnlineUpdateRequest
+	3, // 7: wendy.agent.services.v2.WendyAgentUpdateService.GetOnlineUpdateStatus:input_type -> wendy.agent.services.v2.GetOnlineUpdateStatusRequest
+	1, // 8: wendy.agent.services.v2.WendyAgentUpdateService.UpdateAgent:output_type -> wendy.agent.services.v2.UpdateAgentResponse
+	5, // 9: wendy.agent.services.v2.WendyAgentUpdateService.CheckOnlineUpdate:output_type -> wendy.agent.services.v2.OnlineUpdateStatus
+	5, // 10: wendy.agent.services.v2.WendyAgentUpdateService.StartOnlineUpdate:output_type -> wendy.agent.services.v2.OnlineUpdateStatus
+	5, // 11: wendy.agent.services.v2.WendyAgentUpdateService.GetOnlineUpdateStatus:output_type -> wendy.agent.services.v2.OnlineUpdateStatus
+	8, // [8:12] is the sub-list for method output_type
+	4, // [4:8] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name
 	4, // [4:4] is the sub-list for extension extendee
 	0, // [0:4] is the sub-list for field type_name
@@ -438,7 +674,7 @@ func file_wendy_agent_services_v2_agent_update_service_proto_init() {
 	file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[1].OneofWrappers = []any{
 		(*UpdateAgentResponse_Updated_)(nil),
 	}
-	file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[3].OneofWrappers = []any{
+	file_wendy_agent_services_v2_agent_update_service_proto_msgTypes[7].OneofWrappers = []any{
 		(*UpdateAgentRequest_ControlCommand_Update_)(nil),
 	}
 	type x struct{}
@@ -447,7 +683,7 @@ func file_wendy_agent_services_v2_agent_update_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_agent_update_service_proto_rawDesc), len(file_wendy_agent_services_v2_agent_update_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

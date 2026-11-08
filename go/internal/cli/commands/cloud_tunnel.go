@@ -215,6 +215,12 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		agentConn.MeshHost = meshname.Device(asset.legacy.GetId())
 	}
 	agentConn.IsMTLS = true
+	agentConn.IsCloudV2 = asset.v2 != nil
+	if agentConn.IsCloudV2 && strings.TrimSpace(agentConn.Host) == "" {
+		// Cloud names are optional; keep the pinned device identifiable in
+		// upload and start-failure messages even without a display name.
+		agentConn.Host = asset.key
+	}
 	agentConn.CertInfo = &cert
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
 		return asset.openTunnel(ctx, brokerConn, auth, uint32(port))
@@ -227,7 +233,7 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		return asset.reconnect(rctx, auth, brokerURL)
 	}
 	if brokerConn != nil {
-		agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
+		agentConn.AddCloser(brokerConn)
 	}
 	cleanupBroker = false
 	return agentConn, nil

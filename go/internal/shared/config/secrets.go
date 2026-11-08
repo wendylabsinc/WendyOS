@@ -89,7 +89,7 @@ func resolveError(cause error) error {
 // keyAccount derives the deterministic Keychain account for a client
 // private key, so re-login for the same identity overwrites one item. It
 // hashes cloudGRPC|orgID|userID|assetID|principalURI. userID alone is not
-// enough because asset certs (from performLocalLogin) carry no UserID, only an
+// enough because legacy asset certs carry no UserID, only an
 // AssetID, so two asset certs on the same endpoint+org with different AssetID
 // must not collide. principalURI distinguishes newer pki-core SPIFFE
 // identities, which do not carry the legacy numeric org ID.
@@ -106,9 +106,8 @@ func keyAccount(cloudGRPC string, orgID int, userID string, assetID int, princip
 
 // tokenAccount derives the deterministic Keychain account for a cloud API
 // token. It hashes cloudDashboard|cloudGRPC|orgID — the same triple AddAuth
-// dedups auth entries on — because a browser login (CloudDashboard set) and
-// an --api-key login (CloudDashboard empty, see performLocalLogin) against
-// the same endpoint+org coexist as two distinct AddAuth entries; omitting
+// dedups auth entries on. Stored sessions with different dashboards against
+// the same endpoint+org coexist as distinct AddAuth entries; omitting
 // cloudDashboard would let one entry's dehydrated token overwrite the
 // other's Keychain item even though both entries' references kept pointing
 // at the same account. orgID matters for the analogous reason: several orgs
