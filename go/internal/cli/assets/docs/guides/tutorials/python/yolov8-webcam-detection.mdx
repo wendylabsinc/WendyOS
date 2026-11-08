@@ -1,6 +1,6 @@
 ---
 title: YOLOv8 Webcam Detection
-description: Build a full-screen real-time object detection app with YOLOv8, WebSocket streaming, and a canvas overlay on WendyOS
+description: Build a full-screen real-time object detection app with YOLOv8, WebSocket streaming, and a canvas overlay
 language: python
 ---
 
@@ -12,7 +12,9 @@ import { Accordions, Accordion } from 'fumadocs-ui/components/accordion';
 
 ## Real-Time COCO Object Detection with YOLOv8
 
-This guide walks you through building a complete webcam detection application that runs YOLOv8 on a WendyOS device. The app features a full-screen video feed with bounding box overlays drawn on a canvas, a confidence slider, and a live count of identified objects from the COCO dataset (80 classes including people, cars, animals, and everyday objects).
+YOLO is an object detector: it predicts class labels, bounding boxes, and confidence scores from an image. Use it to find known object categories in a camera feed. A box does not give you depth or a robot destination. This example runs YOLOv8 and displays its 80 COCO classes with a confidence slider.
+
+Compare detections on clear, blurred, and partly obscured objects. Record missed objects and false positives as well as inference delay; a smooth overlay alone does not establish accuracy.
 
 The complete sample is available in the [samples repository](https://github.com/wendylabsinc/samples/tree/main/python/yolov8).
 

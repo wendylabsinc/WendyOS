@@ -1,6 +1,8 @@
 {
   "title": "Set up a device",
   "pages": [
+    "index",
+    "cli",
     "agent-assisted-setup",
     "wendyos-virtual-machine",
     "so101-simulator",

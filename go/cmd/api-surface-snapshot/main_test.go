@@ -123,3 +123,23 @@ func TestCompareRisk(t *testing.T) {
 		})
 	}
 }
+
+func TestDocsSnapshotIncludesVMButNotInternalCommands(t *testing.T) {
+	root := &cobra.Command{Use: "wendy"}
+	vm := &cobra.Command{Use: "vm", Hidden: true}
+	vm.AddCommand(&cobra.Command{Use: "start <name>"})
+	vm.AddCommand(&cobra.Command{Use: "internal", Hidden: true})
+	root.AddCommand(vm, &cobra.Command{Use: "secret", Hidden: true})
+	public := snapshot(root)
+	docs := snapshotForDocs(root, true)
+	if len(public.Commands) != 1 {
+		t.Fatalf("default snapshot exposed hidden commands: %#v", public)
+	}
+	var paths []string
+	for _, command := range docs.Commands {
+		paths = append(paths, command.Path)
+	}
+	if !reflect.DeepEqual(paths, []string{"wendy", "wendy vm", "wendy vm start"}) {
+		t.Fatalf("unexpected documentation commands: %v", paths)
+	}
+}

@@ -117,6 +117,11 @@ for (const file of assetFiles) {
 }
 
 function normalizeMarkdownPath(relativePath) {
+  // Keep the embedded CLI source path stable while publishing core app
+  // configuration in Reference rather than Advanced.
+  if (relativePath.replaceAll(path.sep, '/') === 'apps/wendy.json.md') {
+    return 'reference/app-configuration.md';
+  }
   const extension = path.extname(relativePath).toLowerCase();
   let targetPath = relativePath;
 
@@ -290,7 +295,7 @@ async function writePublishedSitemap(pages) {
 
 async function writeAdvancedIndexPage() {
   const targetPath = path.join(contentRoot, 'advanced', 'index.md');
-  const body = `---\ntitle: "Detailed reference"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Detailed reference\n\nBehavioral explanations and lower-level WendyOS documentation live here.\n\n## Reference areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](./apps/wendy.json.md)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n- [Development](./development/)\n`;
+  const body = `---\ntitle: "Detailed reference"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Detailed reference\n\nBehavioral explanations and lower-level WendyOS documentation live here.\n\n## Reference areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](../reference/app-configuration/)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n- [Development](./development/)\n`;
 
   await writeFile(targetPath, body, 'utf8');
 }

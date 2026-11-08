@@ -1,0 +1,40 @@
+---
+title: Set up a device
+description: Prepare your hardware for its first Wendy app.
+---
+
+Choose your target below. Each guide covers the required hardware, installation,
+and how to confirm that your computer can reach the device.
+Install the [Wendy CLI](/docs/installation/cli) on your development computer first.
+
+| Your target | Setup guide |
+| --- | --- |
+| NVIDIA Jetson Orin Nano or AGX Orin | [Install WendyOS over USB recovery](/docs/installation/wendyos-nvidia-jetson-orin-nano) |
+| NVIDIA Jetson Thor | [Install WendyOS over USB](/docs/installation/wendyos-nvidia-jetson-agx-thor) |
+| Raspberry Pi 5, 4, or 3 | [Install WendyOS on a microSD card](/docs/installation/wendyos-raspberry-pi-5) |
+| Existing Linux computer | [Install Wendy Agent and keep your OS](/docs/installation/linux) |
+| Unitree G1 | [Install Wendy Agent on PC2](/docs/installation/wendy-agent-unitree-g1) |
+| Apple Silicon Mac | [Set up the native Mac target](/docs/installation/wendy-agent-macos) |
+| ESP32 | [Set up Wendy Lite](/docs/installation/wendy-lite-esp32) |
+
+Installing WendyOS erases the selected storage. Check the board guide's power,
+cable, and recovery requirements before starting. For an interactive guide, run
+`wendy tour --hardware`.
+
+## Confirm your device is ready
+
+Run this on your development computer:
+
+```bash
+wendy discover
+```
+
+Your expected device should appear. On macOS, allow Local Network access when
+prompted. For a USB connection on Linux, accept the terminal's host network setup
+prompt. If the device is missing, follow [Target not found](/docs/errors#target-not-found).
+
+Once your Linux or WendyOS device appears, [deploy your first app](/docs/getting-started/app).
+Mac and ESP32 targets use the examples in their own setup guides.
+
+No hardware yet? [Program a simulated robot](/docs/getting-started/robot) or
+[deploy an app to a virtual device](/docs/getting-started/app).

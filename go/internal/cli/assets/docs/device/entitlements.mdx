@@ -62,7 +62,7 @@ The network entitlement controls how your application accesses the network.
 | `host` | Shares the device's interfaces, IP addresses, and listening ports. Use for services that need direct LAN access. Does not grant network administration. |
 | `host-admin` | Host networking plus `CAP_NET_ADMIN`, for apps that reconfigure the host network. |
 | `bridge` | Private network namespace with outbound connectivity, including DNS and downloads, through NAT. Ports are not published on the device's LAN address. |
-| `mesh` | Private Wendy Net service networking. Requires `serviceCIDR: "10.99.0.0/16"` and isolated networking. Declare incoming TCP or UDP ports explicitly. Does not grant an Internet default route. |
+| `mesh` | Private Wendy Net service networking. Requires `serviceCIDR: "10.99.0.0/16"`, the supported virtual service range, and isolated networking. This is not the LAN subnet. Declare incoming TCP or UDP ports explicitly. Does not grant an Internet default route. |
 | `none` | Application runs in an isolated network namespace with no network access. Use this for applications that should be completely offline, such as data processing tasks that don't need external connectivity. |
 
 Omitting the network entitlement gives an ordinary container only loopback.

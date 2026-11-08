@@ -1,267 +1,83 @@
 ---
-title: Hello World in Python
-description: Create your first WendyOS application using Python
+title: Run your first Python app
+description: Deploy a Python HTTP server and verify its response on a Wendy target.
 language: python
 ---
 
-## Creating Your First Python Application
+Deploy a small HTTP server, check its response, then change the response and
+redeploy. This is the starting project for [adding an API endpoint](/docs/guides/tutorials/python/simple-web-server).
 
-This guide walks you through creating your first WendyOS application in Python. It proves you can send an app to your device and that your development environment is set up correctly.
+## Prerequisites
 
-The Python `simple-api` template generates a small FastAPI HTTP server. Unlike a one-shot script that prints and exits, this app **keeps running** and serves requests, so you can open it in your browser right after deploying.
+- [Wendy CLI installed](/docs/installation/cli) on your development computer.
+- Docker running with Buildx. Check with `docker info` and `docker buildx version`.
+- A [Linux device or WendyOS VM](/docs/installation) ready to run your app.
 
-### Prerequisites
+Python and dependencies run inside the container. You do not need Python
+installed on your development computer. Use the VM setup guide if you do not
+have hardware; this tutorial also works with an existing Linux machine running
+Wendy Agent.
 
-- Wendy CLI installed on your development machine
-- Docker and Buildx installed, with Docker running on your development machine
-- A WendyOS device plugged in over USB or connectable over Wi-Fi
-
-Python and the app's dependencies run inside the container. You do not need to
-install Python on your development machine for this guide. Check the builder first:
+## 1. Create the project
 
 ```bash
-docker info
-docker buildx version
+wendy init hello-world --target wendyos --language python --template simple-api --var APP_ID=hello-world --var PORT=3001 --assistant skip --git-init no
+cd hello-world
 ```
 
-Both commands should succeed. If Docker is unavailable, start it before continuing.
-You can also use a [WendyOS virtual device](/docs/installation/wendyos-virtual-machine)
-on macOS or Linux when you do not have hardware yet.
+The template creates `app.py`, `Dockerfile`, and `wendy.json`. The application
+uses FastAPI; the Dockerfile installs its dependencies and starts it with
+Uvicorn. [`wendy.json`](/docs/reference/app-configuration) declares network
+access, a readiness check on port 3001, and a hook to open the browser.
 
-### Creating the Project
-
-<Steps>
-  <Step>
-    ### Initialize the Project
-
-    Start from the Wendy Python template:
-
-    ```bash
-    wendy init hello-world --target wendyos --language python --template simple-api --var APP_ID=hello-world --var PORT=3001 --assistant skip --git-init no
-    cd hello-world
-    ```
-
-    <CliShot flow="init" step="wizard" alt="wendy init scaffolding the hello-world Python project from the simple-api template" />
-
-    This creates `wendy.json`, a `Dockerfile`, and a ready-to-run `app.py` from the template. The next steps explain the generated files.
-  </Step>
-
-  <Step>
-    ### Run on WendyOS
-
-    ```bash
-    wendy run
-    ```
-
-    <CliShot flow="run" step="deploy" alt="wendy run building and deploying the hello-world app to a WendyOS device" />
-
-    <CliClip flow="run" alt="Animated walkthrough of wendy run building, deploying, and starting the hello-world app" />
-
-    Wendy will build the app, ask you to select a device if one is not already configured, deploy the app, and show the run output. Because the generated `wendy.json` includes a `postStart` browser hook, your browser opens to the app automatically once it is ready.
-  </Step>
-</Steps>
-
-## Code Breakdown
-
-<Steps>
-  <Step>
-    ### Generated Application
-
-    The template generates an `app.py` that defines a FastAPI server with a few routes:
-
-    ```python
-    import os
-    from fastapi import FastAPI
-    from pydantic import BaseModel
-
-    app = FastAPI()
-
-    hostname = (
-        os.environ.get("WENDY_DEVICE_HOSTNAME")
-        or os.environ.get("WENDY_HOSTNAME")
-        or "localhost"
-    )
-
-
-    class Item(BaseModel):
-        name: str
-        price: float
-
-
-    @app.on_event("startup")
-    async def startup_event():
-        print(f"Server running on {hostname}:3001", flush=True)
-
-
-    @app.get("/")
-    async def root():
-        print("Received request: GET /", flush=True)
-        return {"message": "hello-world"}
-
-
-    @app.get("/health")
-    async def health():
-        return {"status": "ok"}
-
-
-    @app.post("/items", status_code=201)
-    async def create_item(item: Item):
-        print(f"Received request: POST /items - {item.name}", flush=True)
-        return {"id": 1, "name": item.name, "price": item.price}
-    ```
-
-    There is no `if __name__ == '__main__'` block — the app is started by `uvicorn` (see the Dockerfile). The `GET /` route is what you hit first; it returns `{"message": "hello-world"}`.
-
-    <Callout type="info">
-      **Want the classic one-liner?** A bare hello-world like `print("Hello World")` would print once and exit. The template instead gives you a long-running server so you can interact with your device over HTTP — a more useful starting point for real apps.
-    </Callout>
-  </Step>
-
-  <Step>
-    ### Generated Dockerfile
-
-    The template includes a Dockerfile that installs FastAPI/Uvicorn with `uv` and runs the server with `uvicorn`:
-
-    ```dockerfile
-    FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
-
-    WORKDIR /app
-
-    ENV PYTHONUNBUFFERED=1
-
-    ARG WENDY_DEVICE_HOSTNAME=localhost
-    ENV WENDY_DEVICE_HOSTNAME=${WENDY_DEVICE_HOSTNAME}
-
-    ARG WENDY_DEVICE_TYPE
-    ARG WENDY_DEBUG=false
-    ENV WENDY_DEVICE_TYPE=${WENDY_DEVICE_TYPE}
-    ENV WENDY_DEBUG=${WENDY_DEBUG}
-
-    RUN uv pip install --system fastapi==0.135.3 "uvicorn[standard]"
-    RUN if [ "$WENDY_DEBUG" = "true" ]; then uv pip install --system debugpy; fi
-
-    COPY app.py .
-
-    EXPOSE 3001
-
-    CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "3001"]
-    ```
-
-    Dependencies are installed directly in the Dockerfile, so there is no `requirements.txt` in this template.
-  </Step>
-
-  <Step>
-    ### Generated wendy.json
-
-    The template also generates a `wendy.json` with the `network` entitlement, a readiness probe, and a `postStart` hook that opens your browser when the server is ready:
-
-    ```json
-    {
-        "appId": "hello-world",
-        "platform": "linux",
-        "version": "0.1.0",
-        "entitlements": [
-            {
-                "type": "network"
-            }
-        ],
-        "readiness": {
-            "tcpSocket": { "port": 3001 },
-            "timeoutSeconds": 30
-        },
-        "hooks": {
-            "postStart": {
-                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:3001"
-            }
-        }
-    }
-    ```
-  </Step>
-</Steps>
-
-## Run Again on WendyOS
-
-Deploy your application to a connected WendyOS device:
+## 2. Deploy and check the response
 
 ```bash
 wendy run
 ```
 
-This builds your application into a container, deploys it to your device, and starts the server.
+Select your target. Wendy builds and deploys the server, checks readiness, and
+opens its URL. Open the address printed by Wendy if the browser does not open.
+The root page should return:
 
-## Verifying Deployment on Your Device
-
-After deploying, verify the app is running by listing the applications on your device:
-
-```bash
-wendy device apps list
-✔︎ Searching for WendyOS devices [5.3s]
-✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
-╭───────────────┬─────────┬─────────┬──────────╮
-│ App           │ Version │ State   │ Failures │
-├───────────────┼─────────┼─────────┼──────────┤
-│ hello-world   │ 0.1.0   │ Running │ 0        │
-╰───────────────┴─────────┴─────────┴──────────╯
+```json
+{"message":"hello-world"}
 ```
 
-<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the hello-world app in the Running state" />
+Use the printed address, including its port. A local VM normally uses a
+forwarded address on your development computer; a physical device uses its own
+address. If the build, connection, or readiness check fails, use
+[first-deployment troubleshooting](/docs/errors).
 
-<Callout type="info">
-  **Expected State**: The app shows as "Running" because it is a long-running HTTP server. The "Failures" column showing `0` confirms it started successfully. Reaching `/` in your browser returns `{"message":"hello-world"}`.
-</Callout>
+## 3. Change the response
 
-## Next Steps
+In `app.py`, find the function decorated with `@app.get("/")`. Change its return
+value to:
 
-Now that you have a basic Python application running:
+```python
+return {"message": "Hello from my device"}
+```
 
-- Learn how to build a [Simple Web Server](/docs/guides/tutorials/python/simple-web-server) with FastAPI
-- Explore WendyOS libraries for hardware access
-- Build more complex applications with user input and data processing
+Stop the attached CLI with Ctrl+C, then start the watch loop:
 
-<Accordions>
-  <Accordion title="Testing the app on your own machine">
-    There are times when you might not have a WendyOS device around. You can still test your application locally using Python or Docker.
+```bash
+wendy run --watch
+```
 
-    ### Using Python Directly
+Refresh the browser and check for the new message. Further edits trigger a
+rebuild and deployment when you save. This verifies that your source change
+reached the target.
 
-    The app has no `__main__` block, so run it with `uvicorn`. Install the dependencies first:
+## Finish or continue
 
-    ```bash
-    pip install fastapi "uvicorn[standard]"
-    uvicorn app:app --host 0.0.0.0 --port 3001
-    ```
+Ctrl+C ends the attached CLI session. To stop the deployed app, run:
 
-    You should see output indicating the server has started:
+```bash
+wendy device apps stop hello-world
+```
 
-    ```
-    INFO:     Started server process [12345]
-    INFO:     Waiting for application startup.
-    Server running on localhost:3001
-    INFO:     Application startup complete.
-    INFO:     Uvicorn running on http://0.0.0.0:3001 (Press CTRL+C to quit)
-    ```
+If you used a VM and are finished with it, find its name with `wendy vm list`
+and stop it with `wendy vm stop <name>`.
 
-    In another terminal, hit the root route:
-
-    ```bash
-    curl http://localhost:3001
-    ```
-
-    You should see:
-
-    ```json
-    {"message":"hello-world"}
-    ```
-
-    ### Using Docker Locally
-
-    Build and run your application in a Docker container:
-
-    ```bash
-    docker build -t hello-world .
-    docker run -p 3001:3001 hello-world
-    ```
-
-    Then visit `http://localhost:3001` in your browser or use `curl` as above.
-  </Accordion>
-</Accordions>
+Keep this project for the next tutorial: [add an endpoint that validates input
+and calculates a result](/docs/guides/tutorials/python/simple-web-server).
