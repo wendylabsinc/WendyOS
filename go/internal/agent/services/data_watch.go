@@ -298,7 +298,7 @@ func (s *DataService) removeDocumentTreeLocked(kind, name string) ([]string, err
 	}
 	ref := kind + "/" + name
 	var removed []string
-	for _, ownedKind := range []string{data.KindInference, data.KindWatch} {
+	for _, ownedKind := range data.OwnableKinds() {
 		documents, err := s.manager.Documents(ownedKind)
 		if err != nil {
 			return removed, err
@@ -381,7 +381,7 @@ func (s *DataService) sweepLeasedDocuments() {
 			}
 		}
 	}
-	for _, kind := range []string{data.KindInference, data.KindWatch} {
+	for _, kind := range data.OwnableKinds() {
 		documents, err := s.manager.Documents(kind)
 		if err != nil {
 			s.manager.Warnf("reading %s documents for the boot sweep: %v", kind, err)

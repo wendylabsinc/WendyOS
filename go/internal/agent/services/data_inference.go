@@ -139,6 +139,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 			wanted[campaignJobKey(campaign.Name)] = wantedInference{campaign: campaign}
 		}
 	}
+	// This loop is the runner for inference documents (documentKindHandlers).
 	documents, err := m.service.manager.Documents(data.KindInference)
 	documentsKnown := err == nil
 	if err != nil {

@@ -186,3 +186,9 @@ func TestDecodeStrictReadsHeaderFieldsAndRejectsUnknownKeys(t *testing.T) {
 		t.Fatalf("unknown key: %v", err)
 	}
 }
+
+func TestOwnableKindsAreTheOwnableOnesSorted(t *testing.T) {
+	if got := strings.Join(testRegistry(nil).OwnableKinds(), ","); got != "inference,watch" {
+		t.Fatalf("OwnableKinds() = %s", got)
+	}
+}

@@ -111,6 +111,17 @@ func (r *Registry) Kinds() []string {
 	return names
 }
 
+// OwnableKinds returns the names of the kinds that may have an owner, sorted.
+func (r *Registry) OwnableKinds() []string {
+	var names []string
+	for _, name := range r.Kinds() {
+		if r.kinds[name].Ownable {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 // ValidName reports whether name may name a document: 1 to 128 letters,
@@ -225,12 +236,7 @@ func (r *Registry) checkOwner(kind Kind, header Header) error {
 	if !kind.Ownable {
 		return fmt.Errorf("%s documents cannot have an owner", kind.Name)
 	}
-	var ownable []string
-	for _, name := range r.Kinds() {
-		if r.kinds[name].Ownable {
-			ownable = append(ownable, name)
-		}
-	}
+	ownable := r.OwnableKinds()
 	invalid := fmt.Errorf("owner %q must be <kind>/<name> naming a document of kind %s", header.Owner, strings.Join(ownable, " or "))
 	ownerKind, ownerName, found := strings.Cut(header.Owner, "/")
 	if !found || !slices.Contains(ownable, ownerKind) || !nameRE.MatchString(ownerName) {
