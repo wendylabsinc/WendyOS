@@ -33,11 +33,7 @@ func inferenceJobKey(name string) string { return "inference/" + name }
 // wantedInference is one job a reconcile pass wants running.
 type wantedInference struct {
 	campaign data.Campaign
-	document bool
-	// ownerRef is a document's owner reference, or empty.
-	ownerRef string
-	// private marks an inference a leased watch owns; see ownedByLeasedWatch.
-	private bool
+	mode     inferenceMode
 }
 
 type campaignInferenceManager struct {
@@ -56,16 +52,11 @@ type campaignInferenceManager struct {
 
 type campaignInferenceJob struct {
 	owner *campaignInferenceManager
-	// key is the job's key in jobs; document marks an inference document's job:
-	// no campaign capture, no campaign notifications.
-	key      string
-	document bool
-	ownerRef string
-	// private keeps the job's events off the shared device-event journal.
-	private bool
-	// audience is a document job's current record audience, replaced (never
-	// mutated) under mu by run and read by the stream goroutines.
-	audience       map[string]bool
+	// key is the job's key in jobs.
+	key string
+	// mode is what differs between inline campaign inference and an inference
+	// document (data_inference_modes.go).
+	mode           inferenceMode
 	campaign       data.Campaign
 	cancel         context.CancelFunc
 	done           chan struct{}
@@ -136,7 +127,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 	wanted := map[string]wantedInference{}
 	for _, campaign := range campaigns {
 		if campaign.State == "armed" && (campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
-			wanted[campaignJobKey(campaign.Name)] = wantedInference{campaign: campaign}
+			wanted[campaignJobKey(campaign.Name)] = wantedInference{campaign: campaign, mode: campaignInference{}}
 		}
 	}
 	// This loop is the runner for inference documents (documentKindHandlers).
@@ -152,7 +143,8 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 			continue
 		}
 		if document.IsEnabled() {
-			wanted[inferenceJobKey(stored.Name)] = wantedInference{campaign: document.Campaign(stored.Revision), document: true, ownerRef: document.Owner, private: m.ownedByLeasedWatch(document.Owner)}
+			mode := &documentInference{ownerRef: document.Owner, private: m.ownedByLeasedWatch(document.Owner)}
+			wanted[inferenceJobKey(stored.Name)] = wantedInference{campaign: document.Campaign(stored.Revision), mode: mode}
 		}
 	}
 	m.mu.Lock()
@@ -163,7 +155,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 			continue
 		}
 		// An unreadable document directory is not a removal.
-		if !ok && job.document && !documentsKnown {
+		if _, document := job.mode.(*documentInference); !ok && document && !documentsKnown {
 			continue
 		}
 		job.cancel()
@@ -185,7 +177,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 			continue
 		}
 		child, cancel := context.WithCancel(ctx)
-		job := &campaignInferenceJob{owner: m, key: key, document: want.document, ownerRef: want.ownerRef, private: want.private, campaign: want.campaign, cancel: cancel, done: make(chan struct{}), queue: make(chan DetectionNotification, 16), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
+		job := &campaignInferenceJob{owner: m, key: key, mode: want.mode, campaign: want.campaign, cancel: cancel, done: make(chan struct{}), queue: make(chan DetectionNotification, 16), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
 		m.jobs[key] = job
 		go job.supervise(child)
 	}
@@ -297,10 +289,7 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 			return
 		}
 		j.setState("error", err)
-		what := "campaign"
-		if j.document {
-			what = "inference document"
-		}
+		what := j.mode.noun()
 		var startFailure inferenceStartError
 		switch {
 		case !errors.As(err, &startFailure):
@@ -355,16 +344,8 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 		}
 	}()
 	presence := map[string]*inferencePresence{}
-	// The collections whose episodes an inference document's records may
-	// reach, refreshed with the cameras on every pass (spec §7.3).
-	var audience map[string]bool
 	reconcile := func() {
-		if j.document {
-			audience = j.owner.service.collectionsTriggeredBy(j.campaign.Inference.Event)
-			j.mu.Lock()
-			j.audience = audience
-			j.mu.Unlock()
-		}
+		j.mode.refresh(j)
 		ids, _, _, resolveErr := j.owner.service.manager.ResolveCampaignSources(j.campaign)
 		selected := map[string]bool{}
 		if resolveErr == nil {
@@ -413,10 +394,8 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 		} else {
 			j.setState("running", nil)
 		}
-		if changed && !j.document {
-			if _, active := j.owner.service.manager.ActiveSession(j.campaign.Name); !active {
-				j.owner.service.armCampaign(j.campaign)
-			}
+		if changed {
+			j.mode.camerasAdded(j)
 		}
 	}
 	reconcile()
@@ -461,31 +440,7 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				return err
 			}
 			j.sourceState(result.SourceID, "detecting")
-			if j.document {
-				j.documentResult(presence[result.SourceID], result, detections, audience)
-				continue
-			}
-			attributes := j.predictionAttributes("campaign", result, detections)
-			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
-			if _, err := j.owner.service.manager.RecordCampaignApplication(j.appID(), record); err != nil {
-				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
-			}
-			state := presence[result.SourceID]
-			if state == nil || !state.observe(len(detections) > 0, time.Now(), j.campaign.Inference) {
-				continue
-			}
-			record.Type, record.Name = "event", j.campaign.Inference.Event
-			accepted, triggerErr := j.owner.service.triggerInference(ctx, j.campaign, record)
-			if !accepted {
-				continue
-			}
-			if triggerErr != nil {
-				j.owner.service.manager.Warnf("campaign %q detection could not start an episode: %v", j.campaign.Name, triggerErr)
-			}
-			if j.campaign.Notify != nil && (j.campaign.Notify.On == data.NotifyOnDetection || j.campaign.Notify.On == data.NotifyOnEvent && j.campaign.Notify.Event == record.Name) {
-				request := detectionNotification(j.campaign, result.SourceID, detections)
-				j.enqueueNotification(request)
-			}
+			j.mode.result(ctx, j, presence[result.SourceID], result, detections)
 		}
 	}
 }
@@ -516,10 +471,10 @@ func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Ses
 				if err != nil {
 					break
 				}
-				if j.ownerLapsed() {
+				if j.mode.paused(j) {
 					continue
 				}
-				if err := j.owner.service.manager.RecordModelInputFor(data.ModelInput{AppID: j.appID(), Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}, j.modelInputAudience()); err != nil {
+				if err := j.owner.service.manager.RecordModelInputFor(data.ModelInput{AppID: j.appID(), Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}, j.mode.modelInputAudience()); err != nil {
 					j.owner.service.manager.Warnf("recording campaign model input: %v", err)
 				}
 			}
@@ -628,66 +583,8 @@ func (j *campaignInferenceJob) predictionAttributes(ownerField string, result in
 	return attributes
 }
 
-// documentResult handles one scored frame of an inference document (spec
-// §7.3). An arrival reaches watches first; the records go only to the
-// collections that trigger on its event, and storing them never holds up a
-// notification: watches are told before anything is written.
-func (j *campaignInferenceJob) documentResult(state *inferencePresence, result inference.Result, detections []inference.Detection, audience map[string]bool) {
-	if j.ownerLapsed() {
-		return
-	}
-	service := j.owner.service
-	appID := j.appID()
-	sourceID := result.SourceID
-	attributes := j.predictionAttributes("inference", result, detections)
-	record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
-	arrival := state != nil && state.observe(len(detections) > 0, time.Now(), j.campaign.Inference)
-	// Watches are told first: the record writes below take the manager lock,
-	// which can queue behind a seal.
-	if arrival && service.watches != nil {
-		service.watches.deliver(j.campaign.Name, inferenceNotification(j.campaign, sourceID, detections))
-	}
-	if _, err := service.manager.RecordApplicationFor(appID, record, audience, false, j.private); err != nil {
-		service.manager.Warnf("inference %q prediction: %v", j.campaign.Name, err)
-	}
-	if !arrival {
-		return
-	}
-	record.Type, record.Name = "event", j.campaign.Inference.Event
-	if _, err := service.manager.RecordApplicationFor(appID, record, audience, true, j.private); err != nil {
-		service.manager.Warnf("inference %q event: %v", j.campaign.Name, err)
-	}
-}
-
-// ownerLapsed reports whether the job belongs to a watch whose lease has
-// lapsed. The watch may live a few seconds longer, until the expiry pass, but
-// its client has lost it, so the job writes nothing meanwhile (spec §6.3).
-func (j *campaignInferenceJob) ownerLapsed() bool {
-	name, ok := strings.CutPrefix(j.ownerRef, "watch/")
-	return j.document && ok && j.owner.service.leases.lapsed(name)
-}
-
 // appID is the application id every record of this job carries.
-func (j *campaignInferenceJob) appID() string {
-	if j.document {
-		return inferenceAppPrefix + j.campaign.Name
-	}
-	return data.CampaignAppID(j.campaign.Name)
-}
-
-// modelInputAudience is the episodes this job's model inputs may reach: all of
-// them for a campaign (nil), the document's collections for a document.
-func (j *campaignInferenceJob) modelInputAudience() map[string]bool {
-	if !j.document {
-		return nil
-	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.audience == nil {
-		return map[string]bool{}
-	}
-	return j.audience
-}
+func (j *campaignInferenceJob) appID() string { return j.mode.appID(j.campaign.Name) }
 
 // collectionsTriggeredBy names the armed collections whose capture triggers
 // include event: the only episodes an inference document's records reach.
