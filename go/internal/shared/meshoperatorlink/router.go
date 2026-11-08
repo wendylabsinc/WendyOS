@@ -107,7 +107,9 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 
 // AcceptRouter admits a real primary operator as a Babel neighbour. No caller
 // supplies a fake enrolled device or a first-hop route offer.
-func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, agent func(context.Context, net.Conn) error) (_ *RouterLink, err error) {
+// An optional issuer completer supports known-CA TLS presentations while
+// retaining the original primary trust, role, tenant and validity checks.
+func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
 	stop, err := routerBegin(ctx, c)
 	if err != nil {
 		return nil, err
@@ -120,11 +122,23 @@ func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 		}
 	}()
 	s := c.ConnectionState()
-	chain := make([][]byte, len(s.PeerCertificates))
-	for i, p := range s.PeerCertificates {
+	if len(candidates) > 1 || len(s.PeerCertificates) == 0 || len(s.PeerCertificates) > 16 {
+		return nil, errors.New("the router returned an invalid TLS certificate bundle")
+	}
+	var complete IssuerCandidates
+	if len(candidates) == 1 {
+		complete = candidates[0]
+	}
+	now := time.Now()
+	certificates, err := completePeerCertificates(s.PeerCertificates, complete, now)
+	if err != nil {
+		return nil, err
+	}
+	chain := make([][]byte, len(certificates))
+	for i, p := range certificates {
 		chain[i] = p.Raw
 	}
-	identity, err := meshoperator.VerifyPrimary(chain, roots, tenant, time.Now())
+	identity, err := meshoperator.VerifyPrimary(chain, roots, tenant, now)
 	if err != nil {
 		return nil, err
 	}
