@@ -382,6 +382,14 @@ final class DesktopTests: XCTestCase {
         XCTAssertFalse(failure.message.contains("identity"))
     }
 
+    func testVP8CameraExplainsWhatToChange() {
+        let raw = "This device sends VP8 video, which the Wendy app cannot play yet. Update the device’s Wendy agent, or install gstreamer1.0-plugins-bad on it."
+        let failure = PresentedFailure(raw)
+        XCTAssertTrue(failure.message.contains("VP8"))
+        XCTAssertTrue(failure.message.contains("gstreamer1.0-plugins-bad"))
+        XCTAssertFalse(ConnectionRecovery.canRetry(raw))
+    }
+
     func testChangedIdentityHasActionableExplanation() {
         let failure = PresentedFailure("Connection blocked: device ci-iq8.local identity changed.")
         XCTAssertTrue(failure.message.contains("forget its saved identity"))
