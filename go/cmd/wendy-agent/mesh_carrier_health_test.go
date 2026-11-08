@@ -57,6 +57,27 @@ func TestCarrierPartialFailureTCPOnlyAndSharingError(t *testing.T) {
 	}
 }
 
+func TestReadyBLEIsActiveWhileLANHasNoEligibleInterface(t *testing.T) {
+	var h meshCarrierHealth
+	epoch := h.begin("wifi-ble", []string{"BLE", "LAN"})
+	sharing := services.LocalMeshRuntimeStatus{Available: true, State: "roaming", AuthenticatedPeers: 2, GatewayPrincipal: "verified-donor"}
+	h.report(epoch, "LAN", localmesh.CarrierStatus{Detail: "waiting for an eligible LAN interface"})
+	if state := h.status(sharing); state.State != "initializing" {
+		t.Fatalf("no carrier is ready yet: %+v", state)
+	}
+	h.report(epoch, "BLE", localmesh.CarrierStatus{Ready: true})
+	state := h.status(sharing)
+	if state.State != "mesh-active" || state.AuthenticatedPeers != 2 || state.GatewayPrincipal != sharing.GatewayPrincipal ||
+		!strings.Contains(state.Detail, "BLE: ready") || !strings.Contains(state.Detail, "LAN: initializing (waiting for an eligible LAN interface)") {
+		t.Fatalf("working BLE was hidden by a missing LAN interface: %+v", state)
+	}
+	// A real error is still degraded, even though the BLE data path works.
+	h.report(epoch, "LAN", localmesh.CarrierStatus{Err: errors.New("listener bind failed")})
+	if state := h.status(sharing); state.State != "degraded" {
+		t.Fatalf("LAN failure was hidden by ready BLE: %+v", state)
+	}
+}
+
 func TestCarrierDisableRejectsStaleNotifications(t *testing.T) {
 	var h meshCarrierHealth
 	old := h.begin("nan", []string{"NAN"})

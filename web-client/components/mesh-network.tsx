@@ -29,6 +29,7 @@ import {
   nodeState,
   routeState,
   type MeshDevice,
+  type MeshCloudNames,
   type MeshGroup,
   type MeshNode,
   type MeshObservation,
@@ -38,7 +39,7 @@ import {
 import styles from "./mesh-network.module.css";
 
 export type MeshDataSource = {
-  discover: () => Promise<{ devices: MeshDevice[]; warnings: string[]; retainPrevious?: boolean }>;
+  discover: () => Promise<{ devices: MeshDevice[]; warnings: string[]; retainPrevious?: boolean; cloudNames?: MeshCloudNames }>;
   read: (id: string) => Promise<MeshResult>;
 };
 
@@ -85,7 +86,7 @@ export default function MeshNetwork({
         try {
           const inventory = await source.discover();
           if (controller.signal.aborted) return;
-          const reporters = mergeMeshInventory(inventoryDevices.current, inventory.devices, inventory.retainPrevious);
+          const reporters = mergeMeshInventory(inventoryDevices.current, inventory.devices, inventory.retainPrevious, inventory.cloudNames);
           inventoryDevices.current = reporters;
           setDevices(reporters);
           setWarnings(inventory.warnings);
