@@ -368,3 +368,37 @@ func TestInferenceAcceleratorKeepsExistingRevisions(t *testing.T) {
 		revisions[campaign.Revision] = true
 	}
 }
+
+// A label reaches watch notifications and, through them, chat prompts, so it
+// must be printable text. Labels in other scripts still pass.
+func TestInferenceLabelsMustBePrintable(t *testing.T) {
+	raw := string(peopleCampaign(t))
+	for _, labels := range []string{`["per\nson"]`, `["person\u0000"]`, `["a\tb"]`, `["\u001b[31mred"]`, `["\u0085x"]`} {
+		t.Run(labels, func(t *testing.T) {
+			_, err := ParseCampaign([]byte(strings.ReplaceAll(raw, "labels: [person]", "labels: "+labels)))
+			if err == nil || !strings.Contains(err.Error(), "control characters") {
+				t.Fatalf("labels %s: %v", labels, err)
+			}
+		})
+	}
+	for _, labels := range []string{`["traffic light"]`, `["人"]`, `["کتاب‌خانه"]`, `["café"]`} {
+		withLabels := strings.ReplaceAll(raw, "labels: [person]", "labels: "+labels)
+		if _, err := ParseCampaign([]byte(withLabels)); err != nil && strings.Contains(err.Error(), "labels") {
+			t.Fatalf("labels %s refused: %v", labels, err)
+		}
+	}
+	inference := strings.ReplaceAll(testInferenceDocument, "labels: [person]", `labels: ["per\nson"]`)
+	if _, err := ParseDocument([]byte(inference)); err == nil || !strings.Contains(err.Error(), "control characters") {
+		t.Fatalf("inference document with a newline in a label: %v", err)
+	}
+}
+
+// Stored plans are read without being validated again, so a stricter label
+// rule never makes one that is already on a device unreadable.
+func TestStoredInferenceDocumentIsReadWithoutValidation(t *testing.T) {
+	stored := StoredDocument{Kind: KindInference, Name: "old", Body: json.RawMessage(`{"labels":["per\nson"]}`)}
+	document, err := stored.Inference()
+	if err != nil || len(document.Labels) != 1 {
+		t.Fatalf("stored document = %+v, %v", document, err)
+	}
+}

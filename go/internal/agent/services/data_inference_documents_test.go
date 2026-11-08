@@ -330,3 +330,40 @@ func TestLeasedWatchesInferenceKeepsItsEventsOffTheDeviceEventJournal(t *testing
 		t.Fatalf("device events = %v; want only the unleased watch's inference", apps)
 	}
 }
+
+// An inference document directory that cannot be read is not a removal: the
+// running document jobs stay.
+func TestUnreadableInferenceDocumentsKeepTheirJobs(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "episodes")
+	manager, err := data.NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewDataService(manager)
+	service.addAdapter(&inferenceTestAdapter{sources: []data.Source{{ID: "v4l2:/dev/video0", Kind: "camera", Healthy: true}}})
+	service.video = inferenceTestVideo{}
+	factory := &inferenceTestFactory{sessions: make(chan *inferenceTestSession, 8)}
+	startDocumentTestService(t, service, factory, &inferenceTestSender{requests: make(chan DetectionNotification, 8)})
+	saveDocument(t, service, testInferenceDocumentYAML)
+	session := receiveInference(t, factory.sessions)
+	dir := filepath.Join(filepath.Dir(root), "documents", data.KindInference)
+	if _, err := os.Stat(filepath.Join(dir, "front-door.json")); err != nil {
+		t.Fatalf("documents are not where this test looks: %v", err)
+	}
+	// A file where the directory was fails to list for root too.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.inference.reconcileNow()
+	select {
+	case <-session.closed:
+		t.Fatal("an unreadable document directory retired the job")
+	default:
+	}
+	if !service.inference.inferenceActive(inferenceJobKey("front-door")) {
+		t.Fatal("the document's job is not active")
+	}
+}
