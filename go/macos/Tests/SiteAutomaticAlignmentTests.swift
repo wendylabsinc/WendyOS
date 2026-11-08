@@ -50,41 +50,21 @@ import SwiftUI
         .init(gray: Data(), width: 640, height: 480, received: Date(timeIntervalSince1970: Double(sequence)), sequence: sequence, codec: "JPEG")
     }
 
-    @Test func approximatePositionStillRequiresTwoConsistentFrames() throws {
-        let first = result(measured: false)
-        var second = first
-        second.pose.position.x = 0.2
-        second.residual = 3
-        let verified = try SiteAlignmentValidation.verified(first, by: second, first: frame(1), second: frame(2))
-        #expect(verified.pose.position.x == 0.2)
-        #expect(verified.inliers == 8 && verified.residual == 3)
-        second.pose.position.x = 0.31
-        #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(first, by: second, first: frame(1), second: frame(2)) }
-        second = first
-        let angle = 11.0 * Double.pi / 180
-        second.pose.rotation = .init(0, sin(angle / 2), 0, cos(angle / 2))
-        #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(first, by: second, first: frame(1), second: frame(2)) }
-    }
-
-    @Test func measuredPositionKeepsStricterMovementLimit() {
-        let first = result(measured: true)
-        var second = first
-        second.pose.position.x = 0.09
-        #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(first, by: second, first: frame(1), second: frame(2)) }
-    }
-
-    @Test func repeatedFramesAndCaptureChangesCannotVerifyPosition() {
-        let solution = result(measured: false)
-        let first = frame(1)
-        var second = frame(2)
-        second.sequence = first.sequence
-        #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(solution, by: solution, first: first, second: second) }
-        second = frame(2); second.width = 320
-        #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(solution, by: solution, first: first, second: second) }
-        second = frame(2); second.codec = "H.264"
-        #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(solution, by: solution, first: first, second: second) }
-        second = frame(2); second.received = first.received
-        #expect(throws: (any Error).self) { try SiteAlignmentValidation.verified(solution, by: solution, first: first, second: second) }
+    // Geometry thresholds, capture-mode checks and two-frame agreement are
+    // tested in internal/twinvision and internal/twin, where they now execute.
+    @MainActor @Test func cameraRequestPreservesCaptureModeAndPixels() throws {
+        var sample = frame(7)
+        sample.gray = Data([16, 128, 235]); sample.codec = "H.264"
+        sample.received = Date()
+        let request = SiteCameraAlignment.Command(operation: "begin", roomFrame: "room/revision",
+            camera: "camera", frame: SiteCameraAlignment.Frame(sample))
+        let data = try JSONEncoder().encode(request)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let image = try #require(json["frame"] as? [String: Any])
+        #expect(image["codec"] as? String == "H.264")
+        #expect(image["sequence"] as? Int == 7)
+        #expect(image["gray"] as? String == sample.gray.base64EncodedString())
+        #expect(json["roomFrame"] as? String == "room/revision")
     }
 
     @Test func ambiguousNativeFitIsDisplayOnly() throws {
