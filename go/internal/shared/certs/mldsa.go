@@ -79,7 +79,7 @@ func (e *IdentityMismatchError) Error() string {
 // PinChecker is satisfied by *devicepin.Store. Defined here as an interface
 // so shared/certs does not import shared/devicepin (which would be circular).
 // Call CheckAndUpdate only after verifying the chain and expected identity.
-// The default store records key rotations for that authenticated identity.
+// The default store accepts rotations and rejects older keys for that identity.
 type PinChecker interface {
 	CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 }
@@ -87,7 +87,7 @@ type PinChecker interface {
 // BlockingPinError marks a PinChecker rejection of the peer that must fail the
 // TLS handshake. Local persistence errors do not implement this interface and
 // cannot reject an otherwise verified connection. The default devicepin.Store
-// accepts key rotations, but other PinChecker implementations may reject peers.
+// rejects a changed key when its certificate predates the stored issuance time.
 type BlockingPinError interface {
 	error
 	// BlockingPinRejection distinguishes this error from a persistence
@@ -364,8 +364,8 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			}
 		}
 
-		// Step 3: record the verified device certificate. Custom pin checkers
-		// can reject the peer with BlockingPinError. Local write failures do
+		// Step 3: check and record the verified device certificate. Pin checkers
+		// reject the peer with BlockingPinError on rollback. Local write failures do
 		// not reject an otherwise verified connection.
 		if opts.PinStore != nil && hasIdentity && identity.EntityType == EntityAsset {
 			displayName := leaf.Subject.CommonName

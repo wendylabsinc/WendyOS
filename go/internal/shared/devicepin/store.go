@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -29,13 +30,13 @@ const storeLockTimeout = 2 * time.Second
 type PinnedDevice struct {
 	SPKIFingerprint string `json:"spkiFingerprint"` // "sha256:<hex>"
 	DisplayName     string `json:"displayName"`
-	LastSeen        string `json:"lastSeen"`           // RFC3339
-	NotAfter        string `json:"notAfter,omitempty"` // RFC3339; pinned leaf's expiry
+	LastSeen        string `json:"lastSeen"`            // RFC3339
+	NotBefore       string `json:"notBefore,omitempty"` // RFC3339; latest accepted issuance time
+	NotAfter        string `json:"notAfter,omitempty"`  // RFC3339; pinned leaf's expiry
 }
 
-// PinMismatchError represents a public-key pin rejection. It remains available
-// to callers that report pin failures, but Store.CheckAndUpdate no longer emits
-// it: a verified device identity can rotate keys before its certificate expires.
+// PinMismatchError rejects a changed key whose certificate predates the latest
+// accepted issuance time for this identity.
 type PinMismatchError struct {
 	Key         string
 	DisplayName string
@@ -44,7 +45,7 @@ type PinMismatchError struct {
 }
 
 func (e *PinMismatchError) Error() string {
-	return fmt.Sprintf("device %q (%s) presented a different certificate key than pinned (pinned %s, now %s)",
+	return fmt.Sprintf("device %q (%s) presented an older certificate with a different key than pinned (pinned %s, now %s)",
 		e.DisplayName, e.Key, e.Want, e.Got)
 }
 
@@ -106,14 +107,15 @@ func readPinFile(path string) (devices map[string]PinnedDevice, parsed bool, err
 // device; those bindings belong to the caller's identity checks.
 //
 // Key changes for an authenticated identity are accepted even while the previous
-// certificate is valid. Renewals normally overlap the previous validity window,
-// and certificate rotation may also replace the key. The fingerprint and expiry
-// remain diagnostic metadata, not an additional trust anchor.
+// certificate is valid, provided the new leaf's NotBefore is not older than the
+// stored issuance time. Older keys return PinMismatchError without changing the
+// record. A same-key certificate cannot lower the stored issuance time. Legacy
+// records without NotBefore learn it on the next verified connection.
 //
 // Non-asset certificates are skipped. Write errors do not implement
 // certs.BlockingPinError and must not reject an otherwise verified connection.
 // Unchanged entries refresh LastSeen in memory without writing the file; changes
-// to the key, expiry, or display name are persisted.
+// to the key, issuance time, expiry, or display name are persisted.
 func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error {
 	identity, ok, err := certs.IdentityFromCert(leaf)
 	if err != nil || !ok || identity.EntityType != certs.EntityAsset {
@@ -121,27 +123,46 @@ func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 	}
 
 	key := identity.IdentityKey()
-	// A verified transitional leaf carries both the legacy URN and the SPIFFE
-	// principal. Move the record to the principal so an unpin still removes it.
+	existing, pinned := s.devices[key]
+	// Check a legacy record before migrating it, so rejection changes neither
+	// the in-memory map nor the persisted identity keys.
+	legacy := identity.LegacyURN()
 	renamed := false
-	if legacy := identity.LegacyURN(); key != legacy && legacy != "" {
-		if _, pinnedNow := s.devices[key]; !pinnedNow {
-			if prior, hadLegacy := s.devices[legacy]; hadLegacy {
-				s.devices[key] = prior
-				delete(s.devices, legacy)
-				s.dirty[legacy] = true
-				renamed = true
-			}
-		}
+	if !pinned && key != legacy && legacy != "" {
+		existing, pinned = s.devices[legacy]
+		renamed = pinned
 	}
 	fingerprint := spkiFingerprint(leaf)
+	notBefore := leaf.NotBefore.UTC().Format(time.RFC3339)
 	notAfter := leaf.NotAfter.UTC().Format(time.RFC3339)
-
-	existing, pinned := s.devices[key]
+	keyChanged := pinned && existing.SPKIFingerprint != fingerprint
+	if previous, err := time.Parse(time.RFC3339, existing.NotBefore); err == nil && leaf.NotBefore.Before(previous) {
+		if keyChanged {
+			// Recovery must unpin the record that still exists, since a
+			// rejected transitional certificate has not migrated it yet.
+			pinnedKey := key
+			if renamed {
+				pinnedKey = legacy
+			}
+			return &PinMismatchError{Key: pinnedKey, DisplayName: displayName, Want: existing.SPKIFingerprint, Got: fingerprint}
+		}
+		// Replaying an older certificate with the current key must not lower
+		// the threshold for a later key change.
+		notBefore = existing.NotBefore
+	}
+	if renamed {
+		delete(s.devices, legacy)
+		s.dirty[legacy] = true
+	}
+	if keyChanged {
+		slog.Info("device certificate key rotated", "identity", key,
+			"old_fingerprint", existing.SPKIFingerprint, "new_fingerprint", fingerprint)
+	}
 
 	unchanged := pinned && !renamed &&
 		existing.SPKIFingerprint == fingerprint &&
 		existing.NotAfter == notAfter &&
+		existing.NotBefore == notBefore &&
 		existing.DisplayName == displayName
 
 	s.devices[key] = PinnedDevice{
@@ -149,6 +170,7 @@ func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 		DisplayName:     displayName,
 		LastSeen:        time.Now().UTC().Format(time.RFC3339),
 		NotAfter:        notAfter,
+		NotBefore:       notBefore,
 	}
 	if unchanged {
 		return nil

@@ -926,8 +926,8 @@ func describeAddrFamilies(v4, v6 int) string {
 
 // spkiRefusal renders the OTHER pin's rejection: the SPKI store's, which is
 // keyed by the certificate's own asset URN rather than by hostname and fires
-// when a device's public key changes while its pinned certificate is still
-// valid.
+// when a changed public key comes from a certificate older than the stored
+// issuance time.
 //
 // Without this the store's PinMismatchError reached the user only as whatever
 // text survived gRPC's handshake wrapper — a message that names neither the
@@ -958,7 +958,7 @@ func spkiRefusal(pinKey string, pm *devicepin.PinMismatchError) error {
 		unpinArg = named
 	}
 	refusal := refuseIdentity(
-		"device %q presented a different certificate key than the one pinned for %s (pinned %s, now %s); refusing to connect — if its certificate was legitimately reissued, run 'wendy device unpin %s'",
+		"device %q presented an older certificate with a different key than the one pinned for %s (pinned %s, now %s); refusing to connect. If you intentionally restored its old certificate, run 'wendy device unpin %s'",
 		named, pm.Key, pm.Want, pm.Got, unpinArg)
 	refusal.cause = pm
 	return refusal
