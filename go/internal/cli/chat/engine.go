@@ -70,7 +70,40 @@ func cloneMessages(messages []Message) []Message {
 	return out
 }
 
+// ToolRefusal is an error an ApproveFunc returns to decline a call without
+// asking anyone. The model gets Reason as the call's result and the turn goes
+// on, as it does after a denial.
+type ToolRefusal struct{ Reason string }
+
+func (r *ToolRefusal) Error() string { return r.Reason }
+
+// TurnOptions changes how one turn runs.
+type TurnOptions struct {
+	// SkipMemory turns off memory recall and learning for the turn. Use it for
+	// text that is not a statement from the user, such as a watch's report.
+	SkipMemory bool
+	// UnattendedRefusal, when set, makes the turn one nobody is present for,
+	// such as one a watch report started. Only tools marked Unattended run;
+	// every other call, whoever provides the tool and whether or not it needs
+	// approval, gets this text as its result without asking the approver. The
+	// turn's Wendy MCP calls are also marked read-only (ReadOnlyCallMeta), so
+	// the device refuses any write a mismarked tool would make. It applies to
+	// delegated children too.
+	UnattendedRefusal string
+}
+
+// unattendedTurn reports whether ctx belongs to a turn nobody is present for:
+// one run with TurnOptions.UnattendedRefusal, or a child it delegated to.
+func unattendedTurn(ctx context.Context) bool {
+	runtime, _ := ctx.Value(turnRuntimeKey{}).(*turnRuntime)
+	return runtime != nil && runtime.unattendedRefusal != ""
+}
+
 func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), approve ApproveFunc) error {
+	return e.TurnWithOptions(ctx, prompt, emit, approve, TurnOptions{})
+}
+
+func (e *Engine) TurnWithOptions(ctx context.Context, prompt string, emit func(Event), approve ApproveFunc, opts TurnOptions) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -85,8 +118,13 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 	if emit == nil {
 		emit = func(Event) {}
 	}
-	ctx = context.WithValue(ctx, turnRuntimeKey{}, &turnRuntime{approve: approve, emit: emit, memoryEnabled: e.MemoryEnabled})
-	if e.memory != nil {
+	memoryEnabled := e.MemoryEnabled
+	if opts.SkipMemory {
+		// Children delegated in this turn start without memory.
+		memoryEnabled = func() bool { return false }
+	}
+	ctx = context.WithValue(ctx, turnRuntimeKey{}, &turnRuntime{approve: approve, emit: emit, memoryEnabled: memoryEnabled, skipMemory: opts.SkipMemory, unattendedRefusal: opts.UnattendedRefusal})
+	if e.memory != nil && !opts.SkipMemory {
 		e.memory.beginTurn()
 		defer e.learnMemory(ctx, prompt, emit)
 	}
@@ -114,7 +152,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		if e.memory != nil {
 			messages = e.refreshMemoryHistory(ctx, messages)
 		}
-		if e.MemoryEnabled() {
+		if !opts.SkipMemory && e.MemoryEnabled() {
 			var recallErr error
 			messages, recallErr = e.recallMemory(ctx, prompt, messages)
 			if recallErr != nil && !memoryWarned {
@@ -195,9 +233,15 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 				result = "Tool error: " + validation[i].Error()
 			default:
 				allowed := !byName[call.Name].RequiresApproval
-				if !allowed && approve != nil {
+				var refusal *ToolRefusal
+				if opts.UnattendedRefusal != "" && !byName[call.Name].Unattended {
+					allowed, refusal = false, &ToolRefusal{Reason: opts.UnattendedRefusal}
+				} else if !allowed && approve != nil {
 					emit(Event{Type: "status", Text: "Waiting for approval…", Call: &call})
 					allowed, turnErr = approve(ctx, call)
+					if errors.As(turnErr, &refusal) {
+						allowed, turnErr = false, nil
+					}
 				}
 				switch {
 				case turnErr != nil:
@@ -205,6 +249,8 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 				case ctx.Err() != nil:
 					turnErr = ctx.Err()
 					result = "Tool was not executed because the turn was canceled."
+				case refusal != nil:
+					result = refusal.Reason
 				case !allowed:
 					result = "User denied permission. Tool was not executed; do not retry this action without new user instructions."
 				default:
@@ -220,7 +266,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					if toolErr == nil {
 						images, toolErr = validateImages(output.Images)
 					}
-					if e.memory != nil && ctx.Err() == nil {
+					if e.memory != nil && !opts.SkipMemory && ctx.Err() == nil {
 						e.memory.observe(call, output, toolErr)
 					}
 					if toolErr != nil {

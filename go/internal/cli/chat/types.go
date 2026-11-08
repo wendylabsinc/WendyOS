@@ -50,6 +50,17 @@ type Tool struct {
 	Description      string
 	Parameters       json.RawMessage
 	RequiresApproval bool
+	// AppProvided marks a tool a device app registers through the Wendy MCP
+	// server, named <app>__<tool>. The app sets its own read-only hint, so the
+	// hint cannot be trusted to mean the tool is safe to run unattended.
+	AppProvided bool
+	// Unattended marks a tool that may run in a turn nobody is present for,
+	// such as one a watch report started: calling it changes nothing on the
+	// device, in Cloud or on this computer. Every other tool is refused there
+	// (TurnOptions.UnattendedRefusal). Built-in chat tools set it by hand
+	// (pinned by TestUnattendedChatToolsAreAnExplicitList); a Wendy MCP tool
+	// has it when its read-only hint is set and no device app provides it.
+	Unattended bool
 }
 
 // Provider streams assistant text and returns the complete assistant message,

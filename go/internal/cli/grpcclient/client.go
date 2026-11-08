@@ -26,6 +26,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 )
@@ -66,8 +67,13 @@ const (
 var tlsDebugWriter io.Writer = os.Stderr
 
 type AgentConnection struct {
+	// Conn is the raw channel. Build clients on Client() instead, so a
+	// read-only context (WithReadOnly) is honoured; the service clients below
+	// already are.
 	Conn *grpc.ClientConn
-	Host string // hostname or IP of the connected agent
+	// client is Conn behind the read-only guard.
+	client grpc.ClientConnInterface
+	Host   string // hostname or IP of the connected agent
 	// MeshHost is the device's stable mesh DNS name
 	// (device-<assetID>.mesh.wendy.internal). Cloud transports populate it so
 	// developer-side traffic can use the desktop VPN when it is active instead
@@ -767,29 +773,50 @@ func (c *AgentConnection) PinMismatch() (*devicepin.PinMismatchError, bool) {
 }
 
 func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
+	guarded := guardedConn{conn: conn}
 	return &AgentConnection{
 		Conn:                 conn,
+		client:               guarded,
 		identityMismatch:     new(atomic.Pointer[certs.IdentityMismatchError]),
 		pinMismatch:          new(atomic.Pointer[devicepin.PinMismatchError]),
-		AgentService:         agentpb.NewWendyAgentServiceClient(conn),
-		ContainerService:     agentpb.NewWendyContainerServiceClient(conn),
-		ShellService:         agentpb.NewWendyShellServiceClient(conn),
-		AudioService:         agentpb.NewWendyAudioServiceClient(conn),
-		AudioServiceV2:       agentpbv2.NewWendyAudioServiceClient(conn),
-		VideoService:         agentpb.NewWendyVideoServiceClient(conn),
-		ProvisioningService:  agentpb.NewWendyProvisioningServiceClient(conn),
-		TelemetryService:     agentpb.NewWendyTelemetryServiceClient(conn),
-		FileSyncService:      agentpb.NewWendyFileSyncServiceClient(conn),
-		TimeSyncService:      agentpbv2.NewWendyTimeSyncServiceClient(conn),
-		BuildService:         agentpbv2.NewWendyBuildServiceClient(conn),
-		SensorPairingService: agentpbv2.NewWendySensorPairingServiceClient(conn),
-		UnitreeService:       agentpbv2.NewWendyUnitreeServiceClient(conn),
-		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(conn),
-		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
-		DataService:          agentpbv2.NewDataServiceClient(conn),
+		AgentService:         agentpb.NewWendyAgentServiceClient(guarded),
+		ContainerService:     agentpb.NewWendyContainerServiceClient(guarded),
+		ShellService:         agentpb.NewWendyShellServiceClient(guarded),
+		AudioService:         agentpb.NewWendyAudioServiceClient(guarded),
+		AudioServiceV2:       agentpbv2.NewWendyAudioServiceClient(guarded),
+		VideoService:         agentpb.NewWendyVideoServiceClient(guarded),
+		ProvisioningService:  agentpb.NewWendyProvisioningServiceClient(guarded),
+		TelemetryService:     agentpb.NewWendyTelemetryServiceClient(guarded),
+		FileSyncService:      agentpb.NewWendyFileSyncServiceClient(guarded),
+		TimeSyncService:      agentpbv2.NewWendyTimeSyncServiceClient(guarded),
+		BuildService:         agentpbv2.NewWendyBuildServiceClient(guarded),
+		SensorPairingService: agentpbv2.NewWendySensorPairingServiceClient(guarded),
+		UnitreeService:       agentpbv2.NewWendyUnitreeServiceClient(guarded),
+		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(guarded),
+		DriverService:        agentpbv2.NewWendyDriverServiceClient(guarded),
+		DataService:          agentpbv2.NewDataServiceClient(guarded),
 
-		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(conn),
+		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(guarded),
 	}
+}
+
+// Client is Conn behind the read-only guard: build service clients that the
+// struct does not carry on it.
+func (c *AgentConnection) Client() grpc.ClientConnInterface {
+	if c.client == nil {
+		// A connection assembled without newAgentConnection, as tests do.
+		return guardedConn{conn: c.Conn}
+	}
+	return c.client
+}
+
+// ChannelState is the gRPC channel's state, false when the connection has no
+// channel. It sends nothing to the agent, so it needs no read-only guard.
+func (c *AgentConnection) ChannelState() (connectivity.State, bool) {
+	if c.Conn == nil {
+		return connectivity.Shutdown, false
+	}
+	return c.Conn.GetState(), true
 }
 
 func NewFromConn(conn *grpc.ClientConn) *AgentConnection {
