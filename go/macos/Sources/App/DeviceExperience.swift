@@ -48,7 +48,10 @@ struct DeviceIdentityRow: View {
 }
 
 enum ConnectionRecovery {
+    static func canRetry(_ error: WendyError) -> Bool { error.remedy == .retry }
+    // Legacy setup flows have not yet adopted the bridge failure model.
     static func canRetry(_ message: String) -> Bool {
+        if PresentedFailure(message).offersDeviceSignIn { return false }
         let value = message.lowercased()
         if ["permission", "unauthenticated", "sign in", "certificate", "identity", "pin mismatch", "not supported", "does not support", "update this device", "access denied"].contains(where: value.contains) { return false }
         return ["timeout", "timed out", "deadline", "unavailable", "no route", "network is unreachable", "network is down", "connection refused", "connection reset", "connection ended", "connection closed", "disconnected", "offline", "broken pipe", "startup interrupted", "eof"].contains(where: value.contains)
@@ -59,6 +62,7 @@ struct DeviceConnectionView: View {
     @ObservedObject var model: AppModel
     let device: Device
     @State private var actions = AsyncActions()
+    @Environment(\.openURL) private var openURL
     var body: some View {
         VStack(spacing: 22) {
             #if os(iOS)
@@ -70,13 +74,22 @@ struct DeviceConnectionView: View {
             if let error = model.detailError, !ConnectionRecovery.canRetry(error) {
                 Text(PresentedFailure(error).message).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 if PresentedFailure(error).offersDeviceSignIn {
-                    Button("Sign in to Wendy Cloud") { actions.submit { await model.signIn() } }
+                    Button(model.signingIn ? "Signing in…" : "Sign in again") { actions.submit { await model.signIn() } }
                         .disabled(model.signingIn)
+                }
+                if PresentedFailure(error).offersNetworkSettings {
+                    Button("Open Settings") {
+                        #if os(iOS)
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                        #else
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") { openURL(url) }
+                        #endif
+                    }
                 }
                 if model.canForgetIdentity {
                     Button("Forget saved identity and reconnect") { actions.submit { await model.connect(device, forgetIdentity: true) } }
-                } else {
-                    Button("Check connection") { actions.submit { await model.retryConnection(device) } }
+                } else if !PresentedFailure(error).offersDeviceSignIn {
+                    Button("Try again") { actions.submit { await model.retryConnection(device) } }
                 }
             } else {
                 ProgressView("Connecting…")

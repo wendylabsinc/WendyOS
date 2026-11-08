@@ -20,7 +20,7 @@ struct NativeSiteView: View {
         SiteWorkspace(gatewayID: gatewayID, gatewayAliases: gateway.aliases, feeds: feeds, metadata: displayMetadata, notices: notices,
                       robotSession: model.deviceSession, robotGatewayName: model.connected?.title ?? "this gateway", controls: {
             Button("Pair cameras", systemImage: "plus") { pairing = true }
-        }, onFailure: { error, _ in model.alert = error.localizedDescription }, calibrate: { site, camera in
+        }, onFailure: { error, _ in model.alertFailure = WendyError(error) }, calibrate: { site, camera in
             alignment = SiteAlignmentRequest(site: site, camera: camera, gatewayID: gatewayID, session: model.deviceSession, gatewayAliases: gateway.aliases)
         }, automaticAlignment: { site, editing in
             AnyView(SiteAutomaticAlignmentView(model: model, site: site, gatewayID: gatewayID, gatewayAliases: gateway.aliases,

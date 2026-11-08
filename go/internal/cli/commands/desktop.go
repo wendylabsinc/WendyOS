@@ -20,6 +20,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
@@ -205,7 +206,7 @@ func DesktopRecordingConnect(ctx context.Context, selector string, secureLAN boo
 		return nil, err
 	}
 	if !target.matches(auth) {
-		return nil, errors.New("this recording device is outside the current Cloud organization")
+		return nil, failure.Wrap(errors.New("this recording device is outside the current Cloud organization"), failure.AccountMismatch, failure.ChooseAccount)
 	}
 	devices, err := listCloudDiscoveryDevices(ctx, auth, true)
 	if err != nil {
@@ -341,20 +342,20 @@ func DesktopConnectSecureLAN(ctx context.Context, selector string) (*grpcclient.
 		return nil, err
 	}
 	if len(cfg.Auth) == 0 {
-		return nil, errors.New("sign in to Wendy Cloud to connect to this enrolled device")
+		return nil, failure.Wrap(errors.New("sign in to Wendy Cloud to connect to this enrolled device"), failure.AuthenticationRequired, failure.SignIn)
 	}
 	auth, ok := cfg.ContextByName(cfg.CurrentContext)
 	if !ok && len(cfg.Auth) == 1 {
 		auth = &cfg.Auth[0]
 	}
 	if auth == nil {
-		return nil, errors.New("choose the account for this enrolled device before connecting")
+		return nil, failure.Wrap(errors.New("choose the account for this enrolled device before connecting"), failure.AccountMismatch, failure.ChooseAccount)
 	}
 	if len(auth.Certificates) == 0 {
 		if desktopAccountInfo(*auth).State != 1 {
-			return nil, errors.New("sign in to Wendy Cloud to connect to this enrolled device")
+			return nil, failure.Wrap(errors.New("sign in to Wendy Cloud to connect to this enrolled device"), failure.AuthenticationRequired, failure.SignIn)
 		}
-		return nil, errors.New("this account has no device connection certificate; sign in again with an account in the device's organization")
+		return nil, failure.Wrap(errors.New("this account has no device connection certificate; sign in again with an account in the device's organization"), failure.AuthenticationRequired, failure.SignIn)
 	}
 	target := newDialTargetCandidates(pinKeyForAddr(selector), resolveAddrCandidates(ctx, selector))
 	target.RequiresMTLS = true

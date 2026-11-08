@@ -253,7 +253,7 @@ struct HomeWidgetDeck: View {
     @ViewBuilder private func builtIn(_ widget: HomeWidget) -> some View {
         switch widget.kind {
         case .attention:
-            let issues = [model.nearbyError, model.cloudError, model.detailError].compactMap { $0 }
+            let issues = [model.nearbyErrorFailure, model.cloudErrorFailure, model.detailError].compactMap { $0 }
             VStack(alignment: .leading, spacing: 8) {
                 if issues.isEmpty {
                     Image(systemName: "checkmark.circle").font(.title).foregroundStyle(MobileLensStyle.green)
@@ -305,7 +305,7 @@ struct HomeWidgetDeck: View {
         await model.connect(device)
         guard !Task.isCancelled, scope == model.mobileCloudSelectionKey, model.mobileScopeIsCurrent else { return }
         guard model.selectedDeviceReady, model.connected?.id == device.id else {
-            cameraProblem = (widget.id, model.detailError ?? "Could not connect to the device."); return
+            cameraProblem = (widget.id, model.detailError?.message ?? "Could not connect to the device."); return
         }
         guard model.cameraFeeds.contains(where: { $0.camera.stableID == widget.resource }) else {
             cameraProblem = (widget.id, model.camerasError ?? "This camera is unavailable. Edit the widget to choose another."); return
@@ -442,7 +442,7 @@ private struct HomeWidgetSession: View {
         await model.connect(device)
         guard !Task.isCancelled, model.mobileScopeIsCurrent, scope == model.mobileCloudSelectionKey,
               model.selectedDeviceReady, model.connected?.id == device.id else {
-            busy = false; error = model.detailError ?? "Could not connect to the device."; return
+            busy = false; error = model.detailError?.message ?? "Could not connect to the device."; return
         }
         session = model.deviceSession
         busy = false

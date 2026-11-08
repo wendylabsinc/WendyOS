@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -177,5 +178,19 @@ func TestLiteDeviceAndJPEGBridgeOwnership(t *testing.T) {
 	if batch.items.kind != 8 || batch.items.session != 8 || batch.items.stream != 9 ||
 		!bytes.Equal(unsafe.Slice((*byte)(unsafe.Pointer(batch.items.bytes)), int(batch.items.byte_count)), []byte{0xff, 0xd8, 0xff, 0xd9}) {
 		t.Fatal("JPEG event did not own its bytes or preserve routing")
+	}
+}
+
+func TestFailureMetadataSurvivesStatusAndEvents(t *testing.T) {
+	cause := failure.Wrap(errors.New("diagnostic text can change"), failure.CredentialsExpired, failure.SignIn)
+	result := statusResult(cause)
+	defer WDStatusFree(result)
+	if int32(result.error_code) != int32(failure.CredentialsExpired) || int32(result.remedy) != int32(failure.SignIn) || result.can_forget_identity != 0 {
+		t.Fatal("status lost metadata or offered trust reset")
+	}
+	batch := events([]backend.Event{{Kind: backend.EventLoginError, Err: cause}})
+	defer WDEventsFree(batch)
+	if int32(batch.items.error_code) != int32(failure.CredentialsExpired) || int32(batch.items.remedy) != int32(failure.SignIn) || cstring(unsafe.Pointer(batch.items.text)) != cause.Error() {
+		t.Fatal("event lost metadata or diagnostics")
 	}
 }

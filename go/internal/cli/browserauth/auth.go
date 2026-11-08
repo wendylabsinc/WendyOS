@@ -31,6 +31,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -259,7 +260,11 @@ func (s *Session) exchange(ctx context.Context, form url.Values) (token, error) 
 				nonce = r.Header.Get("DPoP-Nonce")
 				continue
 			}
-			return token{}, fmt.Errorf("Token exchange failed (%d): %s", r.StatusCode, problem.Error)
+			cause := fmt.Errorf("Token exchange failed (%d): %s", r.StatusCode, problem.Error)
+			if problem.Error == "invalid_grant" || problem.Error == "invalid_token" {
+				cause = failure.Wrap(cause, failure.AuthenticationRequired, failure.SignIn)
+			}
+			return token{}, cause
 		}
 		var t token
 		if e = json.Unmarshal(b, &t); e != nil {

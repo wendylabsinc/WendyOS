@@ -150,7 +150,7 @@ struct MobileGeneralHome: View {
     }
 
     private var attentionCount: Int {
-        [model.nearbyError, model.cloudError, model.detailError].compactMap { $0 }.count +
+        [model.nearbyErrorFailure, model.cloudErrorFailure, model.detailError].compactMap { $0 }.count +
             (model.selectedDeviceReady ? model.apps.filter { $0.runningState == .crashLooping }.count : 0)
     }
 

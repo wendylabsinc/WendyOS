@@ -277,13 +277,13 @@ struct HomeWidgetEditor: View {
         await model.connect(device)
         guard !Task.isCancelled, scope == model.mobileCloudSelectionKey, model.mobileScopeIsCurrent,
               model.selectedDeviceReady, model.connected?.id == device.id else {
-            error = model.detailError ?? "Could not connect to this device."; return
+            error = model.detailError?.message ?? "Could not connect to this device."; return
         }
         let session = model.deviceSession
         do {
             switch widget.kind {
             case .camera:
-                if let problem = model.camerasError { throw WendyError(message: problem) }
+                if let problem = model.camerasErrorFailure { throw problem }
                 cameras = model.cameras.filter { !$0.stableID.isEmpty }
                 if cameras.isEmpty { error = "No cameras with a stable identity were reported." }
             case .campaign:
@@ -292,7 +292,7 @@ struct HomeWidgetEditor: View {
                 campaigns = rows
                 if rows.isEmpty { error = "No campaigns are installed on this device." }
             case .portal:
-                if let problem = model.appsError { throw WendyError(message: problem) }
+                if let problem = model.appsErrorFailure { throw problem }
                 apps = model.apps.filter(\.hasWebpage)
                 if apps.isEmpty { error = "No apps publish a web endpoint." }
             default: break

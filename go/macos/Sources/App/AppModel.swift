@@ -52,7 +52,7 @@ final class AppModel: ObservableObject {
     @Published var logApp = ""
     @Published var connectingDevice: Device?
     @Published var failedConnection: Device?
-    @Published var connectionError: String?
+    @Published var connectionError: WendyError?
     private var connectionAttempt: UInt64 = 0
     private let connectDevice: (Device, UInt64, Bool) async throws -> DeviceConnection
 
@@ -75,18 +75,46 @@ final class AppModel: ObservableObject {
     var discovering: Bool { nearbyLoading || cloudLoading }
     @Published var signingIn = false
     @Published var account: CloudAccount?
-    @Published var accountError: String?
+    @Published var accountError: WendyError?
     @Published var initialized = false
-    @Published var alert: String?
-    @Published var nearbyError: String?
-    @Published var cloudError: String?
+    @Published var alertFailure: WendyError?
+    var alert: String? {
+        get { alertFailure?.message }
+        set { alertFailure = newValue.map { WendyError(message: $0) } }
+    }
+    @Published var nearbyErrorFailure: WendyError?
+    var nearbyError: String? {
+        get { nearbyErrorFailure?.message }
+        set { nearbyErrorFailure = newValue.map { WendyError(message: $0) } }
+    }
+    @Published var cloudErrorFailure: WendyError?
+    var cloudError: String? {
+        get { cloudErrorFailure?.message }
+        set { cloudErrorFailure = newValue.map { WendyError(message: $0) } }
+    }
     @Published var canForgetIdentity = false
-    @Published var detailError: String?
-    @Published var appsError: String?
-    @Published var camerasError: String?
-    @Published var logError: String?
+    @Published var detailError: WendyError?
+    @Published var appsErrorFailure: WendyError?
+    var appsError: String? {
+        get { appsErrorFailure?.message }
+        set { appsErrorFailure = newValue.map { WendyError(message: $0) } }
+    }
+    @Published var camerasErrorFailure: WendyError?
+    var camerasError: String? {
+        get { camerasErrorFailure?.message }
+        set { camerasErrorFailure = newValue.map { WendyError(message: $0) } }
+    }
+    @Published var logErrorFailure: WendyError?
+    var logError: String? {
+        get { logErrorFailure?.message }
+        set { logErrorFailure = newValue.map { WendyError(message: $0) } }
+    }
     @Published var vpnUpdating = false
-    @Published var vpnError: String?
+    @Published var vpnErrorFailure: WendyError?
+    var vpnError: String? {
+        get { vpnErrorFailure?.message }
+        set { vpnErrorFailure = newValue.map { WendyError(message: $0) } }
+    }
     @Published var loginURL: URL?
     #if os(iOS)
     let rememberedAIDevices = RememberedAIDevices()
@@ -140,7 +168,7 @@ final class AppModel: ObservableObject {
             await refreshAccount()
             await refreshNearby()
             if account?.signedIn == true { await refreshCloud() }
-        } catch { if !Task.isCancelled { alert = error.localizedDescription } }
+        } catch { if !Task.isCancelled { alertFailure = WendyError(error) } }
     }
 
     /// Polling and account refreshes share the app task's lifetime.
@@ -157,6 +185,10 @@ final class AppModel: ObservableObject {
             #endif
             await refreshCloud()
             await refreshNearby()
+            if let device = selection, let error = detailError,
+               PresentedFailure(error).offersDeviceSignIn {
+                await retryConnection(device)
+            }
         }
         await polling
     }
@@ -172,7 +204,7 @@ final class AppModel: ObservableObject {
                 }
                 try await Task.sleep(for: .milliseconds(16))
             } catch {
-                if !Task.isCancelled && !shuttingDown { alert = error.localizedDescription }
+                if !Task.isCancelled && !shuttingDown { alertFailure = WendyError(error) }
                 return
             }
         }
@@ -181,7 +213,7 @@ final class AppModel: ObservableObject {
     func refreshAccount() async {
         guard initialized else { return }
         do { account = try await client.account(); accountError = nil }
-        catch { if !Task.isCancelled { accountError = error.localizedDescription } }
+        catch { if !Task.isCancelled { accountError = WendyError(error) } }
     }
 
     func refreshNearby(
@@ -215,7 +247,7 @@ final class AppModel: ObservableObject {
             #if os(iOS)
             guard scope == mobileCloudSelectionKey else { return }
             #endif
-            nearbyError = error.localizedDescription
+            nearbyErrorFailure = WendyError(error)
         }
         #if os(macOS)
         do {
@@ -270,7 +302,7 @@ final class AppModel: ObservableObject {
             #if os(iOS)
             guard scope == mobileCloudSelectionKey else { return false }
             #endif
-            cloudError = error.localizedDescription
+            cloudErrorFailure = WendyError(error)
             return false
         }
     }
@@ -339,9 +371,9 @@ final class AppModel: ObservableObject {
             if connected?.id == device.id { connected = nil; connectedLite = false }
             failedConnection = device
             let raw = error.localizedDescription
-            let denied = raw.lowercased().contains("no route to host") ? await LocalNetworkAccess.denied(selector: device.selector) : false
+            let denied = (error as? WendyError)?.code == .networkUnavailable ? await LocalNetworkAccess.denied(selector: device.selector) : false
             guard connectionAttempt == attempt, !Task.isCancelled else { return }
-            detailError = denied ? "Local network access denied. " + raw : raw
+            detailError = denied ? WendyError(message: raw, code: .localNetworkDenied, remedy: .openNetworkSettings) : WendyError(error)
         }
     }
 
@@ -367,7 +399,7 @@ final class AppModel: ObservableObject {
         } catch {
             guard connectionAttempt == previous, !Task.isCancelled else { return }
             connectingDevice = nil
-            detailError = error.localizedDescription
+            detailError = WendyError(error)
         }
     }
 
@@ -400,7 +432,7 @@ final class AppModel: ObservableObject {
                 await refreshDetails()
                 guard !Task.isCancelled, experienceObserver == observer, setupSessions == 0,
                       session == capturedSession, selection?.id == capturedSelection else { continue }
-                if let device = selection, let appError = appsError, let cameraError = camerasError,
+                if let device = selection, let appError = appsErrorFailure, let cameraError = camerasErrorFailure,
                    ConnectionRecovery.canRetry(appError), ConnectionRecovery.canRetry(cameraError) {
                     await connect(device, force: true)
                 }
@@ -427,7 +459,7 @@ final class AppModel: ObservableObject {
             #endif
         } catch {
             guard selectedDeviceReady, session == capturedSession, !Task.isCancelled else { return }
-            alert = error.localizedDescription
+            alertFailure = WendyError(error)
         }
     }
 
@@ -453,7 +485,7 @@ final class AppModel: ObservableObject {
             }
         } catch {
             guard selectedDeviceReady, target == session, !Task.isCancelled else { return }
-            alert = error.localizedDescription
+            alertFailure = WendyError(error)
         }
         // A restart can stop successfully and then fail to start. Re-read the
         // agent even on failure so the controls reflect the actual process state.
@@ -464,7 +496,7 @@ final class AppModel: ObservableObject {
             apps = current
             appsError = nil
         } catch {
-            if selectedDeviceReady, target == session, !Task.isCancelled { appsError = error.localizedDescription }
+            if selectedDeviceReady, target == session, !Task.isCancelled { appsErrorFailure = WendyError(error) }
         }
     }
 
@@ -511,7 +543,7 @@ final class AppModel: ObservableObject {
             apps = updated
         } catch {
             guard session == target.session else { return }
-            alert = error.localizedDescription
+            alertFailure = WendyError(error)
         }
     }
 
@@ -531,7 +563,7 @@ final class AppModel: ObservableObject {
             appsReadSession = capturedSession
         } catch {
             guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
-            appsError = error.localizedDescription
+            appsErrorFailure = WendyError(error)
             appsReadSession = capturedSession
         }
         do {
@@ -551,7 +583,7 @@ final class AppModel: ObservableObject {
             camerasReadSession = capturedSession
             if cameraWallVisible { await playCameras() }
         }
-        catch { if session == capturedSession && selectedDeviceReady && !Task.isCancelled { camerasError = error.localizedDescription; camerasReadSession = capturedSession } }
+        catch { if session == capturedSession && selectedDeviceReady && !Task.isCancelled { camerasErrorFailure = WendyError(error); camerasReadSession = capturedSession } }
     }
 
     func moveCamera(_ source: String, before target: String) {
@@ -592,12 +624,12 @@ final class AppModel: ObservableObject {
             do { try await start(app, stream, capturedSession) }
             catch {
                 if !Task.isCancelled && session == capturedSession && logStream == stream && selectedDeviceReady {
-                    logError = error.localizedDescription
+                    logErrorFailure = WendyError(error)
                 }
             }
             while !Task.isCancelled && selectedDeviceReady && session == capturedSession && logApp == app && logStream == stream {
                 do { try await Task.sleep(for: .seconds(5)) } catch { break }
-                if let error = logError, ConnectionRecovery.canRetry(error) { break }
+                if let error = logErrorFailure, ConnectionRecovery.canRetry(error) { break }
             }
             try? await stop(stream, capturedSession)
             // Drop already-queued records after the logs page has closed.
@@ -664,7 +696,7 @@ final class AppModel: ObservableObject {
             if Task.isCancelled {
                 if feed.stream == stream { feed.pause() }
                 try? await client.stopCamera(id: feed.camera.id, stream: stream, session: currentSession)
-            } else { feed.fail(error.localizedDescription, stream: stream) }
+            } else { feed.fail(WendyError(error), stream: stream) }
         }
         return stream
     }
@@ -690,12 +722,12 @@ final class AppModel: ObservableObject {
         guard !signingIn else { return }
         signingIn = true
         do { try await client.login(development: development) }
-        catch { signingIn = false; if !Task.isCancelled { alert = error.localizedDescription } }
+        catch { signingIn = false; if !Task.isCancelled { alertFailure = WendyError(error) } }
     }
 
     func cancelLogin() async {
         do { try await client.cancelLogin(); signingIn = false; loginURL = nil }
-        catch { if !Task.isCancelled { alert = error.localizedDescription } }
+        catch { if !Task.isCancelled { alertFailure = WendyError(error) } }
     }
 
     func enableVPN() async {
@@ -714,7 +746,7 @@ final class AppModel: ObservableObject {
             if Task.isCancelled {
                 try? await vpn.stop()
                 try? await client.stopVPN()
-            } else { vpnError = error.localizedDescription }
+            } else { vpnErrorFailure = WendyError(error) }
         }
     }
 
@@ -724,7 +756,7 @@ final class AppModel: ObservableObject {
         vpnUpdating = true
         defer { vpnUpdating = false }
         do { try await vpn.stop(); try await client.stopVPN() }
-        catch { if !Task.isCancelled { vpnError = error.localizedDescription } }
+        catch { if !Task.isCancelled { vpnErrorFailure = WendyError(error) } }
     }
 
     func shutdown() async {
@@ -750,10 +782,10 @@ final class AppModel: ObservableObject {
             signingIn = false; loginURL = nil
             refreshes.yield(())
         case .loginError(let text):
-            if signingIn { alert = text }
+            if signingIn { alertFailure = text }
             signingIn = false; loginURL = nil
         case .vpnError(let text):
-            if vpn.enabled && !vpnUpdating { vpnError = text }
+            if vpn.enabled && !vpnUpdating { vpnErrorFailure = text }
         default:
             guard event.session == session, selectedDeviceReady else { return }
             switch event.payload {
@@ -763,7 +795,7 @@ final class AppModel: ObservableObject {
                 if logs.count > 2000 { logs.removeFirst(logs.count - 2000) }
             case .video, .jpeg, .thermal:
                 cameraFeeds.first(where: { $0.stream == event.stream })?.receive(event)
-            case .logsError(let text): if event.stream == logStream { logError = text }
+            case .logsError(let text): if event.stream == logStream { logErrorFailure = text }
             case .cameraError: cameraFeeds.first(where: { $0.stream == event.stream })?.receive(event)
             default: break
             }
@@ -867,7 +899,7 @@ final class AppModel: ObservableObject {
                 if !Task.isCancelled && generation == mobileLifecycleGeneration {
                     mobileMeshState = "unavailable"
                     mobileMeshDetail = error.localizedDescription
-                    nearbyError = error.localizedDescription
+                    nearbyErrorFailure = WendyError(error)
                 }
             }
         }

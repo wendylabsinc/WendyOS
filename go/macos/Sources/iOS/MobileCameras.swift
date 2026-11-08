@@ -9,7 +9,7 @@ struct CameraWallView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
-                if let error = model.camerasError { FailureNote(message: error) }
+                if let error = model.camerasErrorFailure { FailureNote(message: error) }
                 else if model.cameraFeeds.isEmpty && model.camerasInitialLoading {
                     MobileLoadingPlaceholder(label: "Loading cameras…", style: .camera)
                 }

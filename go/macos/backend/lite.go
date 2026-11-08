@@ -121,7 +121,7 @@ func (b *Backend) startLiteCamera(camera uint32, streamID uint64) error {
 			frame, err := stream.Recv()
 			if err != nil {
 				if ctx.Err() == nil {
-					b.emitText(ctx, EventCameraError, session, streamID, err.Error())
+					b.emitError(ctx, EventCameraError, session, streamID, err)
 				}
 				return
 			}

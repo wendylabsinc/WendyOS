@@ -97,7 +97,7 @@ struct LogsView: View {
                     PlatformClipboard.copy(visibleLogs.map(\.copyText).joined(separator: "\n"))
                 } label: { Image(systemName: "doc.on.doc") }.help("Copy visible logs")
             }
-            if let error = model.logError {
+            if let error = model.logErrorFailure {
                 HStack {
                     if ConnectionRecovery.canRetry(error) { ProgressView("Reconnecting logs…") }
                     else { FailureNote(message: error) }
@@ -156,7 +156,7 @@ struct LogsView: View {
     private var mobileContent: some View {
         ScrollViewReader { proxy in
             List {
-                if let error = model.logError {
+                if let error = model.logErrorFailure {
                     Section {
                         if ConnectionRecovery.canRetry(error) { ProgressView("Reconnecting logs…") }
                         else { FailureNote(message: error) }
