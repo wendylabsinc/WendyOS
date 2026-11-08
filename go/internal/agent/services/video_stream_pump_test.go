@@ -26,6 +26,29 @@ type burstReader struct {
 	i      int
 }
 
+// The hub can retain a payload after broadcast returns. Appending immediately
+// in the other pump tests hides reuse of the reader's backing buffer.
+func TestPumpEncodedStreamRetainedChunksOwnTheirBytes(t *testing.T) {
+	want := append(bytes.Repeat([]byte{0xA1}, 300*1024), bytes.Repeat([]byte{0xB2}, 300*1024)...)
+	want = append(want, 0xCC)
+	var retained [][]byte
+	err := pumpEncodedStream(context.Background(), bytes.NewReader(want),
+		agentpb.VideoCodec_VIDEO_CODEC_H264,
+		func(data []byte, _ frameTimestamp, codec agentpb.VideoCodec) bool {
+			if codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+				t.Fatalf("codec changed to %v", codec)
+			}
+			retained = append(retained, data)
+			return true
+		}, func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.Join(retained, nil); !bytes.Equal(got, want) {
+		t.Fatal("later reads overwrote retained encoded bytes")
+	}
+}
+
 func (r *burstReader) Read(p []byte) (int, error) {
 	if r.i >= len(r.chunks) {
 		return 0, io.EOF

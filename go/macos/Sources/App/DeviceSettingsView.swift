@@ -299,10 +299,10 @@ struct DeviceSettingsView: View {
                             Button { joining = WiFiJoinTarget(network: network) } label: { networkLabel(network) }.buttonStyle(.plain)
                         }
                         if network.connected || network.known {
-                            Menu {
+                            OverflowMenu {
                                 if network.connected { Button("Disconnect", role: .destructive) { disconnecting = true } }
                                 if network.known { Button("Connection priority") { priorityNetwork = network }; Button("Forget network", role: .destructive) { forgetting = network } }
-                            } label: { Image(systemName: "ellipsis").frame(minWidth: 32, minHeight: 32) }
+                            }
                                 .accessibilityLabel("Actions for \(network.ssid)")
                         }
                     }.disabled(saving)
@@ -316,10 +316,9 @@ struct DeviceSettingsView: View {
                     ForEach(saved) { network in
                         HStack {
                             Button { joining = WiFiJoinTarget(network: network) } label: { networkLabel(network) }.buttonStyle(.plain)
-                            Menu {
+                            OverflowMenu {
                                 Button("Connection priority") { priorityNetwork = network }
                                 Button("Forget network", role: .destructive) { forgetting = network } }
-                                label: { Image(systemName: "ellipsis").frame(minWidth: 32, minHeight: 32) }
                                 .accessibilityLabel("Actions for \(network.ssid)")
                         }.disabled(saving)
                     }

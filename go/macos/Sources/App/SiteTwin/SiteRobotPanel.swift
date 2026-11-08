@@ -666,11 +666,11 @@ struct SiteRobotPanel: View {
                     } else if model.candidates.isEmpty {
                         HStack {
                             Spacer()
-                            Menu {
+                            OverflowMenu {
                                 Button("Select Go2") { model.selected = true }
                                 Button("Place Manually") { model.beginAlignment() }.disabled(model.reading?.pose != true)
-                            } label: { Image(systemName: "ellipsis") }
-                                .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Position options")
+                            }
+                                .accessibilityLabel("Position options")
                         }.buttonStyle(.bordered)
                     }
                     SiteRobotLocalizationControls(model: model)

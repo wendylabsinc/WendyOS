@@ -5,6 +5,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -356,6 +357,12 @@ func DesktopConnectSecureLAN(ctx context.Context, selector string) (*grpcclient.
 			return nil, failure.Wrap(errors.New("sign in to Wendy Cloud to connect to this enrolled device"), failure.AuthenticationRequired, failure.SignIn)
 		}
 		return nil, failure.Wrap(errors.New("this account has no device connection certificate; sign in again with an account in the device's organization"), failure.AuthenticationRequired, failure.SignIn)
+	}
+	// Renew the selected account before taking the dial's credential snapshot.
+	// This also recovers an expired certificate using the saved OAuth session,
+	// with token rotation serialized and persisted across app/CLI processes.
+	if err := prepareDefaultCloudCertificate(ctx, auth); err != nil {
+		return nil, fmt.Errorf("renewing device connection credentials: %w", err)
 	}
 	target := newDialTargetCandidates(pinKeyForAddr(selector), resolveAddrCandidates(ctx, selector))
 	target.RequiresMTLS = true

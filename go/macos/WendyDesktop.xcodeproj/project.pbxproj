@@ -1261,12 +1261,12 @@
 			projectRoot = "";
 			targets = (
 				061A3B38F40254E591224986 /* WendyDesktop */,
-				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 				66549B7B32DEF8896208E2C0 /* WendyDesktopTests */,
 				4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */,
 				ACDB653814C81DAD375DF0E3 /* WendyMobileNetwork */,
 				9F296B433343571747FBC234 /* WendyMobileTests */,
 				5198757F852AB57452928A68 /* WendyMobileUITests */,
+				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 			);
 		};
 /* End PBXProject section */

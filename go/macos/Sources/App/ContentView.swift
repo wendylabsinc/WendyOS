@@ -170,27 +170,42 @@ struct ContentView: View {
             } else if let device = model.selection {
                 deviceDetail(device)
             } else {
-                ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
                     VStack(alignment: .leading, spacing: 24) {
                         Text("Your devices").font(.largeTitle.weight(.semibold))
                         Text("Pick a device and see what’s happening.").foregroundStyle(.secondary)
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 20)], spacing: 20) {
-                            ForEach(visibleDevices) { device in
-                                Button {
-                                    tab = "overview"
-                                    actions.submit { await model.connect(device) }
-                                } label: {
-                                    DeviceIdentityRow(device: device, connected: model.connected?.id == device.id)
-                                        .padding(20).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 24))
-                                }.buttonStyle(.plain)
+                    }
+
+                    if visibleDevices.isEmpty {
+                        ContentUnavailableView {
+                            Label("Your next device starts here", systemImage: "cpu")
+                        } description: {
+                            Text("Power on a nearby device, or sign in to see your organization’s devices.")
+                        } actions: {
+                            Button("Install Wendy on new hardware") { showingInstaller = true }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 24) {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 20)], spacing: 20) {
+                                    ForEach(visibleDevices) { device in
+                                        Button {
+                                            tab = "overview"
+                                            actions.submit { await model.connect(device) }
+                                        } label: {
+                                            DeviceIdentityRow(device: device, connected: model.connected?.id == device.id)
+                                                .padding(20).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 24))
+                                        }.buttonStyle(.plain)
+                                    }
+                                }
+                                Button("Install Wendy on new hardware") { showingInstaller = true }
                             }
                         }
-                        if visibleDevices.isEmpty {
-                            ContentUnavailableView("Your next device starts here", systemImage: "cpu", description: Text("Power on a nearby device, or sign in to see your organization’s devices."))
-                        }
-                        Button("Install Wendy on new hardware") { showingInstaller = true }
-                    }.padding(32)
+                    }
                 }
+                .padding(32)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             }
         }

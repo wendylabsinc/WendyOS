@@ -391,13 +391,13 @@ struct DeviceChatView: View {
                     if chat.inference == .device { showingLibrary = true } else { showingCloud = true }
                 }.disabled(chat.streaming)
                 Button { chat.clear() } label: { Label("New chat", systemImage: "square.and.pencil") }.help("New chat")
-                Menu {
+                OverflowMenu {
                     Button(chat.inference == .device ? "Connection settings" : "Cloud settings") {
                         if chat.inference == .device { showingConnection = true } else { showingCloud = true }
                     }
                     Button("Refresh models") { actions.submit { await chat.discover() } }
-                } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.borderlessButton).fixedSize().help("Chat options").disabled(chat.streaming)
+                }
+                    .help("Chat options").disabled(chat.streaming)
                     .accessibilityLabel("Chat options")
                     .popover(isPresented: $showingConnection, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
                         VStack(alignment: .leading, spacing: 12) {

@@ -13,6 +13,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -130,5 +131,83 @@ func TestDesktopUnpinClearsOnlySelectedDevice(t *testing.T) {
 	}
 	if _, ok := keys["urn:wendy:org:77:asset:538"]; !ok {
 		t.Fatal("unrelated key removed")
+	}
+}
+
+func TestDesktopSecureLANRenewsExpiredSelectedAccount(t *testing.T) {
+	for _, offline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("offline=%v", offline), func(t *testing.T) {
+			good, tlsConfig := legacyLiteTestPKI(t, 7, certs.AssetURN(7, 42))
+			good.Name = "chosen"
+			good.OAuthIssuer = "https://auth.example"
+			good.RefreshToken = "original"
+			fresh := good.Certificates[0]
+			good.Certificates[0].PemCertificate = "expired"
+			other, _ := legacyLiteTestPKI(t, 8, certs.AssetURN(8, 42))
+			other.Name = "other"
+			setTempConfig(t, &config.Config{CurrentContext: good.Name, Auth: []config.AuthConfig{*other, *good}})
+			oldExpiry, oldRefresh := leafNotAfterFn, refreshDefaultCloudCertificateFn
+			t.Cleanup(func() { leafNotAfterFn, refreshDefaultCloudCertificateFn = oldExpiry, oldRefresh })
+			leafNotAfterFn = func(cert string) (time.Time, error) {
+				if cert == "expired" {
+					return time.Now().Add(-24 * time.Hour), nil
+				}
+				return time.Now().Add(time.Hour), nil
+			}
+			networkErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("offline")}
+			calls := 0
+			refreshDefaultCloudCertificateFn = func(_ context.Context, auth *config.AuthConfig) error {
+				calls++
+				if auth.Name != good.Name {
+					t.Fatalf("renewed wrong account: %s", auth.Name)
+				}
+				if offline {
+					return networkErr
+				}
+				auth.Certificates[0] = fresh
+				auth.RefreshToken = "rotated"
+				return nil
+			}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+			agentpb.RegisterWendyAgentServiceServer(server, versionOnlyAgent{os: "wendyos"})
+			go func() { _ = server.Serve(listener) }()
+			t.Cleanup(server.Stop)
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			conn, err := DesktopConnectSecureLAN(ctx, listener.Addr().String())
+			if calls != 1 {
+				t.Fatalf("refresh calls = %d", calls)
+			}
+			if offline {
+				if !errors.Is(err, networkErr) || conn != nil {
+					t.Fatalf("got %v, %v", conn, err)
+				}
+				if DesktopFailure(err).Remedy == failure.SignIn {
+					t.Fatal("offline renewal asked for sign-in")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if !conn.IsMTLS {
+				t.Fatal("connection is not authenticated")
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Auth[1].RefreshToken != "rotated" || cfg.Auth[1].Certificates[0].PemCertificate != fresh.PemCertificate {
+				t.Fatal("renewed session was not persisted")
+			}
+			if cfg.Auth[0].Certificates[0].PemCertificate != other.Certificates[0].PemCertificate {
+				t.Fatal("changed unrelated account")
+			}
+		})
 	}
 }
