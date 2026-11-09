@@ -102,3 +102,36 @@ func TestDarwinKnownRadiosStayBounded(t *testing.T) {
 		t.Fatalf("expired entries retained: %d", len(cache.peers))
 	}
 }
+
+func TestDarwinNewPeerGetsSetupSlotBeforeKnownStandby(t *testing.T) {
+	now := time.Now()
+	adv, _ := NewAdvertisement(peerDevice, "test", DefaultPSM)
+	advertisements := map[string]Advertisement{"standby": adv, "new": adv}
+	view := localmesh.NodeSnapshot{Links: []localmesh.PeerLink{{ID: 1, Device: peerFixture, Cost: 64, ForwardingReady: true}}}
+	var cache darwinPeerCache
+	cache.remember("standby", adv, peerFixture, now)
+	var candidates localmesh.CandidateQueue
+	// Repeated planning must not let shuffled discovery order give the one
+	// allowed setup attempt to a redundant peer ahead of an unconnected peer.
+	for range 20 {
+		policy := newDarwinConnectionPolicy(selfFixture, func() localmesh.NodeSnapshot { return view })
+		keys := cache.order(&candidates, []string{"standby", "new"}, advertisements, now, view)
+		if keys[0] != "new" {
+			t.Fatalf("new peer was not prioritized: %v", keys)
+		}
+		lease := cache.reserve(policy, &candidates, keys[0], advertisements[keys[0]], now)
+		if lease == nil {
+			t.Fatal("new peer did not receive setup slot")
+		}
+		if other := cache.reserve(policy, &candidates, keys[1], advertisements[keys[1]], now); other != nil {
+			other.Release()
+			t.Fatal("second attempt exceeded native setup budget")
+		}
+		lease.Release()
+	}
+	// A failing new candidate must still respect the common retry penalty.
+	candidates.Failed("new", now)
+	if keys := cache.order(&candidates, []string{"new", "standby"}, advertisements, now, view); keys[0] != "standby" {
+		t.Fatalf("failed candidate bypassed cooldown: %v", keys)
+	}
+}
