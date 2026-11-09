@@ -304,12 +304,20 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	}
 	if agent != nil {
 		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agent)
+		var ejectErr error
 		if attached {
 			markFATVolumes(updated)
-			ejectDisk(updated)
+			ejectErr = ejectDisk(updated)
 		}
+		err, stillMounted := splitStillMounted(err)
 		if err != nil {
-			return fmt.Errorf("the OS image was written, but --binary could not be installed: %w", err)
+			return errors.Join(fmt.Errorf("the OS image was written, but --binary could not be installed: %w", err), ejectErr)
+		}
+		if stillMounted != nil {
+			return errors.Join(fmt.Errorf("the OS image and --binary were written to %s, but %w", updated.Name, stillMounted), ejectErr)
+		}
+		if ejectErr != nil {
+			return fmt.Errorf("the OS image and --binary were written to %s, but the drive could not be ejected: %w", updated.Name, ejectErr)
 		}
 	} else {
 		markFATVolumes(*targetDrive)
@@ -1177,8 +1185,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// agent download — paying 5–30s of network for a guaranteed-skipped
 		// step is the bug from WDY-1118.
 		if hasProvisioningData {
-			ejectDisk(targetDrive)
-			return fmt.Errorf("the OS image was written to %s, but --binary, --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
+			return errors.Join(fmt.Errorf("the OS image was written to %s, but --binary, --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name), ejectDisk(targetDrive))
 		}
 		fmt.Println("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
 	} else {
@@ -1192,23 +1199,42 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData, agent)
 	}
 
+	var ejectErr error
 	if attached {
 		markFATVolumes(targetDrive)
-		ejectDisk(targetDrive)
+		ejectErr = ejectDisk(targetDrive)
 	}
 
-	// Requested provisioning that never reached the card is a failed install:
-	// the device would boot with none of the configuration the user asked for,
-	// and reporting success here is what made WendyOS#1562 look like a device
-	// bug. The image itself is fine, which the warning above already said.
-	if provisionErr != nil {
-		return fmt.Errorf("%s %s was written to %s, but the requested provisioning was not applied: %w",
-			device.Name, imgInfo.Version, targetDrive.Name, provisionErr)
+	if err := diskInstallResult(device.Name+" "+imgInfo.Version, targetDrive.Name, provisionErr, ejectErr); err != nil {
+		return err
 	}
 
 	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
 	fmt.Println("You can now insert the drive into your device and power it on.")
 	printFirstBootVerification(deviceKey, imgInfo.Version)
+	return nil
+}
+
+// diskInstallResult is how a disk install that wrote its image ends; nil means
+// the drive may be removed.
+func diskInstallResult(what, where string, provisionErr, ejectErr error) error {
+	provisionErr, stillMounted := splitStillMounted(provisionErr)
+	switch {
+	// Requested provisioning that never reached the card is a failed install:
+	// the device would boot with none of the configuration the user asked for,
+	// and reporting success here is what made WendyOS#1562 look like a device
+	// bug. The image itself is fine, which the provisioning warning already said.
+	case provisionErr != nil:
+		return errors.Join(fmt.Errorf("%s was written to %s, but the requested provisioning was not applied: %w",
+			what, where, provisionErr), ejectErr)
+	// Telling the user to remove a drive that is still mounted invites losing
+	// the config partition writes that have not reached the media yet.
+	case stillMounted != nil:
+		return errors.Join(fmt.Errorf("%s was written to %s, but %w", what, where, stillMounted), ejectErr)
+	case ejectErr != nil:
+		return fmt.Errorf("%s and its first-boot configuration were written to %s, but the drive could not be ejected: %w",
+			what, where, ejectErr)
+	}
 	return nil
 }
 
@@ -2990,7 +3016,8 @@ var confirmProvisioningRetry = func() (bool, error) {
 // config-partition write failed, --wifi and --device-name never reached the
 // card, and the install still reported success — which read as the device
 // ignoring its configuration rather than never receiving it). When provisioning
-// was not requested it stays advisory and returns nil.
+// was not requested it stays advisory and returns nil. A config partition left
+// mounted is always returned, and never retried: alone, it means the files landed.
 //
 // If the drive drops off the bus mid-write (WDY-3974: a USB NVMe enclosure
 // reset and every retry hit the same vanished /dev/disk8), retrying its old
@@ -3026,6 +3053,12 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 		return d, !relocate, nil
 	}
 	for err != nil {
+		notApplied, stillMounted := splitStillMounted(err)
+		if notApplied == nil {
+			// Only the unmount failed; the caller reports the mount.
+			fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
+			return d, !relocate, stillMounted
+		}
 		if requested {
 			fmt.Printf("\nWarning: could not apply provisioning data — --binary / --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
 		} else {
@@ -3035,10 +3068,16 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 
 		relocate = relocate || driveDisconnected(d, err)
 
-		if !isInteractiveTerminal() {
+		// A retry would mount the still-mounted partition a second time.
+		var mounted *configStillMountedError
+		leftMounted := errors.As(err, &mounted)
+		if !isInteractiveTerminal() || leftMounted {
 			if requested {
 				fmt.Println("Re-run 'wendy os install' to apply the requested provisioning, or configure the device after it boots.")
 				return d, !relocate, err
+			}
+			if leftMounted {
+				return d, !relocate, mounted
 			}
 			return d, !relocate, nil
 		}
