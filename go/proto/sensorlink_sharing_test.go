@@ -13,22 +13,14 @@ import (
 	_ "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
-// wendy_com_msg.proto is shared verbatim with the wendy-lite project, where it
-// sits beside sensorlink.proto in one directory and imports it by bare name.
-// Here sensorlink.proto lives at wendy/lite/sensorlink.proto and is registered
-// under that path, because the agent's v2 sensor service imports it that way.
-// So the two importers name the same file differently, and the WendyCom
-// descriptor's import cannot resolve. The tests below pin down what that does
-// and does not cost: the Go types and the field descriptors are the real
-// shared ones, only the unused import listing is a placeholder.
-
+// Both the Lite envelope and Agent sensor service import the canonical sensorlink descriptor.
 // TestSensorlinkMessagesRegisterOnce fails if litepb ever starts carrying its
 // own copy of the sensorlink messages instead of importing sensorlinkpb, which
 // would panic every binary linking both — the names would be registered twice.
 func TestSensorlinkMessagesRegisterOnce(t *testing.T) {
 	for _, name := range []protoreflect.FullName{
-		"wendy.lite.sensorlink.SensorData",
-		"wendy.lite.sensorlink.SensorManifest",
+		"wendylite.v1.SensorData",
+		"wendylite.v1.SensorManifest",
 		"wendy.agent.services.v2.WendySensorService",
 	} {
 		if _, err := protoregistry.GlobalFiles.FindDescriptorByName(name); err != nil {
@@ -37,19 +29,16 @@ func TestSensorlinkMessagesRegisterOnce(t *testing.T) {
 	}
 }
 
-// TestWendyComFieldsResolveSensorlinkMessages guards the part the unresolved
-// import could plausibly break: protoc-gen-go wires cross-file message fields
-// through its Go type table rather than by descriptor path, so these fields
-// must still point at the real sensorlink descriptors.
+// TestWendyComFieldsResolveSensorlinkMessages checks cross-file field descriptors.
 func TestWendyComFieldsResolveSensorlinkMessages(t *testing.T) {
 	for _, tc := range []struct {
 		msg   protoreflect.ProtoMessage
 		field protoreflect.Name
 		want  protoreflect.FullName
 	}{
-		{&litepb.WendyComMessage{}, "sensor_data", "wendy.lite.sensorlink.SensorData"},
-		{&litepb.WendyComResponse{}, "sensor_link_manifest", "wendy.lite.sensorlink.SensorManifest"},
-		{&litepb.WendyComCommand{}, "sensor_link_subscribe", "wendy.lite.sensorlink.Subscribe"},
+		{&litepb.WendyComMessage{}, "sensor_data", "wendylite.v1.SensorData"},
+		{&litepb.WendyComResponse{}, "sensor_link_manifest", "wendylite.v1.SensorManifest"},
+		{&litepb.WendyComCommand{}, "sensor_link_subscribe", "wendylite.v1.Subscribe"},
 	} {
 		fd := tc.msg.ProtoReflect().Descriptor().Fields().ByName(tc.field)
 		if fd == nil {
@@ -85,5 +74,12 @@ func TestWendyComSensorDataRoundTrips(t *testing.T) {
 	}
 	if got.ChannelId != 3 || got.FrameSeq != 42 || got.ChunkSeq != 2 || got.Flags != 3 || string(got.Payload) != "jpeg" {
 		t.Errorf("round trip changed sensor data: %+v", got)
+	}
+}
+
+func TestWendyComSensorlinkImportResolves(t *testing.T) {
+	imports := (&litepb.WendyComMessage{}).ProtoReflect().Descriptor().ParentFile().Imports()
+	if imports.Len() != 1 || imports.Get(0).IsPlaceholder() || imports.Get(0).Path() != "wendylite/v1/sensorlink.proto" {
+		t.Fatalf("sensorlink import did not resolve: %v", imports)
 	}
 }

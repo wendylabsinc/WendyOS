@@ -140,7 +140,7 @@ type CameraIntrinsics_Provenance int32
 
 const (
 	CameraIntrinsics_PROVENANCE_UNSPECIFIED CameraIntrinsics_Provenance = 0
-	// Read from the device's own factory calibration.
+	// Measured by factory calibration or a validated calibration procedure.
 	CameraIntrinsics_PROVENANCE_MEASURED CameraIntrinsics_Provenance = 1
 	// Derived from a datasheet field of view, or a default. Usable for a
 	// rough back-projection, not for measuring a badge at a metre.

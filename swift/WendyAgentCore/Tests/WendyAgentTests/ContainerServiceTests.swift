@@ -10,6 +10,44 @@ import WendyAgentGRPC
 
 @Suite("ContainerService.startContainer")
 struct ContainerServiceTests {
+    @Test
+    func `canonical RPC additions retain unimplemented Mac behavior`() async throws {
+        let appsBase = try makeTempDir()
+        defer { cleanup(appsBase) }
+        let service = ContainerService(
+            broadcaster: TelemetryBroadcaster(),
+            executablePath: "/usr/bin/false",
+            appsBase: URL(fileURLWithPath: appsBase)
+        )
+        do {
+            _ = try await service.getNetworkStats(
+                request: ServerRequest(metadata: [:], message: .init()),
+                context: makeServerContext(method: "GetNetworkStats")
+            )
+            Issue.record("GetNetworkStats must remain unimplemented")
+        } catch let error as RPCError {
+            #expect(error.code == .unimplemented)
+        }
+        do {
+            _ = try await service.prepareImage(
+                request: ServerRequest(metadata: [:], message: .init()),
+                context: makeServerContext(method: "PrepareImage")
+            )
+            Issue.record("PrepareImage must remain unimplemented")
+        } catch let error as RPCError {
+            #expect(error.code == .unimplemented)
+        }
+        do {
+            _ = try await service.validateContainer(
+                request: ServerRequest(metadata: [:], message: .init()),
+                context: makeServerContext(method: "ValidateContainer")
+            )
+            Issue.record("ValidateContainer must remain unimplemented")
+        } catch let error as RPCError {
+            #expect(error.code == .unimplemented)
+        }
+    }
+
     @Test("telemetry continues after the start stream disconnects", .timeLimit(.minutes(1)))
     func telemetryContinuesAfterStartStreamDisconnects() async throws {
         let appsBase = try makeTempDir()
@@ -1217,7 +1255,7 @@ struct ContainerServiceTests {
         request.appName = appID
         request.imageName = ""
         request.cmd = "sleep.sh"
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .onFailure
         policy.onFailureMaxRetries = 4
         request.restartPolicy = policy
@@ -1255,7 +1293,7 @@ struct ContainerServiceTests {
         createRequest.appName = appID
         createRequest.imageName = ""
         createRequest.cmd = "sleep.sh"
-        var storedPolicy = RestartPolicy()
+        var storedPolicy = Wendy_Agent_Services_V1_RestartPolicy()
         storedPolicy.mode = .onFailure
         storedPolicy.onFailureMaxRetries = 9
         createRequest.restartPolicy = storedPolicy
@@ -1298,7 +1336,7 @@ struct ContainerServiceTests {
 
         var startRequest = Wendy_Agent_Services_V1_StartContainerRequest()
         startRequest.appName = appID
-        var policy = RestartPolicy()
+        var policy = Wendy_Agent_Services_V1_RestartPolicy()
         policy.mode = .no
         startRequest.restartPolicy = policy
 
@@ -1656,7 +1694,7 @@ private func startAppAndCollectStdout(
 
 private func listContainers(
     service: ContainerService
-) async throws -> [AppContainer] {
+) async throws -> [Wendy_Agent_Services_V1_AppContainer] {
     let response = try await service.listContainers(
         request: ServerRequest(
             metadata: [:],
