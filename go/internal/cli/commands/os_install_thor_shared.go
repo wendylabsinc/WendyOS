@@ -96,6 +96,9 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if err != nil {
 		return err
 	}
+	if err := checkInstallConfirmable("flashing the Jetson AGX Thor", force); err != nil {
+		return err
+	}
 	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
 	if err != nil {
 		return err
@@ -122,7 +125,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if !force {
 		fmt.Println()
 		fmt.Println(tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone."))
-		ok, err := tui.ConfirmNoDefaultDanger(fmt.Sprintf("Flash %s?", dev.Label))
+		ok, err := confirmInstallStep("flashing "+dev.Label, fmt.Sprintf("Flash %s?", dev.Label), true, force)
 		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 			return ErrUserCancelled
 		}

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 var (
@@ -67,10 +68,23 @@ func BubbleTableStyles(interactive bool) bubbleTable.Styles {
 			Foreground(tableSelectedFg).
 			Background(tableSelectedBg).
 			Bold(true)
+		// Without colour the highlight renders as plain text.
+		if lipgloss.ColorProfile() == termenv.Ascii {
+			styles.Selected = lipgloss.NewStyle().Transform(markSelectedRow)
+		}
 	} else {
 		styles.Selected = lipgloss.NewStyle()
 	}
 	return styles
+}
+
+// markSelectedRow puts a cursor in the row's leading cell padding, so the
+// row keeps its width.
+func markSelectedRow(row string) string {
+	if rest, ok := strings.CutPrefix(row, " "); ok {
+		return ">" + rest
+	}
+	return row
 }
 
 type BubbleTable struct {

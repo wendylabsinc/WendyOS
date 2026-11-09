@@ -393,6 +393,9 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	if err != nil {
 		return err
 	}
+	if err := checkInstallConfirmable("flashing the "+humanReadableDeviceType(board.deviceType), force); err != nil {
+		return err
+	}
 	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
 	if err != nil {
 		return err
@@ -418,8 +421,8 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 			"This rewrites " + board.guide().rewrites + ": both OS slots, the config partition, and /data. Device identity, enrollment, saved Wi-Fi and app data are discarded — the board comes back as a new device."))
 		fmt.Println(tui.Dim("  Every board in EDL reports the generic id 05c6:9008, so wendy confirms"))
 		fmt.Println(tui.Dim("  the model from its chip id during the flash, not here."))
-		ok, err := tui.ConfirmNoDefaultDanger(
-			fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)))
+		ok, err := confirmInstallStep("flashing "+dragonwingTargetLabel(dev),
+			fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)), true, force)
 		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 			return ErrUserCancelled
 		}

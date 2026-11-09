@@ -78,6 +78,9 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
+		return err
+	}
 	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, &name)
 	if err != nil {
 		return err
@@ -95,7 +98,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if !opts.Force {
 		fmt.Println()
 		fmt.Println(tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage))))
-		ok, err := tui.ConfirmNoDefaultDanger(fmt.Sprintf("Flash %s?", dev.Describe()))
+		ok, err := confirmInstallStep("flashing "+dev.Describe(), fmt.Sprintf("Flash %s?", dev.Describe()), true, opts.Force)
 		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 			return ErrUserCancelled
 		}
@@ -445,7 +448,7 @@ func confirmOrinReady(opts t234InstallOptions) error {
 		return nil
 	}
 	fmt.Println()
-	ok, err := tui.Confirm("Is the target connected and in recovery mode?")
+	ok, err := confirmInstallStep("flashing the "+opts.DeviceName, "Is the target connected and in recovery mode?", false, opts.Force)
 	if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 		return ErrUserCancelled
 	}

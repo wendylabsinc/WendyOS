@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -395,7 +394,7 @@ func pickFromItemsWithColumns(title string, items []tui.PickerItem, columns []tu
 	if len(columns) > 0 {
 		picker = tui.NewPickerWithTitleAndColumns(title, columns)
 	}
-	p := tea.NewProgram(picker)
+	p := tui.NewProgram(picker)
 
 	go func() {
 		p.Send(tui.PickerAddMsg{Items: items})
