@@ -60,7 +60,12 @@ const (
 	materialTimeout    = 30 * time.Second
 	blobAttemptTimeout = 5 * time.Minute
 	chunkTagSize       = 16 // AES-256-GCM tag per chunk (registrycrypto)
-	mediaTypeDockerV2  = "application/vnd.docker.distribution.manifest.v2+json"
+	// minChunkSize floors the served chunk_size, which the manifest digest
+	// does not cover: tiny chunks would let the registry inflate a download
+	// (17x at 1 byte) past the sizes the operator signed. At the floor the
+	// tags add under 0.4 %.
+	minChunkSize      = 4096
+	mediaTypeDockerV2 = "application/vnd.docker.distribution.manifest.v2+json"
 )
 
 // ReleaseImage is a registry release whose every byte verified: the OCI
@@ -162,12 +167,12 @@ func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *clou
 	defer func() { _ = closer.Close() }()
 
 	var mat *cloudpbv2.GetDeploymentMaterialResponse
-	err = p.pullRetry(ctx, a, func(ctx context.Context) error {
+	err = p.pullRetry(ctx, a, func(ctx context.Context) (bool, error) {
 		ctx, cancel := context.WithTimeout(ctx, materialTimeout)
 		defer cancel()
 		var err error
 		mat, err = client.GetDeploymentMaterial(ctx, &cloudpbv2.GetDeploymentMaterialRequest{DeploymentId: a.GetDeploymentId()})
-		return err
+		return false, err
 	})
 	if err != nil {
 		return ReleaseImage{}, err
@@ -199,8 +204,10 @@ func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *clou
 	for i, b := range blobs {
 		ct := filepath.Join(dir, strconv.Itoa(i)+".enc")
 		pt := filepath.Join(dir, strconv.Itoa(i))
-		if err := p.pullRetry(ctx, a, func(ctx context.Context) error {
-			return fetchBlob(ctx, client, a.GetDeploymentId(), b, ct)
+		if err := p.pullRetry(ctx, a, func(ctx context.Context) (bool, error) {
+			before := stagedSize(ct)
+			err := fetchBlob(ctx, client, a.GetDeploymentId(), b, ct)
+			return stagedSize(ct) > before, err
 		}); err != nil {
 			return ReleaseImage{}, err
 		}
@@ -216,12 +223,16 @@ func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *clou
 // failure (the registry could not make the assignment check, an attempt timed
 // out, a stream was cut) backs off with jitter and retries until the
 // assignment's signed validity ends: availability degrades, the check is
-// never skipped. Any other registry status is its refusal.
-func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, call func(context.Context) error) error {
+// never skipped. An attempt that made progress starts the backoff again.
+// Any other registry status is its refusal.
+func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, call func(context.Context) (bool, error)) error {
 	for failures := 0; ; failures++ {
-		err := call(ctx)
+		progressed, err := call(ctx)
 		if err == nil {
 			return nil
+		}
+		if progressed {
+			failures = 0
 		}
 		var f *pullFailure
 		switch {
@@ -266,7 +277,7 @@ func releaseBlobs(a *cloudpbv2.DeviceAssignment, m *cloudpbv2.ArtifactManifest) 
 	if chunkSize == 0 {
 		chunkSize = registrycrypto.DefaultChunkSize
 	}
-	if chunkSize > registrycrypto.MaxChunkSize {
+	if chunkSize < minChunkSize || chunkSize > registrycrypto.MaxChunkSize {
 		return nil, 0, digestRefused(fmt.Errorf("%w: %d", registrycrypto.ErrChunkSize, chunkSize))
 	}
 	var om ocispec.Manifest
@@ -376,6 +387,14 @@ func fetchBlob(ctx context.Context, client cloudpbv2.DeviceArtifactServiceClient
 		offset += uint64(len(data))
 	}
 	return nil
+}
+
+func stagedSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
 
 // decryptStaged checks the staged ciphertext's digest, then decrypts it to pt

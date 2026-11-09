@@ -46,7 +46,7 @@ func (f *pbFixture) release(t *testing.T) *testRelease {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &testRelease{plain: map[string][]byte{}, cipher: map[string][]byte{}, chunkSize: 16}
+	r := &testRelease{plain: map[string][]byte{}, cipher: map[string][]byte{}, chunkSize: minChunkSize}
 	add := func(mediaType string, data []byte) ocispec.Descriptor {
 		r.plain[digest.FromBytes(data).String()] = data
 		return ocispec.Descriptor{MediaType: mediaType, Digest: digest.FromBytes(data), Size: int64(len(data))}
@@ -59,7 +59,7 @@ func (f *pbFixture) release(t *testing.T) *testRelease {
 	om := ocispec.Manifest{
 		MediaType: ocispec.MediaTypeImageManifest,
 		Config:    add(ocispec.MediaTypeImageConfig, []byte(`{"architecture":"arm64","os":"linux"}`)),
-		Layers:    []ocispec.Descriptor{add(ocispec.MediaTypeImageLayer, layer(100)), add(ocispec.MediaTypeImageLayer, layer(0))},
+		Layers:    []ocispec.Descriptor{add(ocispec.MediaTypeImageLayer, layer(10000)), add(ocispec.MediaTypeImageLayer, layer(0))},
 	}
 	om.SchemaVersion = 2
 	oci, err := json.Marshal(om)
@@ -171,7 +171,7 @@ func (a *fakeArtifacts) GetBlob(_ context.Context, in *cloudpbv2.GetBlobRequest,
 	if !ok || in.GetDeploymentId() != a.r.assign.GetDeploymentId() {
 		return nil, status.Error(codes.NotFound, "no live assignment of this deployment")
 	}
-	s := &blobStream{data: data[in.GetOffset():], piece: 7}
+	s := &blobStream{data: data[in.GetOffset():], piece: 1000}
 	if cutNow {
 		s.data, s.end = s.data[:cut], status.Error(codes.Unavailable, "connection reset")
 	}
@@ -246,8 +246,8 @@ func (f *pbFixture) assignEntry(a *cloudpbv2.DeviceAssignment) {
 func TestRegistryPullImportsAVerifiedReleaseAndResumesACutBlob(t *testing.T) {
 	f := newPBFixture(t)
 	r := f.release(t)
-	big := r.material.GetManifest().GetBlobs()[1] // the 100-byte layer: 7 chunks
-	arts := &fakeArtifacts{r: r, cut: map[string]int{big.GetCiphertextDigest(): 50}}
+	big := r.material.GetManifest().GetBlobs()[1] // the 10000-byte layer: 3 chunks
+	arts := &fakeArtifacts{r: r, cut: map[string]int{big.GetCiphertextDigest(): 5000}}
 	rec := f.withArtifacts(arts)
 	f.assignEntry(r.assign)
 	f.cycle()
@@ -268,8 +268,8 @@ func TestRegistryPullImportsAVerifiedReleaseAndResumesACutBlob(t *testing.T) {
 			t.Fatalf("blob %s imported as %x, want %x", d, rec.blobs[d], want)
 		}
 	}
-	if got := arts.offsets[big.GetCiphertextDigest()]; !slices.Equal(got, []uint64{0, 50}) {
-		t.Fatalf("GetBlob offsets = %v, want a resume at the cut [0 50]", got)
+	if got := arts.offsets[big.GetCiphertextDigest()]; !slices.Equal(got, []uint64{0, 5000}) {
+		t.Fatalf("GetBlob offsets = %v, want a resume at the cut [0 5000]", got)
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, registryPullDir)); !os.IsNotExist(err) {
 		t.Fatalf("staging directory left behind: %v", err)
@@ -326,6 +326,13 @@ func TestRegistryPullRefusesBeforeImport(t *testing.T) {
 				f.t.Fatal(err)
 			}
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_UNWRAP},
+		{"chunk size below the floor", func(_ *pbFixture, r *testRelease) {
+			m := r.material.GetManifest()
+			m.ChunkSize = 1 // re-chunking inflates the download 17x
+			for _, b := range m.GetBlobs() {
+				b.CiphertextSize = b.GetPlaintextSize() * 17
+			}
+		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_DIGEST},
 		{"not a container release", func(_ *pbFixture, r *testRelease) {
 			r.material.GetManifest().Kind = cloudpbv2.ReleaseType_WASM
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED},
