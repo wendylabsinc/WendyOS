@@ -16,7 +16,8 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// Leave time for alternative interfaces within the agent's 15s lease request.
+// Start alternatives promptly when the system route is unavailable. Once the
+// alternatives race, allow a slow mesh TLS handshake within the caller budget.
 const uplinkAttemptTimeout = 3 * time.Second
 
 type uplink struct {
@@ -25,14 +26,15 @@ type uplink struct {
 }
 
 type uplinkDialer struct {
-	primary    uplink
-	candidates func(context.Context) ([]uplink, error)
-	timeout    time.Duration
+	primary         uplink
+	candidates      func(context.Context) ([]uplink, error)
+	timeout         time.Duration
+	fallbackTimeout time.Duration
 }
 
 func newUplinkDialer() *uplinkDialer {
 	return &uplinkDialer{primary: uplink{name: "system route", dial: (&net.Dialer{}).DialContext},
-		candidates: availableUplinks, timeout: uplinkAttemptTimeout}
+		candidates: availableUplinks, timeout: uplinkAttemptTimeout, fallbackTimeout: ConnectionSetupTimeout}
 }
 
 // Try the system route first. Race alternatives only after it fails, so a dead
@@ -40,12 +42,12 @@ func newUplinkDialer() *uplinkDialer {
 // attempt includes TLS when appropriate: a captive portal accepting TCP does
 // not establish a usable Cloud path.
 func (d *uplinkDialer) connect(ctx context.Context, attempt func(context.Context, uplink) (net.Conn, error)) (net.Conn, error) {
-	try := func(ctx context.Context, path uplink) (net.Conn, error) {
-		ctx, cancel := context.WithTimeout(ctx, d.timeout)
+	try := func(ctx context.Context, path uplink, budget time.Duration) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, budget)
 		defer cancel()
 		return attempt(ctx, path)
 	}
-	conn, primaryErr := try(ctx, d.primary)
+	conn, primaryErr := try(ctx, d.primary, d.timeout)
 	if primaryErr == nil {
 		return conn, nil
 	}
@@ -57,6 +59,10 @@ func (d *uplinkDialer) connect(ctx context.Context, attempt func(context.Context
 		return nil, errors.Join(primaryErr, err)
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	fallbackBudget := d.fallbackTimeout
+	if fallbackBudget <= 0 {
+		fallbackBudget = d.timeout
+	}
 	type result struct {
 		conn net.Conn
 		err  error
@@ -76,9 +82,9 @@ func (d *uplinkDialer) connect(ctx context.Context, attempt func(context.Context
 				if ctx.Err() != nil {
 					return nil
 				}
-				conn, err := try(ctx, path)
+				conn, err := try(ctx, path, fallbackBudget)
 				if err != nil {
-					err = fmt.Errorf("uplink %s: %w", path.name, err)
+					err = fmt.Errorf("Cloud connection through %s failed: %w", path.name, err)
 				}
 				select {
 				case results <- result{conn, err}:
@@ -156,7 +162,7 @@ func newCloudClient(address string, creds credentials.TransportCredentials, fall
 	// explicitly configured proxies instead of silently connecting directly.
 	proxy, proxyErr := httpproxy.FromEnvironment().ProxyFunc()(&url.URL{Scheme: "https", Host: address})
 	if !fallback || !interfaceFallbackSupported || proxyErr != nil || proxy != nil {
-		return grpc.NewClient(address, grpc.WithTransportCredentials(creds), withKeepalive(brokerKeepalive))
+		return grpc.NewClient(address, grpc.WithTransportCredentials(creds), withKeepalive(brokerKeepalive), cloudConnectBudget())
 	}
 	d := newUplinkDialer()
 	// Keep the hostname intact. gRPC's DNS resolver would otherwise fail on the
@@ -164,7 +170,7 @@ func newCloudClient(address string, creds credentials.TransportCredentials, fall
 	return grpc.NewClient("passthrough:///"+address,
 		grpc.WithContextDialer(func(ctx context.Context, address string) (net.Conn, error) {
 			return d.dialAuthenticated(ctx, address, creds)
-		}), grpc.WithTransportCredentials(uplinkCredentials{creds}), withKeepalive(brokerKeepalive))
+		}), grpc.WithTransportCredentials(uplinkCredentials{creds}), withKeepalive(brokerKeepalive), cloudConnectBudget())
 }
 
 func cloudKeyTransport() *http.Transport {
