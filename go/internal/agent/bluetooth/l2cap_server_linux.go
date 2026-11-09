@@ -139,10 +139,20 @@ func (c *l2capStreamConn) SetDeadline(t time.Time) error {
 }
 
 func (c *l2capStreamConn) SetReadDeadline(t time.Time) error {
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
 	return c.readDeadline.set(c.fd, unix.SO_RCVTIMEO, t)
 }
 
 func (c *l2capStreamConn) SetWriteDeadline(t time.Time) error {
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
 	return c.writeDeadline.set(c.fd, unix.SO_SNDTIMEO, t)
 }
 

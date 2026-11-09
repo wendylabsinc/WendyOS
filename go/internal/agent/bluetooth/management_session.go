@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"time"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
@@ -43,20 +42,11 @@ func serveManagementStream(ctx context.Context, rawConn net.Conn, logger *zap.Lo
 		default:
 		}
 
-		// Re-check context every 30 s via a read deadline.
-		if err := tlsConn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-			return
-		}
-
+		// Cancellation/credential expiry closes rawConn through AfterFunc.
+		// A polling read timeout could discard part of a framed message and
+		// reinterpret its remaining body as a new frame header.
 		payload, err := readMessageFromConn(tlsConn)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			return
-		}
-
-		if err := tlsConn.SetReadDeadline(time.Time{}); err != nil {
 			return
 		}
 

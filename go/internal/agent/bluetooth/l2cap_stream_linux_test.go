@@ -4,11 +4,14 @@ package bluetooth
 
 import (
 	"bytes"
-	"golang.org/x/sys/unix"
+	"errors"
 	"io"
+	"net"
 	"strconv"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestL2CAPStreamSplitsTLSFlightIntoNegotiatedSDUs(t *testing.T) {
@@ -77,5 +80,22 @@ func TestL2CAPCloseInterruptsIdleReadAndIsIdempotent(t *testing.T) {
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatalf("second close: %v", err)
+	}
+}
+
+func TestL2CAPDeadlinesDoNotTouchClosedDescriptors(t *testing.T) {
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(pair[1])
+	conn := &l2capStreamConn{fd: pair[0]}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, set := range []func(time.Time) error{conn.SetDeadline, conn.SetReadDeadline, conn.SetWriteDeadline} {
+		if err := set(time.Now()); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("deadline on closed socket: %v", err)
+		}
 	}
 }
