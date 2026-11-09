@@ -611,7 +611,7 @@ func TestMultiplexSlowUDPReceiverDoesNotBlockOtherFlows(t *testing.T) {
 	}
 }
 
-func TestMultiplexRouteWithdrawalRetiresUDPAndDrainsTCP(t *testing.T) {
+func TestMultiplexRouteWithdrawalRetiresUDPAndRetainsSession(t *testing.T) {
 	a, b := fixtureCredentials(t)
 	registry := meshingress.NewRegistry()
 	udpPort := udpLifecycleApp(t, registry, "udp")
@@ -646,11 +646,13 @@ func TestMultiplexRouteWithdrawalRetiresUDPAndDrainsTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fresh.Close()
-	if fresh.conn == tcp.conn {
-		t.Fatal("restored route reused retired session")
+	if fresh.conn != tcp.conn {
+		t.Fatal("restored route replaced a live authenticated session")
 	}
 	tcp.Close()
-	requireSessionClosed(t, tcp.conn)
+	if err := fresh.conn.Context().Err(); err != nil {
+		t.Fatal("closing TCP killed the shared UDP session", err)
+	}
 	if err := fresh.Send([]byte("restored route")); err != nil {
 		t.Fatal(err)
 	}

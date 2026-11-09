@@ -617,11 +617,18 @@ by any particular hop; clients still authenticate the destination end to end.
 
 ## Shared application QUIC sessions
 
-The application client retains one reusable QUIC connection per destination
-principal and advertised endpoint. Concurrent TCP and UDP dials share its pinned
-TLS handshake. An old connection may drain active flows while a replacement
-accepts new ones after expiry or retirement. This pool is separate from the
-hop-by-hop carrier connections and the native TLS application transport.
+The application client retains at most one live outgoing QUIC connection per
+destination principal. Concurrent TCP and UDP dials share its pinned TLS
+handshake. A healthy connection with active flows remains reusable beyond the
+ten-minute idle-session age limit. A temporary route outage cancels UDP flows
+but retains the connection and its TCP streams; new flows require a fresh signed
+route check and reuse that connection after recovery. Missing, withdrawn or
+expired destination manifests, endpoint changes, credential expiry, and stale
+session failures close the old connection before any replacement handshake.
+This also ends its active TCP streams. A warm port request has a twenty-second
+ACK bound for detecting stale sessions after a remote restart. There is no
+old-session draining overlap. This pool is separate from hop-by-hop carrier
+connections and the native TLS application transport.
 
 ALPN `wendy-app-mesh/2` permits reliable `WAS1` TCP streams and multiplexed UDP
 flows in the same connection. Each UDP flow opens a reliable `WAU4` control
