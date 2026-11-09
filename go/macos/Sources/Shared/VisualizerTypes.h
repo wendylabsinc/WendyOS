@@ -30,6 +30,9 @@ typedef struct {
 typedef struct { WDStatus status; char *local_path; } WDVisualExportResult;
 WDVisualExportResult *WDVisualEpisodeExport(uint64_t session, char *episode);
 void WDVisualExportFree(WDVisualExportResult *value);
+typedef struct { WDStatus status; char *local_path, *reason; double maximum_celsius, duration; int32_t has_maximum; } WDVisualPreviewResult;
+WDVisualPreviewResult *WDVisualPreviewAt(char *selector, char *episode);
+void WDVisualPreviewFree(WDVisualPreviewResult *value);
 
 typedef enum { WD_RECORDING_STATUS, WD_RECORDING_START, WD_RECORDING_STOP } WDVisualRecordingAction;
 WDVisualEpisodesResult *WDVisualRecording(uint64_t session, WDVisualRecordingAction action, char *name, char **sources, size_t source_count);
