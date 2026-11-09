@@ -36,7 +36,8 @@ access, a readiness check on port 3001, and a hook to open the browser.
 wendy run
 ```
 
-Select your target. Wendy builds and deploys the server, checks readiness, and
+For an unenrolled local-only Linux agent, run `wendy run --device 127.0.0.1:50051`
+on that computer instead. Otherwise select your target. Wendy builds and deploys the server, checks readiness, and
 opens its URL. Open the address printed by Wendy if the browser does not open.
 The root page should return:
 
@@ -58,10 +59,15 @@ value to:
 return {"message": "Hello from my device"}
 ```
 
-Stop the attached CLI with Ctrl+C, then start the watch loop:
+Stop the attached CLI with Ctrl+C. Watch mode does not show a device picker.
+Replace `your-device.local` with the hostname or IP from `wendy discover`, or
+use `vm:<name>` with the name from `wendy vm list`. For an unenrolled local-only
+Linux agent, use `127.0.0.1:50051`. Keep this terminal for the
+remaining commands; the variable identifies the agent, not the app's HTTP URL.
 
 ```bash
-wendy run --watch
+WENDY_TARGET='your-device.local'
+wendy run --device "$WENDY_TARGET" --watch
 ```
 
 Refresh the browser and check for the new message. Further edits trigger a
@@ -73,7 +79,7 @@ reached the target.
 Ctrl+C ends the attached CLI session. To stop the deployed app, run:
 
 ```bash
-wendy device apps stop hello-world
+wendy --device "$WENDY_TARGET" device apps stop hello-world
 ```
 
 If you used a VM and are finished with it, find its name with `wendy vm list`

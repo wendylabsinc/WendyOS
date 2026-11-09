@@ -23,7 +23,7 @@ cable, and recovery requirements before starting. For an interactive guide, run
 
 ## Confirm your device is ready
 
-Run this on your development computer:
+For a network-accessible device, run this on your development computer:
 
 ```bash
 wendy discover
@@ -33,7 +33,13 @@ Your expected device should appear. On macOS, allow Local Network access when
 prompted. For a USB connection on Linux, accept the terminal's host network setup
 prompt. If the device is missing, follow [Target not found](/docs/errors#target-not-found).
 
-Once your Linux or WendyOS device appears, [deploy your first app](/docs/getting-started/app).
+For a Linux agent installed with **Only this computer**, run
+`wendy --device 127.0.0.1:50051 device info --json` on that computer instead
+(before enrollment). It should return device information; discovery is disabled.
+See the [local Linux setup](/docs/installation/linux#verify-the-installation)
+for installing the CLI there.
+
+Once your Linux or WendyOS device responds, [deploy your first app](/docs/getting-started/app).
 Mac and ESP32 targets use the examples in their own setup guides.
 
 No hardware yet? [Program a simulated robot](/docs/getting-started/robot) or

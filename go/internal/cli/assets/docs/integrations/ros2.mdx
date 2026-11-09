@@ -89,7 +89,7 @@ Existing projects need no scaffolding — add the `frameworks.ros2` key to
   A running app with `frameworks.ros2` is optional. See
   [Multi-app deployments](/docs/guides/multi-app-deployments) for an app-based
   talker/listener stack.
-- An interactive terminal to select your target when prompted. A configured default may select it automatically. Use `--device` for scripts or an explicit target. See [device selection](/docs/clients/wendy-cli/device-selection).
+- An interactive terminal to select your target when prompted. A configured default may select it automatically. Use `--device` for scripts or an explicit target. See [device selection](/docs/advanced/clients/wendy-cli/device-selection).
 
 Use `wendy device ros2 topics` to inspect a Unitree robot's system graph directly.
 The system sidecar's first use requires internet access to download its image.
@@ -148,8 +148,11 @@ wendy device ros2 hz /chatter
 ```
 
 `echo` and `hz` need the topic's generated message packages inside the CLI
-sidecar. The stock system image includes standard ROS 2 messages, but custom
-types such as `unitree_go/msg/LowState` require additional packages. A topic can
+sidecar. The stock system inspector includes standard ROS 2 messages and the
+`unitree_go` and `unitree_api` packages, including `unitree_go/msg/LowState`.
+Other custom types need their generated message packages installed in the image
+doing the inspection. App sidecars use that app's image, so they only have the
+packages installed there. A topic can
 appear in `topics` and `topic info` even when its message package is unavailable
 for decoding.
 
