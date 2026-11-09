@@ -34,7 +34,7 @@ func DecodeTemperatureSummary(data []byte, layout *pb.RawFormat) *TemperatureSum
 	if binary.LittleEndian.Uint32(data[header:]) != 0xaabbccdd {
 		return nil
 	}
-	// Verified on 2bdf:0102 / firmware 0409: the 96x96 variant carries
+	// Verified on 2bdf:0102 / USB bcdDevice 0409: the 96x96 variant carries
 	// the same summary codes and normalized coordinates at row 196.
 	// Successive summaries match the live sensor extrema; the initial
 	// summary may be cached. Consumers must retain the freshness gate.
