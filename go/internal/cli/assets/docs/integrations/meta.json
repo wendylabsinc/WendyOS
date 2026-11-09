@@ -5,6 +5,8 @@
     "index",
     "../installation/unitree-simulators",
     "sim-to-real",
+    "sensor-fidelity",
+    "vision-language-action",
     "../installation/wendy-agent-unitree-g1",
     "../installation/unitree-g1-reflash",
     "ros2",

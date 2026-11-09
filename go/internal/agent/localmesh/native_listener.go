@@ -140,7 +140,7 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 						lease = policy.ReservePreferred(fmt.Sprintf("tls-incoming:%p", raw), meshid.Device{}, false, group, true)
 						if lease == nil {
 							slot = nil
-							return nil, errors.New("Wendy Net device connection limit reached")
+							return nil, errors.New("Wendy Net connection limit reached")
 						}
 					}
 					select {

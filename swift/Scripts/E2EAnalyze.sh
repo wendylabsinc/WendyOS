@@ -204,6 +204,7 @@ for run_dir in "${RUN_DIRS[@]}"; do
 done
 
 status=0
+declare -A failed_reviews=()
 
 if [[ "$STAGE" == "aggregate" || "$STAGE" == "all" ]]; then
   bash "$SCRIPT_DIR/E2EAggregate.sh" \
@@ -219,6 +220,7 @@ if [[ "$STAGE" == "review" || "$STAGE" == "all" ]]; then
   for run_dir in "${RUN_DIRS[@]}"; do
     bash "$SCRIPT_DIR/E2EReview.sh" --run-dir "$run_dir" "${review_args[@]}" || {
       step_status=$?
+      failed_reviews["$run_dir"]=1
       [[ $status -eq 0 ]] && status=$step_status
     }
   done
@@ -226,7 +228,13 @@ fi
 
 if [[ "$STAGE" == "report" || "$STAGE" == "all" ]]; then
   for run_dir in "${RUN_DIRS[@]}"; do
-    bash "$SCRIPT_DIR/E2EReport.sh" --run-dir "$run_dir" || {
+    (
+      # Otherwise the report reads a review that never finished as a clean result.
+      if [[ -n "${failed_reviews[$run_dir]:-}" ]]; then
+        export WENDY_E2E_REVIEW_OUTCOME=failure
+      fi
+      bash "$SCRIPT_DIR/E2EReport.sh" --run-dir "$run_dir"
+    ) || {
       step_status=$?
       [[ $status -eq 0 ]] && status=$step_status
     }

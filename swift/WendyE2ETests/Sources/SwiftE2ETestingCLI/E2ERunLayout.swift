@@ -118,7 +118,9 @@ private func e2eAttemptXUnitProblem(at attemptURL: URL) -> String? {
     }
 
     let parser = XMLParser(data: data)
-    if parser.parse() {
+    // Linux Foundation's parse() returns true for truncated documents and only
+    // reports the premature end through parserError.
+    if parser.parse(), parser.parserError == nil {
         return nil
     }
 

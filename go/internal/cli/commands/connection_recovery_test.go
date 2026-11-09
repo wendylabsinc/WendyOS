@@ -578,6 +578,11 @@ func TestPickedDeviceGetsClockRecovery(t *testing.T) {
 			if len(targets) != 2 || targets[1].PinKey != targets[0].PinKey || targets[1].Addr != targets[0].Addr {
 				t.Fatalf("retry changed target: %+v", targets)
 			}
+			for _, target := range targets {
+				if target.PinKey != lan.Hostname || target.Expected == nil || target.Expected.EntityID != "42" {
+					t.Fatalf("clock recovery lost the selected device binding: %+v", target)
+				}
+			}
 		})
 	}
 }

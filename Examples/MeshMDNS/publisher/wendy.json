@@ -1,0 +1,19 @@
+{
+  "appId": "com.example.learn-mdns-publisher",
+  "platform": "linux",
+  "isolation": "isolated",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "mesh",
+      "serviceCIDR": "10.99.0.0/16",
+      "ports": [
+        {
+          "host": 18080,
+          "container": 8080,
+          "protocol": "tcp"
+        }
+      ]
+    }
+  ]
+}

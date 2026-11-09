@@ -61,3 +61,11 @@ func (c *darwinPeerCache) known(address string, adv Advertisement, now time.Time
 func (c *darwinPeerCache) reserve(policy *localmesh.ConnectionPolicy, candidates *localmesh.CandidateQueue, address string, adv Advertisement, now time.Time) *localmesh.ConnectionLease {
 	return policy.ReservePreferred(address, c.known(address, adv, now), true, "", candidates.ReclaimEligible(address, now))
 }
+
+// Rank new peers before upgrades and standbys, using the same fresh verified
+// identity as reservation. A changed radio advertisement supplies no authority.
+func (c *darwinPeerCache) order(candidates *localmesh.CandidateQueue, keys []string, advertisements map[string]Advertisement, now time.Time, view localmesh.NodeSnapshot) []string {
+	return candidates.OrderPreferred(keys, now, view, func(address string) (meshid.Device, uint16) {
+		return c.known(address, advertisements[address], now), LinkCost
+	})
+}

@@ -50,6 +50,11 @@ func ExecutionErrorClass(err error) string {
 	if retryable, _ := sessionbroker.OperatorRecovery(err); retryable {
 		return "device_unreachable"
 	}
+	// A failed reconnect can wrap its own deadline. An explicit device
+	// reachability verdict still describes the failure better than that timer.
+	if errors.Is(err, errDeviceUnreachable) || errors.Is(err, errDeviceOffline) {
+		return ErrorClass(err)
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "context_deadline"
 	}

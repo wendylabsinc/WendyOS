@@ -4,12 +4,14 @@ package commands
 import (
 	"context"
 	"errors"
+	"os"
 	"runtime"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -87,7 +89,11 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 		return false, nil
 	}
 
-	interactive := allowPrompt && !jsonOutput && isInteractiveTerminal()
+	// wendy update recognizes no updater for a CLI the Wendy plugin's
+	// launcher installed, so that CLI gets advice once per release and no
+	// update popup (see cliupdate.PluginAdvice).
+	managed := pluginManagedCLI()
+	interactive := allowPrompt && !jsonOutput && isInteractiveTerminal() && !managed
 	if interactive && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, time.Now()) {
 		return false, nil
 	}
@@ -116,7 +122,11 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 	if !interactive && cfg.CLIUpdateNoticeShown == latest {
 		return false, nil
 	}
-	cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: %s\n", latest, version.Version, cliupdate.Command(runtime.GOOS))
+	advice := "Update with: " + cliupdate.Command(runtime.GOOS)
+	if managed {
+		advice = cliupdate.PluginAdvice(runtime.GOOS)
+	}
+	cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\n%s\n", latest, version.Version, advice)
 	trackCLIUpdate(cmd, "cli_update_offered", "completed", "", method)
 	if !interactive {
 		_ = updateCLIState(cmd.Context(), func(current *config.Config) {
@@ -210,4 +220,19 @@ func trackCLIUpdate(cmd *cobra.Command, event, outcome, errorClass, method strin
 	analytics.TrackStage(cmd.Context(), event, "wendy update", outcome, errorClass, map[string]string{
 		"stage": "cli_update", "install_method": method,
 	})
+}
+
+// cliExecutable is os.Executable; a variable so tests can pose as a
+// plugin-managed install.
+var cliExecutable = os.Executable
+
+// pluginManagedCLI reports whether this binary is one the Wendy plugin's
+// launcher installed under the wendy config directory.
+func pluginManagedCLI() bool {
+	exe, err := cliExecutable()
+	if err != nil {
+		return false
+	}
+	dir, err := config.ConfigDir()
+	return err == nil && pluginmode.ManagedInstall(exe, dir)
 }

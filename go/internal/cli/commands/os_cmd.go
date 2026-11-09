@@ -660,7 +660,8 @@ func dialOSUpdateAgent(ctx context.Context, prior *grpcclient.AgentConnection) (
 	if addr == "" {
 		addr = hostPort(prior.Host, defaultAgentPort)
 	}
-	return connectWithAutoTLS(ctx, addr)
+	conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, prior.DevicePinKey)
+	return conn, err
 }
 
 // pollDeviceOnline blocks until the same device responds to GetAgentVersion or

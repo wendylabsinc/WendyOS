@@ -2,8 +2,10 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -74,12 +77,16 @@ func runPowerModeInteractive(cmd *cobra.Command) error {
 		return err
 	}
 	defer conn.Close()
-	return runPowerModeScreen(ctx, conn.AgentService, conn.Host, os.Stdout)
+	addr := conn.Addr
+	if addr == "" {
+		addr = conn.Host
+	}
+	return runPowerModeScreen(ctx, conn.AgentService, addr, conn.DevicePinKey, os.Stdout)
 }
 
 // runPowerModeScreen shows the modes, lets the user pick one and sets it,
 // asking before a reboot and waiting for the device to return in the new mode.
-func runPowerModeScreen(ctx context.Context, client agentpb.WendyAgentServiceClient, host string, out io.Writer) error {
+func runPowerModeScreen(ctx context.Context, client agentpb.WendyAgentServiceClient, host, pinKey string, out io.Writer) error {
 	resp, err := client.GetPowerMode(ctx, &agentpb.GetPowerModeRequest{})
 	if err != nil {
 		return powerModeRPCError("reading the power mode", err)
@@ -105,7 +112,7 @@ func runPowerModeScreen(ctx context.Context, client agentpb.WendyAgentServiceCli
 
 	label := powerModeLabel(o.resp.GetMode())
 	fmt.Fprintf(out, "Power mode %s set; the device is rebooting now.\n", tui.Value(label))
-	applied, err := waitPowerModeAppliedFn(ctx, host, o.resp.GetMode().GetId())
+	applied, err := waitPowerModeAppliedFn(ctx, host, pinKey, o.resp.GetMode().GetId())
 	if err != nil {
 		return err
 	}
@@ -124,6 +131,9 @@ func pollPowerModeApplied(ctx context.Context, probe powerModeProbe, want int32,
 		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		cur, err := probe(probeCtx)
 		cancel()
+		if errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+			return nil, err
+		}
 		if err == nil {
 			last = cur
 			if cur.GetId() == want {
@@ -144,13 +154,16 @@ func pollPowerModeApplied(ctx context.Context, probe powerModeProbe, want int32,
 
 // waitForPowerModeApplied waits for the device at host to come back reporting
 // mode want, behind a spinner on an interactive terminal.
-func waitForPowerModeApplied(ctx context.Context, host string, want int32) (*agentpb.PowerMode, error) {
-	addr := hostPort(host, defaultAgentPort)
+func waitForPowerModeApplied(ctx context.Context, host, pinKey string, want int32) (*agentpb.PowerMode, error) {
+	addr := host
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = hostPort(host, defaultAgentPort)
+	}
 	ctx, cancel := context.WithTimeout(ctx, powerModeWaitTimeout)
 	defer cancel()
 
 	probe := func(ctx context.Context) (*agentpb.PowerMode, error) {
-		conn, err := connectWithAutoTLS(ctx, addr)
+		conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, pinKey)
 		if err != nil {
 			return nil, err
 		}

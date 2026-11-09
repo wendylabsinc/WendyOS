@@ -1,221 +1,31 @@
 ---
-title: Quickstart
-description: Install Wendy and watch a simulated robot move, then connect your own device and deploy an app.
+title: Get started
+description: Choose your first Wendy project, then run it and make a change.
 ---
 
-## What is Wendy?
+Wendy builds your code, runs it on a robot or edge device, and streams its logs to your computer.
+Choose one tutorial below. Each covers setup, a working example, and your first change.
+Neither requires a Wendy Cloud account.
 
-Wendy builds your code, deploys it to a robot or edge device, and streams its logs
-back to your computer. Start by watching a simulated Go2 move in your browser.
-You do not need physical hardware or a Wendy Cloud account for the tour.
+Already using Docker or Ubuntu? [See what Wendy adds](/docs/concepts/why-wendy),
+including the difference between installing Wendy Agent and choosing WendyOS.
 
-Wendy has three parts:
+Keep your Dockerfiles and standard ROS 2 nodes, messages, and launch files. Stagefiles are optional. App configuration handles deployment, permissions, and networking; it does not replace your application APIs.
 
-- **On your device: WendyOS**, an open source Linux operating system for NVIDIA Jetson and Raspberry Pi. Already running Linux? Install Wendy Agent instead.
-- **On your computer: the `wendy` CLI**, which sets up devices and deploys your apps.
-- **Optional: Wendy Cloud**, for deploying to and managing devices from anywhere.
-
-Write your app in Python, Swift, Rust, C++, TypeScript, or anything else that runs in a container.
-
-Install the CLI below, then take the robot tour. If you already have hardware,
-you can go straight to [device setup](#2-set-up-a-device) and deploy a small app.
-
-## 1. Install the Wendy CLI
-
-<Tabs items={['macOS / Linux', 'Windows']} groupId="quickstart-host-os" persist>
-<Tab value="macOS / Linux">
-
-```bash
-curl -fsSL https://install.wendy.dev/cli.sh | bash
-wendy --version
-```
-
-</Tab>
-<Tab value="Windows">
-
-```powershell
-winget install WendyLabs.Wendy --source winget
-```
-
-The managed robot VM tour needs macOS or Linux. On Windows, follow device setup
-below or try the [local Docker robot demo](https://wendy.dev/quickstart?target=simulator).
-
-</Tab>
-</Tabs>
-
-If `wendy --version` is unavailable after installation, open a new terminal and retry.
-
-## Try the robot tour
-
-`wendy tour` and `wendy run` check Docker and QEMU, and offer to install what is
-missing: Docker Desktop and QEMU through Homebrew on macOS, or QEMU through
-apt-get or dnf on Linux. On Linux, install and start
-[Docker](https://docs.docker.com/get-started/get-docker/) with Buildx first.
-Python runs inside the container, so you do not need it on your computer.
-
-Allow four virtual CPUs, 4 GiB of VM memory, and space for the downloaded OS and
-container images. Apple Silicon runs the ARM64 VM with hardware acceleration;
-x86 computers use slower emulation. The initial downloads and builds can take
-several minutes. See [virtual-device setup](/docs/installation/wendyos-virtual-machine)
-for more details.
-
-```bash
-wendy tour
-```
-
-Choose the recommended simulated robot path. The tour creates a Go2 virtual
-device, opens its 3D viewer, and starts a five-second walk. Watch the robot move
-in the browser. The tour verifies a change in position and stops the movement
-before reporting success.
-
-The movement settings are in `~/Documents/wendy-robot-tour/tour.json`. Change
-`turn_rps` to `0` to walk straight, then repeat the tour with the same virtual device:
-
-```bash
-wendy tour --simulator
-```
-
-The VM and its viewer remain available after the check. Use the exact
-`wendy vm stop` command printed by the tour when finished. To keep a separate
-starter, pass `--project DIR`. You can add a coding agent or cloud connection later.
-
-## 2. Set up a device
-
-For guided hardware setup, run `wendy tour --hardware`, or choose a path below.
-
-The app below builds with Docker and Buildx. On macOS, `wendy run` offers to
-install Docker Desktop; on Linux, install and start Docker yourself. The hardware
-guides list the storage, power, and cables needed for each board. Installing
-WendyOS erases the selected target storage.
-
-<Tabs items={['WendyOS VM', 'Jetson Orin', 'Jetson Thor', 'Raspberry Pi', 'Linux computer']} groupId="quickstart-device" persist>
-<Tab value="WendyOS VM">
-
-No hardware needed. On macOS and Linux, Wendy creates the simulator for you in
-step 4 and offers to install QEMU if it is missing.
-
-On Windows, run the Linux Wendy CLI and your container builder inside WSL2 for
-this quickstart; Wendy offers to install QEMU there as on Linux. Native Windows
-[foreground VMs](/docs/installation/wendyos-virtual-machine#windows-foreground-vms)
-support device inspection, but local app builds and automatic app-port forwarding
-require macOS or Linux.
-
-This generic virtual device runs your app without a simulated robot or physical
-camera, GPU, or GPIO. Use the tour above for a moving Go2.
-[More about virtual devices](/docs/installation/wendyos-virtual-machine)
-
-</Tab>
-<Tab value="Jetson Orin">
-
-For Jetson Orin Nano and AGX Orin developer kits, use full USB recovery to update
-boot firmware and the OS together:
-
-1. Fit the NVMe SSD in the board, or use onboard eMMC on AGX Orin. Connect the
-   board's recovery USB-C port to your computer with a data cable and connect power.
-2. Enter recovery mode using your board's [connection and button instructions](/docs/installation/wendyos-nvidia-jetson-orin-nano#full-usb-recovery).
-3. Run `wendy install`, choose your Jetson and **full USB recovery**, then review
-   the storage to erase. No external NVMe adapter is needed for this path.
-4. Keep power and USB attached. Follow the installer's reboot instruction, then
-   run `wendy discover` and confirm that the expected board appears.
-
-The separate rootfs-only workflow requires compatible boot firmware and does
-not update it. Follow the full guide before choosing that advanced path.
-
-[Full guide](/docs/installation/wendyos-nvidia-jetson-orin-nano)
-
-</Tab>
-<Tab value="Jetson Thor">
-
-<YouTubeVideo id="ox6y7X_nckI" title="Getting Started with NVIDIA Jetson Thor" />
-
-1. With the Thor off, connect your computer to the USB-C port next to HDMI. Connect power to the other USB-C port.
-2. Enter recovery mode: press Power, hold the middle Force Recovery button, tap Reset, then release Force Recovery.
-3. Run `wendy install` and choose the Thor. It flashes over USB, so you need no external drive.
-4. When flashing finishes, power-cycle the Thor. After 1–2 minutes, confirm that `wendy discover` lists it.
-
-[Full guide](/docs/installation/wendyos-nvidia-jetson-agx-thor)
-
-</Tab>
-<Tab value="Raspberry Pi">
-
-<YouTubeVideo id="87GlYkx86jY" title="No Extra Hardware Needed: Run Apps on Raspberry Pi 5 with WendyOS" />
-
-For Raspberry Pi 5, 4, or 3:
-
-1. Insert the microSD card into a reader connected to your computer.
-2. Run `wendy install`, choose your Pi, then carefully select the card to erase.
-   Configure Wi-Fi now if you will use it. Cloud enrollment is optional.
-3. Put the card in the powered-off Pi. A Pi 4 or 5 can connect through a USB-C
-   data cable if the computer supplies enough power. Otherwise use the Pi's
-   power supply and Ethernet or Wi-Fi. A Pi 3 connects over the network.
-4. After 1–2 minutes, confirm that `wendy discover` lists it.
-
-[Full guide](/docs/installation/wendyos-raspberry-pi-5)
-
-</Tab>
-<Tab value="Linux computer">
-
-<YouTubeVideo id="MjJ-LgXN0Pg" title="Getting started with DGX Spark" />
-
-Use any Linux machine, such as Ubuntu 22.04 or later on ARM64 or x86-64. The video uses an NVIDIA DGX Spark. Run this on that machine to install the agent with network access, so your development machine can reach it:
-
-```bash
-curl -fsSL https://install.wendy.dev/agent.sh | bash -s -- --network-access network
-```
-
-Keep it on the same network as your development machine, and confirm that `wendy discover` lists it. [Full guide](/docs/installation/linux)
-
-</Tab>
-</Tabs>
-
-Using a [Mac](/docs/installation/wendy-agent-macos), an [ESP32](/docs/installation/wendy-lite-esp32), or a [Unitree G1](/docs/installation/wendy-agent-unitree-g1)? Each has its own guide.
-
-For local discovery, allow **Local Network** access on macOS. On Linux, run
-`wendy discover` in a terminal and accept the host USB-C network setup prompt
-when using that connection. A successfully written image is only the first
-step; wait until your expected device answers before deploying an app.
-
-## 3. Create an app
-
-```bash
-wendy init hello-wendy --target wendyos --language node --template simple-api --assistant skip --git-init no
-cd hello-wendy
-```
-
-This creates a small TypeScript web server. You do not need Node.js installed, because Wendy builds it in a container.
-
-## 4. Run it
-
-```bash
-wendy run
-```
-
-Select your device and press Enter.
-
-For the simulator, press Tab to open the **Simulator** tab, press **c** to create it, and choose **Generic WendyOS**. The first run downloads the WendyOS image, so it takes a few minutes.
-
-Wendy builds the app, deploys it, and streams its logs. When the app is ready, Wendy prints `App reachable at` with its URL and opens it in your browser:
-
-```json
-{"message":"hello-world"}
-```
-
-<Callout type="success" title="Your first Wendy app is running">
-That response came from your device. Edit `src/index.ts`, then run `wendy run --watch` to redeploy every time you save.
-</Callout>
-
-Stuck? See [troubleshoot your first deployment](/docs/errors).
-
-## Next steps
+## Choose your first project
 
 <Cards>
-  <Card title="Operate through Cloud v2" href="/docs/cloud">Enroll a device and deploy remotely. Existing users can follow the Legacy tab and migration guide.</Card>
-  <Card title="Explore the Wendy ecosystem" href="/docs/concepts/ecosystem">Find the tools for sensors, data collection, BI, mobile operation, and AI development.</Card>
-  <Card title="Use Wendy in ChatGPT" href="/docs/guides/chatgpt">Connect the hosted Wendy plugin to your devices through a CLI session.</Card>
-  <Card title="Build in your language" href="/docs/guides/tutorials">Tutorials for Python, Swift, Rust, C++, TypeScript, and Mojo.</Card>
-  <Card title="Connect devices with Wendy Net" href="/docs/guides/wendy-net">Configure local links, share Internet access, and connect apps across devices.</Card>
-  <Card title="Use cameras and GPUs" href="/docs/hardware">Give your app access to device hardware.</Card>
-  <Card title="Record data with campaigns" href="/docs/data">Capture sensor data, application events, and model results around a trigger.</Card>
-  <Card title="Debug your app" href="/docs/remote-debugging/vscode-extension">Set breakpoints in VS Code while your app runs on the device.</Card>
-  <Card title="Learn how Wendy works" href="/docs/concepts">Devices, `wendy.json`, and the build and deploy loop.</Card>
+  <Card title="Program a simulated robot" href="/docs/getting-started/robot">Start here to try robotics without hardware. Watch a Go2 walk, edit a Python patrol app, and run your own route. Requires macOS or Linux.</Card>
+  <Card title="Deploy your first app" href="/docs/getting-started/app">Run a web server on a Linux device or a local virtual device. Change its response and deploy your edit. Use macOS, Linux, or Windows with WSL2.</Card>
 </Cards>
+
+## Have a board to set up?
+
+Follow the [setup guide for your device](/docs/installation), then continue with
+[Deploy your first app](/docs/getting-started/app). Already running WendyOS or Wendy Agent? Go straight to the app tutorial.
+
+WendyOS includes the device agent. On an existing Linux computer, you can install
+Wendy Agent and keep your OS. The tutorials install the Wendy CLI on your development computer.
+
+Native [Mac apps](/docs/installation/wendy-agent-macos) and
+[ESP32 apps](/docs/installation/wendy-lite-esp32) have separate setup guides.

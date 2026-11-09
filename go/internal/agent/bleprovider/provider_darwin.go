@@ -59,15 +59,13 @@ func Run(ctx context.Context, cfg Config) error {
 				latest[d.Address] = d
 			}
 		case <-ticker.C:
+			now := time.Now()
 			keys := []string{}
-			matches := 0
+			advertisements := make(map[string]Advertisement)
 			for address, d := range latest {
-				if time.Since(d.LastSeen) <= 30*time.Second {
-					keys = append(keys, address)
+				if now.Sub(d.LastSeen) > 30*time.Second {
+					continue
 				}
-			}
-			for _, address := range candidates.Order(keys, time.Now()) {
-				d := latest[address]
 				adv, ok := matchingServiceData(d.ServiceData, ServiceUUID(cfg.Credentials.Device.Tenant()), cfg.NetworkName)
 				if !ok {
 					var err error
@@ -76,7 +74,15 @@ func Run(ctx context.Context, cfg Config) error {
 						continue
 					}
 				}
-				matches++
+				keys = append(keys, address)
+				advertisements[address] = adv
+			}
+			var view localmesh.NodeSnapshot
+			if snapshot != nil {
+				view = snapshot()
+			}
+			for _, address := range authenticatedRadios.order(&candidates, keys, advertisements, now, view) {
+				adv := advertisements[address]
 				lease := authenticatedRadios.reserve(policy, &candidates, address, adv, time.Now())
 				if lease == nil {
 					continue
@@ -105,7 +111,7 @@ func Run(ctx context.Context, cfg Config) error {
 			if cfg.Status != nil {
 				counts := policy.Counts()
 				diagnosticMu.Lock()
-				detail := fmt.Sprintf("CoreBluetooth: %d mesh advertisements, %d links, %d connecting", matches, counts.Ready, counts.Attempts)
+				detail := fmt.Sprintf("CoreBluetooth: %d mesh advertisements, %d links, %d connecting", len(keys), counts.Ready, counts.Attempts)
 				if lastError != "" {
 					detail += "; last link error: " + lastError
 				}

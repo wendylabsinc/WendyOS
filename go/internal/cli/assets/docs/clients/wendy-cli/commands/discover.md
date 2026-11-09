@@ -29,6 +29,19 @@ Local discovery combines these mechanisms and merges their results:
   (case-insensitive).
 - **LAN discovery** — uses mDNS/Bonjour to find WendyOS devices and Headless Mac targets advertising themselves on the local network.
 
+## Find devices before enabling Wendy Net
+
+Devices on the same LAN can be discovered and managed even when Wendy Net is
+disabled. Scan once and exit with:
+
+```sh
+wendy discover --type lan --timeout 5s
+```
+
+Use a returned device name or address with `--device` for deployment and device
+commands. Joining Wendy Net is a separate step for destinations reachable only
+through the mesh.
+
 ## Wendy Net mesh discovery
 
 With a selected organization and a valid saved sign-in certificate,
@@ -71,8 +84,12 @@ stays inside the private session; it does not install host routes or change DNS.
 
 The CLI discovers nearby routers over LAN and Bluetooth, then follows routes
 across the mesh. When capacity allows, it can keep both connections to a neighbour,
-with the slower connection ready as a backup. LAN mesh discovery requires an IPv4 interface and multicast
-access. Routed LAN subnets can work when ordinary device discovery supplies
+with the slower connection ready as a backup. See
+[backup connections and recovery](/docs/advanced/development/local-mesh-radio#backup-connections-and-recovery)
+for connection limits and recovery timing.
+
+LAN mesh discovery requires an IPv4 interface and multicast access.
+Routed LAN subnets can work when ordinary device discovery supplies
 addresses, for example through a DNS-SD reflector between VLANs, and the agents
 support routed operator links. USB Ethernet is included when the operating
 system exposes an eligible interface. The router can switch paths and forward
@@ -203,6 +220,11 @@ confirmed during the current scan.
 
 If the CLI cannot verify a device's agent, select its row to see what went
 wrong and what to try next.
+
+Connecting to an enrolled device, including updating its agent with `u`, needs
+a trusted expected device identity. A nearby discovery row alone does not
+establish that identity. See [device identity and recovery](../device-selection.md#device-identity)
+if the CLI reports a missing binding.
 
 ### Clipboard JSON
 

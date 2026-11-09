@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "telemetry-stream"
+  ],
+  "stdout": "{\"type\":\"metric\",\"timestamp\":\"2026-10-19T23:20:21.454148441Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"2026.10.05-134249\"},\"name\":\"process.cpu.time\",\"value\":0.612121,\"metricType\":\"sum\",\"unit\":\"s\",\"attributes\":{\"cpu.mode\":\"system\"}}\n{\"type\":\"metric\",\"timestamp\":\"2026-10-19T23:20:21.454223903Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"2026.10.05-134249\"},\"name\":\"process.memory.usage\",\"value\":56475648,\"metricType\":\"gauge\",\"unit\":\"By\"}\n{\"type\":\"metric\",\"timestamp\":\"2026-10-19T23:20:31.50779409Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"2026.10.05-134249\"},\"name\":\"process.cpu.time\",\"value\":0.759756,\"metricType\":\"sum\",\"unit\":\"s\",\"attributes\":{\"cpu.mode\":\"system\"}}\n{\"type\":\"metric\",\"timestamp\":\"2026-10-19T23:20:31.507816923Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"2026.10.05-134249\"},\"name\":\"process.memory.usage\",\"value\":58654720,\"metricType\":\"gauge\",\"unit\":\"By\"}\n",
+  "stderr": "Connecting to simulator {{vm_name}}...\n",
+  "exit_code": 0
+}

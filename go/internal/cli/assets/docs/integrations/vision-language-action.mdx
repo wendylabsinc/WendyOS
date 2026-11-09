@@ -1,0 +1,37 @@
+---
+title: Use vision-language and action models
+description: Run a local VLM camera example, then understand what a VLA needs before it can control a robot.
+---
+
+A vision-language model, or VLM, accepts images and a text prompt and generates a response. It helps answer open-ended questions such as "Which shelf looks empty?" A vision-language-action model, or VLA, predicts robot actions from images and instructions, often with joint or other robot state.
+
+| Model | Typical output | Useful for |
+| --- | --- | --- |
+| YOLO detector | Classes, boxes, confidence | Finding known object categories |
+| VLM | Descriptions or structured answers | Questions about a scene |
+| VLA | Action values or sequences | A task with a compatible trained robot policy |
+
+A VLM choosing a named skill is different from a VLA predicting continuous actions. Neither fluent text nor a valid action vector proves the task succeeded.
+
+## Run a local VLM
+
+The [HelloVLM example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/HelloVLM) has a camera UI, prompt editor, and saved frames, responses, and timing. It targets substantial NVIDIA hardware, tested on Jetson AGX Thor, with an MJPG USB webcam. Its default model downloads approximately 16.5 GB of weights on first start; allow additional storage for images and recordings.
+
+From a WendyOS checkout:
+
+```sh
+cd Examples/HelloVLM/llm
+wendy run --detach
+cd ../app
+wendy run
+```
+
+Select the same compatible device for both deployments. Wait for the model to load, then open `http://DEVICE_ADDRESS:8080`. Ask "Is a cup visible? Describe the evidence; say when uncertain." Place, remove, and partly hide a cup. Compare each answer with its saved frames and capture time. Check backend logs if no answer arrives.
+
+## Before choosing a VLA
+
+[SmolVLA](https://huggingface.co/docs/lerobot/v0.6.0/en/smolvla) predicts chunks of future actions and supports adaptation with robot demonstrations. A base checkpoint is not a universal controller. Verify camera inputs, state layout, units, joint order, normalization, and compatible task training before integration.
+
+Ten steps at 20 steps per second cover 0.5 seconds. That prediction may become stale when the scene changes. Keep cancellation and robot-specific limits in the control layer; discard queued actions from canceled requests.
+
+The deployment tools can run your chosen runtime and record its outputs. They do not convert an arbitrary checkpoint into a Go2/G1 controller. First log predictions without actuation, then evaluate in a compatible simulator against a scripted baseline. Include [imperfect sensors](/docs/integrations/sensor-fidelity), not only clear images and exact joint values.

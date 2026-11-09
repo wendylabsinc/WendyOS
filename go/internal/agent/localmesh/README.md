@@ -105,6 +105,11 @@ firmware events do not select an arbitrary path for teardown.
 A cheaper LAN link still replaces a slower link only to the same principal;
 LAN does not consume radio capacity. The shared carrier preference can retain
 NAN when shedding duplicate BLE links, independently of connection limits.
+`PeerLink.ForwardingReady` records local runtime evidence that the authenticated
+neighbour is Babel-reachable and its current authorized /128 is selected and
+installed through that exact carrier. `HasCheaperLink` requires this flag:
+authenticated presence or a cheaper discovery candidate alone cannot justify
+retiring a carrier that still forwards traffic.
 Only a fresh candidate for BLE can displace a redundant BLE link; NAN-only
 presence cannot use the freed Bluetooth slot. Failed or expired candidates and
 devices already reached on another carrier do not displace the fallback.
@@ -350,13 +355,16 @@ Babel's existing Route Request; periodic updates remain a fallback.
 For a pure sequence advance, the receiver can retain one compact authorization
 from the preceding independently verified proof until the matching usable finite
 Babel candidate arrives. It retains no old announcement payload and does not
-re-export or persist that authority. Its original one-duration receiver deadline
-and original selected certificate-path cap can only shorten, including after
-clock correction. The replacement authorizes only its own tuple. A change to
+re-export or persist that authority; the old body never appears in `Snapshot`
+or `Records` exports. Its original one-duration receiver deadline and original
+selected certificate-path cap can only shorten, including after clock correction.
+Every snapshot query also bounds the retained proof by the current entry's
+certificate deadline. The replacement authorizes only its own tuple. A change to
 identity, router, signing key or other advertised fields, an explicit withdrawal,
-or loss of either proof's validity ends this handoff immediately. Once the real
-replacement candidate is usable, the old authorization is removed and route
-selection advances without an intermediate unreachable route. No sequence,
+or loss of either proof's validity clears an existing handoff immediately. Once
+the real replacement candidate is usable, `CompleteRouteHandoff` atomically
+removes the old authorization and route selection advances without an
+intermediate unreachable route. No sequence,
 metric or path is inferred from the new proof.
 
 Each receiver starts one monotonic payload deadline from the signed duration.

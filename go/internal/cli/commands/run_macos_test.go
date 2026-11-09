@@ -787,6 +787,22 @@ func TestRequireRegistryAuth_AllowsWhenNotProvisioned(t *testing.T) {
 	}
 }
 
+// A container with the admin entitlement reaches the agent over its socket with
+// no client certificates; the socket is its credential, so the gate is skipped.
+func TestRequireRegistryAuthSkipsOverTheAgentSocket(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	conn, cleanup := startFakeProvisioningServer(t, &fakeProvisionedServer{})
+	defer cleanup()
+	conn.Host = "unix:/run/wendy/agent.sock"
+
+	if err := requireRegistryAuth(context.Background(), conn); err != nil {
+		t.Fatalf("requireRegistryAuth = %v; want nil over the agent socket", err)
+	}
+}
+
 func TestStartAndStreamContainer_FallsBackWhenCreateProgressIsUnimplemented(t *testing.T) {
 	origInteractive := isInteractiveTerminalFn
 	t.Cleanup(func() { isInteractiveTerminalFn = origInteractive })
