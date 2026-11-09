@@ -615,6 +615,50 @@ QUIC and, when available, TCP with TLS. Lite can use the TLS endpoint without
 QUIC. These signed destination endpoints are independent of the carrier used
 by any particular hop; clients still authenticate the destination end to end.
 
+## Shared application QUIC sessions
+
+The application client retains at most one live outgoing QUIC connection per
+destination principal. Concurrent TCP and UDP dials share its pinned TLS
+handshake. A healthy connection with active flows remains reusable beyond the
+ten-minute idle-session age limit. A temporary route outage cancels UDP flows
+but retains the connection and its TCP streams; new flows require a fresh signed
+route check and reuse that connection after recovery. Missing, withdrawn or
+expired destination manifests, endpoint changes, credential expiry, and stale
+session failures close the old connection before any replacement handshake.
+This also ends its active TCP streams. A warm port request has a twenty-second
+ACK bound for detecting stale sessions after a remote restart. Waiting for
+stream credit or receiving a per-stream refusal does not retire the shared
+connection; the attempted flow returns its bounded setup error while existing
+flows continue. There is no
+old-session draining overlap. This pool is separate from hop-by-hop carrier
+connections and the native TLS application transport.
+
+ALPN `wendy-app-mesh/2` permits reliable `WAS1` TCP streams and multiplexed UDP
+flows in the same connection. Each UDP flow opens a reliable `WAU4` control
+stream naming an authorized destination port and negotiating message/chunk
+capacity; `WUA4` acknowledges admission. That control stream remains open for
+the flow's lifetime. Each QUIC DATAGRAM starts with the control stream ID as an
+8-byte big-endian integer, followed by the existing version-2 UDP message
+fragment. Stream IDs are never reused within a connection. Unknown or closed
+IDs are dropped, and closing or revoking one flow does not close other flows.
+
+The maximum framed chunk remains 1,000 bytes: the flow prefix leaves 992 bytes
+for the UDP message fragment, including its 20-byte fragment header. A lower
+QUIC DATAGRAM capacity subtracts the 8-byte prefix before the message scheduler
+reduces its chunk size. Complete application UDP messages still support 65,507
+bytes and are delivered only after complete reassembly. DATAGRAM fragments
+remain unreliable; they are not repaired through a reliable stream. Existing
+per-flow, peer and node message/socket budgets and fragment scheduling continue
+to apply. A session admits at most eight active TCP streams and 32 UDP flows,
+subject to those resource budgets, so UDP controls do not consume TCP capacity.
+
+Servers also accept ALPN `wendy-app-mesh/1` for older clients, retaining its
+single-UDP-flow connection ownership and wire framing. Updated clients offer
+both protocols during the authenticated handshake. TCP can use negotiated v1;
+shared UDP requires v2 and returns an unsupported-protocol error for a v1 peer,
+which must be upgraded. There is no second connection or downgrade retry after
+an authentication failure. Native TLS UDP retains its separate framing.
+
 ## Application service discovery
 
 Applications with the mesh network entitlement can browse signed Wendy Net
