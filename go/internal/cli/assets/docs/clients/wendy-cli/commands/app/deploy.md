@@ -8,7 +8,7 @@ and each device gets its own signed assignment.
 wendy app deploy --release <release-id> --device <device-uuid> [--device ...]
 wendy app assign --deployment <deployment-id> --device <device-uuid>
 wendy app unassign --deployment <deployment-id> --device <device-uuid>
-wendy app rotate --deployment <deployment-id>
+wendy app rotate --deployment <deployment-id> --device <device-uuid> [--device ...]
 ```
 
 - **deploy** creates a deployment of the release, makes its deployment key
@@ -18,8 +18,9 @@ wendy app rotate --deployment <deployment-id>
   manifest digest is not the one you expect.
 - **assign** adds devices to an existing deployment.
 - **unassign** removes devices; Cloud stops serving them the release.
-- **rotate** replaces the deployment key and re-assigns the deployment's
-  devices (or the `--device` list). Only the deployment's creator can rotate.
+- **rotate** replaces the deployment key and re-assigns each `--device` at
+  it. Name every device that should keep the deployment; devices not named
+  stay on the old key. Only the deployment's creator can rotate.
 
 Tag targets are not supported yet: a device cannot verify a tag that Cloud
 resolved, so `--target-tag` is refused. Name each device with `--device`.

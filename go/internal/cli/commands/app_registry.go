@@ -126,11 +126,11 @@ func (f *registryFlags) bind(cmd *cobra.Command, deployment bool) {
 
 // run validates the flags and runs call with this project's app id against
 // the session's registry.
-func (f *registryFlags) run(cmd *cobra.Command, needDevices bool, call func(context.Context, *registryOp, string, []string) error) error {
+func (f *registryFlags) run(cmd *cobra.Command, call func(context.Context, *registryOp, string, []string) error) error {
 	if cmd.Flags().Lookup("deployment") != nil && !canonicalUUID(f.deployment) {
 		return usageErrorf("--deployment must be a deployment id (lower-case UUID)")
 	}
-	if needDevices && len(f.devices) == 0 {
+	if len(f.devices) == 0 {
 		return usageErrorf("name each target device with --device <uuid>")
 	}
 	for _, d := range f.devices {
@@ -174,7 +174,7 @@ func newAppDeployCmd() *cobra.Command {
 			if !canonicalUUID(release) {
 				return usageErrorf("--release must be a release id (lower-case UUID)")
 			}
-			return f.run(cmd, true, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
+			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
 				return op.deploy(ctx, appID, release, digest, devices)
 			})
 		},
@@ -193,7 +193,7 @@ func newAppAssignCmd() *cobra.Command {
 		Short: "Assign more devices to an existing deployment",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, true, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
+			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
 				d, err := op.current(ctx, f.deployment)
 				if err != nil {
 					return err
@@ -213,7 +213,7 @@ func newAppUnassignCmd() *cobra.Command {
 		Short: "Remove devices from a deployment; Cloud stops serving them its release",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, true, func(ctx context.Context, op *registryOp, _ string, devices []string) error {
+			return f.run(cmd, func(ctx context.Context, op *registryOp, _ string, devices []string) error {
 				return op.unassign(ctx, f.deployment, devices)
 			})
 		},
@@ -226,13 +226,13 @@ func newAppRotateCmd() *cobra.Command {
 	var f registryFlags
 	cmd := &cobra.Command{
 		Use:   "rotate",
-		Short: "Replace a deployment's key and re-assign its devices",
-		Long: "Seals the release key under a new deployment key and re-assigns each device at it. Devices\n" +
-			"default to the deployment's picked targets; --device names them instead. Only the\n" +
-			"deployment's creator can rotate (Cloud accepts its custodian wrap from them only).",
+		Short: "Replace a deployment's key and re-assign the named devices",
+		Long: "Seals the release key under a new deployment key and re-assigns each --device at it.\n" +
+			"Name every device that should keep the deployment: devices not named stay on the old key.\n" +
+			"Only the deployment's creator can rotate (Cloud accepts its custodian wrap from them only).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return f.run(cmd, false, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
+			return f.run(cmd, func(ctx context.Context, op *registryOp, appID string, devices []string) error {
 				return op.rotate(ctx, f.deployment, appID, devices)
 			})
 		},
@@ -462,6 +462,8 @@ func (op *registryOp) publish(ctx context.Context, releaseID string, img v1.Imag
 	manifest := &cloudpb.ArtifactManifest{
 		ManifestDigest: "sha256:" + hex.EncodeToString(sum[:]), OciManifest: rawManifest, Kind: cloudpb.ReleaseType_CONTAINER,
 		ContentKeyId: registrycrypto.KeyID(contentKey), Aead: cloudpb.AeadSuite_AEAD_SUITE_AES_256_GCM_CHUNKED,
+		// Always 64 KiB: the manifest digest does not cover chunk_size, so the
+		// agent refuses chunks below 4 KiB (T14) and nothing here varies it.
 		ChunkSize: registrycrypto.DefaultChunkSize,
 	}
 	files := map[string]string{} // ciphertext digest -> encrypted file
@@ -677,8 +679,8 @@ func (op *registryOp) deploy(ctx context.Context, appID, releaseID, wantDigest s
 	}, d); err != nil {
 		return fmt.Errorf("creating the deployment: %w", err)
 	}
-	if !canonicalUUID(d.GetId()) {
-		return fmt.Errorf("Cloud returned deployment id %q", d.GetId())
+	if !canonicalUUID(d.GetId()) || d.GetAppReleaseId() != releaseID {
+		return fmt.Errorf("Cloud returned deployment %q of release %q, not of %s", d.GetId(), d.GetAppReleaseId(), releaseID)
 	}
 	cliLogln("Created deployment %s of release %s (%s)", d.GetId(), releaseID, m.GetManifestDigest())
 	kd, err := op.newDeploymentKey(ctx, d, m, contentKey)
@@ -712,7 +714,17 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 		if err != nil {
 			return nil, fmt.Errorf("deployment %s: %w", deploymentID, err)
 		}
+		// Open the sealed key so the digest signed into assignments is the
+		// one it is bound to, not just what Cloud lists beside it.
 		sealed := resp.GetSealedContentKeys()[j]
+		contentKey, err := registrycrypto.SealedKey{
+			OrganizationID: op.org, DeploymentID: deploymentID, ManifestDigest: sealed.GetManifestDigest(),
+			ContentKeyID: sealed.GetContentKeyId(), DeploymentKeyID: sealed.GetDeploymentKeyId(),
+		}.Open(key, sealed.GetNonce(), sealed.GetCiphertext())
+		if err != nil {
+			return nil, fmt.Errorf("deployment %s: its sealed release key does not open: %w", deploymentID, err)
+		}
+		clear(contentKey)
 		return &keyedDeployment{deployment: d, manifestDigest: sealed.GetManifestDigest(), key: key, sealed: sealed}, nil
 	}
 	return nil, fmt.Errorf("deployment %s has no key wrapped to this machine's registry key %s", deploymentID, op.keyID)
@@ -782,11 +794,10 @@ func (op *registryOp) rotate(ctx context.Context, deploymentID, appID string, de
 	if err != nil {
 		return err
 	}
+	// Named, never defaulted: the deployment's create-time targets would
+	// re-grant devices unassigned since and miss devices assigned since.
 	if len(devices) == 0 {
-		devices = old.deployment.GetTargetDeviceIds()
-	}
-	if len(devices) == 0 {
-		return usageErrorf("deployment %s names no devices; name them with --device", deploymentID)
+		return usageErrorf("name each device to re-assign with --device")
 	}
 	keys, err := op.deviceKeys(ctx, devices)
 	if err != nil {

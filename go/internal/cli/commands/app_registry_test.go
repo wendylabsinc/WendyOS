@@ -587,7 +587,10 @@ func TestRotateAndAssignUseTheNewestDeploymentKey(t *testing.T) {
 		depID = id
 	}
 	first := fake.sealed[0].GetDeploymentKeyId()
-	if err := op.rotate(ctx, depID, "sh.wendy.example", nil); err != nil {
+	if err := op.rotate(ctx, depID, "sh.wendy.example", nil); err == nil {
+		t.Fatal("rotate re-assigned devices nobody named")
+	}
+	if err := op.rotate(ctx, depID, "sh.wendy.example", []string{vectorDevice}); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.sealed) != 2 || fake.sealed[1].GetDeploymentKeyId() == first || fake.sealed[1].GetContentKeyId() != m.GetContentKeyId() {
