@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,11 +25,6 @@ type mcpToolClient interface {
 	CallTool(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
 	Close() error
 }
-
-type quietMCPLogger struct{}
-
-func (quietMCPLogger) Infof(string, ...any)  {}
-func (quietMCPLogger) Errorf(string, ...any) {}
 
 // mcp-go's stdio client removes its response waiter when a call is canceled,
 // but does not notify the server. Forward cancellation with the actual JSON-RPC
@@ -79,7 +75,7 @@ func (t *Tools) startMCP(ctx context.Context, executable, device string) error {
 		command = override
 	}
 	stdio := transport.NewStdioWithOptions(command, nil, args,
-		transport.WithCommandLogger(quietMCPLogger{}),
+		transport.WithCommandLogger(slog.New(slog.DiscardHandler)),
 		transport.WithCommandFunc(func(childCtx context.Context, command string, env, args []string) (*exec.Cmd, error) {
 			cmd := exec.CommandContext(childCtx, command, args...)
 			cmd.Dir = t.workspace

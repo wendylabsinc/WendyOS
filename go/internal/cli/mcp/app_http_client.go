@@ -40,13 +40,15 @@ func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, clo
 	transport := &http.Transport{IdleConnTimeout: appHTTPIdleConnTimeout}
 	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
 		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
+	// Keep the app proxy on the session-based protocol: cancellation and
+	// shutdown depend on initialize and session termination.
 	session, err := client.Connect(initCtx, &sdk.StreamableClientTransport{
 		Endpoint:             endpoint,
 		DisableStandaloneSSE: true,
 		HTTPClient: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
-	}, &sdk.ClientSessionOptions{ProtocolVersion: mcpgo.LATEST_PROTOCOL_VERSION})
+	}, &sdk.ClientSessionOptions{ProtocolVersion: mcpgo.ProtocolVersion20251125})
 	if err != nil {
 		cancel()
 		closeProxy()
