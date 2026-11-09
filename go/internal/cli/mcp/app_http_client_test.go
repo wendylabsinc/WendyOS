@@ -149,7 +149,7 @@ func TestAppHTTPInteroperability(t *testing.T) {
 				}
 			}
 			_ = json.Unmarshal(body, &request)
-			if request.Method == "initialize" && (request.Params.ProtocolVersion != mcpgo.LATEST_PROTOCOL_VERSION || request.Params.ClientInfo.Name != "wendy-app-proxy") {
+			if request.Method == "initialize" && (request.Params.ProtocolVersion != mcpgo.ProtocolVersion20251125 || request.Params.ClientInfo.Name != "wendy-app-proxy") {
 				t.Errorf("unexpected initialize: %s", body)
 			}
 			if request.Method == "tools/list" {
