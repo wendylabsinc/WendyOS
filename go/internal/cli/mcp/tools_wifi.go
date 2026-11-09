@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -41,7 +42,7 @@ func (s *mcpServer) registerWiFiTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("wifi_status", statusOpts...), s.handleWiFiStatus)
 
 	disconnectOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Disconnect the device from its current WiFi network"),
+		mcpgo.WithDescription("Disconnect the device from WiFi. This may also lose the connection carrying the request. acknowledged=true means the device committed to attempting it even if contact is lost; it does not confirm completion. Report the device as disconnected only when completion_confirmed and success are both true. If completion is unconfirmed, use wifi_status after reconnecting through another working path; do not treat a received request as completed."),
 	}
 	disconnectOpts = append(disconnectOpts, destructive()...)
 	disconnectOpts = append(disconnectOpts, openWorld()...)
@@ -126,14 +127,23 @@ func (s *mcpServer) handleWiFiDisconnect(ctx context.Context, _ mcpgo.CallToolRe
 	if conn == nil {
 		return errNotConnected(), nil
 	}
-	resp, err := conn.AgentService.DisconnectWiFi(ctx, &agentpb.DisconnectWiFiRequest{})
+	result, err := conn.DisconnectWiFi(ctx)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		code := codeFromGRPC(err)
+		if errors.Is(err, context.Canceled) {
+			code = errCodeCancelled
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			code = errCodeTimeout
+		}
+		response := mcpgo.NewToolResultStructured(map[string]any{
+			"error_code": string(code),
+			"message":    err.Error(),
+			"result":     result,
+		}, fmt.Sprintf("[%s] %s", code, err))
+		response.IsError = true
+		return response, nil
 	}
-	if !resp.GetSuccess() {
-		return errResultf(errCodeInternal, "disconnect failed: %s", resp.GetErrorMessage()), nil
-	}
-	return okText("disconnected from WiFi"), nil
+	return okResult(result), nil
 }
 
 func (s *mcpServer) handleWiFiKnownNetworks(ctx context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
