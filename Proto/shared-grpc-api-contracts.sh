@@ -60,3 +60,87 @@ SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS=(
     "wendycloud/tunnel/v2/tunnel.proto"
     "wendycloud/tunnel/lite/v1/relay.proto"
 )
+
+# Exact existing sources deferred by the approved migration scope. Each must
+# still exist in both trees; remove its exception with its source migration.
+SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
+    # Retain the deployed OTLP common dependency closure; remove under WDY-4154.
+    "opentelemetry/proto/common/v1/common.proto"
+    # Retain the deployed OTLP resource dependency closure; remove under WDY-4154.
+    "opentelemetry/proto/resource/v1/resource.proto"
+    # Retain the deployed OTLP logs dependency closure; remove under WDY-4154.
+    "opentelemetry/proto/logs/v1/logs.proto"
+    # Retain the deployed OTLP logs collector with its dependencies; remove under WDY-4154.
+    "opentelemetry/proto/collector/logs/v1/logs_service.proto"
+    # Deployed histogram scale/offset use sint32 rather than int32; remove under WDY-4154.
+    "opentelemetry/proto/metrics/v1/metrics.proto"
+    # Retain the metrics collector with the incompatible deployed schema; remove under WDY-4154.
+    "opentelemetry/proto/collector/metrics/v1/metrics_service.proto"
+    # Deployed trace schema differs from the shared catalogue; remove under WDY-4154.
+    "opentelemetry/proto/trace/v1/trace.proto"
+    # Retain the trace collector with the deployed trace schema; remove under WDY-4154.
+    "opentelemetry/proto/collector/trace/v1/trace_service.proto"
+    # Local UUID/SignedRequest API conflicts with shared int32/bare requests; remove under WDY-4155.
+    "org_invites.proto"
+)
+
+check_shared_grpc_api_contracts_sources() {
+    local proto_dir="$1" catalogue_dir="$2" catalogue file proto exception alias
+    local seen="" allowed
+    if [ ! -d "$proto_dir" ] || [ ! -d "$catalogue_dir" ]; then
+        echo "error: missing local proto tree or shared catalogue export" >&2
+        return 1
+    fi
+    catalogue="$(find "$catalogue_dir" -type f -name '*.proto' -print)" || return $?
+    if [ -z "$catalogue" ]; then
+        echo "error: shared catalogue export contains no proto files" >&2
+        return 1
+    fi
+    # Parse the complete catalogue too, including APIs not selected to generate.
+    buf build "$catalogue_dir" --exclude-source-info -o "$catalogue_dir.binpb" || return $?
+    for exception in "${SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS[@]}"; do
+        # Literal file paths only. A glob, traversal, duplicate or stale entry
+        # must not silently broaden the permitted local source tree.
+        case "$exception" in
+            /*|*..*|*[!a-zA-Z0-9_./-]*|"")
+                echo "error: invalid shared source exception: $exception" >&2; return 1 ;;
+        esac
+        case " $seen " in
+            *" $exception "*) echo "error: duplicate shared source exception: $exception" >&2; return 1 ;;
+        esac
+        if [ ! -f "$catalogue_dir/$exception" ] || [ ! -f "$proto_dir/$exception" ] || [ -L "$proto_dir/$exception" ]; then
+            echo "error: shared source exception must name an existing catalogue and regular local file: $exception" >&2
+            return 1
+        fi
+        seen="$seen $exception"
+    done
+    while IFS= read -r file; do
+        proto="${file#"$catalogue_dir/"}"
+        allowed=0
+        for exception in "${SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS[@]}"; do
+            if [ "$proto" = "$exception" ]; then allowed=1; break; fi
+        done
+        if [ "$allowed" -eq 1 ]; then continue; fi
+        alias=""
+        # Only known legacy paths, never inferred basename matches.
+        case "$proto" in
+            apps.proto|certificates.proto|tunnel.proto|users.proto) alias="cloud/$proto" ;;
+            wendylite/v1/sensorlink.proto) alias="wendy/lite/sensorlink.proto" ;;
+        esac
+        for file in "$proto" ${alias:+"$alias"}; do
+            if [ -e "$proto_dir/$file" ] || [ -L "$proto_dir/$file" ]; then
+                echo "error: remove Proto/$file; its source is in pinned service-protos" >&2
+                return 1
+            fi
+        done
+    done <<< "$catalogue"
+}
+
+finish_shared_grpc_api_contracts() {
+    local status="$1" scratch="$2"
+    if [ "$status" -eq 0 ]; then
+        rm -rf "$scratch"
+    else
+        echo "error: generation failed; temporary inputs and artifacts retained at $scratch" >&2
+    fi
+}
