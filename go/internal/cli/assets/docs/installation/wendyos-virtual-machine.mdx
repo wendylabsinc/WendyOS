@@ -3,7 +3,7 @@ title: Simulator
 description: Run WendyOS on your own computer, without a Jetson or Raspberry Pi
 ---
 
-New to Wendy? The [quickstart](/docs/) deploys your first app to the simulator. This page covers the simulator in depth.
+New to Wendy? The [app tutorial](/docs/getting-started/app) deploys your first app to the simulator. This page covers the simulator in depth.
 
 ## What this is for
 
@@ -287,7 +287,7 @@ loopback address, and readiness checks use it too. This works with background
 VMs and detached applications; forwards last until the VM stops and are
 recreated on the next run.
 
-For an app with a declared [`http` endpoint](/docs/advanced/apps/wendy.json#http), capture
+For an app with a declared [`http` endpoint](/docs/reference/app-configuration#http), capture
 the detached result and fetch the reported host URL:
 
 ```sh

@@ -85,6 +85,19 @@ func verifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tena
 	if policy != nil && leaf.NotAfter.Sub(leaf.NotBefore) > certs.MaxPeerCertificateLifetime {
 		return result, errors.New("operator certificate validity window exceeds accepted maximum")
 	}
+	if leaf.IsCA {
+		return result, errors.New("operator credential must not be a CA certificate")
+	}
+	hasClientAuth := false
+	for _, usage := range leaf.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageClientAuth {
+			hasClientAuth = true
+			break
+		}
+	}
+	if !hasClientAuth {
+		return result, errors.New("operator credential requires explicit clientAuth usage")
+	}
 	principal, ok := certs.TenantPrincipalFromCert(leaf)
 	if !ok {
 		return result, errors.New("operator certificate requires exactly one tenant principal")

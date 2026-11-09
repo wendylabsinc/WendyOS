@@ -65,7 +65,7 @@ func stubWait(t *testing.T, applied *agentpb.PowerMode, err error) *[]waitCall {
 	t.Helper()
 	var calls []waitCall
 	orig := waitPowerModeAppliedFn
-	waitPowerModeAppliedFn = func(_ context.Context, host string, want int32) (*agentpb.PowerMode, error) {
+	waitPowerModeAppliedFn = func(_ context.Context, host, _ string, want int32) (*agentpb.PowerMode, error) {
 		calls = append(calls, waitCall{host, want})
 		return applied, err
 	}
@@ -79,7 +79,7 @@ func TestPowerModeScreenLiveSwitch(t *testing.T) {
 	stubConfirm(t, true)
 	f := &fakePowerModeClient{get: orinPowerModes(), setResps: []*agentpb.SetPowerModeResponse{{Mode: &agentpb.PowerMode{Id: 1, Name: "MODE_15W"}}}}
 	var out bytes.Buffer
-	if err := runPowerModeScreen(context.Background(), f, "thor.local", &out); err != nil {
+	if err := runPowerModeScreen(context.Background(), f, "thor.local", "", &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(*titles) != 1 || !strings.Contains((*titles)[0], "MODE_30W (2)") {
@@ -100,7 +100,7 @@ func TestPowerModeScreenRebootWaitsForTheNewMode(t *testing.T) {
 		{Mode: maxn, RebootRequired: true, RebootScheduled: true},
 	}}
 	var out bytes.Buffer
-	if err := runPowerModeScreen(context.Background(), f, "thor.local", &out); err != nil {
+	if err := runPowerModeScreen(context.Background(), f, "thor.local", "", &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(*asked) != 1 || len(f.setReqs) != 2 || !f.setReqs[1].GetReboot() {
@@ -120,7 +120,7 @@ func TestPowerModeScreenDeclinedRebootChangesNothing(t *testing.T) {
 	waits := stubWait(t, nil, nil)
 	f := &fakePowerModeClient{get: orinPowerModes(), setResps: []*agentpb.SetPowerModeResponse{{Mode: maxnMode, RebootRequired: true}}}
 	var out bytes.Buffer
-	if err := runPowerModeScreen(context.Background(), f, "h", &out); err != nil {
+	if err := runPowerModeScreen(context.Background(), f, "h", "", &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.setReqs) != 1 || f.setReqs[0].GetReboot() || len(*waits) != 0 || !strings.Contains(out.String(), "unchanged") {
@@ -132,7 +132,7 @@ func TestPowerModeScreenPickingTheCurrentModeIsANoOp(t *testing.T) {
 	stubPicker(t, "MODE_30W", nil)
 	f := &fakePowerModeClient{get: orinPowerModes()}
 	var out bytes.Buffer
-	if err := runPowerModeScreen(context.Background(), f, "h", &out); err != nil {
+	if err := runPowerModeScreen(context.Background(), f, "h", "", &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.setReqs) != 0 || !strings.Contains(out.String(), "Already in MODE_30W (2)") {
@@ -143,7 +143,7 @@ func TestPowerModeScreenPickingTheCurrentModeIsANoOp(t *testing.T) {
 func TestPowerModeScreenCancelAndWaitFailure(t *testing.T) {
 	stubPicker(t, "", ErrUserCancelled)
 	f := &fakePowerModeClient{get: orinPowerModes()}
-	if err := runPowerModeScreen(context.Background(), f, "h", &bytes.Buffer{}); !errors.Is(err, ErrUserCancelled) || len(f.setReqs) != 0 {
+	if err := runPowerModeScreen(context.Background(), f, "h", "", &bytes.Buffer{}); !errors.Is(err, ErrUserCancelled) || len(f.setReqs) != 0 {
 		t.Errorf("cancel: err=%v requests=%v", err, f.setReqs)
 	}
 
@@ -153,7 +153,7 @@ func TestPowerModeScreenCancelAndWaitFailure(t *testing.T) {
 	f = &fakePowerModeClient{get: orinPowerModes(), setResps: []*agentpb.SetPowerModeResponse{
 		needsReboot(), {Mode: maxnMode, RebootRequired: true, RebootScheduled: true},
 	}}
-	if err := runPowerModeScreen(context.Background(), f, "h", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "did not come back") {
+	if err := runPowerModeScreen(context.Background(), f, "h", "", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "did not come back") {
 		t.Errorf("wait failure: err = %v", err)
 	}
 }
@@ -163,8 +163,8 @@ func TestPollPowerModeAppliedIgnoresStaleReadingsAndErrors(t *testing.T) {
 		mode *agentpb.PowerMode
 		err  error
 	}{
-		{&agentpb.PowerMode{Id: 2, Name: "old"}, nil}, // still up, before the reboot
-		{nil, errors.New("connection refused")},       // rebooting
+		{&agentpb.PowerMode{Id: 2, Name: "old"}, nil},                 // still up, before the reboot
+		{nil, &noAuthenticatedEndpointError{msg: "nothing answered"}}, // rebooting
 		{&agentpb.PowerMode{Id: 0, Name: "MAXN"}, nil},
 	}
 	i := 0

@@ -1,0 +1,34 @@
+---
+title: Install the Wendy CLI
+description: Install Wendy on your development computer.
+---
+
+Install the CLI on your development computer. Your target device runs WendyOS or Wendy Agent instead.
+
+## macOS and Linux
+
+Run in your terminal:
+
+```bash
+curl -fsSL https://install.wendy.dev/cli.sh | bash
+wendy --version
+```
+
+You should see a Wendy version. If the command is not found, open a new terminal and retry.
+
+## Windows
+
+For the app quickstart, open a WSL2 Linux terminal and use the Linux installation
+commands above. Keep your project and container builder inside WSL2 too.
+The managed robot tour requires macOS or Linux.
+
+For native Windows device management, install with PowerShell:
+
+```powershell
+winget install WendyLabs.Wendy --source winget
+wendy --version
+```
+
+Native Windows does not support the quickstart's local app builds and automatic VM app-port forwarding.
+
+Continue with your [first project](/docs/).

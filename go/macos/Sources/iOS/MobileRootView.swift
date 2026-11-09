@@ -192,11 +192,11 @@ private struct MobileDeviceView: View {
                     Picker("Device", selection: $pane) {
                         ForEach([MobilePane.overview, .cameras, .apps]) { Text($0.rawValue).tag($0) }
                     }.pickerStyle(.segmented)
-                    Menu {
+                    OverflowMenu(systemImage: "ellipsis.circle", font: .title3) {
                         ForEach([MobilePane.siteModel, .campaigns, .chat]) { item in
                             Button(item.rawValue) { pane = item }
                         }
-                    } label: { Image(systemName: "ellipsis.circle").font(.title3) }
+                    }
                     .accessibilityLabel("More device tools")
                 }.padding(.horizontal).padding(.vertical, 10)
             }

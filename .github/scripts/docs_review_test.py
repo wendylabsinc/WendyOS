@@ -67,6 +67,32 @@ class ReviewTests(unittest.TestCase):
         self.assertIn('Whole document', context)
         self.assertNotIn('Tail marker', context)
 
+    def test_journey_context_precedes_keyword_matches_with_small_budget(self):
+        prefix = review.DOCS_PREFIX
+        changed = prefix + 'guides/tutorials/python/hello-world.mdx'
+        neighbor = prefix + 'guides/tutorials/python/simple-web-server.mdx'
+        navigation = prefix + 'guides/meta.json'
+        unrelated = prefix + 'unrelated.mdx'
+        documents = {changed: 'Start here', neighbor: 'Continue here',
+                     navigation: '{"pages":["tutorials"]}',
+                     prefix + 'index.mdx': 'Choose a journey',
+                     unrelated: 'python ' * 100}
+        budget = sum(len(f"### {path}\n{body}".encode()) + 2
+                     for path, body in documents.items() if path != unrelated)
+        with patch.object(review, 'DOCS_BUDGET_BYTES', budget):
+            _, included, omitted = review.documentation_context(documents, [changed], 'python', '')
+        self.assertIn(neighbor, included)
+        self.assertIn(navigation, included)
+        self.assertIn(prefix + 'index.mdx', included)
+        self.assertEqual(omitted, [unrelated])
+
+    def test_navigation_is_loaded_from_revision(self):
+        navigation = review.DOCS_PREFIX + 'meta.json'
+        listing = b'100644 blob ' + b'b' * 40 + b'\t' + navigation.encode() + b'\0'
+        with patch.object(review.subprocess, 'check_output', side_effect=[listing, b'{"pages":["index"]}']):
+            documents = review.load_documents(pathlib.Path('.'), SHA, [])
+        self.assertEqual(documents[navigation], '{"pages":["index"]}')
+
     def test_token_preflight_rebatches_losslessly_before_any_review(self):
         raw = diff('source.go', 'let café = true; ' * 400)
         client = Mock()

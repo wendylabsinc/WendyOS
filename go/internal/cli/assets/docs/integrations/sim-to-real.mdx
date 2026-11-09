@@ -9,6 +9,12 @@ The [SO-101 follower simulator](/docs/installation/so101-simulator) has no ROS 2
 
 This walkthrough uses the Go2 sensor dashboard and browser teleoperation examples. They use the native interfaces shared by the simulated and physical Go2. The [G1 path](#using-the-g1-template) uses the same deployment workflow with G1-specific messages and control behavior.
 
+Your existing ROS nodes, message types, launch files, and Dockerfiles remain usable. Configure the supported interfaces and DDS settings for each target; do not replace ROS APIs with simulator-only shortcuts.
+
+The app should consume robot observations, not the browser's full scene or physics-engine state. Diagnostic ground-truth topics exist in the current profiles; keep them out of policy inputs. Sensor-shaped data can still be unrealistically clean. Test [noise, bias, delay, and missing samples](/docs/integrations/sensor-fidelity) before claiming transfer to hardware.
+
+Select the named simulator for simulator commands and the physical robot for hardware checks. Explicit selectors below distinguish those targets during transfer; ordinary single-device tutorials can use the interactive picker.
+
 ## 1. Read the simulated robot's sensors
 
 Create and start `go2-sim` using [Unitree simulator setup](/docs/installation/unitree-simulators). Get the examples from WendyOS, using a CLI built from the same checkout when following unreleased simulator changes:

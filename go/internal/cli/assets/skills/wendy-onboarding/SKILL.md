@@ -185,12 +185,10 @@ Creation returns a stopped VM. Start it through the tools the server exposes:
   `wendy vm create <name> --profile generic`, then connect with a device inspection
   such as `wendy --json device info --device vm:<name>`.
 
-Refresh the simulator state and inspect the agent to verify the connection. For
-a robot profile, call `simulator_viewer` when available; only describe its viewer
-as ready when the result reports both `ready` and `healthy`. If the VM's agent
-lacks robot support, `simulator_update_agent` can finish setup when available;
-then start and verify again. Do not replace or delete the VM to recover an
-uncertain operation.
+Refresh the simulator state and inspect the agent to verify the connection. If
+the VM's agent lacks robot support, update it with
+`wendy --device vm:<name> device update`, then start and verify again. Do not
+replace or delete the VM to recover an uncertain operation.
 
 Simulator operations require a local connection. When unavailable, explain
 that requirement or use the installed CLI on the user's development host. Do

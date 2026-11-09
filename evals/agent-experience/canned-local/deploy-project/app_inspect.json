@@ -1,0 +1,66 @@
+{
+  "tool": "app_inspect",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"app_name\": \"{{args.app_name}}\", \"readiness\": {\"checks\": [], \"reason\": \"project_path is needed to read declared readiness; the agent does not report stored probe results\", \"status\": \"unknown\"}, \"recent_logs\": {\"batches_collected\": 0, \"collected\": 0, \"collection_limited\": true, \"min_severity\": 13, \"omitted\": 0, \"reason\": \"no warning/error records observed in this bounded collection\", \"records\": [], \"status\": \"unknown\"}, \"state\": {\"all_services_running\": true, \"declared_http_port\": 8080, \"failure_count\": 0, \"last_exit\": {\"status\": \"unknown\"}, \"running_state\": \"RUNNING\", \"services\": [{\"container_name\": \"sensor-dashboard_web\", \"name\": \"web\", \"running_state\": \"RUNNING\"}], \"version\": \"latest\"}, \"usage\": {\"containers\": [{\"container_name\": \"sensor-dashboard_web\", \"cpu_usage_nanos\": 67547000, \"image_content_bytes\": 18544712, \"memory_bytes\": 10117120, \"status\": \"reported\"}], \"note\": \"Zero counters are unknown because the agent also uses zero when measurements are unavailable; CPU is cumulative nanoseconds.\", \"warnings\": []}}"
+        }
+      ],
+      "structuredContent": {
+        "app_name": "{{args.app_name}}",
+        "readiness": {
+          "checks": [],
+          "reason": "project_path is needed to read declared readiness; the agent does not report stored probe results",
+          "status": "unknown"
+        },
+        "recent_logs": {
+          "batches_collected": 0,
+          "collected": 0,
+          "collection_limited": true,
+          "min_severity": 13,
+          "omitted": 0,
+          "reason": "no warning/error records observed in this bounded collection",
+          "records": [],
+          "status": "unknown"
+        },
+        "state": {
+          "all_services_running": true,
+          "declared_http_port": 8080,
+          "failure_count": 0,
+          "last_exit": {
+            "status": "unknown"
+          },
+          "running_state": "RUNNING",
+          "services": [
+            {
+              "container_name": "sensor-dashboard_web",
+              "name": "web",
+              "running_state": "RUNNING"
+            }
+          ],
+          "version": "latest"
+        },
+        "usage": {
+          "containers": [
+            {
+              "container_name": "sensor-dashboard_web",
+              "cpu_usage_nanos": 67547000,
+              "image_content_bytes": 18544712,
+              "memory_bytes": 10117120,
+              "status": "reported"
+            }
+          ],
+          "note": "Zero counters are unknown because the agent also uses zero when measurements are unavailable; CPU is cumulative nanoseconds.",
+          "warnings": []
+        }
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "26737d37508f009f29f049ec4b0be255acbaa20730ac9cf72ae8a92c218fb4b7",
+    "device_kind": "local"
+  }
+}
