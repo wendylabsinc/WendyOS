@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
-	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
 
 const (
@@ -715,7 +714,9 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 		}
 
 		if force {
-			if err := atomicfile.Write(destPath, output, 0o644); err != nil {
+			// Match the original overlay writer: retain existing modes and
+			// let the process umask restrict permissions on new files.
+			if err := os.WriteFile(destPath, output, 0o644); err != nil {
 				return fmt.Errorf("writing %s: %w", destPath, err)
 			}
 			continue
