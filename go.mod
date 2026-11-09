@@ -57,7 +57,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
-	github.com/pierrec/lz4/v4 v4.1.26
+	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/pion/rtcp v1.2.19
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.23
