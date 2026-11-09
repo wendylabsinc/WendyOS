@@ -35,31 +35,7 @@ Shows the device's current WiFi connection.
 
 ### `wendy device wifi disconnect`
 
-Disconnects the device from its current WiFi network. If that WiFi connection
-also carries your command, the device may disconnect before its final reply can
-reach you. The CLI distinguishes a confirmed disconnection from a request whose
-result is still unknown. Once the device accepts the request, it attempts the
-disconnection shortly even if the CLI loses contact before finishing the exchange.
-
-If the result is unknown, reach the device over another working connection and
-run `wendy device wifi status`. An accepted request means the device will attempt
-the disconnect; it does not prove that the operation succeeded. Older agents may lose contact without
-confirming receipt at all; an interrupted reply remains an unknown outcome.
-Wendy Lite and explicit Bluetooth operations keep their existing behavior.
-
-#### JSON output
-
-Use `--json` to inspect the result. If the device received the request but its
-completion reply was lost, the command can exit successfully with:
-
-```json
-{"state":"requested","acknowledged":true,"completion_confirmed":false,"success":null}
-```
-
-A confirmed disconnection has both `completion_confirmed` and `success` set to
-`true`. A confirmed result with `success: false` means the operation failed.
-When scripting this command, check these fields: an exit status of zero alone
-can mean the request was received but its completion could not be confirmed.
+Disconnects the device from its current network.
 
 ### `wendy device wifi rank`
 

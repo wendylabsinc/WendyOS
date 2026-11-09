@@ -19,6 +19,7 @@ import (
 func bindingServer(t *testing.T, p *BindingPolicy) *server.MCPServer {
 	t.Helper()
 	s := New(&config.Config{}, nil)
+	s.toolGroups = []string{"all"}
 	s.setBindingPolicy(p)
 	srv, err := s.newProtocolServer()
 	if err != nil {
@@ -35,9 +36,15 @@ func callProtocolTool(t *testing.T, srv *server.MCPServer, name string, args ...
 	}
 	msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, name, encodedArgs)
 	encoded, _ := json.Marshal(srv.HandleMessage(context.Background(), []byte(msg)))
-	var reply struct{ Result mcpgo.CallToolResult }
+	var reply struct {
+		Result mcpgo.CallToolResult
+		Error  json.RawMessage
+	}
 	if err := json.Unmarshal(encoded, &reply); err != nil {
 		t.Fatal(err)
+	}
+	if len(reply.Error) > 0 {
+		t.Fatalf("tool call returned JSON-RPC error: %s", reply.Error)
 	}
 	return reply.Result
 }
@@ -50,9 +57,12 @@ func deniedByBinding(r mcpgo.CallToolResult) bool {
 
 func TestBindingAllowListRefusesUnlistedTools(t *testing.T) {
 	var asked []string
+	var logged []string
 	p := &BindingPolicy{Confirm: func(_ context.Context, tool string, _ map[string]any) bool {
 		asked = append(asked, tool)
 		return true
+	}, Log: func(tool, outcome string) {
+		logged = append(logged, tool+" "+outcome)
 	}}
 	srv := bindingServer(t, p)
 
@@ -61,6 +71,9 @@ func TestBindingAllowListRefusesUnlistedTools(t *testing.T) {
 	}
 	if len(asked) != 0 {
 		t.Fatalf("a refused tool must not reach confirmation; asked %v", asked)
+	}
+	if !slices.Equal(logged, []string{"device_disconnect refused: not allowed for this client"}) {
+		t.Fatalf("hidden call bypassed binding audit: %v", logged)
 	}
 	for _, tool := range protocolTools(t, srv) {
 		if tool.Name == "device_disconnect" {
@@ -279,6 +292,7 @@ func TestBindingPinsTheStartingSession(t *testing.T) {
 		return false
 	}}
 	s := New(cfg, nil)
+	s.toolGroups = []string{"all"}
 	s.setBindingPolicy(p)
 	srv, err := s.newProtocolServer()
 	if err != nil {
