@@ -61,6 +61,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/udpmessage"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbgadget"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
@@ -384,7 +385,10 @@ func main() {
 	defer deliveryManager.Close()
 	cleanupDelivery := func() error {
 		deliveryManager.Close()
-		return os.RemoveAll(filepath.Join(configPath, "build-delivery"))
+		if err := os.RemoveAll(filepath.Join(configPath, "build-delivery")); err != nil {
+			return err
+		}
+		return atomicfile.SyncDirectory(configPath)
 	}
 	if ctrdClient != nil {
 		ctrdClient.SetDeliverySource(deliverySource)
