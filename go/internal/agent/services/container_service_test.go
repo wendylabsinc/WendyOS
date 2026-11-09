@@ -1738,6 +1738,45 @@ func TestStartContainer_GroupStartsAllServices(t *testing.T) {
 	}
 }
 
+func TestAttachContainer_GroupStartsAllServices(t *testing.T) {
+	mc := &groupMock{
+		containerIDs: []string{"com.example.robot_camera", "com.example.robot_detector"},
+	}
+	mon := &mockMonitorRegistrar{}
+	client, cleanup := startContainerServerWithMonitor(t, mc, mon)
+	defer cleanup()
+
+	stream, err := client.AttachContainer(context.Background())
+	if err != nil {
+		t.Fatalf("AttachContainer: %v", err)
+	}
+	if err := stream.Send(&agentpb.AttachContainerRequest{
+		RequestType: &agentpb.AttachContainerRequest_AppName{AppName: "com.example.robot"},
+	}); err != nil {
+		t.Fatalf("send app_name: %v", err)
+	}
+
+	// A group attach starts every service and ends after one Started response,
+	// rather than failing with "has multiple service containers".
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if resp.GetStarted() == nil {
+		t.Fatalf("expected Started response, got %T", resp.GetResponseType())
+	}
+	if _, err = stream.Recv(); err != io.EOF {
+		t.Fatalf("expected EOF after Started, got %v", err)
+	}
+
+	if len(mc.startedNames) != 2 {
+		t.Fatalf("expected 2 StartContainer calls, got %d: %v", len(mc.startedNames), mc.startedNames)
+	}
+	if len(mon.clearStopCalls) != 2 {
+		t.Fatalf("ClearExplicitStop call count = %d; want 2", len(mon.clearStopCalls))
+	}
+}
+
 func TestParseAppConfigRejectsUnsafeAppID(t *testing.T) {
 	// A comma in appId would corrupt OTEL_RESOURCE_ATTRIBUTES once injected.
 	_, err := parseAppConfig([]byte(`{"appId":"bad,id"}`))
