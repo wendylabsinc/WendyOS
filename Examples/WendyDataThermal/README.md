@@ -7,8 +7,8 @@ conversion provenance in `events.jsonl`. It does not record a continuous tempera
 grid. The camera video uses the existing capture adapter and pre-roll ring.
 
 Select the camera using `wendy --json data sources --device <device>`. Replace both
-`/dev/video0` selectors in `campaign.yaml` with the camera's stable selector where
-available. A selector must resolve to exactly one local raw camera. Generic UVC
+`/dev/video0` selectors in `campaign.yaml` with its returned source ID. Recheck the source after USB replug or reboot;
+this campaign API does not resolve the video service's `by-id:` selectors. A selector must resolve to exactly one local raw camera. Generic UVC
 brightness and raw counts without a verified Celsius conversion are refused.
 Supported measurements are the original TC001 temperature plane and HIK TOPDON
 256x392 / 96x200 camera-reported temperature summaries. HIK summary temperatures
