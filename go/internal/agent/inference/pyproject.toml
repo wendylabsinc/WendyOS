@@ -4,7 +4,7 @@ version = "1.0.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "av==16.1.0",
-  "torch==2.8.0",
+  "torch==2.13.0",
   "torchvision==0.23.0",
   "transformers==5.10.1",
   "timm==1.0.29",
