@@ -22,6 +22,7 @@ func TestRunDirectNoopApplyDoesNotClaimClockSynchronized(t *testing.T) {
 	c := Consensus{Confidence: ConfidenceDegraded, Quorum: 2, LowerOffsetNanos: target.Add(-time.Second).UnixNano() - boot, UpperOffsetNanos: target.Add(time.Second).UnixNano() - boot}
 	core, logs := observer.New(zap.DebugLevel)
 	h := newDirectHarness(1, directResult{consensus: c})
+	h.manager.boot = func() (int64, error) { return boot, nil }
 	h.manager.logger = zap.New(core)
 	h.run(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
