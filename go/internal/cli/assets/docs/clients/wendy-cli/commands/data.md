@@ -685,7 +685,8 @@ and markers carry the pair in `correction`, so a viewer can tell corrected value
 from the camera's own. See [Camera Access](/docs/hardware/camera#thermal-camera-temperatures).
 
 `wendy.data.v1.Correction` carries the `gain` and `offset` the agent already
-applied (corrected = gain × uncorrected + offset, in the record's unit). A viewer
+applied (corrected = gain × uncorrected + offset, in the record's unit). Both
+`wendy.data.v1.Grid` and `wendy.data.v1.VideoMarkers` carry this field. A viewer
 needs it only to show that values are corrected, or to recover the camera's own
 reading: uncorrected = (corrected − offset) / gain. `gain` is never 0.
 

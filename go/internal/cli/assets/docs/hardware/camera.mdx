@@ -294,7 +294,8 @@ camera °C    = count / 16 - 273.15
 
 It corrects the grid's `scale` and `offset`, the hottest and coldest markers,
 and the check that a frame's mean is a plausible scene (-40 to 600 °C). Its
-grids and markers carry the pair in a `correction` field, so a viewer can tell
+grids (`wendy.data.v1.Grid.correction`) and markers
+(`wendy.data.v1.VideoMarkers.correction`) carry the pair, so a viewer can tell
 corrected values from the camera's own. `gain` must lie between 0.1 and 10 and
 `offset` between -100 and 100 °C; anything else is refused, as is a camera
 without the TC001's stacked mode.

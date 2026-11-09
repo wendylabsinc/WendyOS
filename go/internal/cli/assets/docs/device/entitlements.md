@@ -132,7 +132,9 @@ episode download, recording export, campaign control or sensor access; the
 agent's camera streams need `camera` as well. All services of a multi-service
 app share one socket and cannot be told apart on it, so the app reads the union
 of its services' allowlists, and the cameras of those that also declare
-`camera`.
+`camera`. When those services have different camera `allowlist` entries, a
+device path admitted by any of those services is readable by all services on
+that socket.
 
 ## Network
 
