@@ -28,6 +28,35 @@ def sha(payload):
     return hashlib.sha256(payload).hexdigest()
 
 
+def inspect_generation(events, exit_status):
+    acceptance = {'completed': False, 'no_tools': True, 'no_failures': True,
+                  'process_succeeded': exit_status == 0}
+    details = {'acceptance': acceptance}
+    for line in events.read_text().splitlines():
+        event = json.loads(line)
+        if event.get('type') == 'thread.started':
+            details['session_id'] = event.get('thread_id')
+        if event.get('type') == 'turn.completed':
+            acceptance['completed'] = True
+            details['token_usage'] = event.get('usage')
+        if event.get('type') in ('turn.failed', 'error'):
+            acceptance['no_failures'] = False
+        item = event.get('item', {})
+        if item.get('type') not in (None, 'agent_message', 'reasoning', 'error'):
+            acceptance['no_tools'] = False
+        if item.get('type') == 'error':
+            # The gated wrapper emits this warning while retaining hooks.
+            if not item.get('message', '').startswith('`--dangerously-bypass-hook-trust` is enabled.'):
+                acceptance['no_failures'] = False
+    return details
+
+
+def accepted(record):
+    state = record.get('acceptance', {})
+    return isinstance(state, dict) and all(state.get(key) is True for key in
+        ('completed', 'no_tools', 'no_failures', 'process_succeeded'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', required=True, type=Path,
@@ -67,7 +96,15 @@ def main():
         payload = args.import_raw.read_bytes()
         if source.get('input_sha256') != inputs or source.get('raw_output_sha256') != sha(payload):
             raise SystemExit('Recorded output provenance does not match the current inputs or raw bytes')
+        if 'acceptance' not in source:
+            # Archived blind v1/v2 responses predate this field. Reconstruct it
+            # from their actual adjacent events, never from hashes/exit alone.
+            source.update(inspect_generation(args.import_raw.with_name('events.jsonl'),
+                                             source.get('exit_status')))
+        if not accepted(source):
+            raise SystemExit('Recorded compiler generation was not accepted; replay rejected')
         record['source_measurement'] = source
+        record['acceptance'] = source['acceptance']
         raw.write_bytes(payload)
         record['operation'] = 'Import recorded output; no model invocation'
     else:
@@ -85,28 +122,12 @@ def main():
             result = subprocess.run(command, cwd=out, input=prompt, stdout=stdout, stderr=stderr)
         record['wall_seconds'] = time.monotonic() - started
         record['exit_status'] = result.returncode
-        completed_turn = False
-        failure = None
-        for line in (out / 'events.jsonl').read_text().splitlines():
-            event = json.loads(line)
-            if event.get('type') == 'thread.started':
-                record['session_id'] = event.get('thread_id')
-            if event.get('type') == 'turn.completed':
-                completed_turn = True
-                record['token_usage'] = event.get('usage')
-            if event.get('type') in ('turn.failed', 'error'):
-                failure = 'Compiler reported failure'
-            item = event.get('item', {})
-            if item.get('type') not in (None, 'agent_message', 'reasoning', 'error'):
-                failure = 'Compiler called a tool; reject this generation'
-            if item.get('type') == 'error':
-                # The gated wrapper emits this warning while retaining hooks.
-                warning = item.get('message', '')
-                if not warning.startswith('`--dangerously-bypass-hook-trust` is enabled.'):
-                    failure = 'Compiler emitted an error item'
+        record.update(inspect_generation(out / 'events.jsonl', result.returncode))
+        if raw.exists():
+            record['raw_output_sha256'] = sha(raw.read_bytes())
         (out / 'measurement.json').write_text(json.dumps(record, indent=2) + '\n')
-        if result.returncode or failure or not completed_turn:
-            raise SystemExit(failure or 'Compiler did not complete successfully; inspect artifacts')
+        if not accepted(record):
+            raise SystemExit('Compiler generation was not accepted; inspect recorded events')
 
     payload = raw.read_bytes()
     markers = list(re.finditer(rb'^// FILE: ([A-Za-z]+\.swift)\r?\n', payload, re.MULTILINE))
@@ -114,21 +135,26 @@ def main():
             or [m[1].decode() for m in markers] != list(files)):
         raise SystemExit('Compiler output has an invalid file envelope')
     destination = BASE.parent / 'Tests/WendyE2ETests/GeneratedEnglishSpecs'
-    destination.mkdir(exist_ok=True)
+    staged = out / 'staged'
+    staged.mkdir()
     record['raw_output_sha256'] = sha(payload)
     record['files'] = {}
     for index, marker in enumerate(markers):
         end = markers[index + 1].start() if index + 1 < len(markers) else len(payload)
         # Keep the FILE comment too: each raw slice is copied byte-for-byte.
         content = payload[marker.start():end]
-        path = destination / files[index]
+        path = staged / files[index]
         path.write_bytes(content)
         record['files'][path.name] = {'raw_slice_sha256': sha(content)}
-    subprocess.run(['swift', 'format', '--in-place', *[str(destination / name) for name in files]],
-                   check=True)
+    subprocess.run(['swift', 'format', '--configuration', str(BASE.parents[2] / '.swift-format'),
+                    '--in-place', *[str(staged / name) for name in files]], check=True)
     for name in files:
-        record['files'][name]['formatted_sha256'] = sha((destination / name).read_bytes())
-    (out / 'import.json').write_text(json.dumps(record, indent=2) + '\n')
+        record['files'][name]['formatted_sha256'] = sha((staged / name).read_bytes())
+    destination.mkdir(exist_ok=True)
+    for name in files:
+        (staged / name).replace(destination / name)
+    for metadata in ('measurement.json', 'import.json'):
+        (out / metadata).write_text(json.dumps(record, indent=2) + '\n')
 
 
 if __name__ == '__main__':

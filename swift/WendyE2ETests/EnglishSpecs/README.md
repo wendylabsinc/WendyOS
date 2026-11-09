@@ -37,8 +37,13 @@ description enter the prompt. The compiler receives no original Swift test
 implementations or product implementation code. A compiler tool call or reported
 failure rejects the generation. Neither measured compilation called tools.
 
-The driver mechanically splits the response and runs `swift format`. Generated
-Swift must never be hand-edited. Correct a spec or API prompt and regenerate when
+The driver stages the split response and runs `swift format` with the repository's
+`.swift-format` before replacing stored Swift. Successful output includes the raw-response hash in
+both provenance files, so it can be replayed immediately. Run the focused offline
+driver checks with `python3 EnglishSpecs/test_compile.py -v`; they use a fake
+compiler transport and the real Swift formatter, without model calls.
+
+Generated Swift must never be hand-edited. Correct a spec or API prompt and regenerate when
 validation exposes a problem. A fresh model invocation is stochastic; it does
 not promise identical output bytes. An archived raw response can be replayed
 without invoking a model:
@@ -49,8 +54,10 @@ python3 EnglishSpecs/compile.py --cache-only \
   --run-dir .build/english-specs-import-new
 ```
 
-Replay requires the adjacent `measurement.json` and rejects mismatched input or
-raw-response hashes. Omit `--cache-only` when replaying the original four-file
+Replay requires the adjacent `measurement.json`, matching input/raw hashes and
+explicit acceptance: completed, no tools, no failures, successful process. For
+archives predating that state, adjacent `events.jsonl` must establish acceptance.
+Omit `--cache-only` when replaying the original four-file
 response at the corresponding input revision. Commit handwritten inputs and
 generated output separately, and put the reproducing command in the generated
 commit. `.gitattributes` marks the stored Swift as generated.
@@ -133,6 +140,27 @@ are CLI-reported counts and include native harness context beyond the supplied
 documents. The ephemeral session IDs and exact prompt/response hashes are in the
 generated commits and retained experiment artifacts. There were two model
 invocations, each successful on its first attempt.
+
+Observed work, with physical line counts including comments and blank lines:
+
+| Work | Observed steps and size |
+| --- | --- |
+| Initial compiler setup | Reused the existing harness unchanged; wrote 83 lines of harness/API instructions and a 108-line fixed-case driver. Formatting, provenance and generated Swift still required technical review. |
+| Initial behavior authoring | Wrote four English specs totaling 112 lines / 630 whitespace-separated words. One blind compilation produced 345 lines of Swift, which were reviewed and run. |
+| Cache maintenance setup | Added a 64-line cache-specific API/instruction input; extended the driver from 108 to 135 lines at the pre-review checkpoint for cache-only generation and validation. This setup work is additional to editing the behavior prose. |
+| English cache maintenance | One behavior edit grew the spec from 26 lines / 160 words to 50 lines / 398 words. One cache-only compilation, zero corrective generation rounds; reviewed and validated the resulting 209-line Swift file. No generated source edits. |
+| AI-assisted Swift maintenance | Adapted the original behavior into an 84-line local Swift comparator, then made one parity edit to include the original writable-file fixture. Formatted and validated it; zero compilation/test-failure repair rounds. No blind compiler invocation; interactive AI usage was not separately metered. |
+| Compiler review repairs | Independent review reproduced three defects: failed formatting overwrote stored output, successful output lacked replay provenance, and replay bypassed tool-call rejection. The final driver is 161 lines, with 106 lines of offline regression checks. The initial two checks fail against the reviewed driver; all three pass after repair. No further model invocation or generated Swift edit. |
+
+Both paths shared CLI builds, isolated execution, mutation construction and
+recording checks. Compiler setup is distinct from per-spec authoring; these
+counts and edit steps measure work products, not equivalent effort or time.
+A non-developer can read the English setup, action, expected saved values and
+cleanup without decoding Swift macros or callbacks. The permission modes,
+symlink fixture and preservation requirements still need technical judgment.
+Swift/API knowledge remained necessary to supply the harness guidance, quote
+shell commands safely, review assertions and cleanup, and investigate failures.
+Readability remains provisional: no non-developer reading study was performed.
 
 Manual comparator maintenance is AI-assisted Swift work. Total authoring effort
 and per-edit interactive-session tokens were not separately measured, so this
