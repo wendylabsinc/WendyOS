@@ -367,7 +367,7 @@ func prepareT234Workspace(fp *flashpack.Flashpack) (workspace, layoutPath string
 	return workspace, filepath.Join(workspace, layoutRel), nil
 }
 
-func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
+func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) (err error) {
 	if err := agent.checkArchitecture("arm64"); err != nil {
 		return err
 	}
@@ -377,7 +377,11 @@ func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, de
 	if err != nil {
 		return fmt.Errorf("opening per-run config image: %w", err)
 	}
-	defer d.Close()
+	defer func() {
+		if closeErr := d.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("finishing per-run config image: %w", closeErr)
+		}
+	}()
 	fsys, err := d.GetFilesystem(0)
 	if err != nil {
 		return fmt.Errorf("reading config filesystem: %w", err)

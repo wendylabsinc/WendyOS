@@ -247,8 +247,10 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
 	return err
 }
 
@@ -257,7 +259,7 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 // wendy.conf, provisioning.json, clock_floor — so first boot applies them via the
 // identical on-device path. Runs before stage-2, so a failure aborts with nothing
 // written to the Thor.
-func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
+func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) (err error) {
 	// A local agent is required provisioning. Release downloads remain
 	// best-effort so an offline flash can still provision WiFi and enrollment.
 	if err := agent.checkArchitecture("arm64"); err != nil {
@@ -269,7 +271,11 @@ func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceN
 	if err != nil {
 		return fmt.Errorf("opening config image: %w", err)
 	}
-	defer d.Close()
+	defer func() {
+		if closeErr := d.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("finishing config image: %w", closeErr)
+		}
+	}()
 	fs, err := d.GetFilesystem(0) // bare FAT32, no partition table
 	if err != nil {
 		return fmt.Errorf("reading config filesystem: %w", err)
