@@ -46,7 +46,8 @@ func liteManagementFixture(t *testing.T) (*operatorTargets, *grpc.ClientConn, *a
 	view.Announcements[0].Name = "test C5"
 	view.Announcements[0].Caps = []string{"sensors", "future-optional"}
 	cert, _ := liteManagementCertificate(t, nil, nil, "operator", "spiffe://wendy.sh/tenant/"+target.Tenant().String()+"/operator/alice", false)
-	r := newOperatorTargets(nil, nil, config.CertificateInfo{PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))}, t.TempDir(), Spec{Host: MeshSelector(adjacent), Operator: &OperatorSpec{RouterUUID: adjacent.UUID().String()}})
+	r := newOperatorTargets(nil, nil, config.CertificateInfo{PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))}, t.TempDir(), Spec{Host: MeshSelector(adjacent), Operator: &OperatorSpec{}})
+	r.currentAdjacent = func() (*grpc.ClientConn, meshid.Device, error) { return r.adjacent, adjacent, nil }
 	var mu sync.Mutex
 	r.targetTopology = nil // This fixture supplies coherent observations in-process.
 	r.topology = func(context.Context) (*pb.LocalMeshTopology, error) {

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -129,5 +130,19 @@ func TestMeshLiteSelectorChoosesNativeProvider(t *testing.T) {
 	_, err := connectToAgent(context.Background(), NonInteractive())
 	if err == nil || !strings.Contains(err.Error(), "WendyOS") {
 		t.Fatal("agent-only command", err)
+	}
+}
+
+func TestOperatorMeshConnectRejectsManualTargeting(t *testing.T) {
+	for _, flag := range []string{"address", "router", "transport", "psm"} {
+		t.Run(flag, func(t *testing.T) {
+			cmd := newDeviceOperatorMeshConnectCmd()
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs([]string{"--" + flag + "=unused"})
+			if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+				t.Fatalf("manual targeting must be rejected before loading credentials: %v", err)
+			}
+		})
 	}
 }

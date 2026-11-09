@@ -110,7 +110,7 @@ func (h *meshCarrierHealth) status(sharing services.LocalMeshRuntimeStatus) serv
 		out.State = "failed"
 	case failed || sharing.State == "error":
 		out.State = "degraded"
-	case ready < len(names):
+	case ready == 0:
 		out.State = "initializing"
 	default:
 		out.State = "mesh-active"

@@ -23,7 +23,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,7 +39,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
@@ -93,6 +91,12 @@ func TestOperatorBrokerNormalLongOpaquePrincipal(t *testing.T) {
 	for _, mode := range []string{"P256-long", "P256-long-escaped"} {
 		t.Run(mode, func(t *testing.T) { operatorBrokerNormal(t, mode, false) })
 	}
+}
+func TestOperatorBrokerLegacyPinnedRecipeUsesDiscovery(t *testing.T) {
+	operatorBrokerNormal(t, "P256-legacy", false)
+}
+func TestOperatorBrokerLegacyPinnedPassiveDiscoveryKeepsEnabled(t *testing.T) {
+	operatorBrokerNormal(t, "P256-legacy-passive", false)
 }
 func TestOperatorBrokerEnableAutomaticKeepsExistingOwner(t *testing.T) {
 	operatorBrokerNormal(t, "P256-enable", false)
@@ -156,10 +160,11 @@ func TestOperatorBrokerNormalCredentialRenewalRejoins(t *testing.T) {
 }
 func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	var extraSources []carriers.Source
+	var fixtureSource carriers.Source
 	previousOpen := openOperatorSession
 	t.Cleanup(func() { openOperatorSession = previousOpen })
 	openOperatorSession = func(ctx context.Context, options operatormesh.Options) (*operatormesh.Session, error) {
-		options.CarrierSources = append([]carriers.Source{}, extraSources...)
+		options.CarrierSources = append([]carriers.Source{fixtureSource}, extraSources...)
 		return operatormesh.Open(ctx, options)
 	}
 
@@ -405,7 +410,7 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 				return err
 			}
 			cmd := exec.CommandContext(ctx, exe, "-test.run=^TestOperatorBrokerChildProcess$")
-			cmd.Env = append(os.Environ(), "WENDY_OPERATOR_BROKER_CHILD="+base64.RawURLEncoding.EncodeToString(b))
+			cmd.Env = append(os.Environ(), "WENDY_OPERATOR_BROKER_CHILD="+base64.RawURLEncoding.EncodeToString(b), "WENDY_OPERATOR_BROKER_ADDRESS="+socket.Addr().String())
 			cmd.ExtraFiles = []*os.File{r}
 			cmd.SysProcAttr = detachedProcessAttributes()
 			if err = cmd.Start(); err != nil {
@@ -444,10 +449,8 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		launchOperatorBroker = func(spec Spec) error { starts.Add(1); return startSpec(spec) }
 		t.Cleanup(func() { _ = SetEmbeddedActive(context.Background(), false) })
 	}
-	if algorithm == "P256-enable" || algorithm == "P256-auto" || algorithm == "P256-roam" || algorithm == "P256-nearby" || algorithm == "P256-nearby-paths" {
-		previousBrowse := browseOperatorLAN
-		t.Cleanup(func() { browseOperatorLAN = previousBrowse })
-		browseOperatorLAN = func(browse context.Context, service string) (<-chan discovery.MDNSService, error) {
+	fixtureSource = func(ctx context.Context, emit func([]carriers.Candidate)) error {
+		for ctx.Err() == nil {
 			count := browses.Add(1)
 			selected := listeners[0]
 			if algorithm == "P256-nearby-paths" && count%2 == 0 {
@@ -456,12 +459,25 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 			if useAlternate.Load() {
 				selected = listeners[1]
 			}
-			host, port, _ := net.SplitHostPort(selected.Addr().String())
-			portNumber, _ := strconv.Atoi(port)
-			ch := make(chan discovery.MDNSService, 1)
-			ch <- discovery.MDNSService{IPAddress: host, Port: portNumber, TXTRecords: map[string]string{"platform": "WendyOS", "version": "1", "protocol": "tls-v1", "role": "router", "principal": router.Principal()}}
-			close(ch)
-			return ch, nil
+			emit([]carriers.Candidate{{Device: router, Transport: carriers.TCP, Address: selected.Addr().String(), Cost: 128}})
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+		return ctx.Err()
+	}
+
+	if strings.HasPrefix(algorithm, "P256-legacy") {
+		path := operatorRecipePath(directory, principal)
+		if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
+			t.Fatal(err)
+		}
+		raw := map[string]any{"version": 1, "principal": principal, "routerAddress": "127.0.0.1:1", "routerUuid": router.UUID().String(), "transport": "tcp"}
+		data, _ := json.Marshal(raw)
+		if err := writePrivateFile(path, data); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if view, err := ReadOperatorTopology(ctx); view != nil || !errors.Is(err, ErrUnavailable) || starts.Load() != 0 {
@@ -478,7 +494,17 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 			} else if algorithm == "P256-enable" || algorithm == "P256-auto" || algorithm == "P256-roam" {
 				client, err = ConnectOperator(ctx, MeshSelector(router))
 			} else {
-				client, err = PrepareOperator(ctx, certificate, socket.Addr().String(), router.UUID().String())
+				prepare := EnableOperatorAutomatic
+				if algorithm == "P256-legacy-passive" {
+					prepare = PrepareOperatorAutomatic
+				}
+				ready, enableErr := prepare(ctx, certificate)
+				if enableErr != nil {
+					err = enableErr
+				} else {
+					ready.Close()
+					client, err = ConnectOperator(ctx, MeshSelector(router))
+				}
 			}
 			if err != nil {
 				failures <- err
@@ -508,6 +534,20 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		}
 		c.Close()
 	}
+	if algorithm == "P256-legacy-passive" {
+		data, err := os.ReadFile(operatorRecipePath(directory, principal))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved map[string]any
+		if err := json.Unmarshal(data, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved["version"] != float64(2) || saved["routerAddress"] != nil || saved["routerUuid"] != nil {
+			t.Fatalf("legacy targeting remained on disk: %s", data)
+		}
+	}
+
 	// The original launching process and even its fixture parent pipe stay
 	// alive; only open user IPC connections may hold this operator context.
 	warm, err := ConnectOperator(ctx, MeshSelector(router))
@@ -653,6 +693,13 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		if err := DisconnectOperator(ctx); err != nil {
 			t.Fatal(err)
 		}
+		before := starts.Load()
+		if _, err := ConnectOperator(ctx, MeshSelector(router)); !errors.Is(err, errOperatorDisconnected) {
+			t.Fatalf("ordinary mesh selection undid explicit disconnect: %v", err)
+		}
+		if starts.Load() != before {
+			t.Fatal("ordinary mesh selection restarted the disconnected broker")
+		}
 	}
 	if transit != nil {
 		transit.roundTrip(t)
@@ -699,7 +746,11 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 // synthetic credentials are read from its isolated private test profile.
 func TestOperatorBrokerChildProcess(t *testing.T) {
 	openOperatorSession = func(ctx context.Context, options operatormesh.Options) (*operatormesh.Session, error) {
-		options.CarrierSources = []carriers.Source{}
+		options.CarrierSources = []carriers.Source{func(ctx context.Context, emit func([]carriers.Candidate)) error {
+			emit([]carriers.Candidate{{Transport: carriers.TCP, Address: os.Getenv("WENDY_OPERATOR_BROKER_ADDRESS"), Cost: 128}})
+			<-ctx.Done()
+			return ctx.Err()
+		}}
 		return operatormesh.Open(ctx, options)
 	}
 

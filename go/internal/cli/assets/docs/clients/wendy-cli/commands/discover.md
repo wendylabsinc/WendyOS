@@ -31,7 +31,7 @@ Local discovery combines these mechanisms and merges their results:
 
 ## Wendy Net mesh discovery
 
-With a selected organization and a valid cached operator certificate,
+With a selected organization and a valid saved sign-in certificate,
 `wendy discover` can automatically join that organization's Wendy Net from this
 computer. It does not enroll the computer as a device or start a Cloud login or
 credential renewal. Select an existing organization with `wendy auth use` if
@@ -58,16 +58,18 @@ five minutes without command activity or transit traffic. To keep your computer
 available as a router between commands, enable it explicitly:
 
 ```sh
-wendy device wendy-net connect
+wendy net connect
 ```
 
-Stop the current router and its connections with `wendy device wendy-net disconnect`.
-Later requested discovery can start it again. Credential changes or expiry also
+Stop this computer's mesh router and its connections with
+`wendy net disconnect`. Discovery and device commands leave it
+disconnected until you explicitly run `wendy net connect` again.
+Ordinary LAN discovery remains available. Credential changes or expiry also
 end a session. Each installation has an independent, persistent router identity,
 so multiple computers can participate with the same operator account. Routing
 stays inside the private session; it does not install host routes or change DNS.
 
-The CLI discovers first-hop routers over LAN and Bluetooth, then follows routes
+The CLI discovers nearby routers over LAN and Bluetooth, then follows routes
 across the mesh. LAN mesh discovery requires an IPv4 interface and multicast
 access. Routed LAN subnets can work when ordinary device discovery supplies
 addresses, for example through a DNS-SD reflector between VLANs, and the agents
@@ -77,15 +79,15 @@ across several hops; it does not combine link bandwidth.
 
 On Linux, Bluetooth requires BlueZ and LE L2CAP support. On macOS it uses
 CoreBluetooth and requires Bluetooth permission. The CLI does not discover
-first hops through Wi-Fi Aware. A failed carrier does not prevent another from
+first hops through Wi-Fi Aware. A failed connection does not prevent another from
 connecting. Windows mesh code builds, but device interoperability has not been
 qualified; ordinary discovery remains available.
 
-First-hop routers need operator-capable agents or supported PSRAM Lite firmware;
+Nearby routers need compatible agents or supported PSRAM Lite firmware;
 older agents reject operator joins. If mesh discovery is unavailable, check the
 selected organization, certificate and router version. Ordinary discovery
 continues. See [Connect from your computer](/docs/advanced/development/local-mesh-radio)
-for Lite limits, service forwarding and explicit first-hop selection.
+for Lite limits, service forwarding and automatic mesh joining.
 
 ## Platform support
 
@@ -101,9 +103,8 @@ without a terminal, `wendy discover` prints a notice on stderr instead.
 
 Headless Mac advertises the same `_wendyos._udp` service. When discovery
 succeeds, Mac agents appear under `lanDevices` in JSON output with
-`"os": "darwin"`. For automation, prefer an explicit target such as
-`--device {hostname}:50051`, because discovery can be blocked by network policy
-or macOS permissions.
+`"os": "darwin"`. For automation, use the returned device selector and advertised management port.
+Discovery can be blocked by network policy or macOS permissions.
 
 ## Local run targets
 
