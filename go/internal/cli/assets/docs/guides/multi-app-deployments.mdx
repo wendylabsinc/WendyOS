@@ -33,6 +33,8 @@ Wendy auto-detects the project shape, so you do not need a build-type flag. A `w
 - Docker installed locally so Wendy can build service images
 - A project directory with either a `services` map in `wendy.json` or a Compose file (`docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`)
 
+A service `context` is a directory relative to the root `wendy.json`. `"context": "api"` points to `./api/`, where that service's Dockerfile and source live. Run commands from the project root. See the [folder layout](/docs/apps/wendy-services) before adapting the examples. Dockerfiles remain supported for every service; Stagefiles are optional.
+
 ## How Wendy runs compose projects
 
 When you run `wendy run` in a directory with a compose file, Wendy auto-detects the compose project and uses the compose path before the single-Dockerfile path.

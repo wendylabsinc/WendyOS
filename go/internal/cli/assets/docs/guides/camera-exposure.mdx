@@ -5,7 +5,7 @@ description: Inspect a camera's controls, fix an overexposed picture, save the s
 
 import { withBasePath } from '@/lib/shared';
 
-Use the Wendy CLI to adjust a USB camera while watching its live feed. You will inspect the controls the camera supports, try a shorter exposure, save the result, and check that it survives a stream reconnect.
+Exposure controls how long the sensor collects light. Longer exposure brightens an image but can blur moving objects; gain can brighten it while adding noise. Adjust these while watching the feed, then check that saved settings survive a reconnect.
 
 The silent clips below show a real Logitech C920 connected to a Jetson Orin Nano, using a current Wendy CLI and device agent with camera control support. The recording demonstrates temporary changes with `--no-persist`. Saving settings and restoring defaults are covered afterward.
 
@@ -20,10 +20,9 @@ The same commands work with local CSI cameras that expose V4L2 controls. Network
 
 ## 1. Select the camera
 
-Choose your WendyOS device, then list its cameras:
+List cameras and select the device when prompted. Use the same target throughout:
 
 ```bash
-wendy device set-default
 wendy device camera list
 ```
 
@@ -169,7 +168,7 @@ Stop the preview with Ctrl+C when you finish. You can delete `camera-controls-be
 
 ### The command is missing or the agent reports an unimplemented method
 
-Both the CLI and the device agent need camera control support. Check the [CLI installation guide](/docs/#1-install-the-wendy-cli) and [device update command](/docs/advanced/clients/wendy-cli/commands/device/update), then retry the control listing.
+Both the CLI and the device agent need camera control support. Check the [CLI installation guide](/docs/installation/cli) and [device update command](/docs/advanced/clients/wendy-cli/commands/device/update), then retry the control listing.
 
 ### A value is rejected or the control is not mutable
 

@@ -3,11 +3,13 @@ title: Stagefile
 description: Describe an app's container build in YAML so Wendy can cache dependencies, skip unnecessary image builds, and upload only what changed
 ---
 
-Most application edits change a few source files, not the operating system, language runtime, or dependencies beneath them. A traditional container build cannot always see that distinction clearly. It may resend a large build context, invalidate an expensive layer, start `buildx`, export the image again, and then discover that almost every byte already exists on the device.
+Your existing Dockerfile or Containerfile remains supported. A Stagefile is an optional build format, not a migration requirement. Run `wendy run` from your existing project to build and deploy it.
+
+Most application edits change source files while dependencies stay the same. Separating those inputs can reduce rebuild time in either format.
 
 A **Stagefile** makes the distinction explicit. It is a declarative YAML build descriptor named `build.stagefile.yaml`. Wendy compiles it into a real, digest-pinned Dockerfile, builds a standard OCI image, and deploys that image with the normal `wendy run` workflow.
 
-The result is a faster edit-deploy loop without maintaining the easy-to-miss performance details of a hand-written Dockerfile.
+Use it when you want the compiler to manage these build details. Keep a hand-written Dockerfile when you need its existing build steps; the same deployment workflow supports both.
 
 ## Why use a Stagefile?
 

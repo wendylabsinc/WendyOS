@@ -2,6 +2,25 @@
 
 When your project needs more than one container managed through a `wendy.json` file (rather than a `docker-compose.yml`), declare a `services` map in `wendy.json`. `wendy run` detects the map and automatically orchestrates a parallel multi-service build and deployment. `wendy build` detects the same map and builds the images locally without deploying — see [Building without deploying](#building-without-deploying).
 
+A service is one separately managed container, such as an API or inference worker. Separate services when they need independent lifecycles. Existing `docker-compose.yml` projects are also supported; neither this map nor Stagefiles are mandatory.
+
+Each `context` is a directory relative to the `wendy.json` containing the map. For example, `"context": "api"` means `./api/`, not an image name or URL:
+
+```text
+project/
+├── wendy.json
+├── db/
+│   └── Dockerfile
+├── api/
+│   ├── Dockerfile
+│   └── ... source files
+└── frontend/
+    ├── Dockerfile
+    └── ... source files
+```
+
+Run `wendy run` from `project/`. Each Dockerfile copies sources from its own context; `COPY ../api` cannot reach outside it. Context paths must be relative and cannot contain `..`.
+
 ## `wendy.json` structure
 
 ```json

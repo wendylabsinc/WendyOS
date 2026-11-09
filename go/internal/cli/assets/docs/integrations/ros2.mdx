@@ -19,6 +19,14 @@ CycloneDDS (default), Fast DDS, RTI Connext, or GurumDDS.
 
 For ROS 2 inside a robot VM, use the [Unitree simulator templates](/docs/installation/unitree-simulators) and [sim-to-real walkthrough](/docs/integrations/sim-to-real).
 
+## What stays standard
+
+ROS 2 connects robot software components. A node performs a task, such as reading a camera. A topic is a named stream of typed messages: publishers send samples and subscribers receive them through ROS middleware. QoS specifies delivery policies such as reliability and queue depth. A service answers a request; an action tracks a longer task with feedback and cancellation.
+
+Keep your existing packages, nodes, message types, launch files, Dockerfiles, and ROS tools. Remote inspection runs standard ROS commands beside the app; it does not replace ROS messaging or require a new application API. The CLI does not create sensor publishers or install a navigation stack for you.
+
+Deployment does configure discovery and isolation. Match the DDS domain, middleware, and network scope to the robot you intend to join; the defaults below can intentionally hide unrelated peers.
+
 ## How it works
 
 The agent discovers running ROS 2 app containers (those deployed with a
@@ -81,8 +89,7 @@ Existing projects need no scaffolding — add the `frameworks.ros2` key to
   A running app with `frameworks.ros2` is optional. See
   [Multi-app deployments](/docs/guides/multi-app-deployments) for an app-based
   talker/listener stack.
-- A device selected as your default (or pass `--device`). See
-  [Discovering devices](/docs/device/discovering-devices).
+- An interactive terminal to select your target when prompted. A configured default may select it automatically. Use `--device` for scripts or an explicit target. See [device selection](/docs/clients/wendy-cli/device-selection).
 
 Use `wendy device ros2 topics` to inspect a Unitree robot's system graph directly.
 The system sidecar's first use requires internet access to download its image.

@@ -17,12 +17,12 @@ each change.
 
 | Task | With Wendy | Try it |
 | --- | --- | --- |
-| Deploy an edit | `wendy run` builds, transfers, starts, and attaches logs; `--watch` repeats after source changes. | [Deploy your first app](/docs/#3-create-an-app) |
-| Configure hardware access | Declare camera, GPU, and other permissions in the app configuration. The host still needs compatible hardware and drivers. | [App configuration](/docs/advanced/apps/wendy.json) |
+| Deploy an edit | `wendy run` builds, transfers, starts, and attaches logs; `--watch` repeats after source changes. | [Deploy your first app](/docs/getting-started/app) |
+| Configure hardware access | Declare camera, GPU, and other permissions in the app configuration. The host still needs compatible hardware and drivers. | [App configuration](/docs/reference/app-configuration) |
 | Run multiple services | Use a supported Compose project and inspect each service's output. | [Compose support](/docs/advanced/apps/compose) |
 | Inspect a robot | Inspect ROS 2 nodes and topics and connect a Foxglove bridge. | [ROS 2](/docs/integrations/ros2) |
 | Work through a coding agent | MCP tools expose deployment and device inspection to your coding assistant. | [Coding-agent setup](/docs/guides/llm-integration) |
-| Try the workflow without a board | Run a local simulated robot. Validate physical peripherals separately on hardware. | [Robot quickstart](/docs/#try-the-robot-tour) |
+| Try the workflow without a board | Run a local simulated robot. Validate physical peripherals separately on hardware. | [Robot quickstart](/docs/getting-started/robot) |
 
 A successful transfer or a running container does not prove that your app works.
 Check its logs and actual output, such as an HTTP response, camera frame, or ROS 2 topic.
@@ -54,7 +54,7 @@ integration. Wendy offers two adoption paths:
 - Install [Wendy Agent on Linux](/docs/installation/linux) to keep the host OS and add
   Wendy's build, deployment, and inspection workflow. You continue managing host
   packages, drivers, and OS updates.
-- Install [WendyOS on a supported board](/docs/#2-set-up-a-device) to use a supplied board
+- Install [WendyOS on a supported board](/docs/installation) to use a supplied board
   image with the Agent included and the board's WendyOS OS update path. A/B layouts
   keep separate root filesystem slots for OS updates. Check your board's support
   and update instructions before planning a rollout.
@@ -93,6 +93,6 @@ not distinguish WendyOS from these tools.
 ## Start with your existing app
 
 Install the Agent on an existing Linux device, or set up a supported WendyOS board.
-Then follow [Deploy your first app](/docs/#3-create-an-app) and try your own Dockerfile
+Then follow [Deploy your first app](/docs/getting-started/app) and try your own Dockerfile
 or supported Compose project. Make one change, redeploy, and inspect the result.
 That gives you a concrete comparison with the workflow you use today.
