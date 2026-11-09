@@ -47,6 +47,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
+	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
@@ -116,6 +117,7 @@ func dbusProxyManagerOrNil(m *dbusproxy.Manager) dbusProxyManager {
 }
 
 type Client struct {
+	deliverySource          delivery.Source
 	client                  *containerd.Client
 	logger                  *zap.Logger
 	namespace               string
@@ -1051,23 +1053,41 @@ func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*
 		}
 	}
 
-	// Create or update the image in the image store.
-	_, err = is.Create(ctx, images.Image{
-		Name:   imageName,
-		Target: manifestDesc,
+	// Both delivery transports and operator writes serialize their final
+	// reference mutation through the same store. Content assembly stays outside
+	// this boundary so PrepareImage can wait for concurrent WriteChunks calls.
+	err = delivery.Commit(ctx, c.deliverySource, imageName, manifestDigest.String(), func() (string, error) {
+		image, err := is.Get(ctx, imageName)
+		if errdefs.IsNotFound(err) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return image.Target.Digest.String(), nil
+	}, func() error {
+		_, err := is.Create(ctx, images.Image{
+			Name:   imageName,
+			Target: manifestDesc,
+		})
+		if err != nil {
+			if errdefs.IsAlreadyExists(err) {
+				_, err = is.Update(ctx, images.Image{
+					Name:   imageName,
+					Target: manifestDesc,
+				})
+				if err != nil {
+					return fmt.Errorf("updating image %q: %w", imageName, err)
+				}
+			} else {
+				return fmt.Errorf("creating image %q: %w", imageName, err)
+			}
+		}
+
+		return nil
 	})
 	if err != nil {
-		if errdefs.IsAlreadyExists(err) {
-			_, err = is.Update(ctx, images.Image{
-				Name:   imageName,
-				Target: manifestDesc,
-			})
-			if err != nil {
-				return fmt.Errorf("updating image %q: %w", imageName, err)
-			}
-		} else {
-			return fmt.Errorf("creating image %q: %w", imageName, err)
-		}
+		return err
 	}
 
 	c.logger.Info("Assembled image",

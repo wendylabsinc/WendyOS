@@ -203,6 +203,9 @@ func (c *Client) MissingChunks(ctx context.Context, hashes [][32]byte) ([][32]by
 	// sweep afterwards, whichever call reads it later.
 	c.chunkSweepMu.RLock()
 	defer c.chunkSweepMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.chunkActivity.touch()
 
 	// The chunk index outlives containerd's content GC. Validate each backing
@@ -322,11 +325,14 @@ func (c *Client) PresentLayers(ctx context.Context, diffIDs []string) (map[strin
 	return present, nil
 }
 
-func (c *Client) StageChunk(_ context.Context, h [32]byte, data []byte) error {
+func (c *Client) StageChunk(ctx context.Context, h [32]byte, data []byte) error {
 	// Maintenance never sweeps staged chunks while a stage holds this: see
 	// MissingChunks above.
 	c.chunkSweepMu.RLock()
 	defer c.chunkSweepMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.chunkActivity.touch()
 
 	if len(data) > maxStagedChunkBytes {

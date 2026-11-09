@@ -72,6 +72,9 @@ var rpcTestDeviceMethods = []string{
 	"/wendy.agent.services.v1.WendyContainerService/WriteChunks",
 	"/wendy.agent.services.v1.WendyContainerService/PrepareImage",
 	"/wendy.agent.services.v2.WendyMeshService/MeshDial",
+	"/wendy.agent.services.v2.WendyBuildDeliveryService/GetDeliveryCapabilities",
+	"/wendy.agent.services.v2.WendyBuildDeliveryService/AdmitDelivery",
+	"/wendy.agent.services.v2.WendyBuildDeliveryService/GetDeliveryStatus",
 	"/wendy.agent.services.v2.WendySensorService/GetSensorManifest",
 	"/wendy.agent.services.v2.WendySensorService/StreamSensors",
 }

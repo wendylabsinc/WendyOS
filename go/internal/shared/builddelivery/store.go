@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
@@ -26,9 +27,10 @@ type record struct {
 	AdmittedAt time.Time `json:"admitted_at"`
 	// Output is durable before publication. A crash may leave pending output;
 	// retry can finish only this exact digest, never choose a different one.
-	Output    string `json:"output,omitempty"`
-	Bytes     int64  `json:"bytes,omitempty"`
-	Completed bool   `json:"completed,omitempty"`
+	Uploads   []string `json:"uploads,omitempty"`
+	Output    string   `json:"output,omitempty"`
+	Bytes     int64    `json:"bytes,omitempty"`
+	Completed bool     `json:"completed,omitempty"`
 }
 type session struct {
 	verified Verified
@@ -91,7 +93,7 @@ func Open(dir string, roots []*x509.Certificate, target meshid.Device, clock fun
 		if err != nil {
 			return nil, err
 		}
-		if info.Size() > MaxContractBytes+4096 {
+		if info.Size() > MaxContractBytes+64*1024 {
 			return nil, errors.New("oversized persisted delivery session")
 		}
 		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
@@ -105,6 +107,17 @@ func Open(dir string, roots []*x509.Certificate, target meshid.Device, clock fun
 		v, err := Admit(r.Contract, s.roots, target, r.AdmittedAt)
 		if err != nil {
 			return nil, fmt.Errorf("invalid persisted delivery admission: %w", err)
+		}
+		if r.Bytes < 0 || r.Bytes > v.claims.MaxBytes || len(r.Uploads) > MaxUploadsPerSession || (r.Completed && r.Output == "") {
+			return nil, errors.New("invalid persisted delivery accounting or completion")
+		}
+		seenUploads := map[string]bool{}
+		for _, upload := range r.Uploads {
+			parsed, parseErr := uuid.Parse(upload)
+			if parseErr != nil || parsed == uuid.Nil || parsed.String() != upload || seenUploads[upload] {
+				return nil, errors.New("invalid persisted upload ownership")
+			}
+			seenUploads[upload] = true
 		}
 		id := sessionID(r.Contract)
 		if entry.Name() != id+".json" || r.AdmittedAt.After(now) {
@@ -247,6 +260,8 @@ func (s *Store) Authorize(id string, peer *x509.Certificate, reference string) (
 // apply must compare the current reference with expected before changing it;
 // if it already equals output, it must succeed (crash/retry recovery). It must
 // not re-enter this Store. Authorization is checked immediately before apply.
+// Completed replay passes expected=output, allowing only a read-only match and
+// never restoration of a subsequently changed reference.
 func (s *Store) Publish(id string, peer *x509.Certificate, reference, output string, apply func(expected, output string) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -269,7 +284,10 @@ func (s *Store) Publish(id string, peer *x509.Certificate, reference, output str
 		return errors.New("delivery job is already bound to another output")
 	}
 	if entry.record.Completed {
-		return nil
+		// Replays may observe the completed output, but cannot restore a tag
+		// subsequently changed by an operator. expected=output makes the CAS
+		// callback read-only: a different current value must fail before apply.
+		return apply(output, output)
 	}
 	if entry.record.Output == "" {
 		r := entry.record
@@ -334,4 +352,75 @@ func (s *Store) Close() {
 		s.closed = true
 		s.release()
 	}
+}
+
+// Policy returns the immutable grant even after completion, so retries can
+// reach Publish's no-op path without reopening staging authority.
+func (s *Store) Policy(id string, peer *x509.Certificate) (Claims, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, err := s.authorize(id, peer, s.now())
+	if err != nil {
+		return Claims{}, err
+	}
+	return entry.verified.Claims(), nil
+}
+
+const MaxUploadsPerSession = 1024
+
+// RegisterUpload records issuance before creating an ingest. A caller cannot
+// invent resume IDs to bypass the bounded upload-start budget.
+func (s *Store) RegisterUpload(id string, peer *x509.Certificate, upload string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, err := s.authorize(id, peer, s.now())
+	if err != nil {
+		return err
+	}
+	parsed, err := uuid.Parse(upload)
+	if err != nil || parsed.String() != upload || parsed == uuid.Nil {
+		return errors.New("invalid upload ID")
+	}
+	if entry.record.Completed || len(entry.record.Uploads) >= MaxUploadsPerSession {
+		return errors.New("delivery upload limit reached")
+	}
+	for _, issued := range entry.record.Uploads {
+		if issued == upload {
+			return errors.New("duplicate upload ID")
+		}
+	}
+	r := entry.record
+	r.Uploads = append(append([]string(nil), r.Uploads...), upload)
+	if err = s.persist(id, r); err != nil {
+		return err
+	}
+	entry.record = r
+	return nil
+}
+func (s *Store) CheckUpload(id string, peer *x509.Certificate, upload string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, err := s.authorize(id, peer, s.now())
+	if err != nil {
+		return err
+	}
+	if entry.record.Completed {
+		return errors.New("delivery completed")
+	}
+	for _, issued := range entry.record.Uploads {
+		if issued == upload {
+			return nil
+		}
+	}
+	return errors.New("upload was not issued to this delivery session")
+}
+
+func (s *Store) CompletedOutput(id string, peer *x509.Certificate) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, err := s.authorize(id, peer, s.now())
+	if err != nil {
+		return "", false, err
+	}
+	return entry.record.Output, entry.record.Completed, nil
 }

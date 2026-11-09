@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -33,10 +34,11 @@ import (
 
 type ContainerService struct {
 	agentpb.UnimplementedWendyContainerServiceServer
-	logger     *zap.Logger
-	containerd ContainerdClient
-	logManager *ContainerLogManager
-	monitor    ContainerMonitorRegistrar
+	deliverySource delivery.Source
+	logger         *zap.Logger
+	containerd     ContainerdClient
+	logManager     *ContainerLogManager
+	monitor        ContainerMonitorRegistrar
 
 	// imageVerifier checks the container image signature (see RunContainer)
 	// before the image is assembled or the container created. This verifies
@@ -88,6 +90,10 @@ func NewContainerService(logger *zap.Logger, client ContainerdClient, opts ...Co
 }
 
 type ContainerServiceOption func(*ContainerService)
+
+func WithDeliverySource(source delivery.Source) ContainerServiceOption {
+	return func(s *ContainerService) { s.deliverySource = source }
+}
 
 func WithLogManager(lm *ContainerLogManager) ContainerServiceOption {
 	return func(s *ContainerService) {
@@ -294,6 +300,20 @@ func to32(b []byte) ([32]byte, error) {
 }
 
 func (s *ContainerService) QueryChunks(ctx context.Context, req *agentpb.QueryChunksRequest) (*agentpb.QueryChunksResponse, error) {
+	var err error
+	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, "")
+	if err != nil {
+		return nil, err
+	}
+	if grant != nil {
+		if err = grant.AuthorizeStaging(); err != nil {
+			return nil, err
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, grant.Deadline())
+		defer cancel()
+	}
+
 	hashes := make([][32]byte, 0, len(req.GetChunkHashes()))
 	for _, b := range req.GetChunkHashes() {
 		h, err := to32(b)
@@ -315,6 +335,20 @@ func (s *ContainerService) QueryChunks(ctx context.Context, req *agentpb.QueryCh
 }
 
 func (s *ContainerService) QueryLayers(ctx context.Context, req *agentpb.QueryLayersRequest) (*agentpb.QueryLayersResponse, error) {
+	var err error
+	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, "")
+	if err != nil {
+		return nil, err
+	}
+	if grant != nil {
+		if err = grant.AuthorizeStaging(); err != nil {
+			return nil, err
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, grant.Deadline())
+		defer cancel()
+	}
+
 	present, err := s.containerd.PresentLayers(ctx, req.GetDiffIds())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "querying layers: %v", err)
@@ -327,9 +361,37 @@ func (s *ContainerService) QueryLayers(ctx context.Context, req *agentpb.QueryLa
 }
 
 func (s *ContainerService) WriteChunks(stream grpc.ClientStreamingServer[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse]) error {
-	ctx := stream.Context()
+	ctx, grant, err := delivery.RPC(stream.Context(), s.deliverySource, "")
+	if err != nil {
+		return err
+	}
+	if grant != nil {
+		if err = grant.AuthorizeStaging(); err != nil {
+			return err
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, grant.Deadline())
+		defer cancel()
+	}
 	for {
-		msg, err := stream.Recv()
+		var msg *agentpb.WriteChunksRequest
+		var err error
+		if grant == nil {
+			msg, err = stream.Recv()
+		} else {
+			type received struct {
+				msg *agentpb.WriteChunksRequest
+				err error
+			}
+			result := make(chan received, 1)
+			go func() { m, e := stream.Recv(); result <- received{m, e} }()
+			select {
+			case got := <-result:
+				msg, err = got.msg, got.err
+			case <-ctx.Done():
+				return status.FromContextError(ctx.Err()).Err()
+			}
+		}
 		if err == io.EOF {
 			return stream.SendAndClose(&agentpb.WriteChunksResponse{})
 		}
@@ -339,6 +401,11 @@ func (s *ContainerService) WriteChunks(stream grpc.ClientStreamingServer[agentpb
 		h, err := to32(msg.GetHash())
 		if err != nil {
 			return err
+		}
+		if grant != nil {
+			if err := grant.ReserveBytes(int64(len(msg.GetData()))); err != nil {
+				return err
+			}
 		}
 		if err := s.containerd.StageChunk(ctx, h, msg.GetData()); err != nil {
 			// Preserve an explicit gRPC code from the store (e.g. ResourceExhausted
@@ -357,6 +424,21 @@ func (s *ContainerService) WriteChunks(stream grpc.ClientStreamingServer[agentpb
 // CLI continues uploading later layers. RunContainer repeats the work through
 // idempotent fast paths, so a lost response cannot leave deploy state ambiguous.
 func (s *ContainerService) PrepareImage(ctx context.Context, req *agentpb.RunContainerLayersRequest) (*agentpb.PrepareImageResponse, error) {
+	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, req.GetImageName())
+	if err != nil {
+		return nil, err
+	}
+	if grant != nil {
+		if _, completed, err := grant.CompletedOutput(); err != nil {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		} else if completed {
+			return nil, status.Error(codes.FailedPrecondition, "delivery already completed; query its status instead of preparing again")
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, grant.Deadline())
+		defer cancel()
+	}
+
 	if err := s.verifyImageSignature(req.GetImageConfig(), req.GetImageSignature()); err != nil {
 		return nil, err
 	}

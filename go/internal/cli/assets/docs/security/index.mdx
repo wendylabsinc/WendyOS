@@ -51,6 +51,32 @@ design — provisioning is the mitigation. The provisioning window is time-bound
 operators; pre-enrollment at imaging time eliminates it entirely. Once provisioned, all
 communication moves to mTLS on port 50052, and the plaintext port is shut down.
 
+**Delegated image delivery (Linux).** A build host's device certificate alone
+cannot stage chunks or mutate the target's OCI registry. Delivery requires a
+versioned operator-signed grant, admitted by the target while the operator's
+certificate is valid. Its embedded certificate chain and deployment entitlements
+are checked against the target's provisioned trust. The grant fixes the target,
+builder identity and public key, build-input hash, repository and tag, prior
+image digest, delivery deadline and resource budget. The actual mTLS caller must
+prove possession of that builder key on either transfer path.
+
+Admission and completion survive an agent restart. An admitted job can finish
+without Cloud or an operator connection, including after its signing certificate
+expires, until its delivery deadline. New admission after certificate expiry is
+refused. Builder key rotation requires a new grant. Publication compares the
+current tag with the operator's expected prior image; a completed grant cannot
+restore a tag subsequently changed by an operator. Device enrollment reset
+revokes the stored grants. These permissions authorize image delivery; image
+signatures remain a separate verification mechanism.
+
+The registry grant covers scoped uploads, upload resume/commit and publication,
+with metadata probes for deduplication. It does not grant blob downloads,
+catalog/tag enumeration, deletion, or app execution/control. Cross-repository
+mounts use the ordinary upload fallback. Each grant is limited to 24 hours,
+1 TiB of received bytes and 1,024 upload starts; retries consume its byte budget.
+Build hosts and their CLI must support this contract before delivering to a
+target that enforces it; there is no legacy device-credential write fallback.
+
 **Container isolation.** Apps run as non-root (`appuser`, UID 1000) inside containerd with a
 baseline seccomp profile, explicit capability grants, and entitlement-gated access to hardware,
 Bluetooth (D-Bus proxied), and host networking. No entitlement, no access.

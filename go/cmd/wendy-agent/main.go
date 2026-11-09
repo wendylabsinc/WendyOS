@@ -35,6 +35,7 @@ import (
 	agentcontainerd "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
 	agentdata "github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
+	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/framesource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostexec"
@@ -337,8 +338,27 @@ func main() {
 		}
 	}
 
+	// mTLS organization-equality enforcement mode. Read once here so the
+	// startMTLSServer closure can capture it. The default (empty value) is strict,
+	// which rejects client certs that carry no org identity. Set to grace for
+	// migration mode, which allows legacy certs without org identity.
+	orgMode, ok := interceptor.ParseOrgMode(os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT"))
+	if !ok {
+		logger.Warn("WENDY_MTLS_ORG_ENFORCEMENT has unrecognised value; defaulting to strict",
+			zap.String("value", os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT")))
+	}
+	logger.Info("mTLS org enforcement mode", zap.String("mode", orgMode.String()))
+
+	var deliveryManager *delivery.Manager
+	deliverySource := func() (delivery.Snapshot, error) {
+		if deliveryManager == nil {
+			return delivery.Snapshot{}, nil
+		}
+		return deliveryManager.Get()
+	}
 	containerSvcOpts := []services.ContainerServiceOption{
 		services.WithLogManager(logManager),
+		services.WithDeliverySource(deliverySource),
 	}
 	if monitor != nil {
 		containerSvcOpts = append(containerSvcOpts, services.WithMonitor(&containerMonitorAdapter{m: monitor}))
@@ -350,6 +370,31 @@ func main() {
 	audioSvc := services.NewAudioService(logger)
 
 	provisioningSvc := services.NewProvisioningService(logger, configPath, timesyncMgr)
+	deliveryRegistryAddress, err := accessPolicy.RegistryAddress(os.Getenv("WENDY_REGISTRY_ADDR"))
+	var deliveryPrefix string
+	if err != nil {
+		logger.Warn("Delegated delivery unavailable without a valid registry address", zap.Error(err))
+	} else {
+		deliveryPrefix, err = registry.LocalImagePrefix(deliveryRegistryAddress)
+		if err != nil {
+			logger.Warn("Delegated delivery registry prefix unavailable", zap.Error(err))
+		}
+	}
+	deliveryManager = delivery.NewManager(filepath.Join(configPath, "build-delivery"), deliveryPrefix, provisioningSvc.ProvisioningPublicCertificates)
+	defer deliveryManager.Close()
+	cleanupDelivery := func() error {
+		deliveryManager.Close()
+		return os.RemoveAll(filepath.Join(configPath, "build-delivery"))
+	}
+	if ctrdClient != nil {
+		ctrdClient.SetDeliverySource(deliverySource)
+	}
+	var deliveryImages services.DeliveryImageResolver
+	if resolver, ok := containerdClient.(services.DeliveryImageResolver); ok {
+		deliveryImages = resolver
+	}
+	deliverySvc := services.NewBuildDeliveryService(deliverySource, deliveryImages)
+
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster, telemetryBuf)
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
@@ -418,6 +463,9 @@ func main() {
 	// Optional startup work can block after resource-owning workers begin.
 	// Handle termination now so those workers can drain during startup too.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	cleanupResetOwnedState := func(resetCtx context.Context) error {
+		return errors.Join(cleanupDelivery(), cleanupResetMesh(resetCtx))
+	}
 	// A verified completed reset, including a recovered pending reset, has
 	// already erased its credentials. Reclaim owned kernel policy before
 	// exposing its receipt. A local-only reset has no receipt but leaves a
@@ -426,7 +474,7 @@ func main() {
 	if resetStatus, err := provisioningSvcV2.IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}); err == nil {
 		completed := len(resetStatus.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 || provisioningSvc.LocalResetCompleted()
 		recoverCompletedResetMesh(ctx, completed, 5*time.Second,
-			cleanupResetMesh, provisioningSvc.SetResetCleanupError, func(err error) {
+			cleanupResetOwnedState, provisioningSvc.SetResetCleanupError, func(err error) {
 				logger.Error("Reset net cleanup incomplete; completion and enrollment remain unavailable", zap.Error(err))
 			})
 	}
@@ -635,7 +683,7 @@ func main() {
 			return
 		}
 
-		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig)
+		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig, registry.WithDeliveryAuthorization(deliverySource, orgMode))
 		if err != nil {
 			logger.Warn("Failed to start embedded dev registry (image push will be unavailable)", zap.Error(err))
 			return
@@ -719,17 +767,6 @@ func main() {
 	} else {
 		logger.Info("kernel dmesg collection disabled (set WENDY_COLLECT_DMESG=true to enable)")
 	}
-
-	// mTLS organization-equality enforcement mode. Read once here so the
-	// startMTLSServer closure can capture it. The default (empty value) is strict,
-	// which rejects client certs that carry no org identity. Set to grace for
-	// migration mode, which allows legacy certs without org identity.
-	orgMode, ok := interceptor.ParseOrgMode(os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT"))
-	if !ok {
-		logger.Warn("WENDY_MTLS_ORG_ENFORCEMENT has unrecognised value; defaulting to strict",
-			zap.String("value", os.Getenv("WENDY_MTLS_ORG_ENFORCEMENT")))
-	}
-	logger.Info("mTLS org enforcement mode", zap.String("mode", orgMode.String()))
 
 	// Main agent gRPC server port.
 	agentPort := defaultAgentPort
@@ -890,6 +927,7 @@ func main() {
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyLocalMeshAdminServiceServer(srv, localMeshAdmin)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)
+		agentpbv2.RegisterWendyBuildDeliveryServiceServer(srv, deliverySvc)
 		agentpbv2.RegisterWendySensorPairingServiceServer(srv, sensorSvc)
 		agentpbv2.RegisterWendyCalibratedFrameServiceServer(srv, calibratedFrameSvc)
 		agentpbv2.RegisterWendyRobotArmServiceServer(srv, robotArmSvc)
@@ -1582,6 +1620,7 @@ func main() {
 	// Revoke Unitree sessions and keys before Unprovision reports success.
 	// A failed clear is retried when the agent restarts unenrolled.
 	provisioningSvc.BeforeUnprovisioned = func() error {
+		deliveryErr := cleanupDelivery()
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()
@@ -1604,11 +1643,11 @@ func main() {
 		if stopErr != nil {
 			// Do not reclaim kernel objects while an undrained worker may still
 			// use them. Reset stays unconfirmed; the scheduled restart retries.
-			return fmt.Errorf("waiting for net shutdown: %w", stopErr)
+			return errors.Join(deliveryErr, fmt.Errorf("waiting for net shutdown: %w", stopErr))
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		return errors.Join(meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx))
+		return errors.Join(deliveryErr, meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx))
 	}
 	provisioningSvc.OnUnprovisioned = func() {
 		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum)

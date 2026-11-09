@@ -53,15 +53,25 @@ func TestDurableAdmissionSurvivesOperatorExpiryAndPinsOutput(t *testing.T) {
 	}
 	output := "sha256:" + strings.Repeat("a", 64)
 	calls := 0
+	current := ""
+	mutations := 0
 	fail := errors.New("publication interrupted")
 	apply := func(expected, got string) error {
 		calls++
-		if expected != "" || got != output {
+		if got != output {
 			t.Fatal("lost CAS/output binding")
+		}
+		if current == got {
+			return nil
+		}
+		if current != expected {
+			return errors.New("reference superseded")
 		}
 		if calls == 1 {
 			return fail
 		}
+		current = got
+		mutations++
 		return nil
 	}
 	if err = s.Publish(id, f.builder, f.claims.Reference, output, apply); !errors.Is(err, fail) {
@@ -90,15 +100,19 @@ func TestDurableAdmissionSurvivesOperatorExpiryAndPinsOutput(t *testing.T) {
 	if err = s.Publish(id, f.builder, f.claims.Reference, output, apply); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 {
+	if calls != 3 || mutations != 1 {
 		t.Fatal("replay repeated a completed image mutation")
+	}
+	current = "sha256:" + strings.Repeat("c", 64)
+	if err = s.Publish(id, f.builder, f.claims.Reference, output, apply); err == nil {
+		t.Fatal("completed replay restored a superseded reference")
 	}
 	deadline := time.Unix(f.claims.ValidUntil, 0)
 	clock = deadline
 	if err = s.Publish(id, f.builder, f.claims.Reference, output, apply); err == nil {
 		t.Fatal("publication after expiry")
 	}
-	if calls != 2 {
+	if calls != 4 || mutations != 1 {
 		t.Fatal("expired publication invoked backend")
 	}
 }
@@ -175,4 +189,40 @@ func TestStoreExcludesConcurrentProcessesAndFailsClosedAfterClose(t *testing.T) 
 		t.Fatal(err)
 	}
 	reopened.Close()
+}
+
+func TestUploadIssuanceSurvivesRestartAndRejectsInventedResumeIDs(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	clock := func() time.Time { return f.now }
+	s, err := Open(dir, f.roots, f.target, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	id, err := s.Admit(f.sign(t, f.claims), f.builder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const issued = "44444444-4444-4444-8444-444444444444"
+	if err = s.CheckUpload(id, f.builder, issued); err == nil {
+		t.Fatal("invented upload accepted")
+	}
+	if err = s.RegisterUpload(id, f.builder, issued); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RegisterUpload(id, f.builder, issued); err == nil {
+		t.Fatal("duplicate upload accepted")
+	}
+	s.Close()
+	s, err = Open(dir, f.roots, f.target, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CheckUpload(id, f.builder, issued); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CheckUpload(id, f.builder, "55555555-5555-4555-8555-555555555555"); err == nil {
+		t.Fatal("restart allowed invented upload")
+	}
 }
