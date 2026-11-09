@@ -260,8 +260,9 @@ func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, 
 
 // releaseBlobs checks the served manifest against the signed assignment
 // before anything else is used: the manifest digest must be the signed one,
-// and the blob list must be exactly the OCI manifest's config and layers with
-// their sizes, each with the ciphertext size its chunking implies. Only then
+// and the blob list must be exactly the set of digests the OCI manifest's
+// config and layers name (a digest repeated there is listed once), each at
+// its descriptor size and with the ciphertext size its chunking implies. Only then
 // are the served sizes allowed to size a download.
 func releaseBlobs(a *cloudpbv2.DeviceAssignment, m *cloudpbv2.ArtifactManifest) ([]*cloudpbv2.EncryptedBlob, int, error) {
 	if m.GetManifestDigest() != a.GetManifestDigest() || digest.FromBytes(m.GetOciManifest()).String() != a.GetManifestDigest() {
@@ -289,6 +290,9 @@ func releaseBlobs(a *cloudpbv2.DeviceAssignment, m *cloudpbv2.ArtifactManifest) 
 	}
 	want := map[string]int64{}
 	for _, d := range append([]ocispec.Descriptor{om.Config}, om.Layers...) {
+		if size, ok := want[d.Digest.String()]; ok && size != d.Size {
+			return nil, 0, pullFailed("manifest", fmt.Errorf("manifest names %s at two sizes", d.Digest))
+		}
 		want[d.Digest.String()] = d.Size
 	}
 	if len(m.GetBlobs()) != len(want) {

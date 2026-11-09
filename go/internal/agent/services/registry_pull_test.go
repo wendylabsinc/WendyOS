@@ -42,6 +42,20 @@ type testRelease struct {
 
 func (f *pbFixture) release(t *testing.T) *testRelease {
 	t.Helper()
+	return f.releaseOf(t, randomBytes(10000), randomBytes(0))
+}
+
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	rand.Read(b)
+	return b
+}
+
+// releaseOf publishes an image with these layers, in order. As the CLI
+// publisher does, the blob list names each digest once: config first, then
+// layers in manifest order.
+func (f *pbFixture) releaseOf(t *testing.T, layers ...[]byte) *testRelease {
+	t.Helper()
 	priv, err := loadOrCreateDeviceEncryptionKey(f.dir, f.uri)
 	if err != nil {
 		t.Fatal(err)
@@ -51,15 +65,12 @@ func (f *pbFixture) release(t *testing.T) *testRelease {
 		r.plain[digest.FromBytes(data).String()] = data
 		return ocispec.Descriptor{MediaType: mediaType, Digest: digest.FromBytes(data), Size: int64(len(data))}
 	}
-	layer := func(n int) []byte {
-		b := make([]byte, n)
-		rand.Read(b)
-		return b
-	}
 	om := ocispec.Manifest{
 		MediaType: ocispec.MediaTypeImageManifest,
 		Config:    add(ocispec.MediaTypeImageConfig, []byte(`{"architecture":"arm64","os":"linux"}`)),
-		Layers:    []ocispec.Descriptor{add(ocispec.MediaTypeImageLayer, layer(10000)), add(ocispec.MediaTypeImageLayer, layer(0))},
+	}
+	for _, l := range layers {
+		om.Layers = append(om.Layers, add(ocispec.MediaTypeImageLayer, l))
 	}
 	om.SchemaVersion = 2
 	oci, err := json.Marshal(om)
@@ -72,7 +83,12 @@ func (f *pbFixture) release(t *testing.T) *testRelease {
 		ContentKeyId: registrycrypto.KeyID(contentKey), Aead: cloudpbv2.AeadSuite_AEAD_SUITE_AES_256_GCM_CHUNKED,
 		ChunkSize: uint32(r.chunkSize),
 	}
+	listed := map[digest.Digest]bool{}
 	for _, d := range append([]ocispec.Descriptor{om.Config}, om.Layers...) {
+		if listed[d.Digest] {
+			continue
+		}
+		listed[d.Digest] = true
 		var ct bytes.Buffer
 		b, err := registrycrypto.EncryptBlob(&ct, bytes.NewReader(r.plain[d.Digest.String()]), contentKey, d.Digest.String(), r.chunkSize)
 		if err != nil {
@@ -273,6 +289,27 @@ func TestRegistryPullImportsAVerifiedReleaseAndResumesACutBlob(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, registryPullDir)); !os.IsNotExist(err) {
 		t.Fatalf("staging directory left behind: %v", err)
+	}
+}
+
+// A layer the image manifest names twice is one blob in the release: it is
+// fetched once and imported under its digest.
+func TestRegistryPullRepeatedLayerIsOneBlob(t *testing.T) {
+	f := newPBFixture(t)
+	shared := randomBytes(5000)
+	r := f.releaseOf(t, shared, randomBytes(300), shared)
+	if n := len(r.material.GetManifest().GetBlobs()); n != 3 {
+		t.Fatalf("fixture lists %d blobs, want 3 (config and two distinct layers)", n)
+	}
+	arts := &fakeArtifacts{r: r}
+	rec := f.withArtifacts(arts)
+	f.assignEntry(r.assign)
+	f.cycle()
+	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || len(rec.imported) != 1 {
+		t.Fatalf("outcome %v, %d imports: want the release imported", o.Outcome, len(rec.imported))
+	}
+	if !bytes.Equal(rec.blobs[digest.FromBytes(shared).String()], shared) || len(rec.blobs) != 3 || arts.blobCalls != 3 {
+		t.Fatalf("imported %d blobs after %d fetches: want the repeated layer fetched and imported once", len(rec.blobs), arts.blobCalls)
 	}
 }
 
