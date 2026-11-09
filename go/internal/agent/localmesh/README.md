@@ -626,7 +626,10 @@ route check and reuse that connection after recovery. Missing, withdrawn or
 expired destination manifests, endpoint changes, credential expiry, and stale
 session failures close the old connection before any replacement handshake.
 This also ends its active TCP streams. A warm port request has a twenty-second
-ACK bound for detecting stale sessions after a remote restart. There is no
+ACK bound for detecting stale sessions after a remote restart. Waiting for
+stream credit or receiving a per-stream refusal does not retire the shared
+connection; the attempted flow returns its bounded setup error while existing
+flows continue. There is no
 old-session draining overlap. This pool is separate from hop-by-hop carrier
 connections and the native TLS application transport.
 

@@ -284,10 +284,11 @@ func requestMuxUDP(ctx context.Context, conn *quic.Conn, port uint16) (*quic.Str
 	}
 	var ack [16]byte
 	if _, err = io.ReadFull(stream, ack[:]); err != nil {
-		if ctx.Err() != nil {
-			return nil, 0, ctx.Err()
+		var refusal *quic.StreamError
+		if ctx.Err() != nil && !errors.As(err, &refusal) {
+			err = ctx.Err()
 		}
-		return nil, 0, err
+		return nil, 0, &portACKError{err}
 	}
 	maximum := int(binary.BigEndian.Uint16(ack[6:8]))
 	if string(ack[:4]) != "WUA4" || ack[5] != 4 || maximum < udpmessage.MinChunkSize || maximum > maxMuxUDPChunk || binary.BigEndian.Uint32(ack[8:12]) != MaxUDPMessageSize || binary.BigEndian.Uint32(ack[12:]) != 0 {
@@ -340,10 +341,10 @@ func (c *Client) dialMultiplexedUDP(ctx context.Context, peer meshid.Device, add
 	}
 	stream, maximum, err := requestMuxUDP(requestCtx, entry.conn, port)
 	if err != nil {
-		// Do not let a warm, unresponsive peer pin later flows to a suspect
-		// connection. The next dial must repeat its caller's route check;
-		// never retry an app denial or silently close unrelated active flows.
-		if !errors.Is(err, ErrDenied) && !errors.Is(err, udpmessage.ErrCapacity) && ctx.Err() == nil {
+		// Only an unanswered request can make a live-looking connection
+		// suspect. Stream-credit exhaustion and per-flow refusal preserve
+		// its siblings. The next dial must repeat its caller's route check.
+		if stalePortACK(err) && ctx.Err() == nil {
 			c.retire(peer, entry)
 		}
 		return nil, err

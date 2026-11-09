@@ -395,13 +395,14 @@ func (c *Client) DialWithRetryCheck(ctx context.Context, peer meshid.Device, add
 			return &streamConn{Stream: stream, conn: entry.conn, release: func() { c.release(entry) }}, nil
 		}
 		dead := entry.conn.Context().Err() != nil
-		if errors.Is(err, ErrDenied) || ctx.Err() != nil {
+		if errors.Is(err, ErrDenied) || ctx.Err() != nil || !dead && !stalePortACK(err) {
 			c.release(entry)
 			return nil, err
 		}
-		// Any failed port request makes this cached connection suspect. A
-		// timeout from the local ACK bound may leave QUIC Context live even
-		// though the remote process no longer owns the connection ID.
+		// A fully written request that gets no ACK can leave QUIC Context
+		// live even though a restarted peer no longer owns the connection ID.
+		// Stream credit waits and explicit per-stream rejection do not make
+		// a healthy shared connection suspect.
 		c.retire(peer, entry)
 		c.release(entry)
 		if attempt != 0 || !reused && !dead {

@@ -29,6 +29,21 @@ const appSessionSetupTimeout = 60 * time.Second
 var ErrNoRoute = errors.New("no authenticated local wendy net route")
 var ErrDenied = errors.New("wendy net app ingress denied")
 
+// Only failure while awaiting an ACK to a completely written app-port request
+// can indicate a live-looking session left behind by a restarted peer. Waiting
+// for stream credit and explicit per-stream rejection are ordinary flow-local
+// capacity/admission outcomes; they must not terminate sibling app flows.
+type portACKError struct{ err error }
+
+func (e *portACKError) Error() string { return e.err.Error() }
+func (e *portACKError) Unwrap() error { return e.err }
+
+func stalePortACK(err error) bool {
+	var ack *portACKError
+	var rejected *quic.StreamError
+	return errors.As(err, &ack) && !errors.As(err, &rejected)
+}
+
 // Authorizer admits only ingress ports belonging to running mesh-mode apps
 // and holds authorization until its verified container endpoint is connected.
 type Authorizer interface {
@@ -160,13 +175,14 @@ func requestAppPort(ctx context.Context, conn *quic.Conn, port uint16, magic [4]
 	}
 	ack := make([]byte, ackSize)
 	if _, err = io.ReadFull(stream, ack); err != nil {
-		if ctx.Err() != nil {
+		var refusal *quic.StreamError
+		if ctx.Err() != nil && !errors.As(err, &refusal) {
 			err = ctx.Err()
 		}
 		if magic == udpOpenMagic && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
 			return nil, fmt.Errorf("%w: incomplete UDP control ACK", ErrUDPUnsupported)
 		}
-		return nil, fmt.Errorf("wendy net app port ACK: %w", err)
+		return nil, &portACKError{fmt.Errorf("wendy net app port ACK: %w", err)}
 	}
 	if magic == udpOpenMagic {
 		if err := validateUDPAck(ack); err != nil {
