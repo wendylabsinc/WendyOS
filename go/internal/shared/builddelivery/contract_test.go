@@ -10,13 +10,14 @@ import (
 	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
-	"github.com/google/uuid"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"math/big"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 type fixture struct {
@@ -241,6 +242,18 @@ func TestReferencesPreserveWendyAppNames(t *testing.T) {
 		c.Reference = name
 		if err := validate(c); err != nil {
 			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestBase64URLRejectsIgnoredWhitespace(t *testing.T) {
+	good := encode([]byte("public binding"))
+	if _, err := decode(good); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{good + "\n", "\r" + good, good[:2] + "\n" + good[2:], good + "="} {
+		if _, err := decode(invalid); err == nil {
+			t.Fatalf("accepted noncanonical encoding %q", invalid)
 		}
 	}
 }

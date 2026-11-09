@@ -286,8 +286,14 @@ func validate(c Claims) error {
 	}
 	return nil
 }
-func encode(b []byte) string          { return base64.RawURLEncoding.EncodeToString(b) }
-func decode(s string) ([]byte, error) { return base64.RawURLEncoding.Strict().DecodeString(s) }
+func encode(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+func decode(s string) ([]byte, error) {
+	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
+	if err != nil || encode(b) != s {
+		return nil, errors.New("noncanonical delivery base64url")
+	}
+	return b, nil
+}
 func parseChain(chain [][]byte) ([]*x509.Certificate, error) {
 	out := make([]*x509.Certificate, len(chain))
 	total := 0

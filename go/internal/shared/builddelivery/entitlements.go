@@ -4,10 +4,11 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"errors"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 // The deployed pki-core OID config uses PEN.1, encoding a DER SEQUENCE OF
