@@ -203,20 +203,20 @@ type VideoDevice struct {
 	// One camera has one stable_id. The value carries the scheme it came from,
 	// because the two names udev publishes are not equally durable:
 	//
-	//   by-id:<name>    vendor + product + serial; survives a reboot AND a
-	//                   move to another USB port. Reported whenever udev has
-	//                   one.
-	//   by-path:<name>  the USB port topology; survives a reboot but NOT a
-	//                   move. Reported only when there is no by-id name --
-	//                   two same-model cameras sharing a factory serial
-	//                   collide on a single by-id link, and the camera that
-	//                   loses it has nothing else that separates the two.
+	//	by-id:<name>    vendor + product + serial; survives a reboot AND a
+	//	                move to another USB port. Reported whenever udev has
+	//	                one.
+	//	by-path:<name>  the USB port topology; survives a reboot but NOT a
+	//	                move. Reported only when there is no by-id name --
+	//	                two same-model cameras sharing a factory serial
+	//	                collide on a single by-id link, and the camera that
+	//	                loses it has nothing else that separates the two.
 	//
-	//   sensorlink:<pairing-key>:<channel-id> identifies an enrolled SensorLink
-	//                   source channel independently of its loopback node.
-	//   ip-mac:<mac>     identifies a registered network camera by MAC address.
-	//   ros2:<key>       identifies a ROS camera by graph, domain and topic;
-	//                   independent of loopback numbering and publisher GUID.
+	//	sensorlink:<pairing-key>:<channel-id> identifies an enrolled SensorLink
+	//	                source channel independently of its loopback node.
+	//	ip-mac:<mac>     identifies a registered network camera by MAC address.
+	//	ros2:<key>       identifies a ROS camera by graph, domain and topic;
+	//	                independent of loopback numbering and publisher GUID.
 	//
 	// Empty when no stable identity is available (for example CSI cameras or
 	// local cameras on a kernel without udev symlinks).
