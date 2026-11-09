@@ -15,6 +15,9 @@ the target. Later delivery and retries need neither Cloud nor the operator
 connection, and can continue after the signing certificate expires, up to the
 job's 24-hour delivery deadline.
 
+This prepares authorization, not a job queue. The current streamed build still
+cancels if its CLI connection closes.
+
 Use `--skip-cloud-registration` when starting a build without Cloud. Ensure base
 images and build dependencies are also available on the isolated network.
 

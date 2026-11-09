@@ -100,6 +100,11 @@ certificate expires. The worker uses the signed target identity and authenticate
 LAN or mesh routing, so it does not need a fresh Cloud roster after restarting.
 Base images and other build dependencies must also be available locally.
 
+This separates delivery authority from the operator connection; it does not add a
+job queue. The current `BuildImage` RPC remains a streamed build and cancels when
+its CLI connection is closed. A queued worker must retain the signed assignment
+and admitted session when scheduling delivery later.
+
 The cached credential uses the platform credential store when available, with
 the same owner-only file fallback as other CLI credentials. `wendy auth logout`
 removes cached delivery signing credentials. Already admitted jobs remain valid
