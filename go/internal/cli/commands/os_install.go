@@ -28,6 +28,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/devicename"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -2642,33 +2643,9 @@ func nonEmptyValidator(v string) error {
 	return nil
 }
 
-// maxDeviceNameLen caps the device name so the derived hostname stays a valid
-// DNS label. The agent builds the hostname as "wendyos-<name>" (see
-// generate-hostname.sh / configpartition.applyDeviceName); with the 8-character
-// "wendyos-" prefix, a 55-character name yields a 63-octet label — the RFC 1035
-// maximum. Longer names produce an invalid hostname label on the device.
-const maxDeviceNameLen = 55
+const maxDeviceNameLen = devicename.MaxLen
 
-func validateDeviceName(name string) error {
-	if len(name) < 3 || len(name) > maxDeviceNameLen {
-		return fmt.Errorf("device name must be 3–%d characters", maxDeviceNameLen)
-	}
-	for i, c := range name {
-		switch {
-		case c >= 'a' && c <= 'z':
-		case (c >= '0' && c <= '9') || c == '-':
-			if i == 0 {
-				return fmt.Errorf("device name must start with a lowercase letter")
-			}
-		default:
-			return fmt.Errorf("device name may only contain lowercase letters, digits, and hyphens")
-		}
-	}
-	if name[len(name)-1] == '-' {
-		return fmt.Errorf("device name must not end with a hyphen")
-	}
-	return nil
-}
+func validateDeviceName(name string) error { return devicename.Validate(name) }
 
 func optionalDeviceNameValidator(name string) error {
 	if strings.TrimSpace(name) == "" {

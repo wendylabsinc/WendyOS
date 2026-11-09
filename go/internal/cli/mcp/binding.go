@@ -151,6 +151,11 @@ func (s *mcpServer) bindingMiddleware(srv *server.MCPServer) server.ToolHandlerM
 				p.log(name, "refused: "+key+" names another session")
 				return errResultf(errCodeDenied, "%s names another Wendy Cloud session or organization; this client may use only the one 'wendy cloud mcp' started with", key), nil
 			}
+			// Refused before Confirm, which shows the arguments on the terminal.
+			if key, credential := relayCredentialArgument(name, req.GetArguments()); credential {
+				p.log(name, "refused: "+key+" carries a credential")
+				return errResult(errCodeDenied, relayWiFiPasswordRefusal), nil
+			}
 			if !p.AllowAll && !(p.AllowRead && readOnlyTool(registered.Tool)) {
 				if p.Confirm == nil || !p.Confirm(ctx, name, req.GetArguments()) {
 					p.log(name, "refused by the user")

@@ -112,7 +112,9 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Codex.
 
 For a new board without WendyOS/Agent, enable the `setup` group with
 `wendy_tools(groups=["setup"])`, then use `os_install_plan` and `os_list_drives`
-before connecting. For supported image installs, use `os_install_start`, show the
+before connecting. For supported image installs, ask for the device name and
+WiFi, pass them to `os_install_start` as `device_name` and `wifi` (or
+`no_wifi=true`; omitted means no WiFi and an auto-generated name), show the
 physical instructions, then `os_install_resume` to probe the target. Obtain explicit
 erase authorization for the returned fingerprint before starting the write. Poll
 `os_install_status`; resume with an explicit address to verify first boot, or use
