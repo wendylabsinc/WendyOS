@@ -400,6 +400,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	if err != nil {
 		return err
 	}
+	enrolled := provJSON != nil
 
 	if err := confirmDragonwingReady(board, plan.version, force); err != nil {
 		return err
@@ -413,22 +414,16 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 		return err
 	}
 
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dragonwingTargetLabel(dev)))
-
-	if !force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage(
-			"This rewrites " + board.guide().rewrites + ": both OS slots, the config partition, and /data. Device identity, enrollment, saved Wi-Fi and app data are discarded — the board comes back as a new device."))
-		fmt.Println(tui.Dim("  Every board in EDL reports the generic id 05c6:9008, so wendy confirms"))
-		fmt.Println(tui.Dim("  the model from its chip id during the flash, not here."))
-		ok, err := confirmInstallStep("flashing "+dragonwingTargetLabel(dev),
-			fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)), true, force)
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target: dragonwingTargetLabel(dev),
+		warning: []string{
+			tui.WarningMessage("This rewrites " + board.guide().rewrites + ": both OS slots, the config partition, and /data. Device identity, enrollment, saved Wi-Fi and app data are discarded — the board comes back as a new device."),
+			tui.Dim("  Every board in EDL reports the generic id 05c6:9008, so wendy confirms"),
+			tui.Dim("  the model from its chip id during the flash, not here."),
+		},
+		question: fmt.Sprintf("Write the %s bundle to %s?", humanReadableDeviceType(board.deviceType), dragonwingTargetLabel(dev)),
+	}, name, creds, enrolled, force); err != nil {
+		return err
 	}
 
 	// On Windows this rebinds the board's driver for good, and the flash needs
@@ -442,6 +437,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 
 	logW, closeFlashLog := openDragonwingFlashLog(board, plan.version)
 	defer closeFlashLog()
+	logProvisioningSummary(logW, name, creds, &enrolled)
 
 	// The image holds the Wi-Fi PSK and any enrollment key in the clear, so it
 	// lives only for the flash rather than in the bundle cache.

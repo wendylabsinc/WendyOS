@@ -951,80 +951,13 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		targetDrive = selectedDrive
 	}
 
-	// Step 3: Confirm destructive write (unless --force).
-	if err := confirmOverwriteInternalDrive(targetDrive, force, yesOverwriteInternal); err != nil {
-		return err
-	}
-	if err := confirmEraseDrive(targetDrive, force); err != nil {
-		return err
-	}
-
-	// Step 5: Resolve image metadata for the target storage. A USB-attached
-	// drive is ambiguous (SD card in a reader vs NVMe SSD in an enclosure), so
-	// the variant is chosen from what this manifest version publishes — see
-	// manifestStorage. Pass --storage to override.
-	ver, ok := device.Manifest.Versions[selectedVersion]
-	if !ok {
-		return fmt.Errorf("version %s not found in device manifest", selectedVersion)
-	}
-	storage := manifestStorage(ver, targetDrive.StorageType, targetDrive.MediaFixed, storageOverride)
-
-	// A USB-attached SD reader and an SSD enclosure are indistinguishable by bus
-	// type, and not every platform reports fixed-media signals. When the variant
-	// is a guess on a dual-variant device, ask the user which slot the drive is
-	// for rather than silently picking the wrong image (a wrong guess can produce
-	// a non-booting device). Non-interactive runs keep the manifest default.
-	if storageOverride == "" && storageChoiceAmbiguous(ver, targetDrive.StorageType, targetDrive.MediaFixed) && isInteractiveTerminal() {
-		bootNVMe, err := tui.ConfirmNoDefault(fmt.Sprintf(
-			"Can't tell if %s is an SD card or an SSD. Will it boot from the NVMe/SSD slot?",
-			targetDrive.DevicePath))
-		if err != nil {
-			return err
-		}
-		if bootNVMe {
-			storage = "nvme"
-		} else {
-			storage = "sd"
-		}
-	} else if storageOverride == "" && targetDrive.MediaFixed && storage == "nvme" {
-		// Auto-detected an SSD enclosure. Surface the inference and the override
-		// so a surprising choice is at least visible and reversible.
-		fmt.Printf("Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).\n", targetDrive.DevicePath)
-	}
-
-	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
-	var imgInfo *imageInfo
-	var err error
-	if rootfsOnly && ver.InstallMode == "recovery" {
-		imgInfo, err = getRootfsOnlyImageInfo(device.Manifest, selectedVersion, storage)
-	} else {
-		imgInfo, err = getImageInfo(device.Manifest, selectedVersion, storage)
-	}
-	if err != nil {
-		return fmt.Errorf("getting image info: %w", err)
-	}
-
-	// Refuse a too-small drive before the prompts, pre-enrollment and download.
-	if err := preflightImageFits(deviceKey, selectedVersion, storage, imgInfo, targetDrive, noBmap); err != nil {
-		return err
-	}
-
-	provCreds, err := resolveWiFiCredentialsList(wifi)
+	// Step 3: Choose the image, settle first boot and confirm the erase.
+	settled, err := settleDiskInstall(ctx, deviceKey, device, selectedVersion, targetDrive, rootfsOnly, noBmap, storageOverride, wifi, deviceName, preOpts, force, yesOverwriteInternal)
 	if err != nil {
 		return err
 	}
-
-	provDeviceName, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-
-	// Resolve pre-enrollment before provisioning — the config partition is mounted
-	// and unmounted inside provisionConfigWithRetry below.
-	provisioningJSON, err := resolveProvisioningJSON(ctx, preOpts, &provDeviceName)
-	if err != nil {
-		return err
-	}
+	storage, imgInfo := settled.storage, settled.imgInfo
+	provCreds, provDeviceName, provisioningJSON := settled.creds, settled.name, settled.provisioningJSON
 
 	activationStep(ctx, "download", map[string]string{"target_selected": "true"})
 	// Step 5a/5b: Settle the image and block map to write (resolveFlashSource).
@@ -2756,6 +2689,16 @@ func resolveDeviceName(flagName string) (string, error) {
 // *deviceName is filled in when the device is pre-enrolled, so the caller
 // writes the name Cloud reserved.
 func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, deviceName *string) ([]byte, error) {
+	plan, err := planProvisioning(preOpts, deviceName)
+	if err != nil || plan == nil {
+		return nil, err
+	}
+	return mintProvisioningJSON(ctx, plan, *deviceName)
+}
+
+// planProvisioning is the question half of resolveProvisioningJSON: it may
+// prompt and fill a blank *deviceName, but reserves nothing in Cloud.
+func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnrollPlan, error) {
 	if preOpts.mode == preEnrollSkip {
 		return nil, nil
 	}
@@ -2766,7 +2709,16 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 		}
 		cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 	}
-	prov, err := resolveACMEPreEnrollment(ctx, cfg, preOpts, isInteractiveTerminal(), deviceName)
+	return planACMEPreEnrollment(cfg, preOpts, isInteractiveTerminal(), deviceName)
+}
+
+// mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
+// plan, or a failure the person chose to continue past, bakes nothing.
+func mintProvisioningJSON(ctx context.Context, plan *acmePreEnrollPlan, deviceName string) ([]byte, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	prov, err := plan.mint(ctx, deviceName)
 	if err != nil || prov == nil {
 		return nil, err
 	}
@@ -2781,17 +2733,11 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 // explicit --yes-overwrite-internal flag (non-interactive) or a typed device
 // path (interactive).
 func confirmOverwriteInternalDrive(d drive, force bool, yesOverwriteInternal bool) error {
-	if d.IsRemovable {
+	if d.IsRemovable || yesOverwriteInternal {
 		return nil
 	}
-	if yesOverwriteInternal {
-		return nil
-	}
-	if force {
-		return fmt.Errorf("refusing to wipe non-removable drive %s (%s) with --force; pass --yes-overwrite-internal to confirm you really want to overwrite an internal drive", d.Name, d.DevicePath)
-	}
-	if !isInteractiveTerminal() {
-		return usageErrorf("%s (%s) is an internal drive and there is no terminal to confirm it: pass --yes-overwrite-internal to overwrite it", d.Name, d.DevicePath)
+	if err := internalDriveRefusal(d, force, yesOverwriteInternal); err != nil {
+		return err
 	}
 	w := tui.PromptWriter()
 	fmt.Fprintf(w, "\n%s (%s) is an internal (non-removable) drive.\n", d.Name, d.DevicePath)
@@ -2803,12 +2749,29 @@ func confirmOverwriteInternalDrive(d drive, force bool, yesOverwriteInternal boo
 	return nil
 }
 
+// internalDriveRefusal is why confirmOverwriteInternalDrive would refuse d
+// without asking anyone, or nil.
+func internalDriveRefusal(d drive, force, yesOverwriteInternal bool) error {
+	switch {
+	case d.IsRemovable || yesOverwriteInternal:
+		return nil
+	case force:
+		return fmt.Errorf("refusing to wipe non-removable drive %s (%s) with --force; pass --yes-overwrite-internal to confirm you really want to overwrite an internal drive", d.Name, d.DevicePath)
+	case !isInteractiveTerminal():
+		return usageErrorf("%s (%s) is an internal drive and there is no terminal to confirm it: pass --yes-overwrite-internal to overwrite it", d.Name, d.DevicePath)
+	}
+	return nil
+}
+
+// eraseDriveStep names erasing d in a needs-confirmation error.
+func eraseDriveStep(d drive) string { return fmt.Sprintf("erasing %s (%s)", d.Name, d.DevicePath) }
+
 // confirmEraseDrive asks before d is erased; --force skips the question.
 func confirmEraseDrive(d drive, force bool) error {
 	if !force && isInteractiveTerminal() {
 		fmt.Fprintln(tui.PromptWriter())
 	}
-	ok, err := confirmInstallStep(fmt.Sprintf("erasing %s (%s)", d.Name, d.DevicePath),
+	ok, err := confirmInstallStep(eraseDriveStep(d),
 		fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", d.Name, d.DevicePath), false, force)
 	if err != nil {
 		return err
@@ -2818,6 +2781,120 @@ func confirmEraseDrive(d drive, force bool) error {
 		return ErrUserCancelled
 	}
 	return nil
+}
+
+// diskInstallSettled is what installLinuxImage writes, settled before the download.
+type diskInstallSettled struct {
+	storage          string
+	imgInfo          *imageInfo
+	creds            []wendyconf.WifiCredential
+	name             string
+	provisioningJSON []byte
+}
+
+// settleDiskInstall picks d's image and refuses a drive too small for it
+// before any first-boot question, then settles first boot and confirms the
+// erase; only after that is anything reserved in Cloud.
+func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevice, version string, d drive, rootfsOnly, noBmap bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) (diskInstallSettled, error) {
+	// Resolve image metadata for the target storage. A USB-attached drive is
+	// ambiguous (SD card in a reader vs NVMe SSD in an enclosure), so the
+	// variant is chosen from what this manifest version publishes — see
+	// manifestStorage. Pass --storage to override.
+	ver, ok := device.Manifest.Versions[version]
+	if !ok {
+		return diskInstallSettled{}, fmt.Errorf("version %s not found in device manifest", version)
+	}
+	storage := manifestStorage(ver, d.StorageType, d.MediaFixed, storageOverride)
+
+	// A USB-attached SD reader and an SSD enclosure are indistinguishable by bus
+	// type, and not every platform reports fixed-media signals. When the variant
+	// is a guess on a dual-variant device, ask the user which slot the drive is
+	// for rather than silently picking the wrong image (a wrong guess can produce
+	// a non-booting device). Non-interactive runs keep the manifest default.
+	if storageOverride == "" && storageChoiceAmbiguous(ver, d.StorageType, d.MediaFixed) && isInteractiveTerminal() {
+		bootNVMe, err := tui.ConfirmNoDefault(fmt.Sprintf(
+			"Can't tell if %s is an SD card or an SSD. Will it boot from the NVMe/SSD slot?",
+			d.DevicePath))
+		if err != nil {
+			return diskInstallSettled{}, err
+		}
+		if bootNVMe {
+			storage = "nvme"
+		} else {
+			storage = "sd"
+		}
+	} else if storageOverride == "" && d.MediaFixed && storage == "nvme" {
+		// Auto-detected an SSD enclosure. Surface the inference and the override
+		// so a surprising choice is at least visible and reversible.
+		fmt.Printf("Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).\n", d.DevicePath)
+	}
+
+	fmt.Printf("\nPreparing %s %s image...\n", device.Name, version)
+	var imgInfo *imageInfo
+	var err error
+	if rootfsOnly && ver.InstallMode == "recovery" {
+		imgInfo, err = getRootfsOnlyImageInfo(device.Manifest, version, storage)
+	} else {
+		imgInfo, err = getImageInfo(device.Manifest, version, storage)
+	}
+	if err != nil {
+		return diskInstallSettled{}, fmt.Errorf("getting image info: %w", err)
+	}
+
+	// Refuse a too-small drive before the prompts, pre-enrollment and download.
+	if err := preflightImageFits(deviceKey, version, storage, imgInfo, d, noBmap); err != nil {
+		return diskInstallSettled{}, err
+	}
+
+	creds, name, plan, err := confirmDiskInstall(d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
+	if err != nil {
+		return diskInstallSettled{}, err
+	}
+	// Reserving the name in Cloud waits for the erase confirm, so a declined
+	// install leaves nothing reserved and its retry can use the same name.
+	provisioningJSON, err := mintProvisioningJSON(ctx, plan, name)
+	if err != nil {
+		return diskInstallSettled{}, err
+	}
+	return diskInstallSettled{storage: storage, imgInfo: imgInfo, creds: creds, name: name, provisioningJSON: provisioningJSON}, nil
+}
+
+// confirmDiskInstall settles what first boot will apply, including whether to
+// pre-enroll, and shows it before asking to erase d, so nothing that changes
+// the result is asked afterwards. The returned plan is minted only after this.
+func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
+	creds, err := resolveWiFiCredentialsList(wifi)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	name, err := resolveDeviceName(deviceName)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	// Answers to the pre-enrollment questions are wasted if the erase cannot be confirmed.
+	if err := internalDriveRefusal(d, force, yesOverwriteInternal); err != nil {
+		return nil, "", nil, err
+	}
+	if err := checkInstallConfirmable(eraseDriveStep(d), force); err != nil {
+		return nil, "", nil, err
+	}
+	// It may ask for the name to enroll, which the summary then shows.
+	plan, err := planProvisioning(preOpts, &name)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	cloud := cloudNotEnrolled
+	if plan != nil {
+		cloud = cloudWillPreEnroll
+	}
+	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), name, creds, cloud)
+	if err := confirmOverwriteInternalDrive(d, force, yesOverwriteInternal); err != nil {
+		return nil, "", nil, err
+	}
+	if err := confirmEraseDrive(d, force); err != nil {
+		return nil, "", nil, err
+	}
+	return creds, name, plan, nil
 }
 
 // checkImageFitsDrive refuses a write the drive cannot hold, for an image
@@ -3010,6 +3087,7 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 		}
 		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, agent)
 	}
+	fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
 	return d, true, nil
 }
 
@@ -3187,6 +3265,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
 
+	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), provDeviceName, provCreds, "")
+
 	// Flash with progress bar. Retries on failure: a busy port gets an extra
 	// offer to identify and kill whatever holds it; any other failure just
 	// gets the plain retry prompt. Prompting is skipped entirely when the run
@@ -3215,7 +3295,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 			return fmt.Errorf("ESP32 enrollment requires native USB; select the board's native USB port, or install with --pre-enroll=false")
 		}
 		if serialDevice.Transport == discovery.SerialTransportUARTBridge {
-			fmt.Fprintln(os.Stderr, tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
+			fmt.Fprintln(alsoOnPromptTerminal(os.Stderr), tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
 			if requiresESP32UARTConfirmation(serialDevice, len(provCreds) > 0, interactive) &&
 				!confirmDefaultNoFn("Continue flashing through USB-UART without WiFi?") {
 				return ErrUserCancelled

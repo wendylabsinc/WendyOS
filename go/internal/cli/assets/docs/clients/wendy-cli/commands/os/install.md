@@ -19,7 +19,7 @@ wendy install
 wendy install --nightly
 
 # Linux: non-interactive with all flags
-wendy install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
+wendy install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force --no-wifi
 
 # Jetson AGX Thor: flash over USB recovery (macOS, Linux, and Windows)
 wendy install --device-type jetson-agx-thor
@@ -39,6 +39,8 @@ wendy install path/to/image.img /dev/disk4 --force
 ```
 
 > **Note:** `--device-type` is not supported for ESP32 targets. Use the interactive picker to flash an ESP32.
+
+> **Without a terminal**, also pass a Wi-Fi choice (`--wifi`, `--wifi-ssid` or `--no-wifi`) and `--force`. See [Running without a terminal](#running-without-a-terminal).
 
 ---
 
@@ -112,11 +114,14 @@ To provision WiFi after first boot, use `wendy device wifi connect`.
 For Raspberry Pi devices—and Orin with `--rootfs-only`, the interactive flash-mode choice "OS image only", or a version that predates recovery flashpacks—the install path writes a disk image to a selected SD card, NVMe drive, or USB-attached enclosure:
 
 1. **Resolve version** — `--version` if provided, otherwise latest (or nightly with `--nightly`).
-2. **Resolve drive** — `--drive` if provided, otherwise an interactive picker of external drives. Internal drives require `--yes-overwrite-internal` in non-interactive mode; in interactive mode the user must type the device path to confirm.
-3. **Download image** — fetched from GCS with a progress bar. Downloaded to `~/Library/Caches/wendy/os-images/` (macOS) or `~/.cache/wendy/os-images/` (Linux). Zip archives are streamed through to the first `.img`, `.raw`, `.wic`, or `.sdimg` entry; gzip-compressed images (`.img.gz`, detected by magic bytes regardless of extension) are decompressed and streamed on the fly. Seekable-zstd images (`.img.zst`) are downloaded and cached directly; when a block map is present, only mapped ranges are decoded during the write step, skipping hole frames entirely. Parallel download is used when the server supports HTTP range requests.
-4. **Write image** — `dd`-equivalent write with elevated privileges (`sudo` on Unix, UAC on Windows), progress bar. A drive too small for the image is refused before anything is written. An image with a GPT partition table (such as the Orin NVMe image) only needs a drive that holds its partitions, and its partition table is rewritten for the drive's real size after the write; see [Drive-size check](/docs/advanced/wendyos/flashing#drive-size-check). When a block map is used and the bmap write fails (e.g. checksum mismatch or a stale/incorrect published bmap), the CLI automatically falls back to a full sequential write using the already-cached `.img.zst` or `.zip` — no re-download is required. A failure *during* the fallback write is fatal.
-5. **Write config partition** — downloads the latest stable `wendy-agent-linux-arm64` binary from GitHub, writes it along with any pre-seeded WiFi credentials and device name to the config partition on the newly written drive. Skipped silently on platforms that don't support config-partition writes. The OS image is already on the drive by this point, and the device boots regardless of this step — it runs the agent baked into the image and fetches updates and configuration after first boot. When provisioning was **not** explicitly requested, a failure here is advisory: a warning is printed and the install is still reported as successful. When `--binary`, `--wifi`, `--device-name`, or `--pre-enroll` **was** requested and could not be applied, the install exits non-zero (see the exit-code note below). On an interactive terminal the CLI offers to retry the write after each failed attempt (useful after, e.g., re-seating an SD card whose config partition couldn't be located); non-interactively it prints guidance and does not retry.
-6. **Eject** — the drive is ejected automatically after writing.
+2. **Resolve drive** — `--drive` if provided, otherwise an interactive picker of external drives. Without a terminal, `--drive` is required. Internal drives require `--yes-overwrite-internal` in non-interactive mode; in interactive mode the user must type the device path to confirm.
+3. **Choose the image and check the drive** — the SD or NVMe image is picked for the drive (asking only when a USB drive could be either), and a drive too small for it is refused before any first-boot question.
+4. **Settle first boot, then confirm** — Wi-Fi and the device name come from the flags or are asked for. When pre-enrollment is chosen, its questions come next, including a name if none was given. A summary of what first boot will apply is printed, with the Cloud line `will pre-enroll` or `not enrolled`. Only then is the erase confirmed (`--force` skips the question).
+5. **Pre-enroll** — only after the confirmation does Wendy Cloud reserve the device name and issue the enrollment credential, so a declined or refused install leaves no name reserved. If this fails, a run without a terminal stops; in a terminal you can continue without enrollment.
+6. **Download image** — fetched from GCS with a progress bar. Downloaded to `~/Library/Caches/wendy/os-images/` (macOS) or `~/.cache/wendy/os-images/` (Linux). Zip archives are streamed through to the first `.img`, `.raw`, `.wic`, or `.sdimg` entry; gzip-compressed images (`.img.gz`, detected by magic bytes regardless of extension) are decompressed and streamed on the fly. Seekable-zstd images (`.img.zst`) are downloaded and cached directly; when a block map is present, only mapped ranges are decoded during the write step, skipping hole frames entirely. Parallel download is used when the server supports HTTP range requests.
+7. **Write image** — `dd`-equivalent write with elevated privileges (`sudo` on Unix, UAC on Windows), progress bar. A drive too small for the image is refused before anything is written. An image with a GPT partition table (such as the Orin NVMe image) only needs a drive that holds its partitions, and its partition table is rewritten for the drive's real size after the write; see [Drive-size check](/docs/advanced/wendyos/flashing#drive-size-check). When a block map is used and the bmap write fails (e.g. checksum mismatch or a stale/incorrect published bmap), the CLI automatically falls back to a full sequential write using the already-cached `.img.zst` or `.zip` — no re-download is required. A failure *during* the fallback write is fatal.
+8. **Write config partition** — downloads the latest stable `wendy-agent-linux-arm64` binary from GitHub, writes it along with any pre-seeded WiFi credentials and device name to the config partition on the newly written drive, then prints one line naming what was written. Skipped silently on platforms that don't support config-partition writes. The OS image is already on the drive by this point, and the device boots regardless of this step — it runs the agent baked into the image and fetches updates and configuration after first boot. When provisioning was **not** explicitly requested, a failure here is advisory: a warning is printed and the install is still reported as successful. When `--binary`, `--wifi`, `--device-name`, or `--pre-enroll` **was** requested and could not be applied, the install exits non-zero (see the exit-code note below). On an interactive terminal the CLI offers to retry the write after each failed attempt (useful after, e.g., re-seating an SD card whose config partition couldn't be located); non-interactively it prints guidance and does not retry.
+9. **Eject** — the drive is ejected automatically after writing.
 
 > **Exit code:** `wendy install` exits `0` when the OS image was written to the drive and any explicitly requested provisioning (`--binary`, `--wifi`, `--device-name`, `--pre-enroll`) was applied. It exits non-zero when the image itself could not be written, or when provisioning was explicitly requested but could not be applied — in the latter case the drive is still ejected first and the OS image is already safely on it, and the error names the image, version, and drive to make that clear, so the values can be re-applied with another `wendy install` or configured after the device boots. Unrequested provisioning (e.g. a failed agent-binary download when none of those flags were given) remains advisory: a warning is printed and the command exits `0`.
 
@@ -212,7 +217,7 @@ Thor flashing talks to the board's USB recovery device directly (an in-process l
 
 - **macOS** — always elevates when not run as root; the OS binds its own driver to the recovery device, so there is no non-root path.
 - **Linux** — if the wendy udev rule (`70-wendy-jetson.rules`, installed by the deb/rpm package; `wendy install` prints the commands to add it by hand) is present, the flash runs as your user with **no prompt**. Otherwise it re-execs under `sudo`.
-- **Non-interactive** (CI, piped input) — the CLI cannot prompt for a password, so it exits with instructions to re-run under `sudo` (Linux: or install the udev rule) instead of hanging.
+- **Non-interactive** (CI, no terminal on stdin) — the CLI cannot prompt for a password, so it exits with instructions to re-run under `sudo` (Linux: or install the udev rule) instead of hanging.
 
 ### WiFi pre-configuration
 
@@ -226,11 +231,11 @@ wendy install \
   --wifi "ssid=Office,password=corp,priority=50" \
   --wifi "ssid=Cafe,hidden=true"
 
-# Skip WiFi setup entirely
+# Install without WiFi; reach the board over Ethernet or USB
 wendy install --no-wifi
 ```
 
-`--wifi-ssid` without `--wifi-password` checks the system keychain (macOS) first, then prompts. In interactive mode without any `--wifi` flags, the CLI asks whether to configure WiFi and offers to scan nearby networks. If the scan fails or finds no networks, you can choose to enter credentials manually or skip WiFi setup entirely (configure later with `wendy device wifi connect`).
+`--wifi-ssid` without `--wifi-password` checks the system keychain (macOS) first, then prompts. Without a terminal it stops instead of assuming an open network; use `--wifi ssid=<name>` for an open one. In interactive mode without any `--wifi` flags, the CLI asks whether to configure WiFi and offers to scan nearby networks. If the scan fails or finds no networks, you can choose to enter credentials manually or skip WiFi setup entirely (configure later with `wendy device wifi connect`). Without a terminal and without a WiFi flag, the install stops before anything is downloaded or erased.
 
 > **Note:** When a password is entered at an interactive prompt, the input is masked — characters appear as `•` so the password is never displayed in plaintext on screen.
 
@@ -255,13 +260,13 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--version` | latest | WendyOS version to install (Linux only) |
 | `--drive` | interactive | Target drive path (e.g. `/dev/disk4`) |
 | `--rootfs-only` | false | Explicitly write only an Orin SD/NVMe image; QSPI is not updated |
-| `--force` | false | Skip confirmation prompts |
+| `--force` | false | Skip confirmation prompts; required without a terminal |
 | `--yes-overwrite-internal` | false | Required to wipe a non-removable drive non-interactively |
 | `--wifi-ssid` | — | Pre-configure a single WiFi network |
 | `--wifi-password` | — | Password for `--wifi-ssid` |
 | `--wifi` | — | Pre-configure one WiFi network; repeatable |
-| `--no-wifi` | false | Skip WiFi setup entirely |
-| `--device-name` | interactive | Set device name on first boot (lowercase letters, digits, hyphens; must start with a letter, 3–55 chars) |
+| `--no-wifi` | false | Install without WiFi; without a terminal, this or `--wifi`/`--wifi-ssid` is required |
+| `--device-name` | interactive | Auto-generated without a terminal. Set device name on first boot (lowercase letters, digits, hyphens; must start with a letter, 3–55 chars) |
 | `--driver` | — | Repeatable driver name. Download before flashing and upload after first boot. Requires `--device-type` and `--device-name`; keep the device connected over USB or LAN. |
 | `--pre-enroll` | auto | Pre-enroll with Wendy Cloud. For WendyOS/Jetson targets, embeds a certificate during imaging. For Linux Desktop / Headless Mac, mints a short-lived token printed with the `agent.sh` one-liner. |
 | `--cloud-grpc` | auto | Cloud gRPC endpoint of the auth session to use for pre-enrollment (applies to both drive imaging and Linux Desktop / Headless Mac); defaults to the session set via `wendy auth use`. |
@@ -271,6 +276,33 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 To manage the device through Wendy Cloud later, [enroll it](../device/enroll.md)
 if you did not choose `--pre-enroll` during installation. Local app development
 does not require Cloud enrollment.
+
+## Running without a terminal
+
+Prompts need a person at a terminal, which means the command was typed in one: its input comes from the terminal. Output may still go to a pipe or a file (`wendy install | tee install.log`). The prompts are then drawn on stderr, or on the terminal itself when stderr is redirected too (on Windows, keep stderr on the console). The first-boot summary and the warning before each erase appear there as well, and the output still gets them.
+
+Without a terminal on the input (CI, an agent's shell), nothing is asked, and every answer must come from a flag:
+
+| Question | Without a terminal |
+|---|---|
+| Device | `--device-type` is required. |
+| Drive (SD card, NVMe) | `--drive` is required. |
+| First-boot WiFi | `--wifi`, `--wifi-ssid` or `--no-wifi` is required; the install stops before downloading or erasing anything otherwise. |
+| Device name | Auto-generated unless `--device-name` is given. |
+| Erase and ready confirmations | `--force` is required. |
+| Internal drive | `--yes-overwrite-internal` is required. |
+| Several boards in recovery or EDL mode | Connect only the one to flash. |
+
+Before anything is erased or flashed, the installer prints what first boot will apply, also with `--force`. Passwords are never printed:
+
+```text
+First boot will apply:
+  Device name  lab-pi
+  Wi-Fi        MyNetwork, Cafe (open)
+  Cloud        not enrolled
+```
+
+SD card and NVMe installs show `will pre-enroll`, because the name is reserved only after the erase is confirmed. The Cloud line is left out for Wendy Lite, which enrolls after flashing. Jetson and Dragonwing flash logs start with the same summary.
 
 ## Agent-driven installation
 
