@@ -932,3 +932,21 @@ retained IDs per stream. Age retention across reboots depends on device clock ac
 This export path does not update cloud upload state.
 Payloads and metadata are exported in checksummed Protobuf `.wdr` frames. Episodes
 also include these frames in `records.wdr`, alongside legacy `events.jsonl`.
+
+### Native thermal recording triggers
+
+Campaigns may declare a `thermal` block with exactly one `camera` selector (also
+listed in `sources`) or `mlx90642_url` pointing to an existing loopback USB thermal
+viewer. Configure `above_celsius`, `clear_below_celsius`, `for` (1s–5m), and `event`
+matching a capture event trigger. For example, 80°C / 75°C / 2s records once after
+sustained overheating and rearms only after a fresh reading below 75°C. Separate
+campaigns monitor separate sensors. `thermal_status` reports runtime readiness.
+
+This uses verified Celsius measurements, never preview brightness. The initial
+measurement must advance; stale samples interrupt the dwell without rearming an
+existing alarm. Agent restart or campaign rearm/revision resets the in-memory
+latch. Episodes retain the triggering measurement and provenance in `events.jsonl`,
+not continuous temperature grids. Video pre-roll remains subject to camera capture
+availability. Thermal campaigns use neither `inference` nor `notify`; notifications
+remain a separate ThermalNotify responsibility. See `Examples/WendyDataThermal` for
+a complete local recording plan and the supported camera layouts.
