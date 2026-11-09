@@ -183,11 +183,11 @@ func TestRelayPublishedProfileControlsListingAndDispatch(t *testing.T) {
 			t.Fatal("listed simulator_create differs from the published definition")
 		}
 	}
+	assertProtocolToolHidden(t, srv, "simulator_start")
 	for _, call := range []struct {
 		name string
 		args map[string]any
 	}{
-		{"simulator_start", map[string]any{"name": "dev"}},
 		{"simulator_create", map[string]any{"name": "dev", "profile": "wendy-lite"}},
 		{"simulator_create", map[string]any{"name": "dev", "profile": "wendy-lite-native"}},
 		{"simulator_create", map[string]any{"name": "dev", "new_argument": true}},
