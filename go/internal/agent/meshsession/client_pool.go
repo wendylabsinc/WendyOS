@@ -26,8 +26,9 @@ const (
 )
 
 type appRetirement struct {
-	quic *quic.Conn
-	udp  interface{ Close() error }
+	quic   *quic.Conn
+	udp    interface{ Close() error }
+	finish func()
 }
 
 func (r appRetirement) close(reason string) {
@@ -36,6 +37,9 @@ func (r appRetirement) close(reason string) {
 	}
 	if r.udp != nil {
 		_ = r.udp.Close()
+	}
+	if r.finish != nil {
+		r.finish()
 	}
 }
 
@@ -49,35 +53,39 @@ type Client struct {
 	ownsUDPManager bool
 	mu             sync.Mutex
 	peers          map[meshid.Device]*pooledSession
-	sessions       map[*pooledSession]struct{} // includes retired sessions with active streams
-	udpSessions    map[*udpSession]struct{}    // dedicated datagram sessions, including pending setup
+	udpSessions    map[*udpSession]struct{} // QUIC/TLS datagram flows, including pending setup
 	tlsApps        map[*tlsAppConn]struct{}
 	tlsDials       map[*tlsAppDial]struct{}
 	closed         bool
 	stop           chan struct{}
 	done           chan struct{}
+	closeDone      chan struct{}
 	dial           func(context.Context, netip.AddrPort, *tls.Config, *quic.Config) (*quic.Conn, error)
 	portACKLimit   time.Duration // test override; zero uses pooledPortACKLimit
 }
 
 type pooledSession struct {
-	peer     meshid.Device
-	lifetime *sessionLifetime
-	address  netip.AddrPort
-	ready    chan struct{}
-	conn     *quic.Conn
-	err      error
-	born     time.Time
-	used     time.Time
-	active   int
-	retired  bool
+	peer      meshid.Device
+	lifetime  *sessionLifetime
+	address   netip.AddrPort
+	ready     chan struct{}
+	closing   chan struct{}
+	cancel    context.CancelFunc
+	conn      *quic.Conn
+	err       error
+	born      time.Time
+	used      time.Time
+	active    int
+	retired   bool
+	withdrawn bool // pending/closing generation lost its caller-side route proof
+	mux       *udpMultiplexer
 }
 
 func NewClient(credentials *localmesh.Credentials, managers ...*udpmessage.Manager) (*Client, error) {
 	if credentials == nil {
 		return nil, errors.New("missing wendy net app credentials")
 	}
-	c := &Client{credentials: credentials, peers: make(map[meshid.Device]*pooledSession), sessions: make(map[*pooledSession]struct{}), udpSessions: make(map[*udpSession]struct{}), stop: make(chan struct{}), done: make(chan struct{}),
+	c := &Client{credentials: credentials, peers: make(map[meshid.Device]*pooledSession), udpSessions: make(map[*udpSession]struct{}), stop: make(chan struct{}), done: make(chan struct{}), closeDone: make(chan struct{}),
 		dial: func(ctx context.Context, endpoint netip.AddrPort, tlsConfig *tls.Config, config *quic.Config) (*quic.Conn, error) {
 			return dialAppQUIC(ctx, credentials, endpoint, tlsConfig, config)
 		}}
@@ -102,22 +110,26 @@ func (c *Client) reap() {
 		case <-ticker.C:
 		}
 		now := time.Now()
-		var stale []*quic.Conn
+		var stale []appRetirement
 		c.mu.Lock()
-		for device, entry := range c.peers {
-			if entry.ready != nil || entry.active != 0 ||
-				entry.conn != nil && entry.conn.Context().Err() == nil && now.Sub(entry.used) < clientIdleLimit && now.Sub(entry.born) < clientAgeLimit {
+		for _, entry := range c.peers {
+			if entry.ready != nil || entry.closing != nil {
 				continue
 			}
-			delete(c.peers, device)
-			entry.retired = true
-			if entry.conn != nil {
-				stale = append(stale, entry.conn)
+			credentialLive := false
+			if entry.lifetime != nil {
+				_, err := entry.lifetime.current()
+				credentialLive = err == nil
 			}
+			if credentialLive && entry.conn != nil && entry.conn.Context().Err() == nil &&
+				(entry.active > 0 || now.Sub(entry.used) < clientIdleLimit && now.Sub(entry.born) < clientAgeLimit) {
+				continue
+			}
+			stale = append(stale, c.retireEntryLocked(entry)...)
 		}
 		c.mu.Unlock()
 		for _, conn := range stale {
-			_ = conn.CloseWithError(0, "wendy net app session idle")
+			conn.close("wendy net app session idle")
 		}
 	}
 }
@@ -125,7 +137,9 @@ func (c *Client) reap() {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed {
+		done := c.closeDone
 		c.mu.Unlock()
+		<-done
 		return nil
 	}
 	c.closed = true
@@ -135,10 +149,13 @@ func (c *Client) Close() error {
 		pending.cancel()
 	}
 	var conns []appRetirement
-	for entry := range c.sessions {
-		entry.retired = true
-		if entry.conn != nil {
-			conns = append(conns, appRetirement{quic: entry.conn})
+	var barriers []<-chan struct{}
+	for _, entry := range c.peers {
+		conns = append(conns, c.retireEntryLocked(entry)...)
+		if entry.ready != nil {
+			barriers = append(barriers, entry.ready)
+		} else if entry.closing != nil {
+			barriers = append(barriers, entry.closing)
 		}
 	}
 	for entry := range c.udpSessions {
@@ -150,7 +167,6 @@ func (c *Client) Close() error {
 			conns = append(conns, appRetirement{udp: entry.flow})
 		}
 	}
-	c.peers = make(map[meshid.Device]*pooledSession)
 	tlsApps := make([]*tlsAppConn, 0, len(c.tlsApps))
 	for conn := range c.tlsApps {
 		tlsApps = append(tlsApps, conn)
@@ -162,15 +178,21 @@ func (c *Client) Close() error {
 	for _, conn := range conns {
 		conn.close("wendy net app client stopped")
 	}
+	// Joining pending handshakes also makes a completed Client.Close a safe
+	// boundary for replacing credentials and constructing a new client.
+	for _, barrier := range barriers {
+		<-barrier
+	}
 	<-c.done
 	if c.ownsUDPManager {
 		c.udpManager.Close()
 	}
+	close(c.closeDone)
 	return nil
 }
 
-// Invalidate closes every session for a peer, including active and already
-// retired streams. Use WithdrawRoute for a temporary routing interruption.
+// Invalidate closes the peer session, including active and pending streams.
+// Use WithdrawRoute for a temporary routing interruption.
 func (c *Client) Invalidate(peer meshid.Device) {
 	if c == nil {
 		return
@@ -192,12 +214,11 @@ func (c *Client) Invalidate(peer meshid.Device) {
 	}
 }
 
-// WithdrawRoute prevents new streams from reusing the peer's cached transport,
-// but lets already authenticated TCP streams survive carrier reconvergence.
-// The routed packet layer still requires a current signed route; this does not
-// authorize forwarding during the outage. Certificate lifetime enforcement and
-// Client.Close continue to terminate established sessions independently.
-// UDP sessions are retired immediately, preserving their existing flow guards.
+// WithdrawRoute cancels UDP flows and pending handshakes, but retains a live
+// authenticated QUIC session so existing TCP streams can survive reconvergence.
+// Every new dial still requires a fresh caller-side signed-route check. The
+// routed packet layer does not forward during the outage; credential lifetime
+// enforcement and Client.Close remain independent.
 func (c *Client) WithdrawRoute(peer meshid.Device) {
 	if c == nil {
 		return
@@ -211,8 +232,8 @@ func (c *Client) WithdrawRoute(peer meshid.Device) {
 }
 
 // PruneRoutes applies one authenticated node snapshot to all cached app
-// sessions. Missing routes retire cached transports for new streams while
-// preserving active TCP streams. An endpoint mismatch invalidates them outright.
+// sessions. Missing routes retain authenticated QUIC transports while canceling
+// UDP flows. Missing/expired manifests or endpoint changes invalidate them.
 func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	if c == nil {
 		return
@@ -229,12 +250,6 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	peers := make(map[meshid.Device]netip.AddrPort)
 	for peer, entry := range c.peers {
 		peers[peer] = entry.address
-	}
-	for entry := range c.sessions {
-		endpoint, err := ResolveApp(snapshot, entry.peer)
-		if err != nil || endpoint.Transport != localmesh.AppQUIC || endpoint.Address != entry.address {
-			peers[entry.peer] = entry.address
-		}
 	}
 	for entry := range c.udpSessions {
 		endpoint, err := ResolveApp(snapshot, entry.peer)
@@ -254,7 +269,9 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	}
 	for peer, address := range peers {
 		endpoint, err := ResolveApp(snapshot, peer)
-		if err != nil || endpoint.Transport != localmesh.AppQUIC {
+		if !quicProofCurrent(snapshot, peer, address) {
+			stale = append(stale, c.invalidateLocked(peer)...)
+		} else if err != nil || endpoint.Transport != localmesh.AppQUIC {
 			stale = append(stale, c.retirePeerLocked(peer, true)...)
 		} else if endpoint.Address != address {
 			stale = append(stale, c.invalidateLocked(peer)...)
@@ -266,7 +283,57 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	}
 }
 
-// Caller holds c.mu. Close is done after unlocking.
+// quicProofCurrent deliberately ignores route reachability. A temporary carrier
+// outage does not change the authenticated destination or listener. Expired or
+// withdrawn signed destination proof, however, must not preserve the session.
+func quicProofCurrent(snapshot localmesh.NodeSnapshot, peer meshid.Device, address netip.AddrPort) bool {
+	for _, device := range snapshot.Devices {
+		if device.Device != peer.UUID() {
+			continue
+		}
+		if device.Withdraw || !device.LeaseDeadline().After(time.Now()) {
+			return false
+		}
+		for _, endpoint := range device.AppEndpoints {
+			if endpoint.Transport == localmesh.AppQUIC && endpoint.Port != 0 && address == netip.AddrPortFrom(peer.MeshAddress(), endpoint.Port) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// Caller holds c.mu. Close is done after unlocking. The slot stays in peers
+// until CloseWithError completes, so concurrent acquires cannot overlap live
+// outgoing QUIC sessions, even while an old app stream is active.
+func (c *Client) retireEntryLocked(entry *pooledSession) []appRetirement {
+	entry.retired = true
+	if entry.cancel != nil {
+		entry.cancel()
+	}
+	if entry.ready != nil || entry.closing != nil {
+		return nil // the handshake/closure owner releases its own barrier
+	}
+	if entry.conn == nil {
+		if c.peers[entry.peer] == entry {
+			delete(c.peers, entry.peer)
+		}
+		return nil
+	}
+	entry.closing = make(chan struct{})
+	done := entry.closing
+	return []appRetirement{{quic: entry.conn, finish: func() {
+		c.mu.Lock()
+		if c.peers[entry.peer] == entry {
+			delete(c.peers, entry.peer)
+		}
+		entry.closing = nil
+		close(done)
+		c.mu.Unlock()
+	}}}
+}
+
 func (c *Client) invalidateLocked(peer meshid.Device) []appRetirement {
 	return c.retirePeerLocked(peer, false)
 }
@@ -278,17 +345,13 @@ func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []
 			pending.cancel()
 		}
 	}
-	if entry := c.peers[peer]; entry != nil {
-		entry.retired = true
-	}
-	delete(c.peers, peer)
 	var conns []appRetirement
-	for entry := range c.sessions {
-		if entry.peer == peer {
-			entry.retired = true
-			if !preserveActiveTCP || entry.active == 0 {
-				conns = append(conns, appRetirement{quic: entry.conn})
-			}
+	if entry := c.peers[peer]; entry != nil {
+		if preserveActiveTCP && (entry.ready != nil || entry.closing != nil) {
+			entry.withdrawn = true
+		}
+		if !preserveActiveTCP || entry.ready != nil {
+			conns = append(conns, c.retireEntryLocked(entry)...)
 		}
 	}
 	for entry := range c.udpSessions {
@@ -340,13 +403,14 @@ func (c *Client) DialWithRetryCheck(ctx context.Context, peer meshid.Device, add
 			return &streamConn{Stream: stream, conn: entry.conn, release: func() { c.release(entry) }}, nil
 		}
 		dead := entry.conn.Context().Err() != nil
-		if errors.Is(err, ErrDenied) || ctx.Err() != nil {
+		if errors.Is(err, ErrDenied) || ctx.Err() != nil || !dead && !stalePortACK(err) {
 			c.release(entry)
 			return nil, err
 		}
-		// Any failed port request makes this cached connection suspect. A
-		// timeout from the local ACK bound may leave QUIC Context live even
-		// though the remote process no longer owns the connection ID.
+		// A fully written request that gets no ACK can leave QUIC Context
+		// live even though a restarted peer no longer owns the connection ID.
+		// Stream credit waits and explicit per-stream rejection do not make
+		// a healthy shared connection suspect.
 		c.retire(peer, entry)
 		c.release(entry)
 		if attempt != 0 || !reused && !dead {
@@ -375,11 +439,23 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 			return nil, false, net.ErrClosed
 		}
 		entry := c.peers[peer]
-		if entry != nil && entry.ready != nil {
+		if entry != nil && (entry.ready != nil || entry.closing != nil) {
 			ready := entry.ready
+			if entry.closing != nil {
+				ready = entry.closing
+			}
 			c.mu.Unlock()
 			select {
 			case <-ready:
+				c.mu.Lock()
+				withdrawn := entry.withdrawn
+				c.mu.Unlock()
+				if withdrawn {
+					// This caller checked the route before waiting on a
+					// generation that was withdrawn. Require a fresh dial
+					// and signed-route check rather than replaying it.
+					return nil, false, ErrNoRoute
+				}
 				continue
 			case <-ctx.Done():
 				return nil, false, ctx.Err()
@@ -391,65 +467,70 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 			credentialLive = err == nil
 		}
 		if entry != nil && entry.address == address && entry.conn != nil && entry.conn.Context().Err() == nil &&
-			credentialLive && now.Sub(entry.born) < clientAgeLimit && now.Sub(entry.used) < clientIdleLimit {
+			credentialLive && (entry.active > 0 || now.Sub(entry.born) < clientAgeLimit && now.Sub(entry.used) < clientIdleLimit) {
 			entry.active++
 			entry.used = now
 			c.mu.Unlock()
 			return entry, true, nil
 		}
-		var oldConn *quic.Conn
 		if entry != nil {
-			delete(c.peers, peer)
-			entry.retired = true
-			if entry.active == 0 || !credentialLive {
-				oldConn = entry.conn
+			stale := c.retireEntryLocked(entry)
+			c.mu.Unlock()
+			for _, conn := range stale {
+				conn.close("wendy net app session replaced")
 			}
+			continue
 		}
-		newEntry := &pooledSession{peer: peer, address: address, ready: make(chan struct{}), born: now, used: now}
+		dialCtx, dialCancel := context.WithCancel(ctx)
+		newEntry := &pooledSession{peer: peer, address: address, ready: make(chan struct{}), cancel: dialCancel, born: now, used: now}
 		ready := newEntry.ready
 		c.peers[peer] = newEntry
 		c.mu.Unlock()
-		if oldConn != nil {
-			_ = oldConn.CloseWithError(0, "wendy net app session replaced")
-		}
-		cfg, err := c.credentials.PeerTLSWithTickets(peer, ALPN, "app-quic")
+		cfg, err := c.credentials.PeerTLSWithTickets(peer, multiplexALPN, "app-quic")
 		var conn *quic.Conn
 		if err == nil {
-			conn, err = c.dial(ctx, address, cfg, quicConfig())
+			c.credentials.ConfigureTLSClient(cfg, multiplexALPN, ALPN)
+			conn, err = c.dial(dialCtx, address, cfg, quicConfig())
 		}
 		if err == nil {
 			newEntry.lifetime, err = limitSessionLifetime(c.credentials, conn)
 		}
+		dialCancel()
 		c.mu.Lock()
 		newEntry.conn, newEntry.err = conn, err
-		newEntry.ready = nil
-		valid := err == nil && !c.closed && c.peers[peer] == newEntry
+		newEntry.cancel = nil
+		valid := err == nil && !newEntry.retired && !c.closed && c.peers[peer] == newEntry
 		if valid {
 			newEntry.active = 1
-			c.sessions[newEntry] = struct{}{}
-			go func() {
-				<-conn.Context().Done()
-				c.mu.Lock()
-				delete(c.sessions, newEntry)
-				c.mu.Unlock()
-			}()
-		} else {
-			if c.peers[peer] == newEntry {
-				delete(c.peers, peer)
+			if localmesh.ApplicationProtocol(conn.ConnectionState().TLS.NegotiatedProtocol) == multiplexALPN {
+				newEntry.mux = newUDPMultiplexer(conn)
+				go newEntry.mux.receive()
 			}
-			newEntry.retired = true
 		}
-		close(ready)
-		c.mu.Unlock()
 		if !valid {
+			newEntry.retired = true
+			c.mu.Unlock()
+			// Keep ready installed until any returned connection is closed. A
+			// canceled handshake can still return a successfully established
+			// connection concurrently with route/identity invalidation.
 			if conn != nil {
 				_ = conn.CloseWithError(0, "wendy net app session replaced")
 			}
+			c.mu.Lock()
+			if c.peers[peer] == newEntry {
+				delete(c.peers, peer)
+			}
+			newEntry.ready = nil
+			close(ready)
+			c.mu.Unlock()
 			if err != nil {
 				return nil, false, fmt.Errorf("wendy net app QUIC dial: %w", err)
 			}
 			return nil, false, net.ErrClosed
 		}
+		newEntry.ready = nil
+		close(ready)
+		c.mu.Unlock()
 		return newEntry, false, nil
 	}
 }
@@ -458,22 +539,14 @@ func (c *Client) release(entry *pooledSession) {
 	c.mu.Lock()
 	entry.active--
 	entry.used = time.Now()
-	closeConn := entry.retired && entry.active == 0
 	c.mu.Unlock()
-	if closeConn && entry.conn != nil {
-		_ = entry.conn.CloseWithError(0, "wendy net app session retired")
-	}
 }
 
 func (c *Client) retire(peer meshid.Device, entry *pooledSession) {
 	c.mu.Lock()
-	if c.peers[peer] == entry {
-		delete(c.peers, peer)
-	}
-	entry.retired = true
-	closeConn := entry.active == 0
+	stale := c.retireEntryLocked(entry)
 	c.mu.Unlock()
-	if closeConn && entry.conn != nil {
-		_ = entry.conn.CloseWithError(0, "wendy net app session failed")
+	for _, conn := range stale {
+		conn.close("wendy net app session failed")
 	}
 }
