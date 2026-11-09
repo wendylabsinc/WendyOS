@@ -55,3 +55,8 @@ SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
     "wendylite/v1/sensorlink.proto"
 )
 SHARED_GRPC_API_CONTRACTS_INPUT="https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF"
+
+SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS=(
+    "wendycloud/tunnel/v2/tunnel.proto"
+    "wendycloud/tunnel/lite/v1/relay.proto"
+)

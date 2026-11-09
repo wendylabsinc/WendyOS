@@ -71,6 +71,7 @@ MODULE="github.com/wendylabsinc/wendy"
 # Migrated gRPC APIs share one source pin with embedded Swift.
 source "$PROTO_DIR/shared-grpc-api-contracts.sh"
 SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS=(
+    "wendycloud/v2/roles.proto"
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/users.proto"
     "wendycloud/v2/tunnel.proto"
@@ -109,6 +110,7 @@ done
 SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
     "${PKI_PROTOS[@]}"
+    "${SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS[@]}"
     "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"
 )
@@ -238,7 +240,6 @@ CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
     "wendycloud/v2/apns.proto"
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
-    "wendycloud/v2/roles.proto"
     "wendycloud/v2/device_access.proto"
 )
 
@@ -248,6 +249,14 @@ CLOUD_V2_M_OPTS=""
 for p in "${CLOUD_V2_PROTOS[@]}"; do
     CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
     CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go-grpc_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
+done
+
+# ---- Cloud-authorized relay protos ----
+RELAY_PKG="$MODULE/go/proto/gen/relaypb"
+WCOMRELAY_PKG="$MODULE/go/proto/gen/wcomrelaypb"
+RELAY_M_OPTS="--go_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG} --go-grpc_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG}"
+for entry in "wendycloud/tunnel/v2/tunnel.proto=$RELAY_PKG" "wendycloud/tunnel/lite/v1/relay.proto=$WCOMRELAY_PKG"; do
+    RELAY_M_OPTS="$RELAY_M_OPTS --go_opt=M$entry --go-grpc_opt=M$entry"
 done
 
 # ---- Wendy System API protos ----
@@ -274,6 +283,10 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
         --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
         --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
         $CLOUD_V2_M_OPTS $PKI_M_OPTS "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
+    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
+        --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
+        $RELAY_M_OPTS "${SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS[@]}"
     # Cloud is the client transport. PKI supplies messages, not direct clients.
     protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
         --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
@@ -310,6 +323,8 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
                 wendy/system/*) package="systempb" ;;
                 wendylite/*) package="sensorlinkpb" ;;
                 pkicore/*) package="pkicorepb" ;;
+                wendycloud/tunnel/v2/*) package="relaypb" ;;
+                wendycloud/tunnel/lite/v1/*) package="wcomrelaypb" ;;
                 */*) package="cloudpb/v2" ;;
                 *) package="cloudpb" ;;
             esac
@@ -431,39 +446,23 @@ protoc \
     --go_opt=Mwendylite/v1/sensorlink.proto="$SENSORLINK_PKG" \
     wendylite/v1/sensorlink.proto
 
-# Cloud-authorized relay contract (service-protos fe42be2). Crypto domain
-# separators remain v1; the RPC package and UUID asset identifiers are v2.
-RELAY_PKG="$MODULE/go/proto/gen/relaypb"
-AUTH_PKG="$MODULE/go/proto/gen/wendyauthpb"
+# Preserve the existing relay packages and RPC names using the shared pin.
+protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+    --go_out="$GEN_DIR" --go_opt=module="$MODULE/go/proto/gen" \
+    --go-grpc_out="$GEN_DIR" --go-grpc_opt=module="$MODULE/go/proto/gen" \
+    $RELAY_M_OPTS "${SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS[@]}"
+# The local fabric envelope remains an input for the existing auth package.
 protoc --proto_path="$PROTO_DIR" \
-    --go_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go_opt=module="$MODULE/go" \
-    --go_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go-grpc_opt=module="$MODULE/go" \
-    --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    wendycloud/tunnel/v2/tunnel.proto wendyauth/v1/envelope.proto
-
-# Packaged Lite relay contract from service-protos.
-WCOMRELAY_PKG="$MODULE/go/proto/gen/wcomrelaypb"
-protoc --proto_path="$PROTO_DIR" \
-    --go_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go_opt=module="$MODULE/go" \
-    --go_opt=Mwendycloud/tunnel/lite/v1/relay.proto="$WCOMRELAY_PKG" \
-    --go_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go-grpc_opt=module="$MODULE/go" \
-    --go-grpc_opt=Mwendycloud/tunnel/lite/v1/relay.proto="$WCOMRELAY_PKG" \
-    --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    wendycloud/tunnel/lite/v1/relay.proto
+    --go_out="$GEN_DIR" --go_opt=module="$MODULE/go/proto/gen" \
+    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" wendyauth/v1/envelope.proto
 
 # App recording envelopes (no generated SDK is needed for lightweight streams).
 protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" --go_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go_opt=module="$MODULE/go" \
     --go_opt=Mwendy/agent/apps/v1/recording.proto="$RECORDING_PKG" wendy/agent/apps/v1/recording.proto
 
 # Cloud-owned invite contract from cloud d840731bfb4a59bd6585efb359d67745d295a28d.
-# UUID identifiers despite its v1 package. roles/device_access above are from
-# service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
+# UUID identifiers despite its v1 package. The local device_access input above
+# is from service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
 mkdir -p "$GEN_DIR/cloudinvitepb"
 protoc --proto_path="$PROTO_DIR" \
     --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
