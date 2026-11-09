@@ -41,26 +41,14 @@ ordinary app debugging, and do not publish credentials or device-specific secret
 
 ## Mesh connectivity and clock errors
 
-Distinguish a device's ordinary LAN connection from this computer's Wendy Net
-router. A device with mesh participation disabled can still be managed over LAN.
-For mesh problems, inspect `wendy net status --device <target>` and
-`wendy --json net topology --local-cli` separately. A ready local
-connection does not prove that the destination has a current route; verify it
-with a real command to the returned `mesh://...` destination.
+Check device participation with `wendy net status --device <target>` and this
+computer's router with `wendy --json net topology --local-cli`. Verify the route
+with a command to the returned `mesh://...` destination. Respect an explicit
+local-router disconnect; first-hop discovery is automatic.
 
-If the user explicitly disconnected the local mesh router, preserve that choice.
-Explain how to reconnect rather than enabling it as a side effect of diagnosis.
-Router addresses, Bluetooth identifiers and PSMs are discovered automatically.
-Do not suggest removed manual first-hop flags.
-
-For certificate or clock errors, retain the exact error and inspect versions and
-time state through the available CLI/MCP tools. A device recovering from an old
-clock may need a working mesh path to a gateway with Internet access before its
-normal time synchronization can finish. Keep that path available and check the
-result; do not assume a selected gateway proves time recovery. Do not bypass
-certificate verification, delete mesh identity/history, or re-enroll as a routine
-workaround. Report a missing clock-inspection capability instead of inventing a
-tool or shell access.
+A stale clock may need an Internet-sharing mesh gateway for normal time sync.
+Keep that path available and verify time recovery. Do not bypass certificate
+checks, delete mesh identity/history, or re-enroll to work around clock errors.
 
 ## Jetson GPU checks
 

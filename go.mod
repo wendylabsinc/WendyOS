@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	cuelabs.dev/go/oci/ociregistry v0.0.0-20251212221603-3adeb8663819
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29
 	github.com/SaveTheRbtz/zstd-seekable-format-go/pkg v0.10.0
 	github.com/bogdanfinn/fhttp v0.6.9
 	github.com/bogdanfinn/tls-client v1.16.0
@@ -12,7 +13,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/cloudflare/circl v1.6.3
+	github.com/cloudflare/circl v1.6.5
 	github.com/coder/websocket v1.8.15
 	github.com/containerd/cgroups/v3 v3.1.3
 	github.com/containerd/containerd/api v1.12.0
@@ -29,11 +30,11 @@ require (
 	github.com/docker/cli v29.9.1+incompatible
 	github.com/dustin/go-humanize v1.0.1
 	github.com/ebitengine/oto/v3 v3.4.0
-	github.com/ebitengine/purego v0.9.0
+	github.com/ebitengine/purego v0.11.3
 	github.com/foxglove/mcap/go/mcap v1.7.4
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/fxamacker/cbor/v2 v2.9.4
-	github.com/gen2brain/malgo v0.11.26
+	github.com/gen2brain/malgo v0.11.27
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gofrs/flock v0.13.1
 	github.com/google/go-containerregistry v0.22.1
@@ -44,7 +45,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/hashicorp/mdns v1.0.7
 	github.com/klauspost/compress v1.20.3
-	github.com/mark3labs/mcp-go v0.54.0
+	github.com/mark3labs/mcp-go v1.5.0
 	github.com/mattn/go-isatty v0.0.21
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/miekg/dns v1.1.73
@@ -56,7 +57,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
-	github.com/pierrec/lz4/v4 v4.1.26
+	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/pion/rtcp v1.2.19
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.23
@@ -89,7 +90,6 @@ require (
 )
 
 require (
-	github.com/Microsoft/go-winio v0.6.3-0.20251027160822-ad3df93bed29 // indirect
 	github.com/Microsoft/hcsshim v0.15.0-rc.4 // indirect
 	github.com/agext/levenshtein v1.2.3 // indirect
 	github.com/alexflint/go-filemutex v1.3.0 // indirect

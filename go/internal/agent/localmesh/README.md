@@ -105,11 +105,8 @@ firmware events do not select an arbitrary path for teardown.
 A cheaper LAN link still replaces a slower link only to the same principal;
 LAN does not consume radio capacity. The shared carrier preference can retain
 NAN when shedding duplicate BLE links, independently of connection limits.
-`PeerLink.ForwardingReady` records local runtime evidence that the authenticated
-neighbour is Babel-reachable and its current authorized /128 is selected and
-installed through that exact carrier. `HasCheaperLink` requires this flag:
-authenticated presence or a cheaper discovery candidate alone cannot justify
-retiring a carrier that still forwards traffic.
+`HasCheaperLink` requires `PeerLink.ForwardingReady`: a Babel-reachable neighbour
+with its authorized /128 selected and installed through that carrier.
 Only a fresh candidate for BLE can displace a redundant BLE link; NAN-only
 presence cannot use the freed Bluetooth slot. Failed or expired candidates and
 devices already reached on another carrier do not displace the fallback.
@@ -281,29 +278,18 @@ that identity. Cloud's `asset_id` carries the same certificate device UUID.
 Authenticate its full principal and tenant before using it as a network
 identity; a database field alone grants no authority.
 
-Mesh certificate validation uses the later of actual wall time and a progressing
-local boot anchor from the provisioned leaf, validated config clock floor or
-systemd saved-clock stamp. All selected-path dates and expiry use that base.
-While boot time is explicitly uncertain, only a leaf's NotBefore may advance by
-at most 24 hours beyond the base. A normal direct signed-time quorum that proves
-actual UTC clears that grace. This virtual policy neither steps OS time nor
-claims fresh public time; it adds no peer clock relay. Legacy physical-LAN and
-Cloud validation defaults remain unchanged.
+Mesh certificate validation uses the later of wall time and a progressing local
+boot anchor from the provisioned leaf, validated config clock floor or systemd
+saved-clock stamp. While boot time is uncertain, only leaf NotBefore receives up
+to 24 hours of grace beyond that base; direct signed-time recovery clears it.
+The anchors require trusted local administrators and do not prove current UTC.
+Peer announcements cannot change them. Issuer trust, signatures and path expiry
+still apply. This policy does not change OS time or LAN/Cloud validation defaults.
 
-These anchors are local operating-system state, not independently signed fresh
-UTC. The policy assumes their writers are trusted administrators; an attacker
-who can alter them can influence the verification clock. Peer announcements
-cannot select an anchor, replace issuer trust or bypass signatures. Accepting a
-bounded future leaf NotBefore before direct time recovery is an explicit boot
-recovery trade-off, not proof of actual UTC validity.
-
-The mesh-native agent ingress is an in-process connection handoff with no
-routable listening address. It requires independent inner mTLS and the same
-mandatory tenant and RPC-role policy as the ordinary authenticated server.
-A device may open an outer app session without gaining operator authority:
-device credentials remain unable to invoke HostShell or either tunnel RPC,
-including during boot uncertainty. Authenticated operators retain management
-access under the bounded mesh certificate policy before time recovery.
+Mesh-native agent ingress uses an in-process handoff with independent inner mTLS
+and the ordinary server's tenant and RPC-role checks. During boot uncertainty,
+authenticated operators retain management access; device credentials still
+cannot invoke HostShell or either tunnel RPC.
 
 Each wendy net verifier may reuse successful certificate-path signature verification
 for up to one minute of monotonic time, within 256 entries and 8 MiB of certificate
@@ -352,41 +338,27 @@ unchanged. A datagram that arrives before its proof is dropped. On a newly
 verified tuple, the receiver requests the current prefix advertisement using
 Babel's existing Route Request; periodic updates remain a fallback.
 
-For a pure sequence advance, the receiver can retain one compact authorization
-from the preceding independently verified proof until the matching usable finite
-Babel candidate arrives. It retains no old announcement payload and does not
-re-export or persist that authority; the old body never appears in `Snapshot`
-or `Records` exports. Its original one-duration receiver deadline and original
-selected certificate-path cap can only shorten, including after clock correction.
-Every snapshot query also bounds the retained proof by the current entry's
-certificate deadline. The replacement authorizes only its own tuple. A change to
-identity, router, signing key or other advertised fields, an explicit withdrawal,
-or loss of either proof's validity clears an existing handoff immediately. Once
-the real replacement candidate is usable, `CompleteRouteHandoff` atomically
-removes the old authorization and route selection advances without an
-intermediate unreachable route. No sequence,
-metric or path is inferred from the new proof.
+For a pure sequence advance, the receiver can retain the preceding verified
+authorization until the matching finite Babel candidate is usable. It retains
+no old payload and neither exports nor persists that authority. The original
+receiver deadline, original certificate-path cap and current entry's certificate
+deadline bound it. Changes to other advertised fields, withdrawal or invalidation
+of either proof clear it immediately. Once the replacement candidate is usable,
+`CompleteRouteHandoff` atomically retires the old authorization without an
+intermediate unreachable route. The proof alone does not establish a route.
 
-Each receiver starts one monotonic payload deadline from the signed duration.
-A higher verified revision starts new payload and watermark periods; duplicates
-and re-signing the same body extend neither. The compact revision/hash watermark,
-including withdrawals, is retained in a dynamic RAM table for ten times the
-duration from that revision's first admission. At the payload deadline, idle maintenance physically
-removes full records and their queued gossip, route and service projections.
-The one-second maintenance tick bounds reconciliation while the event loop runs.
-Withdrawal or loss of certificate trust also removes eligibility. Conflicting
-address claims by different principals fail closed; router IDs alone confer no
-authority over another device's address.
+Receivers expire payloads by the signed duration using monotonic time and retain
+revision/hash watermarks, including withdrawals, in RAM for ten durations from
+first admission. Only a higher verified revision renews these periods. The
+one-second maintenance tick removes expired records, queued gossip and route and
+service projections. Withdrawal or loss of certificate trust removes eligibility.
+Conflicting address claims fail closed; router IDs grant no address authority.
 
-The finite watermark window suppresses delayed copies across neighbour changes,
-not indefinitely: after ten durations or a receiver restart forgets it, an old
-first-seen record can receive one local lease. No foreign durable floor or
-cryptographic origin-age guarantee is added. Live Babel routes, periodic new
-announcements and end-to-end application authentication remain independent.
-These proofs do not establish an honest path metric, current reachability,
-forwarding, or payload source authenticity. Hop-local Babel retractions only
-remove that neighbour's candidate; feasibility, split horizon and loop prevention
-remain unchanged.
+After watermark expiry or restart, a delayed record can receive one local lease.
+These proofs do not establish origin age, honest metrics, reachability,
+forwarding or payload source authenticity. Babel feasibility, split horizon,
+loop prevention and end-to-end authentication still apply. Hop-local retractions
+remove only that neighbour's candidate.
 
 Router QUIC links require hello version 2, ALPN `wendy-net-router/3` and the
 authenticated IP carrier capability described below. BLE TLS uses hello version 1
