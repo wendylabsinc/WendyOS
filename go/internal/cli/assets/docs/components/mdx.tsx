@@ -15,6 +15,7 @@ import {
 } from './docs/buyers-tables';
 import { CliClip, CliShot } from './docs/cli-shot';
 import { CliToAgentRelationshipDiagram } from './docs/cli-to-agent-relationship-diagram';
+import { HardwareCard, HardwareShowcase } from './docs/hardware-showcase';
 import { TrackedCodeBlock } from './docs/install-copy-tracking';
 import { SetDefaultDeviceSection } from './docs/set-default-device-section';
 import { YouTubeVideo } from './docs/youtube-video';
@@ -35,6 +36,8 @@ export function getMDXComponents(components?: MDXComponents) {
     File,
     Files,
     Folder,
+    HardwareCard,
+    HardwareShowcase,
     JetsonBuyersTable,
     Pi5BuyersTable,
     PiZero2WBuyersTable,

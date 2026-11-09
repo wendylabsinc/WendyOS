@@ -36,10 +36,11 @@ const (
 	// A step waits long enough for a LAN negotiation and leaves the rest of
 	// its budget for probes and tunnel setup. A slower negotiation continues
 	// in the background and a later step collects it.
-	leaseStepWait          = 5 * time.Second
-	leaseHeartbeatInterval = 10 * time.Second
-	leaseHeartbeatTimeout  = 30 * time.Second
-	maxLeaseConnections    = 128
+	leaseStepWait             = 5 * time.Second
+	leaseHeartbeatInterval    = 10 * time.Second
+	leaseHeartbeatMinInterval = time.Second
+	leaseHeartbeatTimeout     = 30 * time.Second
+	maxLeaseConnections       = 128
 )
 
 type leaseBackend interface {
@@ -164,14 +165,24 @@ func controlTLS(creds *localmesh.Credentials) *tls.Config {
 }
 
 func controlExpiry(creds *localmesh.Credentials, peer localmesh.Identity) (time.Time, error) {
+	scheduled := time.Now()
 	self, err := creds.Verify(creds.Certificate.Certificate, time.Now())
 	if err != nil {
 		return time.Time{}, err
 	}
-	if self.NotAfter.Before(peer.NotAfter) {
-		return self.NotAfter, nil
+	expires := peer.NotAfter
+	if self.NotAfter.Before(expires) {
+		expires = self.NotAfter
 	}
-	return peer.NotAfter, nil
+	if !creds.HasCertificateTimePolicy() {
+		return expires, nil
+	}
+	policy := creds.CertificateTimePolicy()
+	remaining := expires.Sub(policy.BaseTime(policy.WallTime()))
+	if remaining <= 0 {
+		return time.Time{}, errors.New("gateway control credential lifetime ended")
+	}
+	return scheduled.Add(remaining), nil
 }
 
 // serveGatewayLease returns cleanup errors only; all other failure paths close
@@ -211,6 +222,11 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 	}
 	sessionCtx, cancel := context.WithDeadline(ctx, expiry)
 	defer cancel()
+	bounded := newControlExpiryConn(conn, expiry, creds, conn.ConnectionState(), peer, cancel)
+	defer bounded.Close()
+	if err := bounded.checkValidity(); err != nil {
+		return nil
+	}
 	expire := context.AfterFunc(sessionCtx, func() { raw.Close() })
 	defer expire()
 	grantCtx, cancelGrant := context.WithTimeout(sessionCtx, leaseReplyTimeout)
@@ -219,20 +235,31 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 	if err != nil {
 		return nil
 	}
+	started := time.Now()
+	ended := controlEnd{role: "gateway", phase: "reply", peer: peer.Device, lease: lease, expires: expiry}
+	defer func() {
+		ended.cleanupErr = cleanupErr
+		if reporter, ok := backend.(controlReporter); ok {
+			reporter.reportControlEnd(ended)
+		}
+	}()
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
 		cleanupErr = backend.Revoke(cleanup, peer.Device, lease)
 	}()
+	defer func() { ended.endedAt = time.Now(); ended.elapsed = ended.endedAt.Sub(started) }()
 	if !lease.valid() {
+		ended.reason = "invalid-grant"
 		return nil
 	}
 	// Policy withdrawal (including an uplink change) must interrupt an idle
 	// control socket immediately, rather than waiting for the next heartbeat.
+	var revoked <-chan struct{}
 	if watcher, ok := backend.(interface {
 		LeaseDone(meshid.Device, tunnelLease) <-chan struct{}
 	}); ok {
-		revoked := watcher.LeaseDone(peer.Device, lease)
+		revoked = watcher.LeaseDone(peer.Device, lease)
 		stopWatch, watchDone := make(chan struct{}), make(chan struct{})
 		go func() {
 			defer close(watchDone)
@@ -244,31 +271,42 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 		}()
 		defer func() { close(stopWatch); <-watchDone }()
 	}
-	bounded := &expiryConn{Conn: conn, expires: expiry}
 	bounded.SetDeadline(time.Now().Add(leaseReplyTimeout))
 	response := []byte{byte(lease.Slot >> 8), byte(lease.Slot), 0}
 	if lease.IPv6 {
 		response[2] = 1
 	}
-	if writeControl(bounded, response) != nil {
+	if err := writeControl(bounded, response); err != nil {
+		ended.err, ended.reason = err, controlEndReason(ctx, expiry, revoked, err)
 		return nil
 	}
 	var last time.Time
 	for {
+		ended.phase = "heartbeat-read"
 		bounded.SetDeadline(time.Now().Add(leaseHeartbeatTimeout))
 		var b [1]byte
-		if _, err := io.ReadFull(bounded, b[:]); err != nil || b[0] != leaseHeartbeat {
+		if _, err := io.ReadFull(bounded, b[:]); err != nil {
+			ended.err, ended.reason = err, controlEndReason(ctx, expiry, revoked, err)
+			return nil
+		}
+		if b[0] != leaseHeartbeat {
+			ended.reason = "invalid-heartbeat"
 			return nil
 		}
 		now := time.Now()
-		if !last.IsZero() && now.Sub(last) < time.Second {
+		if !last.IsZero() && now.Sub(last) < leaseHeartbeatMinInterval {
+			ended.reason = "heartbeat-too-frequent"
 			return nil
 		}
 		last = now
 		if _, err := controlPeer(creds, conn.ConnectionState()); err != nil {
+			ended.err, ended.reason = err, "identity-recheck-failed"
 			return nil
 		}
-		if writeControl(bounded, b[:]) != nil {
+		ended.heartbeats++
+		ended.phase = "heartbeat-reply"
+		if err := writeControl(bounded, b[:]); err != nil {
+			ended.err, ended.reason = err, controlEndReason(ctx, expiry, revoked, err)
 			return nil
 		}
 	}
@@ -292,9 +330,14 @@ func dialGatewayLease(ctx context.Context, creds *localmesh.Credentials, gateway
 // It must send heartbeat byte 1 every ten seconds, read the same-byte reply,
 // and withdraw borrowed routes immediately if that exchange fails.
 func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, gateway meshid.Device, raw net.Conn) (conn net.Conn, lease tunnelLease, err error) {
+	var bounded *expiryConn
 	defer func() {
 		if err != nil {
-			raw.Close()
+			if bounded != nil {
+				_ = bounded.Close()
+			} else {
+				_ = raw.Close()
+			}
 		}
 	}()
 	cancelDial := context.AfterFunc(ctx, func() { raw.Close() })
@@ -320,7 +363,8 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 	if err != nil {
 		return nil, lease, err
 	}
-	conn = &expiryConn{Conn: secure, expires: expiry}
+	bounded = newControlExpiryConn(secure, expiry, creds, secure.ConnectionState(), peer, nil)
+	conn = bounded
 	// TLS 1.3 finishes here before the gateway has received this client's
 	// certificate flight. Over a radio that upload, the grant and the reply
 	// share the remaining dial budget rather than a fixed LAN-sized bound.
@@ -417,18 +461,40 @@ func (d *leaseDialer) stop() {
 // either endpoint's credential validity, even while heartbeats remain healthy.
 type expiryConn struct {
 	net.Conn
-	expires time.Time
+	expires   time.Time // Immutable initial resource deadline; policy checks can only shorten it.
+	validity  *controlValidity
+	stop      chan struct{}
+	watchDone chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+	onClose   func()
 }
 
 func (c *expiryConn) cap(t time.Time) time.Time {
-	if t.IsZero() || c.expires.Before(t) {
-		return c.expires
+	expiry := c.currentExpiry()
+	if t.IsZero() || expiry.Before(t) {
+		return expiry
 	}
 	return t
 }
-func (c *expiryConn) SetDeadline(t time.Time) error      { return c.Conn.SetDeadline(c.cap(t)) }
-func (c *expiryConn) SetReadDeadline(t time.Time) error  { return c.Conn.SetReadDeadline(c.cap(t)) }
-func (c *expiryConn) SetWriteDeadline(t time.Time) error { return c.Conn.SetWriteDeadline(c.cap(t)) }
+func (c *expiryConn) SetDeadline(t time.Time) error {
+	if err := c.checkValidity(); err != nil {
+		return err
+	}
+	return c.Conn.SetDeadline(c.cap(t))
+}
+func (c *expiryConn) SetReadDeadline(t time.Time) error {
+	if err := c.checkValidity(); err != nil {
+		return err
+	}
+	return c.Conn.SetReadDeadline(c.cap(t))
+}
+func (c *expiryConn) SetWriteDeadline(t time.Time) error {
+	if err := c.checkValidity(); err != nil {
+		return err
+	}
+	return c.Conn.SetWriteDeadline(c.cap(t))
+}
 func writeControl(w io.Writer, data []byte) error {
 	for len(data) > 0 {
 		n, err := w.Write(data)

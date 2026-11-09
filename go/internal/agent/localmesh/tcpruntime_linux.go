@@ -52,7 +52,13 @@ func RunConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 }
 
 func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdentity, observe func(*Node, *TCPConfig), listen func(string, string) (net.Listener, error)) error {
-	credentials, err := NewCredentials(id.Certificate, id.Chain, id.Key)
+	var credentials *Credentials
+	var err error
+	if id.TimePolicy == nil {
+		credentials, err = NewCredentials(id.Certificate, id.Chain, id.Key)
+	} else {
+		credentials, err = NewCredentialsWithTimePolicy(id.Certificate, id.Chain, id.Key, *id.TimePolicy)
+	}
 	if err != nil {
 		return err
 	}
@@ -98,6 +104,8 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	nodeDone := make(chan error, 1)
 	go func() { nodeDone <- node.Run(); cancel() }()
 	policy := NewConnectionPolicy(credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})
+	policy.SetSnapshot(node.Snapshot)
+	policy.SetCarrierCost(256)
 	var tlsDone chan error
 	if tlsListener != nil {
 		tlsDone = make(chan error, 1)
@@ -122,9 +130,9 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 			keys = append(keys, key)
 		}
 		for ctx.Err() == nil {
-			for _, key := range queue.Order(keys, time.Now()) {
+			for _, key := range queue.OrderPreferred(keys, time.Now(), node.Snapshot(), func(key string) (meshid.Device, uint16) { return allowed[key], 256 }) {
 				peer := allowed[key]
-				lease := policy.Reserve(key, peer, true)
+				lease := policy.ReservePreferred(key, peer, true, "", queue.ReclaimEligible(key, time.Now()))
 				if lease == nil {
 					continue
 				}
@@ -176,7 +184,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 						defer wg.Done()
 						defer func() { <-sem }()
 						defer conn.Close()
-						lease := policy.Reserve(fmt.Sprintf("incoming:%p", conn), meshid.Device{}, false)
+						lease := policy.ReservePreferred(fmt.Sprintf("incoming:%p", conn), meshid.Device{}, false, "", true)
 						if lease == nil {
 							return
 						}

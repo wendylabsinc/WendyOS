@@ -60,7 +60,7 @@ func TestMLDSADeviceManifestAdmission(t *testing.T) {
 			if changed, err := directory.Accept(proof, now); err != nil || changed {
 				t.Fatalf("duplicate: changed=%v err=%v", changed, err)
 			}
-			if _, err := directory.Accept(proof, now.Add(MaxLease+time.Second)); err == nil {
+			if _, err := directory.Accept(proof, now.Add(time.Minute+time.Second)); err == nil {
 				t.Fatal("accepted expired ML-DSA manifest")
 			}
 		})

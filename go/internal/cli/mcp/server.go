@@ -291,12 +291,20 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 			s.relayProfile = profile
 		}
 	}
+	// Groups and profiles control discovery only. mcp-go's tool filters also
+	// gate calls before middleware, bypassing our structured relay refusals
+	// and binding audit log. Filter list responses instead; call authorization
+	// stays in relayManifestMiddleware and bindingMiddleware below.
+	hooks := &server.Hooks{}
+	hooks.AddAfterListTools(func(ctx context.Context, _ any, _ *mcpgo.ListToolsRequest, result *mcpgo.ListToolsResult) {
+		result.Tools = s.filterManifestTools(ctx, result.Tools)
+	})
 	srv := server.NewMCPServer("wendy", version.Version,
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(true, false),
 		server.WithPromptCapabilities(false),
 		server.WithInstructions(instructions),
-		server.WithToolFilter(s.filterManifestTools),
+		server.WithHooks(hooks),
 	)
 	srv.Use(s.relayManifestMiddleware, s.bindingMiddleware(srv))
 	catalog, err := s.skillCatalog()

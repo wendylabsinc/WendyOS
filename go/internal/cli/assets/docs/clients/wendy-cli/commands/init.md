@@ -27,6 +27,8 @@ wendy init \
 
 An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that name. With neither, the wizard offers to scaffold into the current directory instead. Pass `--here` to scaffold into the current directory directly instead of nesting a subdirectory — with an app ID it still writes that as `wendy.json`'s app ID; without one, it infers the app ID from the current directory's name.
 
+With a template, the destination must be a new or empty directory by default, including when using `--here`. A populated directory is rejected before scaffolding, even if it has no `wendy.json`. Use `--force` with `--template` to deliberately overlay an existing directory: template output files, including `wendy.json`, are replaced; unrelated files are retained. Scripts relying on the old implicit overlay behavior must add `--force`. Without it, files arriving during template download or prompts remain protected. A later failure can leave files already written; initialization does not provide whole-project rollback.
+
 ## What it produces
 
 1. Picks a **deployment group** within the Linux, Mac, or Microcontrollers tab. A concrete `--template <name>` resolves first instead: when the template supports exactly one target, the question is skipped and the target is inferred with a notice; when it supports several, the picker is narrowed to those.
@@ -75,6 +77,7 @@ For ESP32, regular native ESP-IDF projects are recommended. Create them with the
 |---|---|
 | `--template [<name>]` | Scaffold from a template. Passing it **without** a value opens a picker filtered by target, auto-selecting when only one template exists for the target. With a value, `--target` becomes optional: it is inferred when the template's metadata maps to exactly one target. |
 | `--branch <name>` | Branch of the templates repo to read templates from. |
+| `--force` | Allow template files to replace existing files in the destination. Requires `--template`. Unrelated files are retained. |
 | `--var KEY=VALUE` | Override a template variable. Repeatable. |
 
 ### Entitlement flags

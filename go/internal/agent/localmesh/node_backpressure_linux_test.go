@@ -106,8 +106,10 @@ func TestDirectorySlowReaderRetainsCertificateRequestsAndOtherPeerProgress(t *te
 	n.peers[other.id] = other
 	defer p.sync.Close()
 	defer other.sync.Close()
-	// A prior ordinary burst is still admitted while the peer starts draining.
-	bulk := ControlMessage{Kind: "gossip", Gossip: &netgossip.Message{Version: 1, Type: netgossip.Manifest, Op: "have", Digest: make([]byte, 32)}}
+	// A prior ordinary identity-repair burst is still admitted while the peer
+	// starts draining. Unowned synthetic HAVE frames are not eligible queue
+	// fillers: announcement pruning correctly drops them before admission.
+	bulk := ControlMessage{Kind: "identity-request", Principal: principals[1]}
 	for range cap(p.control) {
 		p.control <- bulk
 	}
@@ -115,6 +117,9 @@ func TestDirectorySlowReaderRetainsCertificateRequestsAndOtherPeerProgress(t *te
 		if !n.queueReplies(p, []ControlMessage{bulk}) {
 			t.Fatal("initial backlog did not fit existing bounds")
 		}
+	}
+	if len(p.control) != cap(p.control) || len(p.replies) != maxDirectoryReplyFrames || p.replyBytes == 0 {
+		t.Fatal("fixture did not fill both eligible output queues")
 	}
 	receiver := NewCertificateExchange(receiverCache, local.Tenant())
 	defer receiver.Close()
