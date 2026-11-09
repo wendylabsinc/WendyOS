@@ -1,0 +1,18 @@
+{
+  "argv_prefix": [
+    "vm",
+    "list"
+  ],
+  "stdout": "[]",
+  "stderr": "",
+  "exit_code": 0,
+  "after": {
+    "actions": [
+      "tool:simulator_create",
+      "cli:vm create"
+    ],
+    "stdout": "[{\"name\": \"dog-lab\", \"state\": \"stopped\", \"version\": \"0.19.5\", \"source\": \"release\"}]",
+    "stderr": "",
+    "exit_code": 0
+  }
+}

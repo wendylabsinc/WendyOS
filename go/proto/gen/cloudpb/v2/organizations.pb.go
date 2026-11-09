@@ -22,8 +22,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Deprecated: assign roles by role_id (RoleService). Kept until WDY-3351
-// drops the enum.
+// Deprecated: use role_ids for notification audiences and role_id for assignments.
+// Retained as the wire-compatible type of NotificationAudience.roles.
+// Kept for wire compatibility; never remove or renumber its values.
 //
 // Deprecated: Marked as deprecated in wendycloud/v2/organizations.proto.
 type OrganizationRole int32

@@ -87,11 +87,24 @@ sudo systemctl status wendy-agent
 
 You should see the service active and running.
 
-For an unenrolled local-only agent, verify from the same computer:
+For **Only this computer**, install the CLI on this Linux computer too. The
+agent installer does not install it. Skip installation if `wendy --version`
+already works:
+
+```bash
+curl -fsSL https://install.wendy.dev/cli.sh | bash
+wendy --version
+```
+
+Open a new terminal if `wendy` is not found. For an unenrolled local-only agent,
+verify from this same computer:
 
 ```bash
 wendy --device 127.0.0.1:50051 device info --json
 ```
+
+Expect device information in JSON. Local-only agents do not appear in
+`wendy discover`; a missing discovery entry is expected for this setup.
 
 After enrollment, the agent uses its authenticated mTLS port (normally 50052).
 
@@ -119,4 +132,9 @@ Replace `{hostname}` with the hostname or IP address of your remote machine. Thi
 
 ## Next steps
 
-Your Linux computer is ready. Continue with [step 3 of the quickstart](/docs/#3-create-an-app) to create and run your first app.
+Continue with [the app tutorial](/docs/getting-started/app), including its
+Docker with Buildx prerequisite. For **Only this computer**, keep the project,
+CLI, and builder on this Linux computer and pass `--device 127.0.0.1:50051`
+when running against the unenrolled agent. The tutorial carries this target
+through the edit-and-redeploy loop. For **Other devices**, develop on your
+computer and select the Linux target.

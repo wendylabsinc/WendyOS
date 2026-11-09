@@ -9,6 +9,8 @@ ordinary Wi-Fi; Bluetooth is useful when a faster connection is unavailable.
 The numbered setup below is for WendyOS. For Wendy Lite firmware with Wendy Net
 support, use the [Lite configuration instructions](#configure-wendy-net-on-wendy-lite).
 
+Run these commands in an interactive terminal. Select the intended device when prompted and check any automatically selected default.
+
 ## 1. Prepare your devices
 
 Use current WendyOS images with Wendy Net support and enroll each device in the
@@ -21,7 +23,7 @@ while changing network settings.
 For devices on the same Ethernet or ordinary Wi-Fi network, run this for each one:
 
 ```sh
-wendy net configure --device <device> \
+wendy net configure \
   --participate=true --ethernet=true --infrastructure-wifi=true
 ```
 
@@ -53,8 +55,8 @@ require participation, so disable them in the same command if they were enabled.
 ## 3. Check the result
 
 ```sh
-wendy net status --device <device>
-wendy net topology --device <device>
+wendy net status
+wendy net topology
 ```
 
 `status` shows saved settings and current runtime state. `topology` shows the
@@ -171,7 +173,7 @@ use host mode only when the app needs that access.
 Applications opt into Wendy Net in `wendy.json` and explicitly publish the ports
 that other devices may access. See the
 [service sharing guide](/docs/guides/wendy-net-services), then the
-[network configuration reference](/docs/advanced/apps/wendy.json#network).
+[network configuration reference](/docs/reference/app-configuration#network).
 Device connectivity alone does not publish every app port.
 
 Apps with their own mDNS library keep using it on their private interface.
@@ -206,5 +208,5 @@ WendyOS. Lite-specific limits and capability checks are described above.
 `status --json` returns saved choices separately from current runtime state.
 `topology --json` returns the selected device's observed links and routes.
 Changing settings requires an authenticated user in the device's organization.
-An app on the device that holds the [`admin` entitlement](/docs/advanced/apps/wendy.json#admin)
+An app on the device that holds the [`admin` entitlement](/docs/reference/app-configuration#admin)
 can read status and topology through the local agent socket, but cannot change settings.

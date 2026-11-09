@@ -42,7 +42,7 @@ func (s *transitioningEnrollmentAgent) StartACMEProvisioning(ctx context.Context
 // enrollment RPC returns. Verify through that transition, including follow-up
 // RPCs on the returned connection, without registering the device twice.
 func TestDesktopEnrollmentTransitionsToAuthenticatedConnection(t *testing.T) {
-	for _, mode := range []string{"success", "delayed listener", "wrong device", "wrong organization status", "unreachable"} {
+	for _, mode := range []string{"success", "cli success", "delayed listener", "wrong device", "wrong organization status", "unreachable"} {
 		t.Run(mode, func(t *testing.T) {
 			auth := oidcEnrollmentAuth(t)
 			auth.Name = "chosen"
@@ -117,8 +117,20 @@ func TestDesktopEnrollmentTransitionsToAuthenticatedConnection(t *testing.T) {
 			defer conn.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
-			next, err := DesktopEnrollDevice(ctx, conn, "chosen", testOperatorTenant, "test-device")
-			if mode == "success" || mode == "delayed listener" {
+			var next *grpcclient.AgentConnection
+			if mode == "cli success" {
+				err = runEnrollDevice(ctx, conn, auth, "test-device", 0)
+				if err == nil {
+					expected := expectedIdentityFor("test-device")
+					if expected == nil {
+						t.Fatal("CLI enrollment did not save its trusted expected identity")
+					}
+					next, err = grpcclient.ConnectWithTLSExpecting(ctx, secure.Addr().String(), &auth.Certificates[0], nil, expected)
+				}
+			} else {
+				next, err = DesktopEnrollDevice(ctx, conn, "chosen", testOperatorTenant, "test-device")
+			}
+			if mode == "success" || mode == "cli success" || mode == "delayed listener" {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -126,12 +138,21 @@ func TestDesktopEnrollmentTransitionsToAuthenticatedConnection(t *testing.T) {
 				if next == conn || !next.IsMTLS || next.Addr != secure.Addr().String() {
 					t.Fatalf("did not replace plaintext connection: %+v", next)
 				}
+				pin, ok := load().DevicePinFor("test-device")
+				if !ok || pin.Principal != certs.DeviceSPIFFEURI(testOperatorTenant, agent.req.DeviceId) {
+					t.Fatalf("verified enrollment did not persist its generated identity: %+v", pin)
+				}
 				state, err := DesktopDeviceEnrollment(ctx, next)
 				if err != nil || !state.Enrolled || state.OrganizationID != testOperatorTenant {
 					t.Fatalf("follow-up enrollment read = %+v, %v", state, err)
 				}
-			} else if err == nil || next != nil {
-				t.Fatalf("accepted unverified enrollment: %v", err)
+			} else {
+				if err == nil || next != nil {
+					t.Fatalf("accepted unverified enrollment: %v", err)
+				}
+				if _, ok := load().DevicePinFor("test-device"); ok {
+					t.Fatal("failed enrollment persisted a device binding")
+				}
 			}
 			if cloud.registered != 1 || cloud.req == nil || agent.req == nil {
 				t.Fatal("enrollment was missing or repeated")

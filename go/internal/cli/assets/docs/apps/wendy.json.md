@@ -144,7 +144,7 @@ For multi-service apps, declare `frameworks` per service under `services.<name>.
 }
 ```
 
-Use [`wendy init --framework ros2`](../clients/wendy-cli/commands/init.md#frameworks) to scaffold this block, or add it by hand — `wendy run` picks it up on the next deploy. See [Wendy for ROS 2](/docs/integrations/ros2) for inspecting and debugging the running system.
+Use [`wendy init --framework ros2`](/docs/advanced/clients/wendy-cli/commands/init#frameworks) to scaffold this block, or add it by hand — `wendy run` picks it up on the next deploy. See [Wendy for ROS 2](/docs/integrations/ros2) for inspecting and debugging the running system.
 
 ### `readiness`
 
@@ -164,7 +164,7 @@ Configures how the CLI determines when the app is ready after starting.
 | `tcpSocket.port` | integer (1–65535) | — | TCP port to probe |
 | `timeoutSeconds` | integer | `30` | How long to wait before giving up |
 
-For multi-service apps, declare `readiness` per service under `services.<name>.readiness` instead of (or in addition to) the top-level field. A top-level `readiness` becomes an app-level fallback that fires once after every service has started, rather than gating any single service — see [Readiness and lifecycle hooks](./wendy-services.md#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
+For multi-service apps, declare `readiness` per service under `services.<name>.readiness` instead of (or in addition to) the top-level field. A top-level `readiness` becomes an app-level fallback that fires once after every service has started, rather than gating any single service — see [Readiness and lifecycle hooks](/docs/advanced/apps/wendy-services#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
 
 ### `hooks`
 
@@ -191,7 +191,7 @@ Prefer `openURL` over a `cli` command that shells out to a platform-specific ope
 
 > **Note:** `hooks.postStart.agent` is executed directly on the device, not through a shell. Shell features such as pipes (`|`), redirects (`>`), command chaining (`;`, `&&`), and command substitution (`$(...)`) are **not** interpreted — they are passed through as literal arguments. If you need them, put the logic in a script file (e.g. `/app/post-start.sh`) and invoke that. `${WENDY_APP_ID}`, `${WENDY_HOSTNAME}`, `${WENDY_SERVICE_NAME}` (the declaring service's name; empty for single-container apps), and environment variables are still expanded.
 
-For multi-service apps, declare `hooks` per service under `services.<name>.hooks` instead of (or in addition to) the top-level field. A top-level `hooks` becomes an app-level fallback that fires once after every service has started; its `postStart.agent` is ignored for multi-service apps, since there is no single app-level container start to trigger it — `wendy run` warns about this when it loads `wendy.json`. See [Readiness and lifecycle hooks](./wendy-services.md#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
+For multi-service apps, declare `hooks` per service under `services.<name>.hooks` instead of (or in addition to) the top-level field. A top-level `hooks` becomes an app-level fallback that fires once after every service has started; its `postStart.agent` is ignored for multi-service apps, since there is no single app-level container start to trigger it — `wendy run` warns about this when it loads `wendy.json`. See [Readiness and lifecycle hooks](/docs/advanced/apps/wendy-services#readiness-and-lifecycle-hooks) for the full scoping and attached/detached rules.
 
 ### `python`
 
@@ -282,7 +282,7 @@ Optional URI pointing to the JSON Schema for editor autocompletion and validatio
 
 Entitlements grant the app access to hardware and system capabilities. Any capability not listed is unavailable to the app. They are code signed, preventing privilege escalation.
 
-Run `wendy project` for a guided editor, or use `wendy project add`, `edit`, and `remove` with explicit flags. `wendy project validate` checks the result. Direct editing of `wendy.json` is also supported. See the [project editor](../clients/wendy-cli/commands/project/index.md).
+Run `wendy project` for a guided editor, or use `wendy project add`, `edit`, and `remove` with explicit flags. `wendy project validate` checks the result. Direct editing of `wendy.json` is also supported. See the [project editor](/docs/advanced/clients/wendy-cli/commands/project).
 
 ### `network`
 
@@ -301,7 +301,7 @@ IP networking access.
 | `"host-admin"` | Host networking **plus** `CAP_NET_ADMIN` — allows reconfiguring interfaces, routes, and netfilter. Only request this if your app genuinely manages the network; it is a high-privilege capability. |
 | `"none"` | Networking fully disabled — no namespace connectivity of any kind. |
 | `"bridge"` | Isolated network namespace with a private IP, outbound internet via NAT, and working DNS — but **no** host/LAN-published ports. Use this for apps that need to reach the internet without exposing anything locally. Use Wendy Net networking for cross-device app access. |
-| `"mesh"` | Private app networking through Wendy Net. Set `serviceCIDR` to `10.99.0.0/16`, the currently supported service address range. Publish incoming ports with `ports` to let apps on other devices connect. |
+| `"mesh"` | Private app networking through Wendy Net. Set `serviceCIDR` to `10.99.0.0/16`, the currently supported virtual service address range. `/16` fixes the first 16 address bits; this is not the device's LAN subnet. Publish incoming ports with `ports` to let apps on other devices connect. |
 
 > **Security note:** `CAP_NET_ADMIN` (host network reconfiguration) is granted only by `"host-admin"`, never by plain `"host"`. Apps that previously relied on `CAP_NET_ADMIN` under `"host"` must switch to `"host-admin"`.
 
@@ -578,7 +578,7 @@ GPIO pin access.
 
 ### `spi`
 
-SPI device access via `spidev` (`/dev/spidev<bus>.<chipselect>`). Takes no options — grants the SPI subsystem as a whole. See the [SPI guide](../device/entitlements.md#spi).
+SPI device access via `spidev` (`/dev/spidev<bus>.<chipselect>`). Takes no options — grants the SPI subsystem as a whole. See the [SPI guide](/docs/advanced/device/entitlements#spi).
 
 ```json
 { "type": "spi" }
@@ -626,7 +626,7 @@ Declares the app's primary HTTP port. The agent reports it over gRPC (`AppContai
 ```
 
 A detached agent deployment includes declared HTTP ports in its
-[reported endpoints](../clients/wendy-cli/commands/run.md#detached-output), using
+[reported endpoints](/docs/advanced/clients/wendy-cli/commands/run#detached-output), using
 host loopback forwarding for user-networked VMs. Reporting does not check HTTP
 health or open a browser. A TCP readiness port alone does not declare an HTTP
 endpoint; an explicit hostname-based HTTP(S) `openURL` can also supply one.
@@ -767,7 +767,7 @@ Grants `CAP_SYS_ADMIN` and un-denies the `unshare` / `clone(CLONE_NEWUSER)` sysc
 
 If your project uses a `docker-compose.yml` instead of a single container, you don't need a `wendy.json`. `wendy run` detects the compose file automatically and each service gets a generated app config derived from its `ports`, `network_mode`, and `volumes` declarations.
 
-See [Multi-Service Apps with Docker Compose](./compose.md) for details.
+See [Multi-Service Apps with Docker Compose](/docs/advanced/apps/compose) for details.
 
 ---
 

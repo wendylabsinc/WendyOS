@@ -17,7 +17,7 @@ Wendy Labs has three main components to achieve this mission:
 - Wendy-Agent
 - Cloud
 
-[WendyOS](/docs/#2-set-up-a-device) is a pre-built OS for specific hardware (NVIDIA Jetson — Orin Nano, AGX Orin, AGX Thor —, Raspberry Pi, ...) that packages all the tools you need to build & run apps.
+[WendyOS](/docs/installation) is a pre-built OS for specific hardware (NVIDIA Jetson — Orin Nano, AGX Orin, AGX Thor —, Raspberry Pi, ...) that packages all the tools you need to build & run apps.
 
 Wendy-Agent is a daemon, akin to Docker, that manages and runs your apps. It also exposes a way to remotely control the machine and upload apps.
 

@@ -470,8 +470,20 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(self.publish(data, github))
         self.assertIn("No durable API decisions changed.", github.posted_body())
         self.assertIn(("DELETE", f"/repos/{REPO}/issues/1911/labels/api-review", None), github.calls)
-        self.assertIn(("POST", f"/repos/{REPO}/issues/1911/labels", {"labels": ["risk: low"]}), github.calls)
+        self.assertFalse(any(method == "POST" and path.endswith("/labels") for method, path, _ in github.calls))
         self.assertFalse(any("requested_reviewers" in path for _, path, _ in github.mutations()))
+
+    def test_success_recommends_risk_without_mutating_author_labels(self):
+        for risk, display in (("low", "low"), ("mid", "medium"), ("high", "high")):
+            for decisions in (result()["decisions"], []):
+                with self.subTest(risk=risk, decisions=bool(decisions)):
+                    github = FakeGitHub()
+                    self.assertTrue(self.publish({**result(), "risk": risk, "decisions": decisions}, github))
+                    self.assertIn(f"**Recommended risk:** {display}.", github.posted_body())
+                    for method, path, payload in github.mutations():
+                        if "/labels" in path:
+                            self.assertNotIn("risk", path)
+                            self.assertNotIn("risk:", json.dumps(payload))
 
     def test_failure_preserves_previous_approval_and_risk_labels(self):
         checked = review.render_comment(result(), REPO).replace("- [ ]", "- [x]")

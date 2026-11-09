@@ -864,6 +864,10 @@ func (c *AppConfig) Validate() error {
 		if cleaned := filepath.Clean(svc.Context); strings.HasPrefix(cleaned, "..") {
 			return fmt.Errorf("services[%q]: context must not contain '..' components", name)
 		}
+		// IsAbs alone accepts drive-relative and root-relative Windows paths.
+		if !filepath.IsLocal(svc.Context) {
+			return fmt.Errorf("services[%q]: context must be a relative path within the project", name)
+		}
 		for _, dep := range svc.DependsOn {
 			if _, ok := c.Services[dep]; !ok {
 				return fmt.Errorf("services[%q]: dependsOn references unknown service %q", name, dep)
@@ -948,6 +952,10 @@ func (m *FleetManifest) Validate() error {
 		}
 		if cleaned := filepath.Clean(comp.Path); strings.HasPrefix(cleaned, "..") {
 			return fmt.Errorf("components[%q]: path must not contain '..' components", name)
+		}
+		// IsAbs alone accepts drive-relative and root-relative Windows paths.
+		if !filepath.IsLocal(comp.Path) {
+			return fmt.Errorf("components[%q]: path must be a relative path within the project", name)
 		}
 		if len(comp.Tags) == 0 {
 			return fmt.Errorf("components[%q]: at least one tag is required (the devices to deploy to)", name)

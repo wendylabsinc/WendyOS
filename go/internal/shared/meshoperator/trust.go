@@ -70,6 +70,19 @@ func VerifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tena
 		parsed[i] = certificate
 	}
 	leaf := parsed[0]
+	if leaf.IsCA {
+		return result, errors.New("operator credential must not be a CA certificate")
+	}
+	hasClientAuth := false
+	for _, usage := range leaf.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageClientAuth {
+			hasClientAuth = true
+			break
+		}
+	}
+	if !hasClientAuth {
+		return result, errors.New("operator credential requires explicit clientAuth usage")
+	}
 	principal, ok := certs.TenantPrincipalFromCert(leaf)
 	if !ok {
 		return result, errors.New("operator certificate requires exactly one tenant principal")

@@ -46,7 +46,7 @@ export function renderCommand(command, commands, detailsURL) {
 }
 
 export async function writeCLIReference(docsRoot, contentRoot, publicRoot, normalize) {
-  const snapshot = execFileSync('go', ['run', './cmd/api-surface-snapshot'], {
+  const snapshot = execFileSync('go', ['run', './cmd/api-surface-snapshot', '--docs'], {
     cwd: path.resolve(docsRoot, '../../../..'),
     env: { ...process.env, CGO_ENABLED: '1' },
     encoding: 'utf8', maxBuffer: 20 * 1024 * 1024,
@@ -58,7 +58,8 @@ export async function writeCLIReference(docsRoot, contentRoot, publicRoot, norma
     const route = commandRoute(command.path);
     const file = `${route}/index.mdx`;
     const oldPath = `clients/wendy-cli/commands/${command.path.split(' ').slice(1).join('/')}.md`;
-    let detailsURL;
+    let detailsURL = command.path === 'wendy vm' || command.path.startsWith('wendy vm ')
+      ? '/docs/installation/wendyos-virtual-machine' : undefined;
     try {
       await access(path.join(docsRoot, oldPath));
       detailsURL = `/docs/advanced/${oldPath.slice(0, -3)}`;

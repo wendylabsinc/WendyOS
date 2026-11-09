@@ -259,7 +259,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 }
                 Spacer(minLength: 8)
                 siteMenu.labelStyle(.iconOnly)
-                Menu {
+                OverflowMenu {
                     controls()
                     if current != nil {
                         Divider()
@@ -277,7 +277,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         Divider()
                         ForEach(notices, id: \.self) { Text($0) }
                     }
-                } label: { Image(systemName: "ellipsis") }
+                }
                     .accessibilityLabel("View options")
             }
             .buttonStyle(.plain)
@@ -722,7 +722,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(feed == nil)
-            Menu {
+            OverflowMenu {
                 if calibrate != nil {
                     Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
                 }
@@ -740,8 +740,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         }
                     }
                 }
-            } label: { Image(systemName: "ellipsis") }
-                .buttonStyle(.plain).fixedSize().disabled(busy)
+            }
+                .disabled(busy)
                 .accessibilityLabel("Actions for \(label.title)")
         }.padding(10).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
     }

@@ -84,7 +84,7 @@ func TestIdentityMismatchRecorded(t *testing.T) {
 // and calls only VerifyConnection, so the identity check must live there or it
 // silently stops running after the first connect.
 func TestVerifyConnectionNotVerifyPeerCertificate(t *testing.T) {
-	cfg, err := newAgentTLSConfig("dev.local:50052", testCertInfo(t), nil, nil, nil, nil, nil, nil)
+	cfg, err := newAgentTLSConfig("dev.local:50052", testCertInfo(t), nil, nil, nil, &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}, nil, nil)
 	if err != nil {
 		t.Fatalf("newAgentTLSConfig: %v", err)
 	}
