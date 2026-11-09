@@ -37,23 +37,37 @@ func serveStdioStreamsWithSkills(ctx context.Context, srv *server.MCPServer, in 
 	defer cancel()
 	input := &cancelOnEOF{reader: in, cancel: cancel}
 	err := listenWithSkillCatalog(ctx, srv, input, out, catalog)
+	if failure := input.failure.Load(); failure != nil && failure.err != io.EOF && (err == nil || errors.Is(err, context.Canceled)) {
+		// The SDK may observe cancellation before its read result. Preserve the
+		// input failure that caused shutdown instead of treating it as clean EOF.
+		return failure.err
+	}
 	if input.closed.Load() && errors.Is(err, context.Canceled) {
 		return nil // the client disconnected
 	}
 	return err
 }
 
-// cancelOnEOF cancels the serving context when the client's input ends.
+// cancelOnEOF cancels serving when input ends, including failures, so in-flight
+// tools stop before the SDK waits for them. Only EOF is a clean disconnect.
 type cancelOnEOF struct {
-	reader io.Reader
-	cancel context.CancelFunc
-	closed atomic.Bool
+	reader  io.Reader
+	cancel  context.CancelFunc
+	closed  atomic.Bool
+	failure atomic.Pointer[stdioInputFailure]
+}
+
+type stdioInputFailure struct {
+	err error
 }
 
 func (c *cancelOnEOF) Read(p []byte) (int, error) {
 	n, err := c.reader.Read(p)
 	if err != nil {
-		c.closed.Store(true)
+		c.failure.Store(&stdioInputFailure{err: err})
+		if err == io.EOF {
+			c.closed.Store(true)
+		}
 		c.cancel()
 	}
 	return n, err

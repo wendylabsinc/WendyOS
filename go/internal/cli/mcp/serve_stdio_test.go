@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -16,7 +17,8 @@ import (
 // instead of building and deploying for a client that is gone. The server
 // returns once the run has stopped, and a disconnect is a clean exit.
 func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
-	for _, trigger := range []string{"client disconnect", "server stop"} {
+	inputFailure := errors.New("stdin read failed")
+	for _, trigger := range []string{"client disconnect", "server stop", "input failure"} {
 		t.Run(trigger, func(t *testing.T) {
 			s := New(&config.Config{}, nil)
 			started, stopped := make(chan struct{}), make(chan struct{})
@@ -49,6 +51,8 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			}
 			if trigger == "client disconnect" {
 				_ = client.Close()
+			} else if trigger == "input failure" {
+				_ = client.CloseWithError(inputFailure)
 			} else {
 				stop()
 			}
@@ -61,6 +65,9 @@ func TestServeStdioCancelsInFlightRunsOnShutdown(t *testing.T) {
 			case err := <-served:
 				if trigger == "client disconnect" && err != nil {
 					t.Fatalf("disconnect is a clean shutdown, got %v", err)
+				}
+				if trigger == "input failure" && !errors.Is(err, inputFailure) {
+					t.Fatalf("input failure was masked: %v", err)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("server did not return after the run stopped")
