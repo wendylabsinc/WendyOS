@@ -38,6 +38,14 @@ func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, clo
 	}
 	// App responses must never redirect requests outside the local TCP proxy.
 	transport := &http.Transport{IdleConnTimeout: appHTTPIdleConnTimeout}
+	closeProxy = sync.OnceFunc(closeProxy)
+	// A canceled initialize can leave the SDK waiting for its best-effort
+	// cancellation notification during graceful session cleanup. Close the
+	// proxy on cancellation, before Connect must return, so that notification
+	// cannot hold cleanup open. Stop this before our deferred cancelInit on a
+	// successful handshake; initialization no longer owns the live session.
+	stopClosingProxy := context.AfterFunc(initCtx, closeProxy)
+	defer stopClosingProxy()
 	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
 		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
 	// Keep the app proxy on the session-based protocol: cancellation and

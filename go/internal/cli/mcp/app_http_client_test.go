@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -476,6 +478,25 @@ func TestAppHTTPFailedConnectCleansProxy(t *testing.T) {
 				t.Fatal("failed initialization left proxy listener open")
 			}
 		})
+	}
+}
+
+func TestAppHTTPFailedConnectCancellationNotification(t *testing.T) {
+	// The SDK normally sends cancellation notifications asynchronously. If a
+	// notification starts before failed Connect closes its session, graceful
+	// cleanup waits for it. Its compatibility switch makes that ordering
+	// deterministic; the existing test still enforces the same two-second
+	// cancellation bound and verifies that the proxy listener is closed.
+	// The SDK reads this setting at process initialization, so use a child
+	// running only the failure/cleanup test, not the complete package suite.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0],
+		"-test.run=^TestAppHTTPFailedConnectCleansProxy/(init-canceled|lifetime-canceled)$",
+		"-test.count=1")
+	cmd.Env = append(os.Environ(), "MCPGODEBUG=blockingcancelnotify=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("initialization cancellation waited for a notification: %v\n%s", err, output)
 	}
 }
 
