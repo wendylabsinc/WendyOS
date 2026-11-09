@@ -1,0 +1,21 @@
+{
+  "appId": "sh.wendy.examples.stagefile-getting-started",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    },
+    {
+      "type": "http",
+      "port": 8000
+    }
+  ],
+  "readiness": {
+    "tcpSocket": {
+      "port": 8000
+    },
+    "timeoutSeconds": 30
+  }
+}

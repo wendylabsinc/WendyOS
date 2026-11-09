@@ -1,15 +1,134 @@
 ---
 title: Stagefile
-description: Describe an app's container build in YAML so Wendy can cache dependencies, skip unnecessary image builds, and upload only what changed
+description: Build a small HTTP app, then see how Stagefile separates dependencies from source edits.
 ---
 
-Your existing Dockerfile or Containerfile remains supported. A Stagefile is an optional build format, not a migration requirement. Run `wendy run` from your existing project to build and deploy it.
+A Stagefile describes a container build in YAML. Wendy compiles it into a Dockerfile and OCI image. It is optional: your existing Dockerfile or Containerfile remains supported.
 
-Most application edits change source files while dependencies stay the same. Separating those inputs can reduce rebuild time in either format.
+## Build and run the example
 
-A **Stagefile** makes the distinction explicit. It is a declarative YAML build descriptor named `build.stagefile.yaml`. Wendy compiles it into a real, digest-pinned Dockerfile, builds a standard OCI image, and deploys that image with the normal `wendy run` workflow.
+You need the Wendy CLI, Git, a running Docker builder, and internet access for the first build. Deployment also needs a reachable Linux Wendy target or [virtual device](/docs/installation/wendyos-virtual-machine). Python runs inside the image; you do not need to install it locally.
 
-Use it when you want the compiler to manage these build details. Keep a hand-written Dockerfile when you need its existing build steps; the same deployment workflow supports both.
+Get the complete [Stagefile example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/StagefileGettingStarted):
+
+```bash
+git clone --depth 1 https://github.com/wendylabsinc/WendyOS.git
+cd WendyOS/Examples/StagefileGettingStarted
+wendy project validate .
+wendy build --device docker
+```
+
+If you already have the checkout, enter its `Examples/StagefileGettingStarted` directory instead. The last command builds locally without deploying. Keep this terminal in the example directory.
+
+To run it on your Wendy target, use `wendy discover` and set `WENDY_TARGET` to its hostname, address, or `vm:name` selector. Replace `my-device.local` below; keep this value for the later comparisons:
+
+```bash
+WENDY_TARGET=my-device.local
+wendy run --device "$WENDY_TARGET"
+```
+
+Open the URL Wendy prints. Expect `{"message":"Hello from Stagefile"}`. Append `/health` to that URL and expect `{"status":"ok"}`. A listening port establishes connectivity; these responses verify that the expected application is serving requests. Press **Ctrl-C** to leave the attached run, then explicitly stop this app:
+
+```bash
+wendy device apps stop sh.wendy.examples.stagefile-getting-started --device "$WENDY_TARGET"
+```
+
+Ctrl-C can leave an existing app running when the command was only following its logs. Use the explicit stop after each experiment.
+
+## What the files do
+
+```text
+StagefileGettingStarted/
+  app.py
+  requirements.txt
+  build.stagefile.yaml
+  wendy.json
+```
+
+`requirements.txt` pins Flask to 3.1.2. `app.py` defines the two routes and explicitly starts a server on `0.0.0.0:8000` when invoked as `python app.py`. It uses Flask's development server for this exercise; production apps should choose a production server.
+
+The Stagefile installs dependencies before copying the frequently edited source:
+
+```yaml
+version: 1
+stages:
+  - name: app
+    from: python:3.12-slim
+    workdir: /app
+    env:
+      PYTHONUNBUFFERED: "1"
+    install:
+      pip:
+        - requirements: requirements.txt
+    copy:
+      - from: local
+        paths: [app.py]
+    healthcheck:
+      exec: [python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 3s
+      startPeriod: 5s
+      retries: 3
+    cmd: [python, app.py]
+```
+
+The final image runs as UID 65532 by default. Port 8000 does not require root. The image health check requests the same `/health` route that you inspected above.
+
+`wendy.json` grants network access, identifies the HTTP port, and sets a TCP readiness deadline:
+
+```json
+{
+  "appId": "sh.wendy.examples.stagefile-getting-started",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    },
+    {
+      "type": "http",
+      "port": 8000
+    }
+  ],
+  "readiness": {
+    "tcpSocket": {
+      "port": 8000
+    },
+    "timeoutSeconds": 30
+  }
+}
+```
+
+The image health check and Wendy's TCP readiness probe are different checks. The probe waits for port 8000; it does not validate the HTTP response body.
+
+## Change one source file
+
+Change `MESSAGE` in `app.py` to `Hello after an edit`, then run `wendy run --device "$WENDY_TARGET"` again. Reload the page and verify the new message. Leave `requirements.txt`, the Stagefile, and the target unchanged so this is a source-only comparison.
+
+On an eligible device deployment with a warm native-layer cache, the CLI prints:
+
+```text
+App layer(s) rebuilt natively (deps unchanged; container builder skipped)
+```
+
+That line confirms the shortcut was used. A normal image build is also valid: the shortcut depends on the cached OCI layout and the build shape described below. Do not infer it from a fast elapsed time alone. Local `wendy build --device docker` uses the container builder and does not test this deployment shortcut.
+
+For a comparison that requires a normal build, add `LESSON_REVISION: "2"` under the Stagefile's `env` and repeat `wendy run --device "$WENDY_TARGET"`. Changing the Stagefile invalidates the native source-only shortcut, although BuildKit may still reuse unchanged layers. Inspect the build output and confirm that the HTTP response remains correct. Restore the environment change when finished.
+
+## Generated files and recovery
+
+The default Dockerfile backend writes these files beside the Stagefile:
+
+| File | What to do with it |
+| --- | --- |
+| `build.stagefile.lock.yaml` | Commit it when pinning your project. It records resolved base-image digests and other locked inputs. |
+| `Dockerfile.generated` | Generated build output; do not edit or commit it. |
+| `Dockerfile.generated.dockerignore` | Generated input allowlist; do not edit or commit it. |
+
+The example's `.gitignore` excludes `Dockerfile.generated*`. Run `wendy build` or `wendy run` to compile a Stagefile; Docker does not read the YAML directly.
+
+If validation fails, check that you are in the example directory and have all four files. If the builder is unavailable, start Docker and check `docker info`. If deployment starts but the page is unavailable, inspect the attached app logs, use the printed URL, and check for another service using port 8000. A successful build alone does not prove that the server is running.
 
 ## Why use a Stagefile?
 
@@ -58,88 +177,6 @@ A Stagefile also removes several sources of build drift:
 - The final stage runs as the non-root UID `65532` unless `user` is set explicitly. CUDA stages default to root because Jetson GPU access requires it.
 
 You still get a conventional Dockerfile and OCI image, but the compiler owns the repetitive correctness and caching details.
-
-## Create your first Stagefile
-
-Suppose a Python app contains these files:
-
-```text
-my-app/
-  app.py
-  requirements.txt
-  wendy.json
-```
-
-Add `build.stagefile.yaml` at the project root:
-
-```yaml
-version: 1
-stages:
-  - name: app
-    from: python:3.12-slim
-    workdir: /app
-    env:
-      PYTHONUNBUFFERED: "1"
-    install:
-      pip:
-        - requirements: requirements.txt
-    copy:
-      - from: local
-        paths: [app.py]
-    healthcheck:
-      exec: [python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 3s
-      startPeriod: 5s
-      retries: 3
-    cmd: [python, app.py]
-```
-
-The order in the YAML describes intent; the compiler produces the optimized sequence:
-
-1. Pin and start from the Python base image.
-2. Copy `requirements.txt` and install dependencies with a pip cache mount.
-3. Copy `app.py` as a separate, late layer.
-4. Add the health check, command, and default non-root user.
-5. Generate an allowlist build context containing only `requirements.txt` and `app.py`.
-
-Run it exactly like any other Wendy app:
-
-```bash
-wendy run
-```
-
-Wendy auto-detects `build.stagefile.yaml`; no build-type flag is required. Use watch mode for the tightest source-edit loop:
-
-```bash
-wendy run --watch
-```
-
-You can validate the image without deploying it:
-
-```bash
-wendy build
-```
-
-The first build writes three files beside the Stagefile:
-
-| File | What to do with it |
-| --- | --- |
-| `build.stagefile.lock.yaml` | Commit it. It records resolved base-image digests, remote-download checksums, and GPU profiles. |
-| `Dockerfile.generated` | Do not edit or commit it. It is regenerated build output. |
-| `Dockerfile.generated.dockerignore` | Do not edit or commit it. It is the derived build-context allowlist. |
-
-Add the generated namespace to `.gitignore`:
-
-```text
-Dockerfile.generated*
-```
-
-<Callout type="warning">
-  Stagefiles are a Wendy build input, not a Docker CLI format. Run `wendy build`
-  or `wendy run` to compile one. If another tool must build the result, generate
-  it first and point that tool at `Dockerfile.generated`.
-</Callout>
 
 ## Understand the building blocks
 
@@ -291,7 +328,7 @@ gpu.stagefile.lock.yaml
 The canonical `build.stagefile.yaml` is selected by default. Choose another variant explicitly in automation:
 
 ```bash
-wendy run --dockerfile gpu.stagefile.yaml
+wendy run --device "$WENDY_TARGET" --dockerfile gpu.stagefile.yaml
 ```
 
 Variant names may contain letters, digits, underscores, and hyphens, but not dots. See [`wendy build`](/docs/advanced/clients/wendy-cli/commands/build) for detection order, generated filenames, flags, and builder compatibility.

@@ -1,32 +1,16 @@
+<a href="https://wendy.dev/videos/wendy-g1-warehouse-turbopuffer-2026-09-29.mp4">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset=".github/assets/readme/header.png">
+    <img src=".github/assets/readme/header.gif" alt="Wendy: build and run apps on robots. A simulated G1 picks up a box in a warehouse. Watch the full demo." width="960" height="400">
+  </picture>
+</a>
+
 # Wendy
 
-Build and run apps on robots, Raspberry Pis, Jetsons, and other Linux devices.
-Wendy builds your code, deploys it, and brings the logs back to your terminal.
+Build, deploy, and debug apps on robots, Raspberry Pis, Jetsons, and Linux devices.
+Bring your Dockerfile or Compose project. Start with hardware or a simulator.
 
-The CLI runs on your development computer. The Wendy Agent runs on the device
-and manages your apps. WendyOS includes the Agent. You can also install the
-Agent on an existing Linux computer or robot and keep its OS.
-
-[Documentation](https://docs.wendy.dev) · [Examples](Examples) · [Discord](https://discord.gg/wendylabsinc)
-
-## Why Wendy?
-
-Getting a container to start is only part of building a robot or edge app.
-You also need to build for the device, transfer changes, configure hardware
-access, and find out why the app failed. Wendy connects those steps in one
-workflow, so you spend less time maintaining deployment scripts.
-
-| If you use... | What Wendy adds |
-| --- | --- |
-| Docker or Compose | `wendy run` builds for your target, transfers the app, starts it, and attaches logs. `wendy run --watch` repeats the loop after edits. Bring your Dockerfile or a supported Compose project. |
-| Ubuntu or JetPack | Install Wendy Agent to get deployment and inspection tools while keeping your OS. Choose WendyOS on supported boards for a supplied OS image and its A/B OS update path. |
-| Separate hardware and robotics tools | Declare hardware permissions in `wendy.json`, inspect ROS 2 nodes and topics, and connect a coding agent through MCP. |
-
-Local development needs no Wendy Cloud account. Wendy Cloud adds remote access
-and fleet management. Installing the Agent on Ubuntu does not add WendyOS OS updates.
-
-[Compare Wendy with Docker, Ubuntu, balena, and OTA tools](https://docs.wendy.dev/latest/concepts/why-wendy/)
-and see where each is a good fit.
+[Get started](https://docs.wendy.dev/latest/getting-started/app/) · [Watch the demo](https://wendy.dev/videos/wendy-g1-warehouse-turbopuffer-2026-09-29.mp4) · [Examples](Examples) · [Discord](https://discord.gg/wendylabsinc)
 
 ## Install
 
@@ -43,6 +27,9 @@ On Windows:
 ```powershell
 winget install WendyLabs.Wendy --source winget
 ```
+
+The Linux app examples below use a macOS or Linux terminal. On Windows, use
+WSL2 with the Wendy CLI and Docker with Buildx installed inside WSL2.
 
 [Other installation methods and updates](INSTALL.md)
 
@@ -79,14 +66,29 @@ for prerequisites. When finished, use the `wendy vm stop` command printed by the
 With your device set up and Docker running, create a small HTTP app:
 
 ```sh
-wendy init hello-wendy --target wendyos --language node --template simple-api --assistant skip --git-init no
+wendy init hello-wendy --target wendyos --language node --template simple-api --var APP_ID=hello-wendy --assistant skip --git-init no
 cd hello-wendy
 wendy run
 ```
 
 Select your device. Open the address Wendy prints and check for
-`{"message":"hello-world"}`. Edit `src/index.ts`, save, then run `wendy run` again
-to rebuild and deploy your change. Node.js runs inside the container.
+`{"message":"hello-world"}`. Press Ctrl+C, edit `src/index.ts`, save, then run
+`wendy run` again against the same target. Node.js runs inside the container.
+Follow the [full walkthrough](https://docs.wendy.dev/latest/getting-started/app/)
+for watch mode, local-only Linux targets, and stopping the app when finished.
+
+## Why Wendy?
+
+The CLI runs on your computer; Wendy Agent runs on your device,
+manages your apps, and returns logs. Install the Agent on an existing Linux system,
+or use WendyOS with the Agent included.
+
+- **Build and deploy:** use Docker or Compose, build for the target, and send changes with `wendy run`.
+- **Work with hardware:** declare camera, GPU, and device access in `wendy.json`; inspect ROS 2 nodes and topics.
+- **Use a coding agent:** connect through MCP to deploy changes and inspect the device.
+
+Local development needs no cloud account. [Wendy Cloud](https://cloud.wendy.dev)
+adds remote access and fleet management. [Compare deployment options](https://docs.wendy.dev/latest/concepts/why-wendy/).
 
 ## Build with a coding agent
 
@@ -105,7 +107,7 @@ for supported tools. For ChatGPT, see the [ChatGPT guide](https://docs.wendy.dev
 
 - [Robot apps](https://docs.wendy.dev/latest/integrations/ros2/) with ROS 2 in containers, remote topic inspection, and a Foxglove bridge.
 - [Camera and AI apps](https://docs.wendy.dev/latest/hardware/) with access to cameras, audio, and GPUs.
-- [Multi-service apps](https://docs.wendy.dev/latest/guides/stagefile/) with incremental builds and automatic redeployment through `wendy run --watch`.
+- [Multi-service apps](https://docs.wendy.dev/latest/guides/multi-app-deployments/) with ROS 2 talkers, listeners, and shared configuration.
 - [Data collection](https://docs.wendy.dev/latest/data/) that records sensor data, app events, and model results around triggers.
 
 Browse the [examples](Examples) or follow a

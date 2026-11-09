@@ -19,7 +19,9 @@ cd simple-server
 wendy run
 ```
 
-Select your target. Wendy builds the image, deploys it, and streams logs. After readiness succeeds, expect a line like this, with your target's address:
+Select your target. For an unenrolled local-only Linux agent, use
+`wendy run --device 127.0.0.1:50051` on that computer instead.
+Wendy builds the image, deploys it, and streams logs. After readiness succeeds, expect a line like this, with your target's address:
 
 ```text
 App reachable at http://192.168.123.222:3000
@@ -35,6 +37,27 @@ Open the printed URL in your browser. You should see:
 {"message":"hello-world"}
 ```
 
-Your web service is running on the target. Edit `src/index.ts` to change the response, then use `wendy run --watch` to redeploy as you edit.
+## 4. Edit and redeploy
+
+Press Ctrl+C, then set the same target explicitly; watch mode cannot show a
+picker. Replace the value below with the device hostname or IP from
+`wendy discover`, `vm:<name>` from `wendy vm list`, or `127.0.0.1:50051` for
+an unenrolled local-only Linux agent. Use the agent address, not the HTTP URL.
+
+```bash
+WENDY_TARGET='your-device.local'
+wendy run --device "$WENDY_TARGET" --watch
+```
+
+In `src/index.ts`, change the root route's message to `Hello after an edit`.
+Save, wait for redeployment, then refresh the browser and verify the new message.
+
+When finished, press Ctrl+C and stop the app in the same terminal:
+
+```bash
+wendy --device "$WENDY_TARGET" device apps stop simple-server
+```
+
+If you used a VM, stop it with `wendy vm stop <name>` when you no longer need it.
 
 [Understand what Wendy generated](/docs/guides/tutorials/typescript/generated-server), including the Dockerfile and `wendy.json`, or use [troubleshooting](/docs/errors) if you did not get a response.

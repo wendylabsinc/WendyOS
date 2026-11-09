@@ -44,10 +44,14 @@ calculates a result for each request; it does not store orders.
 
 ## 2. Deploy the change
 
-From the project directory, run:
+From the project directory, use the `WENDY_TARGET` you set in the previous
+tutorial. In a new terminal, set it again to your device hostname or IP from
+`wendy discover`, `vm:<name>` from `wendy vm list`, or `127.0.0.1:50051` for an
+unenrolled local-only Linux agent. Watch mode requires an
+explicit target or a saved default; it cannot ask you to choose one.
 
 ```bash
-wendy run --watch
+wendy run --device "$WENDY_TARGET" --watch
 ```
 
 If the watch loop is already running, save `app.py` and wait for deployment to
@@ -93,7 +97,7 @@ body. If you get `404`, confirm that the updated app deployed and that you used
 ## Finish or continue
 
 Stop the watch loop with Ctrl+C. To stop the app on your target, run
-`wendy device apps stop hello-world`. Stop an unused VM with
+`wendy --device "$WENDY_TARGET" device apps stop hello-world`. Stop an unused VM with
 `wendy vm stop <name>`.
 
 You now have a deployed endpoint with input validation. For a separate project
