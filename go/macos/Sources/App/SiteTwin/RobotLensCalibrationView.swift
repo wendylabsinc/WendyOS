@@ -120,13 +120,14 @@ struct RobotLensCalibrationView: View {
             .toolbar {
                 #if os(iOS)
                 ToolbarItem(placement: .cancellationAction) {
-                    Menu {
+                    OverflowMenu(systemImage: "ellipsis.circle") {
                         Button("Help", systemImage: "questionmark.circle") { showingHelp = true }
                         Button("Save checkerboard…", systemImage: "square.and.arrow.down") {
                             do { pattern = try RobotCalibrationPattern(); exporting = true }
                             catch { message = error.localizedDescription }
                         }
-                    } label: { Label("Calibration options", systemImage: "ellipsis.circle") }
+                    }
+                    .accessibilityLabel("Calibration options")
                 }
                 #endif
                 ToolbarItem(placement: .confirmationAction) {

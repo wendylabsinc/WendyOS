@@ -120,7 +120,7 @@ Each row leads with the existing control, then notes hardening underway. Severit
 Beyond the per-threat hardening noted above:
 
 - **Codesigning, PKI & certificate improvements (🛠 In progress, targeted for Q3 2026).** cosign image-signature verification, `wendy-agent` binary signing, OS artifact signing, cloud-CA pinning, OCSP/CRL revocation with OCSP-stapled offline operator certificates, and operator-scoped permissions in developer certificates.
-- **Physical tamper-resistance of the hardware platform.** Hardware-backed protection of key material (HSM/TPM), establishing a root of trust so the device private key cannot be extracted via physical access, is 🛠 in progress. On supported platforms, fuse burning (one-time-programmable eFuses) to lock secure-boot configuration and prevent flashing unsigned firmware or downgrading the bootloader is 📋 planned.
+- **Physical tamper-resistance of the hardware platform.** Hardware-backed protection of key material (HSM/TPM), establishing a root of trust so the device private key cannot be extracted via physical access, is 🛠 in progress. Secure boot and immutable RootFS are also 🛠 in progress. On supported platforms, fuse burning (one-time-programmable eFuses) to lock secure-boot configuration and prevent flashing unsigned firmware or downgrading the bootloader is 📋 planned.
 
 ## Out of Scope
 

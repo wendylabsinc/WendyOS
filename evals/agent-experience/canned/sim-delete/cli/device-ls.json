@@ -1,0 +1,19 @@
+{
+  "argv_prefix": [
+    "device",
+    "ls"
+  ],
+  "stdout": "{\"usbDevices\": null, \"lanDevices\": [], \"bluetoothDevices\": null, \"ethernetDevices\": null, \"externalDevices\": [{\"id\": \"local\", \"displayName\": \"This PC\", \"providerKey\": \"local\", \"isWendyDevice\": false, \"os\": \"linux\", \"cpuArchitecture\": \"amd64\"}, {\"id\": \"docker\", \"displayName\": \"Docker\", \"providerKey\": \"docker\", \"isWendyDevice\": false, \"agentVersion\": \"29.9.1\"}]}",
+  "stderr": "",
+  "exit_code": 0,
+  "after": {
+    "actions": [
+      "tool:simulator_delete",
+      "cli:vm rm",
+      "cli:vm remove"
+    ],
+    "stdout": "{\"usbDevices\": null, \"lanDevices\": [], \"bluetoothDevices\": null, \"ethernetDevices\": null, \"externalDevices\": [{\"id\": \"local\", \"displayName\": \"This PC\", \"providerKey\": \"local\", \"isWendyDevice\": false, \"os\": \"linux\", \"cpuArchitecture\": \"amd64\"}, {\"id\": \"docker\", \"displayName\": \"Docker\", \"providerKey\": \"docker\", \"isWendyDevice\": false, \"agentVersion\": \"29.9.1\"}]}",
+    "stderr": "",
+    "exit_code": 0
+  }
+}

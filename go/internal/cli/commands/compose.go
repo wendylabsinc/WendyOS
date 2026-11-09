@@ -1229,6 +1229,13 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if err != nil {
 		return err
 	}
+	entitlementCfgs := make([]*appconfig.AppConfig, 0, len(svcCfgs))
+	for _, svcCfg := range svcCfgs {
+		entitlementCfgs = append(entitlementCfgs, svcCfg)
+	}
+	if err := checkAgentEntitlements(versionResp, entitlementCfgs...); err != nil {
+		return err
+	}
 	for _, w := range xWendyWarnings {
 		cliLogln("warning: %s", w)
 	}
@@ -1322,6 +1329,10 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 		for k, v := range buildArgs {
 			allBuildArgs[k] = v
 		}
+		allBuildArgs, err = mergeBuildArgFlags(allBuildArgs, opts.buildArgs)
+		if err != nil {
+			return err
+		}
 
 		appCfg := svcCfgs[name]
 		imageIdentity := normalizeImageRef(svc.Image)
@@ -1395,6 +1406,15 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 
 	if len(jobs) > 0 {
+		// Only a service left to build needs room here or on the device. Compose
+		// projects cannot use --build-host, so it is not offered.
+		if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, false)); err != nil {
+			return err
+		}
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
+		ctx = withDeviceStorage(ctx, versionResp)
 		noteEmulatedBuild(platform, false)
 	}
 	failedBuilds, preparedContent, err := buildComposeServicesParallel(ctx, conn, regPort, agentOS, opts.builder, platform, opts.chunking, jobs, opts.maxConcurrency, opts.quietBuild)

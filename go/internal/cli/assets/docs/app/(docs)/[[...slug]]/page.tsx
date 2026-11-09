@@ -36,6 +36,8 @@ const tutorialOgImages: Record<string, string> = {
 };
 
 const legacyRedirects: Record<string, string> = {
+  'apps/wendy.json': '/reference/app-configuration/',
+  'advanced/apps/wendy.json': '/reference/app-configuration/',
   'installation/wendyos-nvidia-jetson': '/installation/wendyos-nvidia-jetson-orin-nano/',
   'installation/wendy-agent-linux': '/installation/linux/',
   'installation/ubuntu': '/installation/linux/',

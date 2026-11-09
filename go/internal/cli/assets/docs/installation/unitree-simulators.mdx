@@ -7,16 +7,18 @@ Choose a Unitree simulator template to develop against a robot before you have h
 
 For a guided first run on macOS or Linux, start with `wendy tour --simulator`.
 It sets up a Go2, opens the viewer, and verifies a short walk. Follow the
-[quickstart](/docs/#try-the-robot-tour) for prerequisites and how to change the
+[quickstart](/docs/getting-started/robot) for prerequisites and how to change the
 movement. The commands below let you manage robot virtual devices yourself.
 
 On Windows, run the Linux CLI, QEMU, and container builder inside WSL2.
 Native Windows foreground VMs do not support the background lifecycle and
 automatic port forwarding required by managed robot profiles.
 
+Apps use documented robot sensor and command interfaces. The observer scene and diagnostic ground truth are for inspection, not extra policy inputs. Read [sensor fidelity](/docs/integrations/sensor-fidelity) to test noise and timing gaps before moving to hardware.
+
 ## Start a robot
 
-You need the [Wendy CLI](/docs/#1-install-the-wendy-cli), [QEMU and ARM64 firmware](/docs/installation/wendyos-virtual-machine#what-youll-need), and Docker running on your development machine. Use a CLI and VM agent with support for the selected robot profile. The profiles default to four virtual CPUs and 4 GiB of memory each. Apple Silicon can run the ARM64 guest with hardware acceleration; x86 hosts use slower emulation.
+You need the [Wendy CLI](/docs/installation/cli), [QEMU and ARM64 firmware](/docs/installation/wendyos-virtual-machine#what-youll-need), and Docker running on your development machine. Use a CLI and VM agent with support for the selected robot profile. The profiles default to four virtual CPUs and 4 GiB of memory each. Apple Silicon can run the ARM64 guest with hardware acceleration; x86 hosts use slower emulation.
 
 The first start downloads the WendyOS image and robot assets and builds the runtime. Allow extra time for those downloads and the container build.
 

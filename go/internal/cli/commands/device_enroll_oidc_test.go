@@ -244,7 +244,7 @@ func TestOIDCEnrollmentAutomaticCloudRelay(t *testing.T) {
 			auth.CloudGRPC = host
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := runEnrollDevice(ctx, conn, auth, name, 0); err != nil {
+			if _, err := runEnrollDeviceIdentity(ctx, conn, auth, name, 0); err != nil {
 				t.Fatal(err)
 			}
 			if name == "" {
@@ -505,7 +505,7 @@ func TestOIDCEnrollmentSendsDeviceHardware(t *testing.T) {
 			auth.CloudGRPC = host
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := runEnrollDevice(ctx, conn, auth, "sim", 0); err != nil {
+			if _, err := runEnrollDeviceIdentity(ctx, conn, auth, "sim", 0); err != nil {
 				t.Fatal(err)
 			}
 			if got := cloud.req.GetHardware(); !proto.Equal(got, tc.want) {

@@ -39,9 +39,11 @@ The CLI runs on your development machine. A target is the machine that runs your
 
 Linux targets run containers. Mac targets run native macOS apps. ESP32 uses Wendy Lite and has a separate native firmware workflow.
 
+Keep existing Dockerfiles, Compose projects, and standard ROS 2 application interfaces. A Stagefile is an optional build recipe. Deployment settings select resources and connectivity; they do not require rewriting your app.
+
 ## App configuration
 
-[`wendy.json`](/docs/advanced/apps/wendy.json) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path. Physical hardware access is limited to opt-in [serial passthrough](/docs/installation/wendyos-virtual-machine#serial-passthrough); other peripherals need a real device.
+[`wendy.json`](/docs/reference/app-configuration) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path. Physical hardware access is limited to opt-in [serial passthrough](/docs/installation/wendyos-virtual-machine#serial-passthrough); other peripherals need a real device.
 
 ## Optional cloud management
 

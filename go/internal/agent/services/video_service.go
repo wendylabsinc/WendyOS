@@ -435,6 +435,9 @@ type videoFrame struct {
 	receiptUncertaintyNanos int64
 	// rawFmt describes a VIDEO_CODEC_RAW frame's layout; nil for encoded video.
 	rawFmt *agentpb.RawFormat
+	// webmJoin, on a VP8 frame, is where a viewer that joined after the stream
+	// began can start; nil when it cannot start in this frame (see webmJoins).
+	webmJoin *webmJoinPoint
 }
 
 type frameTimestamp struct {
@@ -530,6 +533,9 @@ type deviceHub struct {
 	rawFormat *agentpb.RawFormat
 	// Set before capture starts; immutable for this producer's lifetime.
 	thermalProfile *agentpb.ThermalCamera
+	// webmJoins follows a VP8 stream, beside webmInit, to find where late
+	// viewers can start. Protected by h.mu.
+	webmJoins webmJoins
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -761,9 +767,11 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 // video to viewers, VIDEO_CODEC_RAW frames to raw subscribers — dropping for
 // slow consumers. Returns false when there are no subscribers left (producer
 // should stop). Late-joining subscribers receive whatever frame the producer
-// sends next; they will not see an IDR/keyframe until the next one arrives
-// naturally (at most one GOP interval away for GStreamer pipelines with
-// key-int-max set).
+// sends next; for H.264 they will not see an IDR/keyframe until the next one
+// arrives naturally (at most one GOP interval away for GStreamer pipelines with
+// key-int-max set). VP8 is one WebM container rather than a run of frames, so
+// each VP8 frame also carries the stream's initialization and, where a Cluster
+// opening on a key frame was found, a join point for late viewers.
 //
 // This is delivery only: it mints nothing. Call produce for a frame arriving
 // from the producer, and broadcast to put an existing frame onto a further
@@ -786,6 +794,7 @@ func (h *deviceHub) broadcast(frame *videoFrame) bool {
 	}
 	if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 {
 		frame.decoderInit = h.webmInit.feed(frame.data)
+		frame.webmJoin = h.webmJoins.feed(frame.data, frame.decoderInit)
 	}
 	for id, sub := range h.subs {
 		if sub.closed || sub.raw != raw {
@@ -1148,11 +1157,15 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	return svc
 }
 
-// LoadCameraDHCPAllowlist enables camera DHCP only on explicitly configured
-// interfaces. A missing allowlist leaves serving disabled while camera
-// discovery and probing continue normally. It is reread every link scan.
+// LoadCameraDHCPAllowlist loads saved permissions, migrating legacy camera links
+// with MAC-matched stored credentials once if no configuration exists. The file
+// is authoritative even when empty, and is reread every link scan. Call before
+// StartDiscovery.
 func (s *VideoService) LoadCameraDHCPAllowlist(path string) error {
-	return s.links.LoadDHCPAllowlist(path)
+	if err := s.links.LoadDHCPAllowlist(path); err != nil {
+		return err
+	}
+	return s.links.MigrateLegacyDHCPAllowlist(s.credentials)
 }
 
 // discoveryInterval is how often the agent re-probes for network cameras. It is
@@ -2563,6 +2576,10 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 	ctx := stream.Context()
 	var pacer rawFramePacer
 	adapt := len(adaptive) > 0 && adaptive[0]
+	// A VP8 viewer that joined after the stream began waits for a join point,
+	// where it is sent the WebM initialization and a Cluster opening on a key
+	// frame: nothing before that could be demuxed or decoded.
+	joined := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -2608,6 +2625,14 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 					continue
 				}
 			}
+			data := frame.data
+			if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_VP8 && !joined {
+				if frame.webmJoin == nil {
+					continue
+				}
+				joined = true
+				data = frame.webmJoin.join(frame.data)
+			}
 			started := time.Now()
 			// frame.data is an immutable, per-frame allocation produced by the
 			// capture loop and never modified after broadcast(). stream.Send()
@@ -2615,7 +2640,7 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 			// returning, so passing the shared slice directly is safe and avoids
 			// an O(N × frameSize) heap allocation per broadcast.
 			if err := stream.Send(&agentpb.VideoFrame{
-				Data:        frame.data,
+				Data:        data,
 				TimestampNs: frame.tsNs,
 				Codec:       frame.codec,
 				RawFormat:   frame.rawFmt,
@@ -3505,16 +3530,26 @@ func findGStreamerEncoderFromSet(available map[string]bool) (gstEncoderResult, e
 		}
 	}
 
-	// VP8 preferred over raw H.264 when h264parse is absent: vp8enc+webmmux (both
-	// in gst-plugins-good) produce a self-describing WebM container that requires no
-	// stream-format negotiation and is always decodable by the client.
+	// Without h264parse, x264enc can still emit what the client needs:
+	// encoderSegment pins its output caps to Annex B byte-stream, and in that mode
+	// it repeats SPS/PPS before every IDR, so a viewer that joins late starts at
+	// the next key frame (verified on GStreamer 1.24). H.264 matters here because
+	// the Wendy Mac and iPhone apps cannot play VP8. Other H.264 encoders are not
+	// used this way: their byte-stream output or per-key-frame SPS/PPS is not
+	// established, so they keep the VP8 fallback below.
+	if hasElem("x264enc") {
+		return gstEncoderResult{element: "x264enc", codec: agentpb.VideoCodec_VIDEO_CODEC_H264}, nil
+	}
+
+	// VP8 preferred over raw H.264 when neither h264parse nor x264enc is present:
+	// vp8enc+webmmux (both in gst-plugins-good) produce a self-describing WebM
+	// container that requires no stream-format negotiation.
 	if hasElem("vp8enc") && hasElem("webmmux") {
 		return gstEncoderResult{element: "vp8enc", codec: agentpb.VideoCodec_VIDEO_CODEC_VP8}, nil
 	}
 
 	// Last resort: attempt H.264 without normalization. Hardware encoders such as
-	// nvv4l2h264enc and v4l2h264enc typically emit byte-stream natively; x264enc may
-	// produce AVC which the client's h264parse may or may not be able to decode.
+	// nvv4l2h264enc and v4l2h264enc typically emit byte-stream natively.
 	for _, enc := range h264Encoders {
 		if hasElem(enc) {
 			return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, hasH264Parse: false}, nil
@@ -3528,7 +3563,7 @@ func findGStreamerEncoderFromSet(available map[string]bool) (gstEncoderResult, e
 	}
 
 	return gstEncoderResult{}, fmt.Errorf(
-		"no supported GStreamer encoder found (checked %d elements); install gst-plugins-good (vp8enc+webmmux) or gst-plugins-bad (h264parse)+gst-plugins-ugly (x264enc)",
+		"no supported GStreamer encoder found (checked %d elements); install gst-plugins-ugly (x264enc) or gst-plugins-good (vp8enc+webmmux)",
 		len(available),
 	)
 }
@@ -4061,7 +4096,13 @@ func encoderSegment(encoder string, hasH264Parse bool, gop int) string {
 		// (verified on a Pi 4, WDY-1603).
 		enc = "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc" + kf + " ! video/x-h264,profile=baseline,level=(string)4"
 	case "x264enc":
-		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency" + kf + " ! video/x-h264,profile=high"
+		caps := "video/x-h264,profile=high"
+		if !hasH264Parse {
+			// No h264parse to convert it (see h264ByteStream), so x264enc must
+			// emit Annex B itself; it then repeats SPS/PPS before every IDR.
+			caps += ",stream-format=byte-stream,alignment=au"
+		}
+		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency" + kf + " ! " + caps
 	case "openh264enc":
 		enc = "videoconvert ! video/x-raw,format=I420 ! openh264enc" + kf
 	case "avenc_h264":

@@ -61,6 +61,15 @@ func newControlExpiryConn(conn net.Conn, expires time.Time, creds *localmesh.Cre
 		if err != nil {
 			return time.Time{}, err
 		}
+		if current.Device.IsOperator() {
+			// TLS revalidates the signing principal, not the installation
+			// UUID bound by the authenticated control exchange and source
+			// address. Preserve that session's instance before comparing.
+			current.Device, err = current.Device.WithInstance(peer.Device.UUID())
+			if err != nil {
+				return time.Time{}, err
+			}
+		}
 		if current.Device != peer.Device {
 			return time.Time{}, errors.New("gateway control peer changed")
 		}

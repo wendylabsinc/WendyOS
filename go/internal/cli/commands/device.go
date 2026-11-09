@@ -442,10 +442,22 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if len(netInterfaces) > 0 {
 					ifaces := make([]map[string]any, len(netInterfaces))
 					for i, iface := range netInterfaces {
-						ifaces[i] = map[string]any{
+						entry := map[string]any{
 							"name":        iface.GetName(),
 							"ipAddresses": iface.GetIpAddresses(),
 						}
+						// Absent rather than false/unknown: older agents
+						// report none of these.
+						if iface.GetIsDefaultRoute() {
+							entry["isDefaultRoute"] = true
+						}
+						if iface.RouteMetric != nil {
+							entry["routeMetric"] = iface.GetRouteMetric()
+						}
+						if c := connectivityLabel(iface.GetConnectivity()); c != "" {
+							entry["connectivity"] = c
+						}
+						ifaces[i] = entry
 					}
 					out["networkInterfaces"] = ifaces
 				}
@@ -1033,7 +1045,14 @@ func enrollmentName(host, name string) (string, error) {
 }
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
-	_, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	if err != nil {
+		return err
+	}
+	next, err := verifyAndSaveEnrollment(ctx, conn, auth, identity, name)
+	if next != nil && next != conn {
+		next.Close()
+	}
 	return err
 }
 
@@ -2337,7 +2356,7 @@ func reconnectAgentAfterRestart(ctx context.Context, conn *grpcclient.AgentConne
 	if addr == "" {
 		addr = hostPort(conn.Host, defaultAgentPort)
 	}
-	return waitForAgentRestart(ctx, addr)
+	return waitForAgentRestartKeyed(ctx, addr, conn.DevicePinKey)
 }
 
 // osUpdateOutcome reports what `device update`'s OS-update step did, so the

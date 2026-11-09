@@ -136,14 +136,26 @@ jobs:
         # the former 120s under -race on main (2026-10-06).
         run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
 
-      - name: Check camera discovery on a shared LAN
+      - name: Fuzz stream boundaries and sparse flash ranges
+        run: |
+          go test ./go/internal/episodeexport -run '^$' -fuzz '^FuzzH264ChunkBoundaries$' -fuzztime=10s -parallel=2
+          go test ./go/internal/cli/tegraflash/t234 -run '^$' -fuzz '^FuzzStaleExtentsPreserveWrittenBytes$' -fuzztime=10s -parallel=2
+
+      - name: Check camera DHCP lifecycle and migration
         # Privileged kernel fixtures run only for repository-owned branches.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         working-directory: go
         run: |
           go test -c -o "$RUNNER_TEMP/ipcam.test" ./internal/agent/ipcam
-          sudo unshare --mount --net --propagation private env WENDY_TEST_NETNS=1 \
-            "$RUNNER_TEMP/ipcam.test" -test.run '^TestDHCPLinuxSharedLANClient$' -test.v -test.timeout 30s
+          sudo unshare --mount --net --propagation private sh -eu -c '
+            # Carrier reads must see the interfaces in this network namespace.
+            mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /sys
+            # Packet fixtures put both veth ends in this disposable namespace.
+            sysctl -qw net.ipv4.conf.all.accept_local=1 \
+              net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0
+            export WENDY_TEST_NETNS=1
+            exec "$1" -test.run "^TestDHCPLinux" -test.v -test.timeout 120s
+          ' sh "$RUNNER_TEMP/ipcam.test"
 
       - name: Check runtime skill packaging
         run: python3 scripts/sync-agent-skills.py --check
@@ -152,6 +164,68 @@ jobs:
         run: |
           python3 scripts/test-package-chatgpt-plugin.py
           python3 scripts/package-chatgpt-plugin.py --check
+
+  containerd-regressions:
+    name: Containerd lifecycle regressions (${{ matrix.runtime }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: '1.7'
+            package: containerd=1.7.12-0ubuntu4
+          - runtime: current
+            package: containerd
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: containerd-regressions
+      - name: Compile integration tests
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go test -c -o "$RUNNER_TEMP/containerd.test" ./go/internal/agent/containerd
+          go test -c -o "$RUNNER_TEMP/rtps.test" ./go/internal/rtps
+      - name: Extract test runtime without replacing the runner's daemon
+        env:
+          CONTAINERD_PACKAGE: ${{ matrix.package }}
+        run: |
+          sudo apt-get update
+          mkdir -p "$RUNNER_TEMP/wendy-runtime"
+          cd "$RUNNER_TEMP/wendy-runtime"
+          apt-get download "$CONTAINERD_PACKAGE" runc busybox-static
+          for package in ./*.deb; do dpkg-deb --extract "$package" root; done
+      - name: Test replacement, restoration and layer repair
+        run: |
+          runtime="$RUNNER_TEMP/wendy-runtime/root"
+          sudo env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
+            bash .github/scripts/test-containerd-regressions.sh "$RUNNER_TEMP/containerd.test"
+
+      - name: Check real DDS network namespace isolation
+        run: |
+          command -v ip unshare
+          tests='TestHostNetworkContainersAndBatteryShareTwoParticipants|TestIsolatedNamespaceUsesSeparateParticipant|TestAutomaticHostInterfaceResolvesBeforePoolLookup'
+          sudo "$RUNNER_TEMP/rtps.test" -test.run "^($tests)$" -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/rtps-results"
+          for test in ${tests//|/ }; do
+            grep -F -- "--- PASS: $test (" "$RUNNER_TEMP/rtps-results"
+          done
+
+  darwin-regressions:
+    name: Darwin BLE regressions
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Exercise the native BLE bridge without a radio
+        run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
 
   windows:
     name: Windows CLI
@@ -235,6 +309,9 @@ jobs:
       # Native execution covers Windows identity files and process shutdown,
       # including CLI/MCP identity sharing across WENDY_CONFIG_DIR overrides.
       # Delivery tests redirect requests to local HTTP receivers.
+      - name: Test portable state, schema, export and flash invariants on Windows
+        run: go test ./go/internal/shared/atomicfile ./go/internal/shared/appconfig ./go/internal/episodeexport ./go/internal/cli/tegraflash/t234 -count=1 -timeout 120s
+
       - name: Test analytics
         working-directory: go
         run: go test ./internal/cli/analytics -count=1 -timeout 120s
@@ -286,7 +363,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -299,6 +376,8 @@ jobs:
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
+          DARWIN_RESULT: ${{ needs.darwin-regressions.result }}
+          CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
           test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
@@ -310,6 +389,8 @@ jobs:
           test "$VET_RESULT" = success
           test "$STARTUP_RESULT" = success
           test "$INFERENCE_WORKER_RESULT" = success
+          test "$CONTAINERD_RESULT" = success
+          test "$DARWIN_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
