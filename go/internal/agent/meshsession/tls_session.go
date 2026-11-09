@@ -468,6 +468,11 @@ func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, lifetime *se
 	if owner, ok := local.(interface{ Done() <-chan struct{} }); ok {
 		revoked = owner.Done()
 	}
+	var closed <-chan struct{}
+	if pipe, ok := local.(interface{ Closed() <-chan struct{} }); ok {
+		closed = pipe.Closed()
+	}
+	drained := make(chan struct{})
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() {
@@ -475,6 +480,19 @@ func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, lifetime *se
 		case <-revoked:
 			secure.Close()
 			local.Close()
+		case <-closed:
+			// A full local pipe close is ordinary EOF, not an authority
+			// withdrawal. Preserve bytes already read by the outbound copy.
+			select {
+			case <-drained:
+				secure.Close()
+				local.Close()
+			case <-revoked:
+				secure.Close()
+				local.Close()
+			case <-session.Done():
+			case <-finished:
+			}
 		case <-session.Done():
 		case <-finished:
 		}
@@ -502,9 +520,22 @@ func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, lifetime *se
 		if err == nil {
 			err = records.CloseWrite()
 		}
+		close(drained)
 		done <- err
 	}()
 	if err := <-done; err != nil {
+		select {
+		case <-closed:
+			// The incoming copy may fail on a full local close while the
+			// outgoing copy still owns accepted bytes. Drain those first;
+			// owner or credential revocation still interrupts immediately.
+			select {
+			case <-drained:
+			case <-revoked:
+			case <-session.Done():
+			}
+		default:
+		}
 		// A failed direction cannot complete a graceful half-close. Release
 		// the other copy worker as well when an ordinary connection is lost.
 		secure.Close()

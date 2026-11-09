@@ -157,9 +157,11 @@ type meshTLSPipe struct {
 
 func (p *meshTLSPipe) close() {
 	p.once.Do(func() {
+		// Publish full closure before either endpoint can return its I/O
+		// error, so forwarders can distinguish it from a transport failure.
+		close(p.done)
 		_ = p.ends[0].Close()
 		_ = p.ends[1].Close()
-		close(p.done)
 		p.listener.mu.Lock()
 		delete(p.listener.pipes, p)
 		p.listener.mu.Unlock()
@@ -171,8 +173,15 @@ type meshTLSConn struct {
 	pipe *meshTLSPipe
 }
 
-func (c *meshTLSConn) Close() error          { c.pipe.close(); return nil }
-func (c *meshTLSConn) Done() <-chan struct{} { return c.pipe.done }
+func (c *meshTLSConn) Close() error { c.pipe.close(); return nil }
+
+// Done reports owner revocation. An ordinary endpoint close must not revoke
+// bytes already accepted by an outer proxy but still waiting to be forwarded.
+func (c *meshTLSConn) Done() <-chan struct{} { return c.pipe.listener.done }
+
+// Closed reports a full pipe close, not a TCP half-close. Forwarders drain the
+// accepted outbound bytes before retiring their otherwise idle reverse read.
+func (c *meshTLSConn) Closed() <-chan struct{} { return c.pipe.done }
 
 // DialContext waits for the local TLS server to accept this pipe. Cancellation
 // before handoff closes both ends; after handoff the ordinary connection and
