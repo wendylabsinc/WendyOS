@@ -11,12 +11,15 @@ import (
 	"net/netip"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vishvananda/netlink"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"go.uber.org/zap"
 )
 
 type grantedTunnel struct {
@@ -31,10 +34,39 @@ type grantedTunnel struct {
 
 type borrowedTunnel struct {
 	grantedTunnel
-	control  net.Conn
-	done     chan struct{}
-	stop     chan struct{}
-	stopOnce sync.Once
+	control     net.Conn
+	done        chan struct{}
+	stop        chan struct{}
+	stopOnce    sync.Once
+	started     time.Time
+	controlLive atomic.Bool
+}
+
+// borrowedControlConn records locally observed control failure immediately, even
+// while the heartbeat worker is waiting to acquire the policy lock for cleanup.
+// Its expiry comes from the authenticated certificate paths in negotiateGatewayLease.
+type borrowedControlConn struct {
+	*expiryConn
+	closed atomic.Bool
+}
+
+func (c *borrowedControlConn) Close() error {
+	c.closed.Store(true)
+	return c.expiryConn.Close()
+}
+func (c *borrowedControlConn) Read(b []byte) (int, error) {
+	n, err := c.expiryConn.Read(b)
+	if err != nil {
+		c.closed.Store(true)
+	}
+	return n, err
+}
+func (c *borrowedControlConn) Write(b []byte) (int, error) {
+	n, err := c.expiryConn.Write(b)
+	if err != nil {
+		c.closed.Store(true)
+	}
+	return n, err
 }
 
 // linuxTunnelPolicy owns the separate Internet overlay. Babel sees only the
@@ -59,6 +91,43 @@ type linuxTunnelPolicy struct {
 	closed            bool
 	probeIPv6         func(context.Context, string, string) bool
 	borrowers         sync.WaitGroup
+	logger            atomic.Pointer[zap.Logger]
+}
+
+func (p *linuxTunnelPolicy) SetLogger(logger *zap.Logger) { p.logger.Store(logger) }
+
+func (p *linuxTunnelPolicy) reportControlEnd(event controlEnd) {
+	logger := p.logger.Load()
+	if logger == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("role", event.role), zap.String("phase", event.phase), zap.String("reason", event.reason),
+		zap.String("peer_principal", event.peer.Principal()), zap.Uint16("slot", event.lease.Slot),
+		zap.Time("ended_at", event.endedAt), zap.Duration("elapsed", event.elapsed),
+		zap.Error(event.err), zap.NamedError("cleanup_error", event.cleanupErr)}
+	if !event.expires.IsZero() {
+		fields = append(fields, zap.Time("credential_expires_at", event.expires))
+	}
+	if event.role == "gateway" {
+		fields = append(fields, zap.Uint64("heartbeats", event.heartbeats))
+	}
+	asyncdiag.Log(logger, zap.InfoLevel, "Wendy Net gateway control ended", fields...)
+}
+
+// Caller holds p.mu, so old and desired sharing inputs describe one decision.
+func (p *linuxTunnelPolicy) reportSharingChange(reason, iface, upstream string, ipv6, routesChanged bool, err error) {
+	if logger := p.logger.Load(); logger != nil {
+		fields := []zap.Field{zap.String("reason", reason),
+			zap.String("interface", iface), zap.String("previous_interface", p.sharing),
+			zap.Bool("interface_changed", iface != p.sharing), zap.Bool("resolver_changed", upstream != p.upstream),
+			zap.Bool("ipv6", ipv6), zap.Bool("previous_ipv6", p.sharing6), zap.Bool("ipv6_changed", ipv6 != p.sharing6),
+			zap.Int("granted_leases", len(p.grants)), zap.Error(err)}
+		if reason == "reconfigure" || reason == "sharing-disabled" {
+			fields = append(fields, zap.Bool("routes_changed", routesChanged))
+		}
+		asyncdiag.Log(logger, zap.InfoLevel, "Wendy Net gateway sharing changed", fields...)
+	}
 }
 
 func newLinuxTunnelPolicy(ctx context.Context, credentials *localmesh.Credentials) (p *linuxTunnelPolicy, err error) {
@@ -180,6 +249,7 @@ func (p *linuxTunnelPolicy) SetSharing(ctx context.Context, iface, upstream stri
 	if iface != "" {
 		routes, err = selectedDonorRoutes(iface, share6)
 		if err != nil {
+			p.reportSharingChange("native-route-read-failed", iface, upstream, share6, false, err)
 			return errors.Join(err, p.stopSharingLocked(ctx))
 		}
 	}
@@ -187,13 +257,20 @@ func (p *linuxTunnelPolicy) SetSharing(ctx context.Context, iface, upstream stri
 		select {
 		case exit := <-p.dnsDone:
 			p.dnsDone <- exit
+			p.reportSharingChange("resolver-exited", iface, upstream, share6, false, exit)
 			return errors.Join(fmt.Errorf("Wendy Net DNS proxy stopped: %v", exit), p.stopSharingLocked(ctx))
 		default:
 		}
 	}
-	if iface == p.sharing && upstream == p.upstream && share6 == p.sharing6 && sameDonorRoutes(routes, p.donorRouting.routes) && (iface != "" || (len(p.grants) == 0 && len(p.shareRules) == 0 && !p.forwarding6)) {
+	routesChanged := !sameDonorRoutes(routes, p.donorRouting.routes)
+	if iface == p.sharing && upstream == p.upstream && share6 == p.sharing6 && !routesChanged && (iface != "" || (len(p.grants) == 0 && len(p.shareRules) == 0 && !p.forwarding6)) {
 		return nil
 	}
+	reason := "reconfigure"
+	if iface == "" {
+		reason = "sharing-disabled"
+	}
+	p.reportSharingChange(reason, iface, upstream, share6, routesChanged, nil)
 	if err = p.stopSharingLocked(ctx); err != nil {
 		return err
 	}
@@ -374,18 +451,50 @@ func (p *linuxTunnelPolicy) LeaseDone(peer meshid.Device, lease tunnelLease) <-c
 	return done
 }
 
+// ActiveGatewayLease is reachability evidence only for the currently installed,
+// authenticated donor. Signed capability and routed identity checks remain the
+// controller's responsibility; this never makes a new donor eligible.
+func (p *linuxTunnelPolicy) ActiveGatewayLease(peer meshid.Device) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.activeGatewayLeaseLocked(peer)
+}
+
+func (p *linuxTunnelPolicy) activeGatewayLeaseLocked(peer meshid.Device) bool {
+	b := p.borrowed
+	if p.closed || !peer.IsValid() || b == nil || b.peer != peer || !b.lease.valid() ||
+		b.tunnel == nil || b.tunnel.link == nil || b.stop == nil || b.done == nil || !b.controlLive.Load() {
+		return false
+	}
+	control, ok := b.control.(*borrowedControlConn)
+	if !ok || control.closed.Load() {
+		return false
+	}
+	expiry := control.currentExpiry()
+	if expiry.IsZero() || !time.Now().Before(expiry) {
+		return false
+	}
+	select {
+	case <-b.stop:
+		return false
+	default:
+	}
+	select {
+	case <-b.done:
+		return false
+	default:
+	}
+	return true
+}
+
 func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) (err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
 		return errors.New("Wendy Net Internet policy closed")
 	}
-	if p.borrowed != nil && p.borrowed.peer == peer {
-		select {
-		case <-p.borrowed.done:
-		default:
-			return nil
-		}
+	if p.activeGatewayLeaseLocked(peer) {
+		return nil
 	}
 	if !peer.IsValid() {
 		// Withdrawal also abandons a negotiation that is still in flight.
@@ -404,7 +513,15 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 	if err != nil {
 		return err
 	}
-	b := &borrowedTunnel{grantedTunnel: grantedTunnel{peer: peer, lease: lease}, control: control, done: make(chan struct{}), stop: make(chan struct{})}
+	// Only the authenticated, expiry-bounded production connection can support
+	// active-lease reachability. Reject an unbounded connection before installation.
+	bounded, ok := control.(*expiryConn)
+	if !ok || bounded == nil || bounded.currentExpiry().IsZero() || !time.Now().Before(bounded.currentExpiry()) {
+		_ = control.Close()
+		return errors.New("gateway control has no valid credential expiry")
+	}
+	control = &borrowedControlConn{expiryConn: bounded}
+	b := &borrowedTunnel{grantedTunnel: grantedTunnel{peer: peer, lease: lease}, control: control, done: make(chan struct{}), stop: make(chan struct{}), started: time.Now()}
 	p.borrowed = b
 	defer func() {
 		if err != nil {
@@ -451,6 +568,7 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 			return err
 		}
 	}
+	b.controlLive.Store(true)
 	p.borrowers.Add(1)
 	go p.watchBorrowed(b)
 	return nil
@@ -459,37 +577,30 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 func (p *linuxTunnelPolicy) watchBorrowed(b *borrowedTunnel) {
 	defer p.borrowers.Done()
 	defer close(b.done)
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		ticker := time.NewTicker(leaseHeartbeatInterval)
-		defer ticker.Stop()
-		for {
-			if err := b.control.SetWriteDeadline(time.Now().Add(leaseHeartbeatTimeout)); err != nil {
-				_ = b.control.Close()
-				return
-			}
-			if _, err := b.control.Write([]byte{leaseHeartbeat}); err != nil {
-				_ = b.control.Close()
-				return
-			}
-			select {
-			case <-b.stop:
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	defer func() { b.stopOnce.Do(func() { close(b.stop) }); _ = b.control.Close(); <-writerDone }()
-	for {
-		if err := b.control.SetReadDeadline(time.Now().Add(leaseHeartbeatTimeout)); err != nil {
-			break
-		}
-		var ack [1]byte
-		if _, err := io.ReadFull(b.control, ack[:]); err != nil || ack[0] != leaseHeartbeat {
-			break
-		}
+	defer func() { b.stopOnce.Do(func() { close(b.stop) }); _ = b.control.Close() }()
+	err := exchangeLeaseHeartbeats(b.control, b.stop, leaseHeartbeatInterval, leaseHeartbeatMinInterval, leaseHeartbeatTimeout)
+	b.controlLive.Store(false)
+	ended := controlEnd{role: "borrower", phase: "heartbeat-exchange", peer: b.peer, lease: b.lease, err: err, endedAt: time.Now()}
+	var failure *heartbeatFailure
+	if errors.As(err, &failure) {
+		ended.phase = failure.phase
 	}
+	if !b.started.IsZero() {
+		ended.elapsed = time.Since(b.started)
+	}
+	switch bounded := b.control.(type) {
+	case *expiryConn:
+		ended.expires = bounded.currentExpiry()
+	case *borrowedControlConn:
+		ended.expires = bounded.currentExpiry()
+	}
+	select {
+	case <-b.stop:
+		ended.reason = "local-stop"
+	default:
+		ended.reason = controlEndReason(nil, ended.expires, nil, err)
+	}
+	p.reportControlEnd(ended)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.borrowed == b {
@@ -504,6 +615,7 @@ func (p *linuxTunnelPolicy) stopBorrowingLocked(ctx context.Context) error {
 	if b == nil {
 		return nil
 	}
+	b.controlLive.Store(false)
 	b.stopOnce.Do(func() { close(b.stop) })
 	_ = b.control.Close()
 	if b.tunnel != nil {

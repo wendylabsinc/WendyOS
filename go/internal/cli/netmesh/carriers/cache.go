@@ -24,6 +24,7 @@ func (p peerCache) remember(c Candidate, peer meshid.Device, now time.Time, ttl 
 		return
 	}
 	c.authenticated = nil
+	c.attached = nil
 	p[c.key()] = knownPeer{c, peer, now}
 }
 func (p peerCache) peer(c Candidate, now time.Time, ttl time.Duration) meshid.Device {

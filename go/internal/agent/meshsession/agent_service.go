@@ -14,13 +14,29 @@ func WithAgentService(apps Authorizer, agentTLSPort uint16) Authorizer {
 	return agentServiceAuthorizer{apps: apps, port: agentTLSPort}
 }
 
+// WithAgentServiceDial connects the native agent port to a local, mesh-only
+// TLS ingress. Server invokes this authorizer only after authenticating the
+// outer app session. The returned connection carries ordinary inner TLS and
+// does not inherit the outer peer's identity or permissions. Other application
+// ports continue using their normal registry and network dialer.
+func WithAgentServiceDial(apps Authorizer, agentTLSPort uint16, dial func() (net.Conn, error)) Authorizer {
+	if dial == nil {
+		dial = func() (net.Conn, error) { return nil, ErrDenied }
+	}
+	return agentServiceAuthorizer{apps: apps, port: agentTLSPort, agentDial: dial}
+}
+
 type agentServiceAuthorizer struct {
-	apps Authorizer
-	port uint16
+	apps      Authorizer
+	port      uint16
+	agentDial func() (net.Conn, error)
 }
 
 func (a agentServiceAuthorizer) DialAuthorized(port uint16, dial func(string) (net.Conn, error)) (net.Conn, error) {
 	if a.port != 0 && port == a.port {
+		if a.agentDial != nil {
+			return a.agentDial()
+		}
 		return dial(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(a.port))))
 	}
 	if a.apps == nil {

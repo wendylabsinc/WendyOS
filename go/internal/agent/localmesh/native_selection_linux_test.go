@@ -13,9 +13,9 @@ import (
 	"time"
 )
 
-// An authenticated Ethernet replacement must release the native Wi-Fi
-// attachment and its shared LAN lease, as the QUIC LAN carrier already does.
-func TestNativeTLSRetiresWiFiAfterEthernetReplacement(t *testing.T) {
+// An authenticated Ethernet upgrade retains the native Wi-Fi standby and its
+// shared LAN lease while the provider has spare capacity.
+func TestNativeTLSRetainsWiFiStandbyAfterEthernetUpgrade(t *testing.T) {
 	if os.Getenv("WENDY_LOCALMESH_ISOLATED_TEST") != "1" {
 		t.Skip("requires disposable privileged Linux container")
 	}
@@ -73,10 +73,10 @@ func TestNativeTLSRetiresWiFiAfterEthernetReplacement(t *testing.T) {
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		links := node.Snapshot().Links
-		if len(links) == 1 && links[0].Cost == EthernetLinkCost && policy.Counts().Total == 1 {
+		if len(links) == 2 && policy.Counts().Total == 2 {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("native Wi-Fi survived Ethernet replacement: links=%+v leases=%+v", node.Snapshot().Links, policy.Counts())
+	t.Fatalf("native Wi-Fi standby was lost during Ethernet upgrade: links=%+v leases=%+v", node.Snapshot().Links, policy.Counts())
 }
