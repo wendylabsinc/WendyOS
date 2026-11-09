@@ -61,8 +61,8 @@ SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS=(
     "wendycloud/tunnel/lite/v1/relay.proto"
 )
 
-# Exact existing sources deferred by the approved migration scope. Each must
-# still exist in both trees; remove its exception with its source migration.
+# Exact local sources deferred by the approved migration scope. Each must
+# still match a catalogue source; remove its exception with its source migration.
 SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
     # Retain the deployed OTLP common dependency closure; remove under WDY-4154.
     "opentelemetry/proto/common/v1/common.proto"
@@ -82,11 +82,19 @@ SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
     "opentelemetry/proto/collector/trace/v1/trace_service.proto"
     # Local UUID/SignedRequest API conflicts with shared int32/bare requests; remove under WDY-4155.
     "org_invites.proto"
+    # Older local Cloud v1 asset fields/RPCs differ; remove under WDY-4157.
+    "cloud/assets.proto"
+    # Older local Cloud v1 deployment fields/RPCs differ; remove under WDY-4157.
+    "cloud/deployments.proto"
+    # Local Cloud v1 notification imports/contract differ; remove under WDY-4157.
+    "cloud/notifications.proto"
+    # Older local Cloud v1 organization API differs; remove under WDY-4157.
+    "cloud/organizations.proto"
 )
 
 check_shared_grpc_api_contracts_sources() {
     local proto_dir="$1" catalogue_dir="$2" catalogue file proto exception alias
-    local seen="" allowed
+    local seen="" allowed catalogue_proto
     if [ ! -d "$proto_dir" ] || [ ! -d "$catalogue_dir" ]; then
         echo "error: missing local proto tree or shared catalogue export" >&2
         return 1
@@ -108,7 +116,17 @@ check_shared_grpc_api_contracts_sources() {
         case " $seen " in
             *" $exception "*) echo "error: duplicate shared source exception: $exception" >&2; return 1 ;;
         esac
-        if [ ! -f "$catalogue_dir/$exception" ] || [ ! -f "$proto_dir/$exception" ] || [ -L "$proto_dir/$exception" ]; then
+        catalogue_proto="$exception"
+        if [ ! -f "$catalogue_dir/$catalogue_proto" ]; then
+            case "$exception" in
+                cloud/*)
+                    case "${exception#cloud/}" in
+                        */*) ;;
+                        *) catalogue_proto="${exception#cloud/}" ;;
+                    esac ;;
+            esac
+        fi
+        if [ ! -f "$catalogue_dir/$catalogue_proto" ] || [ ! -f "$proto_dir/$exception" ] || [ -L "$proto_dir/$exception" ]; then
             echo "error: shared source exception must name an existing catalogue and regular local file: $exception" >&2
             return 1
         fi
@@ -116,18 +134,20 @@ check_shared_grpc_api_contracts_sources() {
     done
     while IFS= read -r file; do
         proto="${file#"$catalogue_dir/"}"
-        allowed=0
-        for exception in "${SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS[@]}"; do
-            if [ "$proto" = "$exception" ]; then allowed=1; break; fi
-        done
-        if [ "$allowed" -eq 1 ]; then continue; fi
         alias=""
-        # Only known legacy paths, never inferred basename matches.
+        # Root catalogue files are staged under cloud/ by legacy consumers.
         case "$proto" in
-            apps.proto|certificates.proto|tunnel.proto|users.proto) alias="cloud/$proto" ;;
             wendylite/v1/sensorlink.proto) alias="wendy/lite/sensorlink.proto" ;;
+            */*) ;;
+            *) alias="cloud/$proto" ;;
         esac
         for file in "$proto" ${alias:+"$alias"}; do
+            # An exception covers this local path, never its other spelling.
+            allowed=0
+            for exception in "${SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS[@]}"; do
+                if [ "$file" = "$exception" ]; then allowed=1; break; fi
+            done
+            if [ "$allowed" -eq 1 ]; then continue; fi
             if [ -e "$proto_dir/$file" ] || [ -L "$proto_dir/$file" ]; then
                 echo "error: remove Proto/$file; its source is in pinned service-protos" >&2
                 return 1
