@@ -323,6 +323,20 @@ func runInitWizard(args []string, opts initOptions) error {
 		return err
 	}
 
+	// An explicit template and destination can be checked before contacting
+	// the registry. Refusal must not depend on network availability.
+	templateName := normalizeInitChoice(opts.template)
+	hasDestination := opts.here || opts.appIDSet || len(args) > 0
+	if opts.templateSet && templateName != "" && templateName != bareTemplatePickSentinel && hasDestination {
+		destDir, _, err := resolveInitDestAndID(cwd, args, opts)
+		if err != nil {
+			return err
+		}
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
+		}
+	}
+
 	// Steps 1-2: target and template resolve together — a concrete --template
 	// can pin or narrow the target from registry metadata.
 	target, tmpl, meta, err := resolveInitTargetAndTemplate(opts)
@@ -784,13 +798,9 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 	return files, manifest, dlErr
 }
 
-// runTemplateFlow handles init when a template is selected.
-// destDir is the resolved project directory (either cwd or a new subdir).
-func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
-	// Scaffolding into cwd (most commonly via --here, WDY-2439) must not
-	// silently clobber an existing project. Checked first, before any
-	// network calls or filesystem mutation, mirroring the non-template
-	// wizard's own wendy.json-exists guard.
+// validateTemplateDestination refuses an overlay before any scaffolding.
+func validateTemplateDestination(cwd, destDir string) error {
+	// Preserve the existing --here diagnostic for a Wendy project.
 	if filepath.Clean(destDir) == filepath.Clean(cwd) {
 		if _, err := os.Stat(filepath.Join(destDir, "wendy.json")); err == nil {
 			return fmt.Errorf("wendy.json already exists here; run from an empty directory or remove it first")
@@ -804,6 +814,16 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 	}
 	if len(entries) > 0 {
 		return fmt.Errorf("project directory %s is not empty; choose a new or empty directory", destDir)
+	}
+
+	return nil
+}
+
+// runTemplateFlow handles init when a template is selected.
+// destDir is the resolved project directory (either cwd or a new subdir).
+func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
+	if err := validateTemplateDestination(cwd, destDir); err != nil {
+		return err
 	}
 
 	language, err := resolveTemplateLanguage(target, tmpl, meta, opts)
@@ -854,6 +874,12 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		if err := collectSchemaAnswers(manifest.Schema, vals); err != nil {
 			return err
 		}
+	}
+
+	// Preparation may have taken time. Refuse files that arrived meanwhile;
+	// exclusive creation in the writer closes the remaining check/write race.
+	if err := validateTemplateDestination(cwd, destDir); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {

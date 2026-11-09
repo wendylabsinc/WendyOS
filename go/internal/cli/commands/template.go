@@ -713,8 +713,12 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 			output = rendered
 		}
 
-		if err := os.WriteFile(destPath, output, 0o644); err != nil {
+		created, err := createFileIfAbsent(destPath, output)
+		if err != nil {
 			return fmt.Errorf("writing %s: %w", destPath, err)
+		}
+		if !created {
+			return fmt.Errorf("refusing to overwrite %s: %w", destPath, os.ErrExist)
 		}
 	}
 

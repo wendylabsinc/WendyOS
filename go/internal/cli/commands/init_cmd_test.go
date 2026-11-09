@@ -2061,3 +2061,49 @@ func TestRunTemplateFlow_ReportsDestinationReadError(t *testing.T) {
 		t.Fatalf("existing bytes changed: %q", got)
 	}
 }
+
+func TestInitCommand_RejectsPopulatedTemplateDestinationBeforeRegistry(t *testing.T) {
+	cwd := chdirTemp(t)
+	dest := filepath.Join(cwd, "sapi")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dest, "Package.swift")
+	original := []byte("valuable package\n")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubFetchRepoMeta(t, nil, fmt.Errorf("registry must not be contacted"))
+	cmd := newInitCmd()
+	cmd.SetArgs([]string{"--app-id", "sapi", "--target", "wendyos", "--language", "swift", "--template", "simple-api", "--assistant", "skip", "--git-init", "no"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("want destination refusal before registry access, got %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing bytes changed: %q", got)
+	}
+}
+
+func TestValidateTemplateDestination_AcceptsNewAndEmptyDirectories(t *testing.T) {
+	cwd := t.TempDir()
+	dest := filepath.Join(cwd, "sapi")
+	if err := validateTemplateDestination(cwd, dest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("validation mutated destination: %v", err)
+	}
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTemplateDestination(cwd, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTemplateDestination(dest, dest); err != nil {
+		t.Fatal(err)
+	}
+}
