@@ -4226,7 +4226,7 @@ var File_wendy_com_msg_proto protoreflect.FileDescriptor
 
 const file_wendy_com_msg_proto_rawDesc = "" +
 	"\n" +
-	"\x13wendy_com_msg.proto\x1a\x10sensorlink.proto\"E\n" +
+	"\x13wendy_com_msg.proto\x1a\x1dwendylite/v1/sensorlink.proto\"E\n" +
 	"\x17WendyComProtocolVersion\x12\x14\n" +
 	"\x05major\x18\x01 \x01(\rR\x05major\x12\x14\n" +
 	"\x05minor\x18\x02 \x01(\rR\x05minor\"j\n" +
@@ -4419,7 +4419,7 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x06target\x18\x04 \x01(\tR\x06target\x12(\n" +
 	"\x10wasm_app_support\x18\x05 \x01(\bR\x0ewasmAppSupport\x12,\n" +
 	"\x12native_app_support\x18\x06 \x01(\bR\x10nativeAppSupport\x12\x14\n" +
-	"\x05board\x18\a \x01(\tR\x05board\"\x88\x0e\n" +
+	"\x05board\x18\a \x01(\tR\x05board\"\xed\r\n" +
 	"\x0fWendyComCommand\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\rR\trequestId\x12)\n" +
@@ -4438,10 +4438,10 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x0econsole_detach\x18\f \x01(\v2\x1c.WendyComConsoleDetachParamsH\x00R\rconsoleDetach\x12F\n" +
 	"\x0fconf_push_begin\x18\r \x01(\v2\x1c.WendyComConfPushBeginParamsH\x00R\rconfPushBegin\x12C\n" +
 	"\x0econf_push_data\x18\x0e \x01(\v2\x1b.WendyComConfPushDataParamsH\x00R\fconfPushData\x12@\n" +
-	"\rconf_push_end\x18\x0f \x01(\v2\x1a.WendyComConfPushEndParamsH\x00R\vconfPushEnd\x12c\n" +
-	"\x18sensor_link_get_manifest\x18\x10 \x01(\v2(.wendy.lite.sensorlink.GetSensorManifestH\x00R\x15sensorLinkGetManifest\x12V\n" +
-	"\x15sensor_link_subscribe\x18\x11 \x01(\v2 .wendy.lite.sensorlink.SubscribeH\x00R\x13sensorLinkSubscribe\x12\\\n" +
-	"\x17sensor_link_unsubscribe\x18\x12 \x01(\v2\".wendy.lite.sensorlink.UnsubscribeH\x00R\x15sensorLinkUnsubscribe\x12W\n" +
+	"\rconf_push_end\x18\x0f \x01(\v2\x1a.WendyComConfPushEndParamsH\x00R\vconfPushEnd\x12Z\n" +
+	"\x18sensor_link_get_manifest\x18\x10 \x01(\v2\x1f.wendylite.v1.GetSensorManifestH\x00R\x15sensorLinkGetManifest\x12M\n" +
+	"\x15sensor_link_subscribe\x18\x11 \x01(\v2\x17.wendylite.v1.SubscribeH\x00R\x13sensorLinkSubscribe\x12S\n" +
+	"\x17sensor_link_unsubscribe\x18\x12 \x01(\v2\x19.wendylite.v1.UnsubscribeH\x00R\x15sensorLinkUnsubscribe\x12W\n" +
 	"\x14enrollment_challenge\x18\x13 \x01(\v2\".WendyComEnrollmentChallengeParamsH\x00R\x13enrollmentChallenge\x126\n" +
 	"\tsync_time\x18\x14 \x01(\v2\x17.WendyComSyncTimeParamsH\x00R\bsyncTime\x12K\n" +
 	"\x10enrollment_reset\x18\x15 \x01(\v2\x1e.WendyComEnrollmentResetParamsH\x00R\x0fenrollmentReset\x120\n" +
@@ -4450,15 +4450,15 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\fnet_topology\x18\x18 \x01(\v2\x1a.WendyComNetTopologyParamsH\x00R\vnetTopology\x12R\n" +
 	"\x13bluetooth_power_get\x18\x19 \x01(\v2 .WendyComBluetoothPowerGetParamsH\x00R\x11bluetoothPowerGet\x12R\n" +
 	"\x13bluetooth_power_set\x18\x1a \x01(\v2 .WendyComBluetoothPowerSetParamsH\x00R\x11bluetoothPowerSetB\b\n" +
-	"\x06params\"\x82\x05\n" +
+	"\x06params\"\xf9\x04\n" +
 	"\x10WendyComResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\rR\trequestId\x12'\n" +
 	"\x06result\x18\x02 \x01(\x0e2\x0f.WendyComResultR\x06result\x12B\n" +
 	"\x0fdevice_identity\x18\x03 \x01(\v2\x17.WendyComDeviceIdentityH\x00R\x0edeviceIdentity\x126\n" +
 	"\vdevice_info\x18\x04 \x01(\v2\x13.WendyComDeviceInfoH\x00R\n" +
-	"deviceInfo\x12Y\n" +
-	"\x14sensor_link_manifest\x18\x05 \x01(\v2%.wendy.lite.sensorlink.SensorManifestH\x00R\x12sensorLinkManifest\x12Q\n" +
+	"deviceInfo\x12P\n" +
+	"\x14sensor_link_manifest\x18\x05 \x01(\v2\x1c.wendylite.v1.SensorManifestH\x00R\x12sensorLinkManifest\x12Q\n" +
 	"\x14enrollment_challenge\x18\x06 \x01(\v2\x1c.WendyComEnrollmentChallengeH\x00R\x13enrollmentChallenge\x126\n" +
 	"\tsync_time\x18\a \x01(\v2\x17.WendyComSyncTimeResultH\x00R\bsyncTime\x123\n" +
 	"\n" +
@@ -4489,14 +4489,14 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\fopen_channel\x18\x01 \x01(\v2\x14.WendyComOpenChannelH\x00R\vopenChannel\x12<\n" +
 	"\rclose_channel\x18\x02 \x01(\v2\x15.WendyComCloseChannelH\x00R\fcloseChannel\x12<\n" +
 	"\rchannel_state\x18\x03 \x01(\v2\x15.WendyComChannelStateH\x00R\fchannelStateB\x05\n" +
-	"\x03cmd\"\xc7\x02\n" +
+	"\x03cmd\"\xbe\x02\n" +
 	"\x0fWendyComMessage\x122\n" +
 	"\thandshake\x18\x01 \x01(\v2\x12.WendyComHandshakeH\x00R\thandshake\x12,\n" +
 	"\aservice\x18\x02 \x01(\v2\x10.WendyComServiceH\x00R\aservice\x12,\n" +
 	"\acommand\x18\x03 \x01(\v2\x10.WendyComCommandH\x00R\acommand\x12/\n" +
 	"\bresponse\x18\x04 \x01(\v2\x11.WendyComResponseH\x00R\bresponse\x12&\n" +
-	"\x05event\x18\x05 \x01(\v2\x0e.WendyComEventH\x00R\x05event\x12D\n" +
-	"\vsensor_data\x18\x06 \x01(\v2!.wendy.lite.sensorlink.SensorDataH\x00R\n" +
+	"\x05event\x18\x05 \x01(\v2\x0e.WendyComEventH\x00R\x05event\x12;\n" +
+	"\vsensor_data\x18\x06 \x01(\v2\x18.wendylite.v1.SensorDataH\x00R\n" +
 	"sensorDataB\x05\n" +
 	"\x03msg*M\n" +
 	"\x0fWendyComAppType\x12\x1b\n" +
@@ -4616,11 +4616,11 @@ var file_wendy_com_msg_proto_goTypes = []any{
 	(*WendyComChannelState)(nil),              // 55: WendyComChannelState
 	(*WendyComService)(nil),                   // 56: WendyComService
 	(*WendyComMessage)(nil),                   // 57: WendyComMessage
-	(*sensorlinkpb.GetSensorManifest)(nil),    // 58: wendy.lite.sensorlink.GetSensorManifest
-	(*sensorlinkpb.Subscribe)(nil),            // 59: wendy.lite.sensorlink.Subscribe
-	(*sensorlinkpb.Unsubscribe)(nil),          // 60: wendy.lite.sensorlink.Unsubscribe
-	(*sensorlinkpb.SensorManifest)(nil),       // 61: wendy.lite.sensorlink.SensorManifest
-	(*sensorlinkpb.SensorData)(nil),           // 62: wendy.lite.sensorlink.SensorData
+	(*sensorlinkpb.GetSensorManifest)(nil),    // 58: wendylite.v1.GetSensorManifest
+	(*sensorlinkpb.Subscribe)(nil),            // 59: wendylite.v1.Subscribe
+	(*sensorlinkpb.Unsubscribe)(nil),          // 60: wendylite.v1.Unsubscribe
+	(*sensorlinkpb.SensorManifest)(nil),       // 61: wendylite.v1.SensorManifest
+	(*sensorlinkpb.SensorData)(nil),           // 62: wendylite.v1.SensorData
 }
 var file_wendy_com_msg_proto_depIdxs = []int32{
 	8,  // 0: WendyComHandshake.version:type_name -> WendyComProtocolVersion
@@ -4655,9 +4655,9 @@ var file_wendy_com_msg_proto_depIdxs = []int32{
 	17, // 29: WendyComCommand.conf_push_begin:type_name -> WendyComConfPushBeginParams
 	18, // 30: WendyComCommand.conf_push_data:type_name -> WendyComConfPushDataParams
 	19, // 31: WendyComCommand.conf_push_end:type_name -> WendyComConfPushEndParams
-	58, // 32: WendyComCommand.sensor_link_get_manifest:type_name -> wendy.lite.sensorlink.GetSensorManifest
-	59, // 33: WendyComCommand.sensor_link_subscribe:type_name -> wendy.lite.sensorlink.Subscribe
-	60, // 34: WendyComCommand.sensor_link_unsubscribe:type_name -> wendy.lite.sensorlink.Unsubscribe
+	58, // 32: WendyComCommand.sensor_link_get_manifest:type_name -> wendylite.v1.GetSensorManifest
+	59, // 33: WendyComCommand.sensor_link_subscribe:type_name -> wendylite.v1.Subscribe
+	60, // 34: WendyComCommand.sensor_link_unsubscribe:type_name -> wendylite.v1.Unsubscribe
 	36, // 35: WendyComCommand.enrollment_challenge:type_name -> WendyComEnrollmentChallengeParams
 	39, // 36: WendyComCommand.sync_time:type_name -> WendyComSyncTimeParams
 	38, // 37: WendyComCommand.enrollment_reset:type_name -> WendyComEnrollmentResetParams
@@ -4669,7 +4669,7 @@ var file_wendy_com_msg_proto_depIdxs = []int32{
 	6,  // 43: WendyComResponse.result:type_name -> WendyComResult
 	21, // 44: WendyComResponse.device_identity:type_name -> WendyComDeviceIdentity
 	46, // 45: WendyComResponse.device_info:type_name -> WendyComDeviceInfo
-	61, // 46: WendyComResponse.sensor_link_manifest:type_name -> wendy.lite.sensorlink.SensorManifest
+	61, // 46: WendyComResponse.sensor_link_manifest:type_name -> wendylite.v1.SensorManifest
 	37, // 47: WendyComResponse.enrollment_challenge:type_name -> WendyComEnrollmentChallenge
 	40, // 48: WendyComResponse.sync_time:type_name -> WendyComSyncTimeResult
 	31, // 49: WendyComResponse.net_status:type_name -> WendyComNetStatus
@@ -4690,7 +4690,7 @@ var file_wendy_com_msg_proto_depIdxs = []int32{
 	47, // 64: WendyComMessage.command:type_name -> WendyComCommand
 	48, // 65: WendyComMessage.response:type_name -> WendyComResponse
 	49, // 66: WendyComMessage.event:type_name -> WendyComEvent
-	62, // 67: WendyComMessage.sensor_data:type_name -> wendy.lite.sensorlink.SensorData
+	62, // 67: WendyComMessage.sensor_data:type_name -> wendylite.v1.SensorData
 	68, // [68:68] is the sub-list for method output_type
 	68, // [68:68] is the sub-list for method input_type
 	68, // [68:68] is the sub-list for extension type_name
