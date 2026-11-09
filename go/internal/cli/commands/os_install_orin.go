@@ -85,6 +85,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
+	enrolled := provJSON != nil
 
 	if err := confirmOrinReady(opts); err != nil {
 		return err
@@ -93,18 +94,12 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dev.Describe()))
-
-	if !opts.Force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage))))
-		ok, err := confirmInstallStep("flashing "+dev.Describe(), fmt.Sprintf("Flash %s?", dev.Describe()), true, opts.Force)
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target:   dev.Describe(),
+		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
+		question: fmt.Sprintf("Flash %s?", dev.Describe()),
+	}, name, creds, enrolled, opts.Force); err != nil {
+		return err
 	}
 
 	if err := preAuthElevation(); err != nil {
@@ -130,6 +125,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		if lf, lerr := os.Create(logPath); lerr == nil {
 			defer lf.Close()
 			fmt.Fprintf(lf, "wendy os install — %s %s recovery — WendyOS %s\n\n", opts.DeviceType, opts.Storage, opts.Version)
+			logProvisioningSummary(lf, name, creds, &enrolled)
 			logW = lf
 			defer func() { fmt.Println(tui.Dim("Full flash log: " + logPath)) }()
 		} else {

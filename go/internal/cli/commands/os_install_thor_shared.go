@@ -103,6 +103,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if err != nil {
 		return err
 	}
+	enrolled := provJSON != nil
 
 	// Brief the user (Windows briefing includes the WinUSB driver note),
 	// then confirm before touching USB.
@@ -120,18 +121,12 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dev.Label))
-
-	if !force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone."))
-		ok, err := confirmInstallStep("flashing "+dev.Label, fmt.Sprintf("Flash %s?", dev.Label), true, force)
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target:   dev.Label,
+		warning:  []string{tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone.")},
+		question: fmt.Sprintf("Flash %s?", dev.Label),
+	}, name, creds, enrolled, force); err != nil {
+		return err
 	}
 
 	// flashCtx aborts in-flight step work (the stage-2 engine) when the user
@@ -149,6 +144,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		if lf, lerr := os.Create(logPath); lerr == nil {
 			defer lf.Close()
 			fmt.Fprintf(lf, "wendy os install — Jetson AGX Thor — WendyOS %s\n\n", plan.version)
+			logProvisioningSummary(lf, name, creds, &enrolled)
 			logW = lf
 			defer func() { fmt.Println(tui.Dim("Full flash log: " + logPath)) }()
 		} else {
