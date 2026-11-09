@@ -203,6 +203,11 @@ confirmed during the current scan.
 If the CLI cannot verify a device's agent, select its row to see what went
 wrong and what to try next.
 
+Connecting to an enrolled device, including updating its agent with `u`, needs
+a trusted expected device identity. A nearby discovery row alone does not
+establish that identity. See [device identity and recovery](../device-selection.md#device-identity)
+if the CLI reports a missing binding.
+
 ### Clipboard JSON
 
 Pressing `enter` copies the highlighted device as a JSON object; `a` copies all

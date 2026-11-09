@@ -2,6 +2,6 @@ mujoco==3.3.7
 numpy==1.26.4
 onnxruntime==1.23.2
 # ROS Humble uses Python 3.10; Pillow 13 requires Python 3.11 or newer.
-Pillow==12.3.0
+Pillow==13.0.0
 PyYAML==6.0.3
 

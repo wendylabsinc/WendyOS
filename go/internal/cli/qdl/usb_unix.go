@@ -13,12 +13,6 @@ import (
 	"github.com/google/gousb"
 )
 
-// A Qualcomm SoC in Emergency Download mode.
-const (
-	VendorQualcomm gousb.ID = 0x05c6
-	ProductEDL     gousb.ID = 0x9008
-)
-
 // The EDL interface is vendor-specific. Protocol 0xff is the generic case;
 // 0x10, 0x11 and 0x13 are the Sahara variants shipped by different boot ROMs.
 var edlProtocols = []gousb.Protocol{0xff, 0x10, 0x11, 0x13}

@@ -33,10 +33,14 @@ import (
 type unavailableContainerClient struct {
 	agentpb.WendyContainerServiceClient // embedded nil
 	calls                               int
+	err                                 error
 }
 
 func (c *unavailableContainerClient) QueryChunks(_ context.Context, _ *agentpb.QueryChunksRequest, _ ...grpc.CallOption) (*agentpb.QueryChunksResponse, error) {
 	c.calls++
+	if c.err != nil {
+		return nil, c.err
+	}
 	return nil, status.Error(codes.Unavailable, "tunnel dropped")
 }
 
@@ -211,6 +215,9 @@ func TestPushLayersResumingTunnelDropsGivesUpAfterAttempts(t *testing.T) {
 	connA := &grpcclient.AgentConnection{ContainerService: &unavailableContainerClient{}}
 	connB := &grpcclient.AgentConnection{ContainerService: &unavailableContainerClient{}}
 	connC := &grpcclient.AgentConnection{ContainerService: &unavailableContainerClient{}}
+	for _, conn := range []*grpcclient.AgentConnection{connA, connB, connC} {
+		conn.IsCloudV2, conn.Host = true, "test-jetson"
+	}
 
 	var bClosed, cClosed bool
 	connB.ExtraClosers = append(connB.ExtraClosers, closeTracker{&bClosed})
@@ -233,6 +240,11 @@ func TestPushLayersResumingTunnelDropsGivesUpAfterAttempts(t *testing.T) {
 	gotConn, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, nil, nil, gzipChunkUploadConfig, nil)
 	if err == nil {
 		t.Fatal("expected an error after exhausting all attempts")
+	}
+	for _, want := range []string{"The Cloud connection to test-jetson was lost during the upload.", cloudUploadRetryHint} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
 	}
 	if headers != nil {
 		t.Fatalf("expected nil headers on failure, got %v", headers)
@@ -624,5 +636,142 @@ func TestPushLayersResumingTunnelDropsFallsBackToGzipAfterAStall(t *testing.T) {
 	}
 	if agentB.received.Load() >= int64(len(dev.staged)) {
 		t.Fatal("the retry re-sent everything")
+	}
+}
+
+// Exercise the real streaming failure path: the final error must retain the
+// upload failure and its counters even when the reconnect itself fails.
+func TestCloudChunkDropReportsProgressWhenReconnectFails(t *testing.T) {
+	defer forceBuildProgressInteractive(false)()
+	defer setBuildProgressOut(io.Discard)()
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+	t.Setenv("WENDY_CHUNK_UPLOAD_BATCH", "16")
+	layerTar := variedChunkTestData(100 * 64 << 10)
+	agent := &probeAgent{dev: &probeDevice{staged: map[[32]byte]int{}}, dropAfter: 20}
+	conn, server := startProbeAgent(t, agent)
+	agent.drop = server.Stop
+	conn.IsCloudV2, conn.Host = true, "test-jetson"
+	reconnectErr := errors.New("Cloud device remains offline")
+	conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) { return nil, reconnectErr }
+	layers := []localLayer{{Digest: "sha256:" + sha256Hex(layerTar), MediaType: "application/vnd.oci.image.layer.v1.tar", Blob: layerTar}}
+	var snap chunkPushSnapshot
+	got, _, err := pushLayersResumingTunnelDrops(t.Context(), conn, layers, nil, gzipChunkUploadConfig, func(s chunkPushSnapshot) { snap = s })
+	if got != conn || !errors.Is(err, reconnectErr) || status.Code(err) != codes.Unavailable {
+		t.Fatalf("conn=%p err=%v, want original connection and reconnect cause", got, err)
+	}
+	if snap.SentChunks == 0 || snap.SentBytes == 0 {
+		t.Fatalf("test did not reach the upload: %+v", snap)
+	}
+	for _, want := range []string{"The Cloud connection to test-jetson was lost during the upload.", fmt.Sprintf("Sent %s of %s planned.", formatBytes(snap.SentBytes), formatBytes(snap.PlannedBytes)), "Could not reconnect.", cloudUploadRetryHint} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "restart") || strings.Contains(err.Error(), "attempt") || strings.Contains(err.Error(), "rpc error") || strings.Contains(err.Error(), reconnectErr.Error()) {
+		t.Fatalf("error exposes internal diagnostics: %v", err)
+	}
+	if ExecutionErrorClass(err) != "device_unreachable" {
+		t.Fatalf("class=%s", ExecutionErrorClass(err))
+	}
+}
+
+func TestLANAndLegacyCloudResumeKeepTheOriginalUploadError(t *testing.T) {
+	defer forceBuildProgressInteractive(false)()
+	defer setBuildProgressOut(io.Discard)()
+	for _, reconnectable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reconnectable=%v", reconnectable), func(t *testing.T) {
+			want := status.Error(codes.Unavailable, "original upload failure")
+			client := &unavailableContainerClient{err: want}
+			conn := &grpcclient.AgentConnection{ContainerService: client}
+			if reconnectable {
+				conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) { return conn, nil }
+			}
+			_, _, got := pushLayersResumingTunnelDrops(t.Context(), conn, nil, nil, gzipChunkUploadConfig, nil)
+			var cloud *cloudDeployError
+			if !errors.Is(got, want) || got.Error() != want.Error() || errors.As(got, &cloud) {
+				t.Fatalf("error=%v, want the original upload message and cause without a Cloud wrapper", got)
+			}
+			attempts := 1
+			if reconnectable {
+				attempts = chunkPushResumeAttempts
+			}
+			if client.calls != attempts {
+				t.Fatalf("calls=%d, want %d", client.calls, attempts)
+			}
+		})
+	}
+}
+
+func TestLegacyCloudResumeKeepsReconnectFailure(t *testing.T) {
+	defer forceBuildProgressInteractive(false)()
+	defer setBuildProgressOut(io.Discard)()
+	conn := &grpcclient.AgentConnection{ContainerService: &unavailableContainerClient{}}
+	conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		return waitForCloudDeviceRestart(ctx, "jetson", "legacy-id", func(context.Context) (*grpcclient.AgentConnection, error) {
+			t.Fatal("canceled restart must not connect")
+			return nil, nil
+		})
+	}
+	_, _, err := pushLayersResumingTunnelDrops(t.Context(), conn, nil, nil, gzipChunkUploadConfig, nil)
+	const want = "reconnecting to resume the chunk push: timed out waiting for jetson (id=legacy-id) to restart"
+	if err.Error() != want || len(NextSteps(err)) != 0 || errors.Is(err, errDeviceUnreachable) {
+		t.Fatalf("legacy reconnect error=%v, want %q without upload hints/classification", err, want)
+	}
+}
+
+func TestCloudResumeFailureReportsProgressAcrossAttempts(t *testing.T) {
+	defer forceBuildProgressInteractive(false)()
+	defer setBuildProgressOut(io.Discard)()
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "1")
+	t.Setenv("WENDY_CHUNK_UPLOAD_BATCH", "1")
+	cause := status.Error(codes.Unavailable, "connection dropped")
+	staged := map[string]bool{}
+	var mu sync.Mutex
+	newDroppingClient := func() *fakeContainerClient {
+		sent := 0
+		return &fakeContainerClient{
+			queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
+				mu.Lock()
+				defer mu.Unlock()
+				resp := &agentpb.QueryChunksResponse{}
+				for _, hash := range req.GetChunkHashes() {
+					if !staged[string(hash)] {
+						resp.MissingHashes = append(resp.MissingHashes, hash)
+					}
+				}
+				return resp
+			},
+			writeFn: func(req *agentpb.WriteChunksRequest) error {
+				mu.Lock()
+				defer mu.Unlock()
+				sent++
+				if sent > 10 {
+					return cause
+				}
+				staged[string(req.GetHash())] = true
+				return nil
+			},
+		}
+	}
+	first := &grpcclient.AgentConnection{IsCloudV2: true, Host: "jetson", ContainerService: newDroppingClient()}
+	second := &grpcclient.AgentConnection{IsCloudV2: true, Host: "jetson", ContainerService: newDroppingClient()}
+	third := &grpcclient.AgentConnection{IsCloudV2: true, Host: "jetson", ContainerService: &unavailableContainerClient{err: cause}}
+	first.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) { return second, nil }
+	second.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) { return third, nil }
+	data := variedChunkTestData(100 * 64 << 10)
+	layers := []localLayer{{Digest: "sha256:" + sha256Hex(data), MediaType: "application/vnd.oci.image.layer.v1.tar", Blob: data}}
+	var snapshots []chunkPushSnapshot
+	_, _, err := pushLayersResumingTunnelDrops(t.Context(), first, layers, nil, gzipChunkUploadConfig, func(s chunkPushSnapshot) { snapshots = append(snapshots, s) })
+	if len(snapshots) != 3 || snapshots[0].SentBytes == 0 || snapshots[1].SentBytes == 0 || snapshots[1].PlannedBytes >= snapshots[0].PlannedBytes || snapshots[2].PlannedBytes != 0 {
+		t.Fatalf("test must send on two decreasing plans, then fail its capability query: %+v", snapshots)
+	}
+	want := fmt.Sprintf("Sent %s of %s planned.", formatBytes(snapshots[0].SentBytes+snapshots[1].SentBytes), formatBytes(snapshots[0].PlannedBytes))
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err=%v, want cumulative progress %q", err, want)
 	}
 }

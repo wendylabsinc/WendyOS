@@ -3,10 +3,12 @@
   "pages": [
     "---Get started---",
     "index",
+    "...getting-started",
+    "...concepts",
+    "installation",
     "---Build apps---",
     "...guides",
     "---Hardware---",
-    "installation",
     "...hardware",
     "---Debug & observe---",
     "data",
@@ -20,8 +22,6 @@
     "security",
     "---Robotics---",
     "...integrations",
-    "---Concepts---",
-    "...concepts",
     "---Reference---",
     "...reference",
     "advanced"

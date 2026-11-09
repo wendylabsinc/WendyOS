@@ -25,14 +25,36 @@ To target a different device in one shell or AI session without changing the def
 
 ## Certificate pinning
 
-When you set a default device (and again on the first successful connection if the device was offline at set-default time), the CLI **pins** the device's identity — the organisation and cloud host its TLS certificate belongs to. On every later connection to the default device, the CLI checks that the device still presents that same organisation and cloud host.
+An enrolled device's certificate must match a trusted expected device identity,
+including its organisation and asset or device ID. The CLI gets that identity
+from authenticated Cloud inventory, verified enrollment, or an existing saved
+binding. Older organisation/asset certificate identities are still supported.
+See [device identity](../../device-selection.md#device-identity) for connection
+requirements and recovery steps.
 
-A routine certificate **renewal or re-enrollment** keeps the same organisation and cloud, so it is accepted silently. A change of organisation or cloud host — which can indicate a man-in-the-middle or a swapped device — **refuses the connection**. So does a device that was pinned while enrolled but now answers with no identity at all, which means it was reflashed, factory reset, or replaced by something squatting its name.
+Setting a LAN or VM default clears its saved pin and attempts a connection.
+The default is saved even if that connection cannot be established. Clearing
+the pin does not let the CLI learn a new identity from whichever device answers:
+an enrolled-device connection still needs a trusted expected identity. Cloud
+selectors use the selected inventory identity and have no LAN hostname pin to
+clear.
 
-Both refusals are **unconditional**: they read identically in interactive, `--json`, and non-interactive runs, and there is deliberately **no "trust this anyway?" prompt** — a man-in-the-middle warning that can be dismissed gets dismissed. Re-running `wendy device set-default` does not re-pin either. Clearing the pin is a separate, deliberate act:
+Routine certificate renewal is accepted when the device identity stays the
+same. A different organisation, issuing Cloud, asset, or device identity is
+refused. A previously pinned device that no longer presents an enrolled
+identity is also refused. These checks apply in interactive, `--json`, and
+non-interactive runs, without a trust override prompt.
+
+After an intentional replacement or reset, you can clear a pin without
+changing the default:
 
 ```sh
 wendy device unpin <host>
 ```
+
+Before reconnecting to an enrolled device, refresh its trusted Cloud inventory
+binding. For a reset device that is now unprovisioned, complete explicit
+`wendy device enroll` instead. If the identity change was unexpected, keep the
+pin and verify the device first.
 
 Loopback addresses share the pin of their bare host, whatever the port: `127.0.0.1:50051` and `127.0.0.1:50061` are both checked against the `127.0.0.1` pin, and `localhost:50051` against the `localhost` pin. The exception is a running local VM: `127.0.0.1` on its forwarded agent port, or on the mTLS port after it, is that VM, pinned as `vm:<name>` like `--device vm:<name>`, so each VM keeps its own pin. `wendy device set-default vm:<name>` clears only that VM's pin, never the shared `127.0.0.1` pin.

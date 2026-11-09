@@ -10,6 +10,7 @@ import subprocess
 from typing import Any
 
 from review_diff import DiffBatch, split_diff
+from review_sources import source_diff, is_generated_path, SOURCE_ONLY_RULE
 
 DOCS_PREFIX = "go/internal/cli/assets/docs/"
 DOCS_BUDGET_BYTES = 120_000
@@ -49,9 +50,9 @@ class ReviewError(RuntimeError):
     """No complete documentation review can be published."""
 
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT = SOURCE_ONLY_RULE + "\n\n" + (
     'You are a technical writer for WendyOS.\n'
-    'Given a PR diff and the current documentation, identify the minimal doc changes needed to keep docs accurate — added behaviour, removed behaviour, or changed behaviour.\n'
+    'Given a PR diff and the current documentation, review accuracy and the complete reader journey affected by the change. Follow the entry page, prerequisites, task steps, success check, and next step across the supplied pages.\n'
     '\n'
     'Return a valid JSON object with this shape and no markdown fence:\n'
     '{\n'
@@ -69,14 +70,16 @@ SYSTEM_PROMPT = (
     '\n'
     'Severity guidance:\n'
     '- blocker: docs are directly wrong or missing for behaviour changed by the diff.\n'
-    '- concern: likely docs gap or unclear existing docs caused by the diff.\n'
+    '- concern: an evidenced obstacle in the affected reader journey, including existing duplication, conflicting prerequisites, confusing navigation, or a next step that repeats the same task.\n'
     '- info: nice-to-have clarification, cleanup, or low-risk suggestion.\n'
     '\n'
     'Rules:\n'
     '- Return at most 8 findings.\n'
-    '- Only flag content that is directly wrong or missing as a result of the diff.\n'
+    '- Review the affected journey as well as changed lines. Existing obstacles in that journey may be concerns; unrelated site-wide cleanup is out of scope.\n'
+    '- Check that each tutorial has one outcome, prerequisites match its commands, success is observable, and the next tutorial teaches a distinct capability. Check navigation places required concepts and configuration where beginners can find them.\n'
+    '- Prefer consolidating duplicate instructions or linking to their canonical page over appending another explanation. Do not require every platform exception on introductory pages.\n'
     '- Write in timeless present tense ("X does Y").\n'
-    '- Suggest new files only for features that are completely undocumented.\n'
+    '- Suggest new pages when a missing task or a split of competing journeys needs one. Identify which existing instructions should move or link there, so the change does not add another duplicate.\n'
     '- Do not invent features absent from the diff.\n'
     '- Missing or omitted source evidence is unknown, never proof of a documentation error. Do not report speculative contradictions (for example, "if the constants differ") as blockers.\n'
     '- A blocker requires a concrete contradiction or missing changed behavior demonstrated by the supplied source and current documentation. Cite the source and documentation paths and the exact conflicting behavior.\n'
@@ -116,9 +119,12 @@ def load_documents(repo: pathlib.Path, revision: str, changed_paths: list[str]) 
             continue
         metadata, raw_path = record.split(b"\t", 1)
         path = raw_path.decode("utf-8")
+        if is_generated_path(path):
+            continue
         mode, kind, _ = metadata.decode("ascii").split()
         item = pathlib.PurePosixPath(path)
-        if item.suffix not in {".md", ".mdx"} or item.name in PROTECTED:
+        is_navigation = path.startswith(DOCS_PREFIX) and item.name == "meta.json"
+        if (item.suffix not in {".md", ".mdx"} and not is_navigation) or item.name in PROTECTED:
             continue
         if path not in changed and not path.startswith(DOCS_PREFIX):
             continue
@@ -140,7 +146,20 @@ def documentation_context(documents: dict[str, str], changed_paths: list[str], t
     changed = set(changed_paths)
     keywords = _keywords(title) | _keywords(diff)
     mandatory = sorted(path for path in documents if path in changed)
+    # Give entry points, navigation, and adjacent tutorials priority over keyword
+    # matches so review can assess a path through the docs, not isolated pages.
+    journey_roots = {DOCS_PREFIX + name for name in (
+        "index.mdx", "meta.json", "concepts/index.mdx", "reference/index.mdx",
+        "guides/tutorials/index.mdx", "getting-started/app.mdx",
+        "getting-started/robot.mdx", "installation/cli.mdx", "installation/index.mdx",
+    )}
+    changed_dirs = {str(pathlib.PurePosixPath(path).parent) for path in changed
+                    if path.startswith(DOCS_PREFIX)}
     optional = sorted((path for path in documents if path not in changed), key=lambda path: (
+        0 if path in journey_roots else 1 if any(
+            str(pathlib.PurePosixPath(path).parent) == directory
+            or (path.endswith("/meta.json") and directory.startswith(path.rsplit("/", 1)[0] + "/"))
+            for directory in changed_dirs) else 2,
         -(3 * len(_keywords(path) & keywords)
           + len(_keywords(documents[path][:1500]) & keywords)), path))
     included = list(mandatory)
@@ -263,7 +282,16 @@ def _payload(message: Any) -> dict[str, Any]:
 def review(client: Any, repo: pathlib.Path, revision: str, diff: str, changed_paths: list[str],
            title: str, body: str, number: str,
            manifest_path: pathlib.Path | None = None) -> dict[str, Any]:
-    documents = load_documents(repo, revision, changed_paths)
+    full_diff = diff
+    diff, coverage = source_diff(diff, allow_binary=True)
+    changed_paths = [path for path in changed_paths if not is_generated_path(path)]
+    if not diff:
+        if manifest_path:
+            manifest_path.write_text(json.dumps({"source_revision": revision, **coverage,
+                "review_complete": False, "skipped_generated_only": True}, indent=2) + "\n")
+        return {"summary": "Only generated protocol output changed; no AI review was performed.", "findings": []}
+    documents = {path: text for path, text in load_documents(repo, revision, changed_paths).items()
+                 if not is_generated_path(path)}
     docs, included, omitted = documentation_context(documents, changed_paths, title, diff)
     baseline = getattr(client.messages.count_tokens(
         **_request(title, body, number, "", docs, 0, 1)), "input_tokens", None)
@@ -295,14 +323,15 @@ def review(client: Any, repo: pathlib.Path, revision: str, diff: str, changed_pa
             raise ReviewError("Complete changed documentation and review context exceed the token budget; "
                               "no partial documentation review was performed")
         limit = max(1024, limit // 2)
-    manifest = {"source_revision": revision, "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
-                "diff_bytes": len(diff.encode()), "complete_documents": included,
+    manifest = {"source_revision": revision, "diff_sha256": hashlib.sha256(full_diff.encode()).hexdigest(),
+                "source_coverage": coverage,
+                "diff_bytes": len(full_diff.encode()), "source_bytes": len(diff.encode()), "complete_documents": included,
                 "omitted_optional_documents": omitted, "batch_input_tokens": tokens,
                 "batch_source_ranges": [[batch.source_start, batch.source_end] for batch in batches],
                 "batch_sha256": [hashlib.sha256(batch.rendered.encode()).hexdigest() for batch in batches]}
     if manifest_path:
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Prepared all {manifest['diff_bytes']} diff bytes in {len(batches)} complete docs-review "
+    print(f"Prepared all {manifest['source_bytes']} source diff bytes in {len(batches)} complete docs-review "
           f"batch(es); source {revision}; diff SHA-256 {manifest['diff_sha256']}")
     manifest.update({"attempts": [], "retry_preflights": [],
                      "completed_source_ranges": [], "review_complete": False})

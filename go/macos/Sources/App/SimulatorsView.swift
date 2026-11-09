@@ -78,7 +78,7 @@ struct SimulatorsView: View {
                             } else {
                                 Button("Start", systemImage: "play.fill") { actions.submit { await model.act(item, WDSimStart, label: "Starting") } }
                             }
-                            Menu {
+                            OverflowMenu(systemImage: "ellipsis.circle") {
                                 if item.robot {
                                     Button("Prepare simulation") { actions.submit { await model.act(item, WDSimStart, label: "Preparing") } }
                                     Button("Update robot runtime") { actions.submit { await model.act(item, WDSimUpdateRuntime, label: "Updating runtime for") } }
@@ -87,11 +87,7 @@ struct SimulatorsView: View {
                                 }
                                 Button("Copy device selector") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("vm:\(item.name)", forType: .string) }
                                 Button("Delete simulator…", role: .destructive) { deleting = item }.disabled(item.running)
-                            } label: { Image(systemName: "ellipsis.circle") }
-                                .menuStyle(.borderlessButton)
-                                .menuIndicator(.hidden)
-                                .fixedSize()
-                                .frame(width: 24)
+                            }
                                 .help("Simulator options")
                                 .accessibilityLabel("Simulator options")
                         }.padding(16).disabled(model.operation != nil)

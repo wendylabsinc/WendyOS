@@ -1,35 +1,23 @@
 ---
 title: Robotics overview
-description: Build, deploy, and operate ROS 2 robots with WendyOS. Standard, upstream ROS 2 from prototype to production fleet.
+description: Deploy and inspect standard ROS 2 apps, test robot interfaces in simulation, and verify behavior on hardware.
 ---
 
-WendyOS is built for ROS 2 robots, and takes them all the way from a prototype on
-your desk to a fleet in production. It runs **standard, upstream ROS 2** in
-containers, deploys to NVIDIA Jetson and Raspberry Pi with one command, and lets you
-inspect, debug, and update everything remotely over one secure connection.
+ROS 2 connects robot components through typed messages. Keep your existing nodes, packages, launch files, and Dockerfiles. The deployment tools package and run that software on a device; remote inspection helps you follow messages without opening an SSH session.
 
-Start with [Sim to real with Unitree](/docs/integrations/sim-to-real) to run a ROS 2 app on a Go2 or G1 VM profile, then deploy to hardware.
+Networking still needs configuration: DDS domains, middleware, and discovery scope must match the robot. Stagefiles are optional, and simulated interfaces do not reproduce every feature of physical hardware.
 
-## Why WendyOS for ROS 2
+## Choose a task
 
-- **Open and standard.** Real upstream ROS 2 in stock containers, with your choice of
-  middleware: CycloneDDS (default), Fast DDS, RTI Connext, or Gurum. Apache-2.0, no
-  lock-in.
-- **Deploy in one command.** Ship a containerized ROS 2 stack to a device with
-  `wendy run`. No flashing, no `source /opt/ros/<distro>/setup.bash`, no toolchain
-  setup.
-- **Production from day one.** Over-the-air updates, multi-device fleets, and
-  fine-grained entitlements that scope each app's access to GPU, camera, audio, and
-  storage.
+| Task | Start here |
+| --- | --- |
+| Inspect nodes, topics, and delivery | [ROS 2 inspection](/docs/integrations/ros2) |
+| Run an app without a physical robot | [Go2 and G1 setup](/docs/installation/unitree-simulators) |
+| Compare simulation with hardware | [Sim-to-real workflow](/docs/integrations/sim-to-real) |
+| Test noisy or delayed observations | [Sensor fidelity](/docs/integrations/sensor-fidelity) |
+| Understand VLM observations and VLA actions | [Vision and action models](/docs/integrations/vision-language-action) |
+| Deploy several containers | [Multi-app deployments](/docs/guides/multi-app-deployments) |
+| Plot live sensor data | [Foxglove](/docs/integrations/foxglove) |
+| Inspect through a coding assistant | [Robot diagnostics](/docs/integrations/robot-diagnostics) |
 
-## The workflow
-
-1. **Deploy.** Declare ROS 2 in your `wendy.json` with a `frameworks.ros2` block and
-   ship the stack. See [Multi-app deployments](/docs/guides/multi-app-deployments).
-2. **Operate.** Inspect nodes and topics, echo messages, set parameters, and record
-   rosbags on the running device with no SSH. See
-   [Wendy for ROS 2](/docs/integrations/ros2).
-   AI assistants can inspect sensor topics through
-   [Robot diagnostics with MCP](/docs/integrations/robot-diagnostics).
-3. **Visualize.** Bridge live topics into Foxglove Studio for plots and panels. See
-   [Wendy for Foxglove](/docs/integrations/foxglove).
+Start with a sensor reader. Verify message types, timestamps, and frames before enabling motion. A running container is not evidence that a robot sees fresh data or completed its task.

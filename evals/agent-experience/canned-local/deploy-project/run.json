@@ -1,0 +1,30 @@
+{
+  "tool": "run",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"app\": \"sensor-dashboard\", \"build_log_uri\": \"wendy://runs/00000000-0000-0000-0000-000000000000/logs\", \"endpoints\": [], \"readiness\": \"not_checked\", \"status\": \"started\", \"suggested_next_step\": \"Connect to the returned target, check container_list and telemetry_logs, then test the app's health endpoint or ROS interface. Deployment alone does not verify behavior.\", \"target\": {\"device\": \"{{device}}\", \"transport\": \"socket\"}}"
+        }
+      ],
+      "structuredContent": {
+        "app": "sensor-dashboard",
+        "build_log_uri": "wendy://runs/00000000-0000-0000-0000-000000000000/logs",
+        "endpoints": [],
+        "readiness": "not_checked",
+        "status": "started",
+        "suggested_next_step": "Connect to the returned target, check container_list and telemetry_logs, then test the app's health endpoint or ROS interface. Deployment alone does not verify behavior.",
+        "target": {
+          "device": "{{device}}",
+          "transport": "socket"
+        }
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "26737d37508f009f29f049ec4b0be255acbaa20730ac9cf72ae8a92c218fb4b7",
+    "device_kind": "local"
+  }
+}

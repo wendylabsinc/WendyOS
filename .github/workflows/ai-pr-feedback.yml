@@ -75,8 +75,6 @@ on:
       - Build products and release
       - Go Tests
       - Swift Tests
-      - Docs Review
-      - Integration Test Review
     types: [completed]
 
 # CONCURRENCY: cancel-in-progress: true ensures at most one run is active per PR

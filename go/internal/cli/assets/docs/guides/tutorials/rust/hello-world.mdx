@@ -1,6 +1,6 @@
 ---
 title: Hello World in Rust
-description: Create your first WendyOS application using Rust
+description: Create your first application using Rust
 language: rust
 ---
 
@@ -10,9 +10,12 @@ This guide will walk you through creating your first WendyOS application in Rust
 
 ### Prerequisites
 
-- Wendy CLI installed on your development machine
-- Rust 1.85 or later installed (via `rustup`)
-- A WendyOS device plugged in over USB or connectable over Wi-Fi
+- [Wendy CLI installed](/docs/installation/cli) on your development computer.
+- Docker running with Buildx. Check with `docker info` and `docker buildx version`.
+- A [Linux device or WendyOS VM](/docs/installation) ready to run your app.
+
+The Dockerfile installs the language toolchain inside the builder. You only need
+a local language installation if you choose to run the source outside Docker.
 
 <Callout type="info">
   **Containerized Deployment**: Unlike Swift, which compiles natively for WendyOS, Rust applications run inside containers on your WendyOS device. The Wendy CLI handles the local build setup when deploying Rust applications.
