@@ -51,6 +51,14 @@ design — provisioning is the mitigation. The provisioning window is time-bound
 operators; pre-enrollment at imaging time eliminates it entirely. Once provisioned, all
 communication moves to mTLS on port 50052, and the plaintext port is shut down.
 
+**BLE management.** The Linux L2CAP management listener requires an operator/user
+certificate for the device's tenant before accepting any command. A same-tenant
+device certificate cannot list, stop or remove apps, change Wi-Fi, or manage
+Bluetooth peripherals through this listener. Legacy user certificates retain
+their explicit grace-mode compatibility; device identities never inherit it.
+Management sessions end when their operator certificate expires. The separate
+BLE mesh transport retains its independently authenticated peer protocol.
+
 **Container isolation.** Apps run as non-root (`appuser`, UID 1000) inside containerd with a
 baseline seccomp profile, explicit capability grants, and entitlement-gated access to hardware,
 Bluetooth (D-Bus proxied), and host networking. No entitlement, no access.

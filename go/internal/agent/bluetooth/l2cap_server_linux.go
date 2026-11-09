@@ -5,34 +5,41 @@ package bluetooth
 import (
 	"context"
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
 	wendyL2CAPPSM = 128
-	maxFrameSize  = 65536
 )
 
 type l2capStreamConn struct {
-	fd   int
-	rbuf []byte // bytes remaining from the last received SDU
+	ioMu      sync.RWMutex
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
+	fd        int
+	rbuf      []byte // bytes remaining from the last received SDU
+	sndMTU    int    // peer-negotiated maximum SDU; zero uses the LE minimum
 
 	readDeadline  l2capDeadline
 	writeDeadline l2capDeadline
 }
 
 func (c *l2capStreamConn) Read(b []byte) (int, error) {
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
 	if len(c.rbuf) > 0 {
 		n := copy(b, c.rbuf)
 		c.rbuf = c.rbuf[n:]
@@ -62,17 +69,37 @@ func (c *l2capStreamConn) Read(b []byte) (int, error) {
 	return copied, nil
 }
 
+// One write on SOCK_SEQPACKET is one SDU. A TLS record (in particular an
+// ML-DSA certificate flight) can exceed the negotiated MTU. Split the stream
+// just as the central transport does; the reader already reassembles SDUs.
 func (c *l2capStreamConn) Write(b []byte) (int, error) {
-	n, err := retryL2CAPInterrupted(func() (int, error) {
-		if err := c.writeDeadline.prepare(c.fd, unix.SO_SNDTIMEO); err != nil {
-			return 0, err
-		}
-		return unix.Write(c.fd, b)
-	})
-	if err != nil {
-		return n, &net.OpError{Op: "write", Net: "l2cap", Err: err}
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
+	if c.closed.Load() {
+		return 0, net.ErrClosed
 	}
-	return n, nil
+	mtu := c.sndMTU
+	if mtu < 23 {
+		mtu = 23
+	}
+	written := 0
+	for written < len(b) {
+		end := min(written+mtu, len(b))
+		n, err := retryL2CAPInterrupted(func() (int, error) {
+			if err := c.writeDeadline.prepare(c.fd, unix.SO_SNDTIMEO); err != nil {
+				return 0, err
+			}
+			return unix.Write(c.fd, b[written:end])
+		})
+		written += n
+		if err != nil {
+			return written, &net.OpError{Op: "write", Net: "l2cap", Err: err}
+		}
+		if n == 0 {
+			return written, io.ErrNoProgress
+		}
+	}
+	return written, nil
 }
 
 // Go's async preemption can interrupt these raw socket syscalls. A signal is
@@ -86,7 +113,18 @@ func retryL2CAPInterrupted(operation func() (int, error)) (int, error) {
 	}
 }
 
-func (c *l2capStreamConn) Close() error { return unix.Close(c.fd) }
+func (c *l2capStreamConn) Close() error {
+	c.closeOnce.Do(func() {
+		// Wake a blocked read when the operator credential expires or the
+		// server stops, before releasing the descriptor for reuse.
+		c.closed.Store(true)
+		_ = unix.Shutdown(c.fd, unix.SHUT_RDWR)
+		c.ioMu.Lock()
+		defer c.ioMu.Unlock()
+		c.closeErr = unix.Close(c.fd)
+	})
+	return c.closeErr
+}
 
 func (c *l2capStreamConn) LocalAddr() net.Addr  { return l2capAddr("local") }
 func (c *l2capStreamConn) RemoteAddr() net.Addr { return l2capAddr("remote") }
@@ -241,94 +279,10 @@ func serveL2CAPConn(ctx context.Context, fd int, logger *zap.Logger, d *Dispatch
 	// that and also converts SEQPACKET message semantics to stream semantics by
 	// buffering received SDUs so TLS partial reads don't discard data.
 	rawConn := &l2capStreamConn{fd: fd}
-
-	tlsConn := tls.Server(rawConn, tlsConfig)
-	defer tlsConn.Close()
-
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		logger.Warn("BLE mTLS handshake failed", zap.Error(err))
-		return
+	// SOL_BLUETOOTH / BT_SNDMTU, shared with the Linux central transport.
+	if mtu, err := unix.GetsockoptInt(fd, 274, 12); err == nil && mtu >= 23 {
+		rawConn.sndMTU = mtu
 	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Re-check context every 30 s via a read deadline.
-		if err := tlsConn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-			return
-		}
-
-		payload, err := readMessageFromConn(tlsConn)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			return
-		}
-
-		if err := tlsConn.SetReadDeadline(time.Time{}); err != nil {
-			return
-		}
-
-		var cmd agentpb.BluetoothCommand
-		if err := proto.Unmarshal(payload, &cmd); err != nil {
-			writeErrFrameToConn(tlsConn, logger, "malformed protobuf")
-			return
-		}
-
-		resp := d.Dispatch(ctx, &cmd)
-		respBytes, err := proto.Marshal(resp)
-		if err != nil {
-			writeErrFrameToConn(tlsConn, logger, "marshal error")
-			return
-		}
-		if err := writeFrameToConn(tlsConn, respBytes); err != nil {
-			return
-		}
-	}
-}
-
-// readMessageFromConn reads one length-prefixed message from a stream reader.
-// The format is: 2-byte big-endian length | payload bytes.
-func readMessageFromConn(r io.Reader) ([]byte, error) {
-	var header [2]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return nil, err
-	}
-	msgLen := binary.BigEndian.Uint16(header[:])
-	if msgLen == 0 {
-		return nil, fmt.Errorf("empty message")
-	}
-	if int(msgLen) > maxFrameSize-2 {
-		return nil, fmt.Errorf("message too large: %d bytes", msgLen)
-	}
-	body := make([]byte, msgLen)
-	if _, err := io.ReadFull(r, body); err != nil {
-		return nil, err
-	}
-	return body, nil
-}
-
-func writeFrameToConn(w io.Writer, data []byte) error {
-	if len(data) > maxFrameSize-2 {
-		return fmt.Errorf("frame too large: %d bytes", len(data))
-	}
-	frame := make([]byte, 2+len(data))
-	binary.BigEndian.PutUint16(frame[:2], uint16(len(data)))
-	copy(frame[2:], data)
-	_, err := w.Write(frame)
-	return err
-}
-
-func writeErrFrameToConn(w io.Writer, logger *zap.Logger, msg string) {
-	resp := errResp(msg)
-	if b, err := proto.Marshal(resp); err == nil {
-		if wErr := writeFrameToConn(w, b); wErr != nil {
-			logger.Debug("l2cap write error frame failed", zap.Error(wErr))
-		}
-	}
+	serveManagementStream(ctx, rawConn, logger, d, tlsConfig)
 }
