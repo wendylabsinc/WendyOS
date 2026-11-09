@@ -2127,8 +2127,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         // the actor's executor.
         let containers = self.appsByID.values
             .sorted { $0.info.id < $1.info.id }
-            .map { app -> AppContainer in
-                var container = AppContainer()
+            .map { app -> Wendy_Agent_Services_V1_AppContainer in
+                var container = Wendy_Agent_Services_V1_AppContainer()
                 container.appName = app.info.id
                 container.runningState = Self.runningState(for: app)
                 let (http, mcp) = self.entitlementPorts(forAppID: app.info.id)
@@ -2181,11 +2181,36 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         return (http, mcp)
     }
 
+    // Preserve the Mac agent's unimplemented results for newly generated RPC requirements.
+    func validateContainer(
+        request: ServerRequest<Wendy_Agent_Services_V1_CreateContainerRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ValidateContainerResponse> {
+        throw RPCError(
+            code: .unimplemented,
+            message: "ValidateContainer is not implemented on macOS"
+        )
+    }
+
+    func prepareImage(
+        request: ServerRequest<Wendy_Agent_Services_V1_RunContainerLayersRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_PrepareImageResponse> {
+        throw RPCError(code: .unimplemented, message: "PrepareImage is not implemented on macOS")
+    }
+
+    func getNetworkStats(
+        request: ServerRequest<Wendy_Agent_Services_V1_GetNetworkStatsRequest>,
+        context: ServerContext
+    ) async throws -> ServerResponse<Wendy_Agent_Services_V1_NetworkStats> {
+        throw RPCError(code: .unimplemented, message: "GetNetworkStats is not implemented on macOS")
+    }
+
     /// A down app the supervisor has already restarted at least once and will
     /// restart again reports `CRASH_LOOPING` rather than `STOPPED`, so a crash
     /// loop is visible instead of masquerading as an ordinary stop. A
     /// user-stopped app, or one whose policy won't restart it, stays `STOPPED`.
-    private static func runningState(for app: WendyApp) -> AppRunningState {
+    private static func runningState(for app: WendyApp) -> Wendy_Agent_Services_V1_AppRunningState {
         if app.info.status == .running { return .running }
         if app.failureCount > 0, Self.shouldRestart(app) { return .crashLooping }
         return .stopped

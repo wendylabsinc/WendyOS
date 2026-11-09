@@ -4823,13 +4823,13 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"app_config\x18\x03 \x01(\fR\tappConfig\x1a\x1b\n" +
 	"\x05Chunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04dataB\x0e\n" +
-	"\frequest_type\"\x94\x02\n" +
+	"\frequest_type\"\xad\x02\n" +
 	"\x0eControlCommand\x12?\n" +
 	"\x03run\x18\x01 \x01(\v2+.wendy.agent.services.v1.ControlCommand.RunH\x00R\x03run\x12B\n" +
-	"\x04stop\x18\x02 \x01(\v2,.wendy.agent.services.v1.ControlCommand.StopH\x00R\x04stop\x1aj\n" +
+	"\x04stop\x18\x02 \x01(\v2,.wendy.agent.services.v1.ControlCommand.StopH\x00R\x04stop\x1a\x82\x01\n" +
 	"\x03Run\x12\x14\n" +
-	"\x05debug\x18\x01 \x01(\bR\x05debug\x12:\n" +
-	"\x0erestart_policy\x18\x02 \x01(\v2\x0e.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01B\x11\n" +
+	"\x05debug\x18\x01 \x01(\bR\x05debug\x12R\n" +
+	"\x0erestart_policy\x18\x02 \x01(\v2&.wendy.agent.services.v1.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01B\x11\n" +
 	"\x0f_restart_policy\x1a\x06\n" +
 	"\x04StopB\t\n" +
 	"\acommand\"\xef\x03\n" +
@@ -4861,7 +4861,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\x9e\f\n" +
+	"\x16GetAgentVersionRequest\"\xb6\f\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -4893,8 +4893,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\x0fmem_total_bytes\x18\x12 \x01(\x03R\rmemTotalBytes\x12\x1b\n" +
 	"\tcpu_count\x18\x13 \x01(\rR\bcpuCount\x12#\n" +
 	"\rbinary_sha256\x18\x14 \x01(\tR\fbinarySha256\x12\x1a\n" +
-	"\bhostname\x18\x15 \x01(\tR\bhostname\x12,\n" +
-	"\abattery\x18\x16 \x01(\v2\r.BatteryStatsH\vR\abattery\x88\x01\x01\x12\x1c\n" +
+	"\bhostname\x18\x15 \x01(\tR\bhostname\x12D\n" +
+	"\abattery\x18\x16 \x01(\v2%.wendy.agent.services.v1.BatteryStatsH\vR\abattery\x88\x01\x01\x12\x1c\n" +
 	"\ahas_npu\x18\x17 \x01(\bH\fR\x06hasNpu\x88\x01\x01\x12\"\n" +
 	"\n" +
 	"npu_vendor\x18\x18 \x01(\tH\rR\tnpuVendor\x88\x01\x01\x12X\n" +
@@ -5195,7 +5195,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\x11GetOSUpdateStatus\x121.wendy.agent.services.v1.GetOSUpdateStatusRequest\x1a2.wendy.agent.services.v1.GetOSUpdateStatusResponse\x12h\n" +
 	"\vSetHostname\x12+.wendy.agent.services.v1.SetHostnameRequest\x1a,.wendy.agent.services.v1.SetHostnameResponse\x12k\n" +
 	"\fGetPowerMode\x12,.wendy.agent.services.v1.GetPowerModeRequest\x1a-.wendy.agent.services.v1.GetPowerModeResponse\x12k\n" +
-	"\fSetPowerMode\x12,.wendy.agent.services.v1.SetPowerModeRequest\x1a-.wendy.agent.services.v1.SetPowerModeResponseb\x06proto3"
+	"\fSetPowerMode\x12,.wendy.agent.services.v1.SetPowerModeRequest\x1a-.wendy.agent.services.v1.SetPowerModeResponseB7Z5github.com/wendylabsinc/cloud/services/internal/protob\x06proto3"
 
 var (
 	file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDescOnce sync.Once
@@ -5291,8 +5291,8 @@ var file_wendy_agent_services_v1_wendy_agent_v1_service_proto_goTypes = []any{
 	(*OSUpdateEngineStatus_PendingUpdate)(nil), // 76: wendy.agent.services.v1.OSUpdateEngineStatus.PendingUpdate
 	nil, // 77: wendy.agent.services.v1.OSUpdateEngineStatus.DiagnosticsEntry
 	(*GetOSUpdateStatusResponse_ServiceResult)(nil), // 78: wendy.agent.services.v1.GetOSUpdateStatusResponse.ServiceResult
-	(*BatteryStats)(nil),                            // 79: BatteryStats
-	(*RestartPolicy)(nil),                           // 80: RestartPolicy
+	(*BatteryStats)(nil),                            // 79: wendy.agent.services.v1.BatteryStats
+	(*RestartPolicy)(nil),                           // 80: wendy.agent.services.v1.RestartPolicy
 }
 var file_wendy_agent_services_v1_wendy_agent_v1_service_proto_depIdxs = []int32{
 	56, // 0: wendy.agent.services.v1.RunContainerRequest.header:type_name -> wendy.agent.services.v1.RunContainerRequest.Header
@@ -5309,7 +5309,7 @@ var file_wendy_agent_services_v1_wendy_agent_v1_service_proto_depIdxs = []int32{
 	66, // 11: wendy.agent.services.v1.UpdateAgentResponse.updated:type_name -> wendy.agent.services.v1.UpdateAgentResponse.Updated
 	12, // 12: wendy.agent.services.v1.GetAgentVersionResponse.partitions:type_name -> wendy.agent.services.v1.DiskPartition
 	11, // 13: wendy.agent.services.v1.GetAgentVersionResponse.network_interfaces:type_name -> wendy.agent.services.v1.NetworkInterface
-	79, // 14: wendy.agent.services.v1.GetAgentVersionResponse.battery:type_name -> BatteryStats
+	79, // 14: wendy.agent.services.v1.GetAgentVersionResponse.battery:type_name -> wendy.agent.services.v1.BatteryStats
 	12, // 15: wendy.agent.services.v1.GetAgentVersionResponse.container_storage:type_name -> wendy.agent.services.v1.DiskPartition
 	55, // 16: wendy.agent.services.v1.GetAgentVersionResponse.gpu_capabilities:type_name -> wendy.agent.services.v1.GpuCapabilities
 	50, // 17: wendy.agent.services.v1.GetAgentVersionResponse.power_mode:type_name -> wendy.agent.services.v1.PowerMode
@@ -5334,7 +5334,7 @@ var file_wendy_agent_services_v1_wendy_agent_v1_service_proto_depIdxs = []int32{
 	50, // 36: wendy.agent.services.v1.GetPowerModeResponse.available:type_name -> wendy.agent.services.v1.PowerMode
 	50, // 37: wendy.agent.services.v1.GetPowerModeResponse.boot_default:type_name -> wendy.agent.services.v1.PowerMode
 	50, // 38: wendy.agent.services.v1.SetPowerModeResponse.mode:type_name -> wendy.agent.services.v1.PowerMode
-	80, // 39: wendy.agent.services.v1.ControlCommand.Run.restart_policy:type_name -> RestartPolicy
+	80, // 39: wendy.agent.services.v1.ControlCommand.Run.restart_policy:type_name -> wendy.agent.services.v1.RestartPolicy
 	65, // 40: wendy.agent.services.v1.UpdateAgentRequest.ControlCommand.update:type_name -> wendy.agent.services.v1.UpdateAgentRequest.ControlCommand.Update
 	1,  // 41: wendy.agent.services.v1.ListWiFiNetworksResponse.WiFiNetwork.security:type_name -> wendy.agent.services.v1.WiFiSecurityType
 	1,  // 42: wendy.agent.services.v1.ListKnownWiFiNetworksResponse.KnownWiFiNetwork.security:type_name -> wendy.agent.services.v1.WiFiSecurityType

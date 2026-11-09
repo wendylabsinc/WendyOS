@@ -115,46 +115,82 @@ public nonisolated enum Wendy_Agent_Services_V1_VideoCodec: SwiftProtobuf.Enum, 
 
 }
 
-public nonisolated struct Wendy_Agent_Services_V1_VideoDevice: Sendable {
+public nonisolated struct Wendy_Agent_Services_V1_VideoDevice: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   /// numeric suffix of /dev/videoN; network cameras use the reserved 200-255 band
-  public var id: UInt32 = 0
+  public var id: UInt32 {
+    get {_storage._id}
+    set {_uniqueStorage()._id = newValue}
+  }
 
   /// human-readable name from sysfs, or the model for network cameras
-  public var name: String = String()
+  public var name: String {
+    get {_storage._name}
+    set {_uniqueStorage()._name = newValue}
+  }
 
   /// e.g. "/dev/video0"; empty for a network camera with no loopback node
-  public var path: String = String()
+  public var path: String {
+    get {_storage._path}
+    set {_uniqueStorage()._path = newValue}
+  }
 
   /// interface (csi, usb, ip, unknown)
-  public var transport: Wendy_Agent_Services_V1_VideoTransport = .unknown
+  public var transport: Wendy_Agent_Services_V1_VideoTransport {
+    get {_storage._transport}
+    set {_uniqueStorage()._transport = newValue}
+  }
 
   /// kernel driver name from sysfs (e.g. "uvcvideo", "tegra-capture-vi"); empty if unknown
-  public var driver: String = String()
+  public var driver: String {
+    get {_storage._driver}
+    set {_uniqueStorage()._driver = newValue}
+  }
 
   /// libcamera camera-name; empty when libcamera enumeration unavailable or ambiguous
-  public var libcameraID: String = String()
+  public var libcameraID: String {
+    get {_storage._libcameraID}
+    set {_uniqueStorage()._libcameraID = newValue}
+  }
 
   /// network camera address, e.g. "10.98.0.50"; empty for local cameras
-  public var address: String = String()
+  public var address: String {
+    get {_storage._address}
+    set {_uniqueStorage()._address = newValue}
+  }
 
   /// model reported by discovery, e.g. "RLC-520A"
-  public var model: String = String()
+  public var model: String {
+    get {_storage._model}
+    set {_uniqueStorage()._model = newValue}
+  }
 
   /// stable identity for network cameras; empty for local cameras
-  public var mac: String = String()
+  public var mac: String {
+    get {_storage._mac}
+    set {_uniqueStorage()._mac = newValue}
+  }
 
   /// the agent holds a login for this camera
-  public var hasCredentials_p: Bool = false
+  public var hasCredentials_p: Bool {
+    get {_storage._hasCredentials_p}
+    set {_uniqueStorage()._hasCredentials_p = newValue}
+  }
 
   /// the most recent probe reached this camera
-  public var online: Bool = false
+  public var online: Bool {
+    get {_storage._online}
+    set {_uniqueStorage()._online = newValue}
+  }
 
   /// ROS 2 image topic, e.g. "/camera/image_raw"; empty for other transports
-  public var topic: String = String()
+  public var topic: String {
+    get {_storage._topic}
+    set {_uniqueStorage()._topic = newValue}
+  }
 
   /// Stable identity for a LOCAL camera, the counterpart of `mac` above, and
   /// the name to pass to StreamVideoRequest.stable_id.
@@ -177,14 +213,56 @@ public nonisolated struct Wendy_Agent_Services_V1_VideoDevice: Sendable {
   ///                   collide on a single by-id link, and the camera that
   ///                   loses it has nothing else that separates the two.
   ///
-  /// Empty when the device has no /dev/v4l entry -- CSI and network cameras,
-  /// or a kernel without the udev symlinks.
-  public var stableID: String = String()
+  ///   sensorlink:<pairing-key>:<channel-id> identifies an enrolled SensorLink
+  ///                   source channel independently of its loopback node.
+  ///   ip-mac:<mac>     identifies a registered network camera by MAC address.
+  ///   ros2:<key>       identifies a ROS camera by graph, domain and topic;
+  ///                   independent of loopback numbering and publisher GUID.
+  ///
+  /// Empty when no stable identity is available (for example CSI cameras or
+  /// local cameras on a kernel without udev symlinks).
+  public var stableID: String {
+    get {_storage._stableID}
+    set {_uniqueStorage()._stableID = newValue}
+  }
 
   /// V4L2 capture FourCCs, including trailing spaces (e.g. "Z16 ").
   /// Empty for older agents, non-V4L2 sources, or an unavailable format query.
   /// These describe the sensor output, not the encoded delivery codec.
-  public var pixelFormats: [String] = []
+  public var pixelFormats: [String] {
+    get {_storage._pixelFormats}
+    set {_uniqueStorage()._pixelFormats = newValue}
+  }
+
+  /// A recognized adapter and its preferred raw capture geometry. Presence
+  /// does not promise temperatures: inspect each frame's thermal_plane.
+  public var thermal: Wendy_Agent_Services_V1_ThermalCamera {
+    get {_storage._thermal ?? Wendy_Agent_Services_V1_ThermalCamera()}
+    set {_uniqueStorage()._thermal = newValue}
+  }
+  /// Returns true if `thermal` has been explicitly set.
+  public var hasThermal: Bool {_storage._thermal != nil}
+  /// Clears the value of `thermal`. Subsequent reads from it will return its default value.
+  public mutating func clearThermal() {_uniqueStorage()._thermal = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _storage = _StorageClass.defaultInstance
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_ThermalCamera: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// versioned decoder profile, e.g. "topdon-tc001-v1"
+  public var adapter: String = String()
+
+  public var captureWidth: UInt32 = 0
+
+  public var captureHeight: UInt32 = 0
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -271,6 +349,13 @@ public nonisolated struct Wendy_Agent_Services_V1_StreamVideoRequest: Sendable {
   /// stream whatever the kernel happened to put at that number, which is the
   /// silent-wrong-camera failure this field exists to remove.
   public var stableID: String = String()
+
+  /// Adapt RAW delivery to this subscriber's transport capacity. Starts at
+  /// 5 fps, reduces the rate under backpressure and probes upward gradually.
+  /// Frames are skipped before transmission; capture and other subscribers
+  /// are unaffected. Intended for live viewers, not full-rate recording or
+  /// analytics. Ignored for encoded video and by older agents.
+  public var adaptiveFramerate: Bool = false
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -453,54 +538,134 @@ public nonisolated struct Wendy_Agent_Services_V1_RawFormat: Sendable {
   /// stride; data is exactly bytes_per_line * height bytes
   public var bytesPerLine: UInt32 = 0
 
+  /// Optional measurement plane within the untouched capture payload. Never
+  /// infer thermal measurements from the FourCC or geometry alone.
+  public var thermalPlane: Wendy_Agent_Services_V1_ThermalPlane {
+    get {_thermalPlane ?? Wendy_Agent_Services_V1_ThermalPlane()}
+    set {_thermalPlane = newValue}
+  }
+  /// Returns true if `thermalPlane` has been explicitly set.
+  public var hasThermalPlane: Bool {self._thermalPlane != nil}
+  /// Clears the value of `thermalPlane`. Subsequent reads from it will return its default value.
+  public mutating func clearThermalPlane() {self._thermalPlane = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _thermalPlane: Wendy_Agent_Services_V1_ThermalPlane? = nil
+}
+
+/// Version 1 describes row-major unsigned 16-bit little-endian sensor samples.
+/// Offsets and stride are bytes in VideoFrame.data, not preview coordinates.
+/// Preview/header/telemetry bytes outside the plane are not measurements.
+public nonisolated struct Wendy_Agent_Services_V1_ThermalPlane: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var version: UInt32 = 0
+
+  public var adapter: String = String()
+
+  public var width: UInt32 = 0
+
+  public var height: UInt32 = 0
+
+  public var offsetBytes: UInt32 = 0
+
+  public var rowStrideBytes: UInt32 = 0
+
+  public var invalidValues: [UInt32] = []
+
+  /// Absent means raw counts only. The adapter must establish the active
+  /// radiometric mode before providing a conversion. This is not an accuracy
+  /// guarantee or a claim that scene-specific emissivity has been corrected.
+  public var temperature: Wendy_Agent_Services_V1_ThermalLinearTemperature {
+    get {_temperature ?? Wendy_Agent_Services_V1_ThermalLinearTemperature()}
+    set {_temperature = newValue}
+  }
+  /// Returns true if `temperature` has been explicitly set.
+  public var hasTemperature: Bool {self._temperature != nil}
+  /// Clears the value of `temperature`. Subsequent reads from it will return its default value.
+  public mutating func clearTemperature() {self._temperature = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _temperature: Wendy_Agent_Services_V1_ThermalLinearTemperature? = nil
+}
+
+public nonisolated struct Wendy_Agent_Services_V1_ThermalLinearTemperature: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var kelvinPerCount: Double = 0
+
+  public var kelvinOffset: Double = 0
+
+  /// identifies the conversion/configuration evidence
+  public var provenance: String = String()
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 }
 
-public nonisolated struct Wendy_Agent_Services_V1_VideoFrame: Sendable {
+public nonisolated struct Wendy_Agent_Services_V1_VideoFrame: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   /// chunk of encoded video; concatenate chunks in order; format described by codec. For VIDEO_CODEC_RAW, one whole frame.
-  public var data: Data = Data()
+  public var data: Data {
+    get {_storage._data}
+    set {_uniqueStorage()._data = newValue}
+  }
 
   /// wall-clock timestamp in nanoseconds
-  public var timestampNs: UInt64 = 0
+  public var timestampNs: UInt64 {
+    get {_storage._timestampNs}
+    set {_uniqueStorage()._timestampNs = newValue}
+  }
 
   /// codec used; default 0 = H264
-  public var codec: Wendy_Agent_Services_V1_VideoCodec = .h264
+  public var codec: Wendy_Agent_Services_V1_VideoCodec {
+    get {_storage._codec}
+    set {_uniqueStorage()._codec = newValue}
+  }
 
   /// set on VIDEO_CODEC_RAW frames only
   public var rawFormat: Wendy_Agent_Services_V1_RawFormat {
-    get {_rawFormat ?? Wendy_Agent_Services_V1_RawFormat()}
-    set {_rawFormat = newValue}
+    get {_storage._rawFormat ?? Wendy_Agent_Services_V1_RawFormat()}
+    set {_uniqueStorage()._rawFormat = newValue}
   }
   /// Returns true if `rawFormat` has been explicitly set.
-  public var hasRawFormat: Bool {self._rawFormat != nil}
+  public var hasRawFormat: Bool {_storage._rawFormat != nil}
   /// Clears the value of `rawFormat`. Subsequent reads from it will return its default value.
-  public mutating func clearRawFormat() {self._rawFormat = nil}
+  public mutating func clearRawFormat() {_uniqueStorage()._rawFormat = nil}
 
-  /// Wendy Data's extrema for a supported picture-only Y16 frame. Values are
-  /// sensor counts, NOT temperatures: the camera's radiometric mode and scale
-  /// must be known before converting them. Absent on older agents or layouts
-  /// the decoder cannot interpret. Computed from this exact raw payload.
+  /// Extrema in thermal_plane sensor coordinates, computed from this exact
+  /// payload. Values remain raw samples; use thermal_plane.temperature only
+  /// when present to convert them. Absent for unidentified/unsupported planes.
+  /// Older agents may send extrema for picture-only PureThermal Y16 frames
+  /// without a plane description; their values have no implied temperature.
   public var rawExtrema: Wendy_Agent_Services_V1_RawFrameExtrema {
-    get {_rawExtrema ?? Wendy_Agent_Services_V1_RawFrameExtrema()}
-    set {_rawExtrema = newValue}
+    get {_storage._rawExtrema ?? Wendy_Agent_Services_V1_RawFrameExtrema()}
+    set {_uniqueStorage()._rawExtrema = newValue}
   }
   /// Returns true if `rawExtrema` has been explicitly set.
-  public var hasRawExtrema: Bool {self._rawExtrema != nil}
+  public var hasRawExtrema: Bool {_storage._rawExtrema != nil}
   /// Clears the value of `rawExtrema`. Subsequent reads from it will return its default value.
-  public mutating func clearRawExtrema() {self._rawExtrema = nil}
+  public mutating func clearRawExtrema() {_uniqueStorage()._rawExtrema = nil}
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 
-  fileprivate var _rawFormat: Wendy_Agent_Services_V1_RawFormat? = nil
-  fileprivate var _rawExtrema: Wendy_Agent_Services_V1_RawFrameExtrema? = nil
+  fileprivate var _storage = _StorageClass.defaultInstance
 }
 
 /// A tunable V4L2 control on a local camera -- exposure, gain, white balance and
@@ -781,7 +946,175 @@ nonisolated extension Wendy_Agent_Services_V1_VideoCodec: SwiftProtobuf._ProtoNa
 
 nonisolated extension Wendy_Agent_Services_V1_VideoDevice: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".VideoDevice"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}name\0\u{1}path\0\u{1}transport\0\u{1}driver\0\u{3}libcamera_id\0\u{1}address\0\u{1}model\0\u{1}mac\0\u{3}has_credentials\0\u{1}online\0\u{1}topic\0\u{3}stable_id\0\u{3}pixel_formats\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}name\0\u{1}path\0\u{1}transport\0\u{1}driver\0\u{3}libcamera_id\0\u{1}address\0\u{1}model\0\u{1}mac\0\u{3}has_credentials\0\u{1}online\0\u{1}topic\0\u{3}stable_id\0\u{3}pixel_formats\0\u{1}thermal\0")
+
+  fileprivate class _StorageClass {
+    var _id: UInt32 = 0
+    var _name: String = String()
+    var _path: String = String()
+    var _transport: Wendy_Agent_Services_V1_VideoTransport = .unknown
+    var _driver: String = String()
+    var _libcameraID: String = String()
+    var _address: String = String()
+    var _model: String = String()
+    var _mac: String = String()
+    var _hasCredentials_p: Bool = false
+    var _online: Bool = false
+    var _topic: String = String()
+    var _stableID: String = String()
+    var _pixelFormats: [String] = []
+    var _thermal: Wendy_Agent_Services_V1_ThermalCamera? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _id = source._id
+      _name = source._name
+      _path = source._path
+      _transport = source._transport
+      _driver = source._driver
+      _libcameraID = source._libcameraID
+      _address = source._address
+      _model = source._model
+      _mac = source._mac
+      _hasCredentials_p = source._hasCredentials_p
+      _online = source._online
+      _topic = source._topic
+      _stableID = source._stableID
+      _pixelFormats = source._pixelFormats
+      _thermal = source._thermal
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularUInt32Field(value: &_storage._id) }()
+        case 2: try { try decoder.decodeSingularStringField(value: &_storage._name) }()
+        case 3: try { try decoder.decodeSingularStringField(value: &_storage._path) }()
+        case 4: try { try decoder.decodeSingularEnumField(value: &_storage._transport) }()
+        case 5: try { try decoder.decodeSingularStringField(value: &_storage._driver) }()
+        case 6: try { try decoder.decodeSingularStringField(value: &_storage._libcameraID) }()
+        case 7: try { try decoder.decodeSingularStringField(value: &_storage._address) }()
+        case 8: try { try decoder.decodeSingularStringField(value: &_storage._model) }()
+        case 9: try { try decoder.decodeSingularStringField(value: &_storage._mac) }()
+        case 10: try { try decoder.decodeSingularBoolField(value: &_storage._hasCredentials_p) }()
+        case 11: try { try decoder.decodeSingularBoolField(value: &_storage._online) }()
+        case 12: try { try decoder.decodeSingularStringField(value: &_storage._topic) }()
+        case 13: try { try decoder.decodeSingularStringField(value: &_storage._stableID) }()
+        case 14: try { try decoder.decodeRepeatedStringField(value: &_storage._pixelFormats) }()
+        case 15: try { try decoder.decodeSingularMessageField(value: &_storage._thermal) }()
+        default: break
+        }
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if _storage._id != 0 {
+        try visitor.visitSingularUInt32Field(value: _storage._id, fieldNumber: 1)
+      }
+      if !_storage._name.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._name, fieldNumber: 2)
+      }
+      if !_storage._path.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._path, fieldNumber: 3)
+      }
+      if _storage._transport != .unknown {
+        try visitor.visitSingularEnumField(value: _storage._transport, fieldNumber: 4)
+      }
+      if !_storage._driver.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._driver, fieldNumber: 5)
+      }
+      if !_storage._libcameraID.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._libcameraID, fieldNumber: 6)
+      }
+      if !_storage._address.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._address, fieldNumber: 7)
+      }
+      if !_storage._model.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._model, fieldNumber: 8)
+      }
+      if !_storage._mac.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._mac, fieldNumber: 9)
+      }
+      if _storage._hasCredentials_p != false {
+        try visitor.visitSingularBoolField(value: _storage._hasCredentials_p, fieldNumber: 10)
+      }
+      if _storage._online != false {
+        try visitor.visitSingularBoolField(value: _storage._online, fieldNumber: 11)
+      }
+      if !_storage._topic.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._topic, fieldNumber: 12)
+      }
+      if !_storage._stableID.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._stableID, fieldNumber: 13)
+      }
+      if !_storage._pixelFormats.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._pixelFormats, fieldNumber: 14)
+      }
+      try { if let v = _storage._thermal {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 15)
+      } }()
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_VideoDevice, rhs: Wendy_Agent_Services_V1_VideoDevice) -> Bool {
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._id != rhs_storage._id {return false}
+        if _storage._name != rhs_storage._name {return false}
+        if _storage._path != rhs_storage._path {return false}
+        if _storage._transport != rhs_storage._transport {return false}
+        if _storage._driver != rhs_storage._driver {return false}
+        if _storage._libcameraID != rhs_storage._libcameraID {return false}
+        if _storage._address != rhs_storage._address {return false}
+        if _storage._model != rhs_storage._model {return false}
+        if _storage._mac != rhs_storage._mac {return false}
+        if _storage._hasCredentials_p != rhs_storage._hasCredentials_p {return false}
+        if _storage._online != rhs_storage._online {return false}
+        if _storage._topic != rhs_storage._topic {return false}
+        if _storage._stableID != rhs_storage._stableID {return false}
+        if _storage._pixelFormats != rhs_storage._pixelFormats {return false}
+        if _storage._thermal != rhs_storage._thermal {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_ThermalCamera: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ThermalCamera"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}adapter\0\u{3}capture_width\0\u{3}capture_height\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -789,86 +1122,31 @@ nonisolated extension Wendy_Agent_Services_V1_VideoDevice: SwiftProtobuf.Message
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.path) }()
-      case 4: try { try decoder.decodeSingularEnumField(value: &self.transport) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self.driver) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self.libcameraID) }()
-      case 7: try { try decoder.decodeSingularStringField(value: &self.address) }()
-      case 8: try { try decoder.decodeSingularStringField(value: &self.model) }()
-      case 9: try { try decoder.decodeSingularStringField(value: &self.mac) }()
-      case 10: try { try decoder.decodeSingularBoolField(value: &self.hasCredentials_p) }()
-      case 11: try { try decoder.decodeSingularBoolField(value: &self.online) }()
-      case 12: try { try decoder.decodeSingularStringField(value: &self.topic) }()
-      case 13: try { try decoder.decodeSingularStringField(value: &self.stableID) }()
-      case 14: try { try decoder.decodeRepeatedStringField(value: &self.pixelFormats) }()
+      case 1: try { try decoder.decodeSingularStringField(value: &self.adapter) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.captureWidth) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.captureHeight) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if self.id != 0 {
-      try visitor.visitSingularUInt32Field(value: self.id, fieldNumber: 1)
+    if !self.adapter.isEmpty {
+      try visitor.visitSingularStringField(value: self.adapter, fieldNumber: 1)
     }
-    if !self.name.isEmpty {
-      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
+    if self.captureWidth != 0 {
+      try visitor.visitSingularUInt32Field(value: self.captureWidth, fieldNumber: 2)
     }
-    if !self.path.isEmpty {
-      try visitor.visitSingularStringField(value: self.path, fieldNumber: 3)
-    }
-    if self.transport != .unknown {
-      try visitor.visitSingularEnumField(value: self.transport, fieldNumber: 4)
-    }
-    if !self.driver.isEmpty {
-      try visitor.visitSingularStringField(value: self.driver, fieldNumber: 5)
-    }
-    if !self.libcameraID.isEmpty {
-      try visitor.visitSingularStringField(value: self.libcameraID, fieldNumber: 6)
-    }
-    if !self.address.isEmpty {
-      try visitor.visitSingularStringField(value: self.address, fieldNumber: 7)
-    }
-    if !self.model.isEmpty {
-      try visitor.visitSingularStringField(value: self.model, fieldNumber: 8)
-    }
-    if !self.mac.isEmpty {
-      try visitor.visitSingularStringField(value: self.mac, fieldNumber: 9)
-    }
-    if self.hasCredentials_p != false {
-      try visitor.visitSingularBoolField(value: self.hasCredentials_p, fieldNumber: 10)
-    }
-    if self.online != false {
-      try visitor.visitSingularBoolField(value: self.online, fieldNumber: 11)
-    }
-    if !self.topic.isEmpty {
-      try visitor.visitSingularStringField(value: self.topic, fieldNumber: 12)
-    }
-    if !self.stableID.isEmpty {
-      try visitor.visitSingularStringField(value: self.stableID, fieldNumber: 13)
-    }
-    if !self.pixelFormats.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.pixelFormats, fieldNumber: 14)
+    if self.captureHeight != 0 {
+      try visitor.visitSingularUInt32Field(value: self.captureHeight, fieldNumber: 3)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: Wendy_Agent_Services_V1_VideoDevice, rhs: Wendy_Agent_Services_V1_VideoDevice) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.name != rhs.name {return false}
-    if lhs.path != rhs.path {return false}
-    if lhs.transport != rhs.transport {return false}
-    if lhs.driver != rhs.driver {return false}
-    if lhs.libcameraID != rhs.libcameraID {return false}
-    if lhs.address != rhs.address {return false}
-    if lhs.model != rhs.model {return false}
-    if lhs.mac != rhs.mac {return false}
-    if lhs.hasCredentials_p != rhs.hasCredentials_p {return false}
-    if lhs.online != rhs.online {return false}
-    if lhs.topic != rhs.topic {return false}
-    if lhs.stableID != rhs.stableID {return false}
-    if lhs.pixelFormats != rhs.pixelFormats {return false}
+  public static func ==(lhs: Wendy_Agent_Services_V1_ThermalCamera, rhs: Wendy_Agent_Services_V1_ThermalCamera) -> Bool {
+    if lhs.adapter != rhs.adapter {return false}
+    if lhs.captureWidth != rhs.captureWidth {return false}
+    if lhs.captureHeight != rhs.captureHeight {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -936,7 +1214,7 @@ nonisolated extension Wendy_Agent_Services_V1_ListVideoDevicesResponse: SwiftPro
 
 nonisolated extension Wendy_Agent_Services_V1_StreamVideoRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".StreamVideoRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}device_id\0\u{1}width\0\u{1}height\0\u{1}framerate\0\u{1}codec\0\u{3}stable_id\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}device_id\0\u{1}width\0\u{1}height\0\u{1}framerate\0\u{1}codec\0\u{3}stable_id\0\u{3}adaptive_framerate\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -950,6 +1228,7 @@ nonisolated extension Wendy_Agent_Services_V1_StreamVideoRequest: SwiftProtobuf.
       case 4: try { try decoder.decodeSingularUInt32Field(value: &self.framerate) }()
       case 5: try { try decoder.decodeSingularEnumField(value: &self.codec) }()
       case 6: try { try decoder.decodeSingularStringField(value: &self.stableID) }()
+      case 7: try { try decoder.decodeSingularBoolField(value: &self.adaptiveFramerate) }()
       default: break
       }
     }
@@ -974,6 +1253,9 @@ nonisolated extension Wendy_Agent_Services_V1_StreamVideoRequest: SwiftProtobuf.
     if !self.stableID.isEmpty {
       try visitor.visitSingularStringField(value: self.stableID, fieldNumber: 6)
     }
+    if self.adaptiveFramerate != false {
+      try visitor.visitSingularBoolField(value: self.adaptiveFramerate, fieldNumber: 7)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -984,6 +1266,7 @@ nonisolated extension Wendy_Agent_Services_V1_StreamVideoRequest: SwiftProtobuf.
     if lhs.framerate != rhs.framerate {return false}
     if lhs.codec != rhs.codec {return false}
     if lhs.stableID != rhs.stableID {return false}
+    if lhs.adaptiveFramerate != rhs.adaptiveFramerate {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1222,7 +1505,7 @@ nonisolated extension Wendy_Agent_Services_V1_TestCameraCredentialsResponse.Resu
 
 nonisolated extension Wendy_Agent_Services_V1_RawFormat: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RawFormat"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}width\0\u{1}height\0\u{1}fourcc\0\u{3}bytes_per_line\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}width\0\u{1}height\0\u{1}fourcc\0\u{3}bytes_per_line\0\u{3}thermal_plane\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1234,12 +1517,17 @@ nonisolated extension Wendy_Agent_Services_V1_RawFormat: SwiftProtobuf.Message, 
       case 2: try { try decoder.decodeSingularUInt32Field(value: &self.height) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self.fourcc) }()
       case 4: try { try decoder.decodeSingularUInt32Field(value: &self.bytesPerLine) }()
+      case 5: try { try decoder.decodeSingularMessageField(value: &self._thermalPlane) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if self.width != 0 {
       try visitor.visitSingularUInt32Field(value: self.width, fieldNumber: 1)
     }
@@ -1252,6 +1540,9 @@ nonisolated extension Wendy_Agent_Services_V1_RawFormat: SwiftProtobuf.Message, 
     if self.bytesPerLine != 0 {
       try visitor.visitSingularUInt32Field(value: self.bytesPerLine, fieldNumber: 4)
     }
+    try { if let v = self._thermalPlane {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1260,14 +1551,15 @@ nonisolated extension Wendy_Agent_Services_V1_RawFormat: SwiftProtobuf.Message, 
     if lhs.height != rhs.height {return false}
     if lhs.fourcc != rhs.fourcc {return false}
     if lhs.bytesPerLine != rhs.bytesPerLine {return false}
+    if lhs._thermalPlane != rhs._thermalPlane {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".VideoFrame"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0\u{3}timestamp_ns\0\u{1}codec\0\u{3}raw_format\0\u{3}raw_extrema\0")
+nonisolated extension Wendy_Agent_Services_V1_ThermalPlane: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ThermalPlane"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{1}adapter\0\u{1}width\0\u{1}height\0\u{3}offset_bytes\0\u{3}row_stride_bytes\0\u{3}invalid_values\0\u{1}temperature\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1275,11 +1567,14 @@ nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message,
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularBytesField(value: &self.data) }()
-      case 2: try { try decoder.decodeSingularUInt64Field(value: &self.timestampNs) }()
-      case 3: try { try decoder.decodeSingularEnumField(value: &self.codec) }()
-      case 4: try { try decoder.decodeSingularMessageField(value: &self._rawFormat) }()
-      case 5: try { try decoder.decodeSingularMessageField(value: &self._rawExtrema) }()
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.version) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.adapter) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.width) }()
+      case 4: try { try decoder.decodeSingularUInt32Field(value: &self.height) }()
+      case 5: try { try decoder.decodeSingularUInt32Field(value: &self.offsetBytes) }()
+      case 6: try { try decoder.decodeSingularUInt32Field(value: &self.rowStrideBytes) }()
+      case 7: try { try decoder.decodeRepeatedUInt32Field(value: &self.invalidValues) }()
+      case 8: try { try decoder.decodeSingularMessageField(value: &self._temperature) }()
       default: break
       }
     }
@@ -1290,30 +1585,180 @@ nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message,
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
     // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.data.isEmpty {
-      try visitor.visitSingularBytesField(value: self.data, fieldNumber: 1)
+    if self.version != 0 {
+      try visitor.visitSingularUInt32Field(value: self.version, fieldNumber: 1)
     }
-    if self.timestampNs != 0 {
-      try visitor.visitSingularUInt64Field(value: self.timestampNs, fieldNumber: 2)
+    if !self.adapter.isEmpty {
+      try visitor.visitSingularStringField(value: self.adapter, fieldNumber: 2)
     }
-    if self.codec != .h264 {
-      try visitor.visitSingularEnumField(value: self.codec, fieldNumber: 3)
+    if self.width != 0 {
+      try visitor.visitSingularUInt32Field(value: self.width, fieldNumber: 3)
     }
-    try { if let v = self._rawFormat {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
-    } }()
-    try { if let v = self._rawExtrema {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    if self.height != 0 {
+      try visitor.visitSingularUInt32Field(value: self.height, fieldNumber: 4)
+    }
+    if self.offsetBytes != 0 {
+      try visitor.visitSingularUInt32Field(value: self.offsetBytes, fieldNumber: 5)
+    }
+    if self.rowStrideBytes != 0 {
+      try visitor.visitSingularUInt32Field(value: self.rowStrideBytes, fieldNumber: 6)
+    }
+    if !self.invalidValues.isEmpty {
+      try visitor.visitPackedUInt32Field(value: self.invalidValues, fieldNumber: 7)
+    }
+    try { if let v = self._temperature {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
     } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
+  public static func ==(lhs: Wendy_Agent_Services_V1_ThermalPlane, rhs: Wendy_Agent_Services_V1_ThermalPlane) -> Bool {
+    if lhs.version != rhs.version {return false}
+    if lhs.adapter != rhs.adapter {return false}
+    if lhs.width != rhs.width {return false}
+    if lhs.height != rhs.height {return false}
+    if lhs.offsetBytes != rhs.offsetBytes {return false}
+    if lhs.rowStrideBytes != rhs.rowStrideBytes {return false}
+    if lhs.invalidValues != rhs.invalidValues {return false}
+    if lhs._temperature != rhs._temperature {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_ThermalLinearTemperature: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ThermalLinearTemperature"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}kelvin_per_count\0\u{3}kelvin_offset\0\u{1}provenance\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularDoubleField(value: &self.kelvinPerCount) }()
+      case 2: try { try decoder.decodeSingularDoubleField(value: &self.kelvinOffset) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.provenance) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.kelvinPerCount.bitPattern != 0 {
+      try visitor.visitSingularDoubleField(value: self.kelvinPerCount, fieldNumber: 1)
+    }
+    if self.kelvinOffset.bitPattern != 0 {
+      try visitor.visitSingularDoubleField(value: self.kelvinOffset, fieldNumber: 2)
+    }
+    if !self.provenance.isEmpty {
+      try visitor.visitSingularStringField(value: self.provenance, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_ThermalLinearTemperature, rhs: Wendy_Agent_Services_V1_ThermalLinearTemperature) -> Bool {
+    if lhs.kelvinPerCount != rhs.kelvinPerCount {return false}
+    if lhs.kelvinOffset != rhs.kelvinOffset {return false}
+    if lhs.provenance != rhs.provenance {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".VideoFrame"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0\u{3}timestamp_ns\0\u{1}codec\0\u{3}raw_format\0\u{3}raw_extrema\0")
+
+  fileprivate class _StorageClass {
+    var _data: Data = Data()
+    var _timestampNs: UInt64 = 0
+    var _codec: Wendy_Agent_Services_V1_VideoCodec = .h264
+    var _rawFormat: Wendy_Agent_Services_V1_RawFormat? = nil
+    var _rawExtrema: Wendy_Agent_Services_V1_RawFrameExtrema? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _data = source._data
+      _timestampNs = source._timestampNs
+      _codec = source._codec
+      _rawFormat = source._rawFormat
+      _rawExtrema = source._rawExtrema
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularBytesField(value: &_storage._data) }()
+        case 2: try { try decoder.decodeSingularUInt64Field(value: &_storage._timestampNs) }()
+        case 3: try { try decoder.decodeSingularEnumField(value: &_storage._codec) }()
+        case 4: try { try decoder.decodeSingularMessageField(value: &_storage._rawFormat) }()
+        case 5: try { try decoder.decodeSingularMessageField(value: &_storage._rawExtrema) }()
+        default: break
+        }
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if !_storage._data.isEmpty {
+        try visitor.visitSingularBytesField(value: _storage._data, fieldNumber: 1)
+      }
+      if _storage._timestampNs != 0 {
+        try visitor.visitSingularUInt64Field(value: _storage._timestampNs, fieldNumber: 2)
+      }
+      if _storage._codec != .h264 {
+        try visitor.visitSingularEnumField(value: _storage._codec, fieldNumber: 3)
+      }
+      try { if let v = _storage._rawFormat {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+      } }()
+      try { if let v = _storage._rawExtrema {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+      } }()
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
   public static func ==(lhs: Wendy_Agent_Services_V1_VideoFrame, rhs: Wendy_Agent_Services_V1_VideoFrame) -> Bool {
-    if lhs.data != rhs.data {return false}
-    if lhs.timestampNs != rhs.timestampNs {return false}
-    if lhs.codec != rhs.codec {return false}
-    if lhs._rawFormat != rhs._rawFormat {return false}
-    if lhs._rawExtrema != rhs._rawExtrema {return false}
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._data != rhs_storage._data {return false}
+        if _storage._timestampNs != rhs_storage._timestampNs {return false}
+        if _storage._codec != rhs_storage._codec {return false}
+        if _storage._rawFormat != rhs_storage._rawFormat {return false}
+        if _storage._rawExtrema != rhs_storage._rawExtrema {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
