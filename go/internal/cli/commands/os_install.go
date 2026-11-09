@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"google.golang.org/protobuf/proto"
 
@@ -87,7 +88,7 @@ When called with positional arguments, skips interactive prompts:
   wendy os install <image-path> <drive-id> --force
 
 When called with manifest-backed flags, installs a specific version:
-  wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
+  wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force --no-wifi
 
 Pre-seed multiple WiFi networks (repeatable, highest-priority first):
   wendy os install --device-type raspberry-pi-5 --drive /dev/disk4 --force \
@@ -95,7 +96,10 @@ Pre-seed multiple WiFi networks (repeatable, highest-priority first):
     --wifi "ssid=Office,password=corp,priority=50" \
     --wifi "ssid=Cafe,hidden=true"
 
-Flags can be provided progressively — omitted values trigger interactive pickers.`,
+Flags can be provided progressively — omitted values trigger interactive pickers.
+Prompts still work when output is piped, as long as you type the command in a
+terminal. Without a terminal, choose first-boot Wi-Fi with --wifi, --wifi-ssid
+or --no-wifi, pick the target with flags, and pass --force to skip confirmations.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			switch len(args) {
 			case 0, 2:
@@ -135,6 +139,27 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			if nightly && versionFlag != "" {
 				return usageErrorf("--nightly and --version are mutually exclusive")
 			}
+			opts := wifiCLIOptions{
+				SSID:          wifiSSID,
+				Password:      wifiPassword,
+				Entries:       wifiEntries,
+				NoWifi:        noWifi,
+				RequireChoice: true,
+			}
+			// Flag mistakes fail before anything is fetched, elevated or erased.
+			if err := validateWiFiFlags(opts); err != nil {
+				return err
+			}
+			if deviceName != "" {
+				if err := validateDeviceName(deviceName); err != nil {
+					return usageErrorf("--device-name: %w", err)
+				}
+			}
+			// Without a terminal the installers would reach this error only after
+			// elevation and drive selection; fail before them.
+			if len(args) == 0 && !isInteractiveTerminal() && !opts.chosen() && installAsksWiFi(deviceType) {
+				return markUsage(errWiFiUndecided)
+			}
 
 			var agent *localInstallAgent
 			if cmd.Flags().Changed("binary") {
@@ -146,13 +171,6 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				if err != nil {
 					return err
 				}
-			}
-
-			opts := wifiCLIOptions{
-				SSID:     wifiSSID,
-				Password: wifiPassword,
-				Entries:  wifiEntries,
-				NoWifi:   noWifi,
 			}
 
 			if len(args) == 2 {
@@ -199,7 +217,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")
 	cmd.Flags().StringArrayVar(&wifiEntries, "wifi", nil, "Pre-configure a WiFi network. Repeatable. Format: ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2]")
-	cmd.Flags().BoolVar(&noWifi, "no-wifi", false, "Skip WiFi setup entirely (no interactive prompt, no pre-seeded networks)")
+	cmd.Flags().BoolVar(&noWifi, "no-wifi", false, "Install without WiFi (reach the device over Ethernet or USB); without a terminal, pass this or --wifi/--wifi-ssid")
 	cmd.Flags().StringVar(&deviceName, "device-name", "", "Set device name on first boot (e.g. brave-dolphin)")
 	cmd.Flags().BoolVar(&preEnroll, "pre-enroll", false, "Enroll with Wendy Cloud during imaging, or after reboot for ESP32 (requires 'wendy auth login')")
 	cmd.Flags().StringVar(&enrollCloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the auth session to use for pre-enrollment (optional when a default is set via 'wendy auth use')")
@@ -427,8 +445,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	}
 	// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
 	// Rejected before any manifest fetch: the answer never depends on it.
-	switch flagDeviceType {
-	case "esp32-c5", "esp32-c6", "esp32-c61", "esp32-p4", "esp32-s3":
+	if isESP32Target(flagDeviceType) {
 		return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
 	}
 	if storageOverride != "" && storageOverride != "nvme" && storageOverride != "sd" && storageOverride != "emmc" {
@@ -2298,30 +2315,97 @@ type wifiCLIOptions struct {
 	Password string   // --wifi-password (only valid with --wifi-ssid)
 	Entries  []string // --wifi, repeatable
 	NoWifi   bool     // --no-wifi
+	// RequireChoice makes an unanswered Wi-Fi question an error without a
+	// terminal; only callers with Wi-Fi flags to point at set it.
+	RequireChoice bool
 }
 
-// resolveWiFiCredentialsList builds the ordered list of WiFi credentials to
-// write to the config partition. It consults flags first (non-interactive),
-// and only falls back to the Bubble Tea prompts when no flag was set and
-// stdin is a TTY.
-func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
-	if opts.NoWifi {
-		if opts.SSID != "" || len(opts.Entries) > 0 {
-			return nil, fmt.Errorf("--no-wifi is incompatible with --wifi / --wifi-ssid")
-		}
-		return nil, nil
+// chosen reports whether a flag settles first-boot Wi-Fi.
+func (o wifiCLIOptions) chosen() bool {
+	return o.NoWifi || o.SSID != "" || len(o.Entries) > 0
+}
+
+// installAsksWiFi reports whether installing --device-type deviceType asks for
+// first-boot Wi-Fi; an empty type is picked interactively.
+func installAsksWiFi(deviceType string) bool {
+	switch deviceType {
+	case "", linuxDesktopValue, headlessMacValue:
+		return false
+	}
+	return !isESP32Target(deviceType)
+}
+
+// isESP32Target reports whether deviceType names an ESP32 target, which
+// --device-type does not install.
+func isESP32Target(deviceType string) bool {
+	switch deviceType {
+	case "esp32-c5", "esp32-c6", "esp32-c61", "esp32-p4", "esp32-s3":
+		return true
+	}
+	return false
+}
+
+// errWiFiUndecided is returned when nobody chose Wi-Fi for first boot and no
+// terminal can ask, so the board would otherwise boot unreachable over Wi-Fi.
+var errWiFiUndecided = errors.New("no Wi-Fi choice for first boot and no terminal to ask: pass --wifi ssid=<name>,password=<pw> (or --wifi-ssid/--wifi-password), or --no-wifi to skip")
+
+// Wi-Fi hooks used by resolveWiFiCredentialsList; stubbed in tests.
+var (
+	wifiKeychainPassword = lookupKeychainPassword
+	confirmWifiSetup     = func() (bool, error) {
+		return tui.ConfirmDefaultYes("Set up WiFi on first boot?")
+	}
+	promptWifiShortcutPassword = func(ssid string) (string, error) {
+		return tui.PromptPassword(fmt.Sprintf("WiFi password for %s", ssid), "(leave empty for open network)", nil)
+	}
+)
+
+// validateWiFiFlags rejects contradictory Wi-Fi flags and malformed --wifi
+// entries. It needs no terminal, so it runs before anything else.
+func validateWiFiFlags(opts wifiCLIOptions) error {
+	if opts.NoWifi && (opts.SSID != "" || opts.Password != "" || len(opts.Entries) > 0) {
+		return usageErrorf("--no-wifi cannot be combined with --wifi, --wifi-ssid or --wifi-password")
 	}
 	if opts.Password != "" && opts.SSID == "" {
-		return nil, fmt.Errorf("--wifi-password requires --wifi-ssid")
+		return usageErrorf("--wifi-password requires --wifi-ssid")
+	}
+	for i, raw := range opts.Entries {
+		if _, err := parseWiFiEntry(raw); err != nil {
+			return markUsage(wifiEntryError(i, raw, err))
+		}
+	}
+	return nil
+}
+
+// wifiEntryError names a bad --wifi entry by position and SSID, never by its
+// text: the entry can hold a password.
+func wifiEntryError(i int, raw string, err error) error {
+	for _, kv := range splitEscaped(raw, ',') {
+		k, v, _ := strings.Cut(kv, "=")
+		if strings.EqualFold(strings.TrimSpace(k), "ssid") && strings.TrimSpace(v) != "" {
+			return fmt.Errorf("invalid --wifi entry %d (ssid %q): %w", i+1, strings.TrimSpace(v), err)
+		}
+	}
+	return fmt.Errorf("invalid --wifi entry %d: %w", i+1, err)
+}
+
+// resolveWiFiCredentialsList returns the networks to seed: from flags, else asked.
+// With RequireChoice, nil always means none was chosen, never that nobody asked.
+func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
+	if err := validateWiFiFlags(opts); err != nil {
+		return nil, err
+	}
+	if opts.NoWifi {
+		return nil, nil
 	}
 
 	var creds []wendyconf.WifiCredential
 
 	// --wifi (repeatable) first so priorities stay in the order the user typed.
-	for _, raw := range opts.Entries {
+	for i, raw := range opts.Entries {
 		c, err := parseWiFiEntry(raw)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --wifi %q: %w", raw, err)
+			return nil, wifiEntryError(i, raw, err)
 		}
 		creds = append(creds, c)
 	}
@@ -2330,10 +2414,10 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 	if opts.SSID != "" {
 		c := wendyconf.WifiCredential{SSID: opts.SSID, Password: opts.Password}
 		if c.Password == "" {
-			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
+			if pw, kerr := wifiKeychainPassword(c.SSID); kerr == nil && pw != "" {
 				c.Password = pw
 			} else if isInteractiveTerminal() {
-				pw, perr := tui.PromptPassword(fmt.Sprintf("WiFi password for %s", c.SSID), "(leave empty for open network)", nil)
+				pw, perr := promptWifiShortcutPassword(c.SSID)
 				if perr != nil {
 					if errors.Is(perr, tui.ErrCancelled) {
 						return nil, ErrUserCancelled
@@ -2341,18 +2425,26 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 					return nil, fmt.Errorf("reading WiFi password: %w", perr)
 				}
 				c.Password = pw
+			} else {
+				// An open network must be asked for, not inferred from a missing password.
+				return nil, usageErrorf("no password for Wi-Fi %q: pass --wifi-password, or %s for an open network", c.SSID, openWiFiFlag(c.SSID))
 			}
 		}
 		creds = append(creds, c)
 	}
 
-	// If any flag supplied creds OR stdin is not a TTY, we're done.
-	if len(creds) > 0 || !isInteractiveTerminal() {
+	if len(creds) > 0 {
 		return creds, nil
+	}
+	if !isInteractiveTerminal() {
+		if opts.RequireChoice {
+			return nil, markUsage(errWiFiUndecided)
+		}
+		return nil, nil
 	}
 
 	// Interactive path: Y/N → loop until the user declines another network.
-	enable, err := tui.ConfirmDefaultYes("Set up WiFi on first boot?")
+	enable, err := confirmWifiSetup()
 	if err != nil {
 		if errors.Is(err, tui.ErrCancelled) {
 			return nil, ErrUserCancelled
@@ -2390,16 +2482,18 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 
 // parseWiFiEntry parses `ssid=X,password=Y,priority=N,hidden=true,security=wpa2`.
 // Only `ssid=` is required; commas inside values can be escaped with `\,`.
+// Errors never quote the entry: a password with an unescaped comma splits into
+// fields that would otherwise be echoed.
 func parseWiFiEntry(raw string) (wendyconf.WifiCredential, error) {
 	var c wendyconf.WifiCredential
-	for _, kv := range splitEscaped(raw, ',') {
+	for i, kv := range splitEscaped(raw, ',') {
 		kv = strings.TrimSpace(kv)
 		if kv == "" {
 			continue
 		}
 		eq := strings.IndexByte(kv, '=')
 		if eq <= 0 {
-			return c, fmt.Errorf("expected key=value, got %q", kv)
+			return c, fmt.Errorf("field %d is not key=value (escape a comma inside a value as \\,)", i+1)
 		}
 		k := strings.ToLower(strings.TrimSpace(kv[:eq]))
 		v := strings.TrimSpace(kv[eq+1:])
@@ -2411,25 +2505,36 @@ func parseWiFiEntry(raw string) (wendyconf.WifiCredential, error) {
 		case "priority":
 			n, err := strconv.Atoi(v)
 			if err != nil {
-				return c, fmt.Errorf("priority must be an integer: %w", err)
+				return c, errors.New("priority must be an integer")
 			}
 			c.Priority = int32(n)
 		case "hidden":
 			b, err := strconv.ParseBool(v)
 			if err != nil {
-				return c, fmt.Errorf("hidden must be true/false: %w", err)
+				return c, errors.New("hidden must be true/false")
 			}
 			c.Hidden = b
 		case "security":
 			c.Security = strings.ToLower(v)
 		default:
-			return c, fmt.Errorf("unknown key %q", k)
+			return c, fmt.Errorf("field %d has an unknown key: use ssid, password, priority, hidden or security, and escape a comma inside a value as \\,", i+1)
 		}
 	}
 	if c.SSID == "" {
 		return c, fmt.Errorf("ssid is required")
 	}
 	return c, nil
+}
+
+// openWiFiFlag is the --wifi argument that seeds ssid as an open network, as
+// parseWiFiEntry reads it and quoted for a shell; a placeholder if it cannot be.
+func openWiFiFlag(ssid string) string {
+	entry := "ssid=" + strings.ReplaceAll(ssid, ",", `\,`)
+	c, err := parseWiFiEntry(entry)
+	if err != nil || c.SSID != ssid || strings.ContainsFunc(ssid, unicode.IsControl) {
+		return "--wifi ssid=<name>"
+	}
+	return "--wifi " + shellQuoteArg(entry)
 }
 
 // splitEscaped splits s on sep, honouring `\sep` as a literal separator char.
