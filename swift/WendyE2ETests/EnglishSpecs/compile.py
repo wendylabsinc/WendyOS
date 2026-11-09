@@ -43,11 +43,13 @@ def main():
     names, files, envelope = NAMES, FILES, ENVELOPE
     if args.cache_only:
         names, files = ('CacheCompilerInput.md', 'cache-clear.md'), FILES[:1]
-        envelope = ('You are a blind English-to-Swift compiler. Compile only the two input '
-                    'documents below. They are the only task and behavior inputs. Do not '
-                    'call tools, read files, inspect implementations or run tests. Return '
-                    'only the requested Swift source, beginning with '
-                    '// FILE: EnglishCacheClearTests.swift and no Markdown fences.\n')
+        envelope = ('You are a blind English-to-Swift compiler. Compile the two input '
+                    'documents below, which are the only task and behavior inputs. Do not '
+                    'call any tool, read any file, inspect original or previously generated '
+                    'source, run another model or CLI, or run tests. All input bytes are '
+                    'provided in this prompt. Return only the requested complete Swift '
+                    'source file, beginning with the exact marker required by '
+                    'CacheCompilerInput.md, without Markdown fences or explanatory prose.\n')
     parts = [envelope]
     inputs = {}
     for name in names:
