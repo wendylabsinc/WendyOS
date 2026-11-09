@@ -81,6 +81,101 @@ func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
 	return result.GetEpisodes(), nil
 }
 
+// VisualPreviewAt retrieves only the first playable video, without changing the
+// active session. Clients extract and cache a small poster frame locally.
+type VisualPreview struct {
+	Path           string
+	MaximumCelsius *float64
+	Duration       float64
+	Reason         string
+}
+
+func (b *Backend) VisualPreviewAt(selector, episode string) (VisualPreview, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	conn, lite, err := b.connectTarget(ctx, selector)
+	if lite != nil {
+		defer lite.Close()
+	}
+	if conn != nil {
+		defer conn.Close()
+	}
+	if err != nil {
+		return VisualPreview{}, err
+	}
+	if conn == nil {
+		return VisualPreview{}, errors.New("recordings require a WendyOS agent")
+	}
+	return readVisualPreview(ctx, conn.DataService, episode)
+}
+
+func readVisualPreview(ctx context.Context, client pb.DataServiceClient, episode string) (VisualPreview, error) {
+	result, err := client.Inspect(ctx, &pb.DataInspectRequest{Episode: episode})
+	if err != nil {
+		return VisualPreview{}, err
+	}
+	if len(result.GetManifestJson()) > visualFileLimit {
+		return VisualPreview{}, errors.New("episode manifest exceeds the viewer limit")
+	}
+	var manifest data.Manifest
+	if err := json.Unmarshal(result.GetManifestJson(), &manifest); err != nil {
+		return VisualPreview{}, err
+	}
+	if manifest.ID != episode {
+		return VisualPreview{}, errors.New("the Agent returned a different episode")
+	}
+	start, end := manifest.StartedEpisodeNS, manifest.StoppedEpisodeNS
+	for _, source := range manifest.Sources {
+		if source.Count > 0 {
+			start = min(start, source.ActualOffset)
+		}
+	}
+	if manifest.CaptureStoppedEpisodeNS != 0 {
+		end = manifest.CaptureStoppedEpisodeNS
+	}
+	preview := VisualPreview{Reason: manifest.Trigger.Reason, Duration: (float64(end) - float64(start)) / 1e9}
+	for _, file := range manifest.Files {
+		if file.Path == "events.jsonl" && file.Size <= 2<<20 {
+			payload, err := visualDownload(ctx, client, episode, file)
+			if err == nil {
+				preview.MaximumCelsius = recordedThermalMaximum(payload)
+			}
+		}
+	}
+	for _, file := range manifest.Files {
+		if file.Role == data.FileRoleDerived && path.Base(file.Path) == "playable.mp4" && strings.HasPrefix(file.Path, "cameras/") && file.Size > 0 && file.Size <= 64<<20 {
+			preview.Path, err = visualDownloadVideo(ctx, client, episode, file)
+			return preview, err
+		}
+	}
+	return preview, nil
+}
+
+func recordedThermalMaximum(payload []byte) *float64 {
+	var maximum *float64
+	scan := bufio.NewScanner(bytes.NewReader(payload))
+	scan.Buffer(make([]byte, 4096), 2<<20)
+	for scan.Scan() {
+		var event struct {
+			Attributes struct {
+				Maximum *float64 `json:"max_celsius"`
+			} `json:"attributes"`
+		}
+		if json.Unmarshal(scan.Bytes(), &event) != nil || event.Attributes.Maximum == nil {
+			continue
+		}
+		value := *event.Attributes.Maximum
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < -273.15 {
+			continue
+		}
+		if maximum == nil || value > *maximum {
+			copy := value
+			maximum = &copy
+		}
+	}
+	return maximum
+}
+
 func (b *Backend) VisualEpisodes(session uint64) ([]*pb.DataEpisode, error) {
 	ctx, done := b.begin()
 	defer done()

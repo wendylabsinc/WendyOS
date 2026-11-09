@@ -37,6 +37,35 @@ func WDVisualEpisodesAt(selector *C.char) *C.WDVisualEpisodesResult {
 	return p
 }
 
+//export WDVisualPreviewAt
+func WDVisualPreviewAt(selector, episode *C.char) *C.WDVisualPreviewResult {
+	p := alloc[C.WDVisualPreviewResult](1)
+	preview, err := desktop.VisualPreviewAt(C.GoString(selector), C.GoString(episode))
+	p.status = status(err)
+	p.local_path = C.CString(preview.Path)
+	p.reason = C.CString(preview.Reason)
+	p.duration = C.double(preview.Duration)
+	if preview.MaximumCelsius != nil {
+		p.has_maximum = 1
+		p.maximum_celsius = C.double(*preview.MaximumCelsius)
+	}
+	return p
+}
+
+//export WDVisualPreviewFree
+func WDVisualPreviewFree(p *C.WDVisualPreviewResult) {
+	if p == nil {
+		return
+	}
+	if p.local_path != nil {
+		_ = os.Remove(C.GoString(p.local_path))
+	}
+	free(p.local_path)
+	free(p.reason)
+	free(p.status.message)
+	free(p)
+}
+
 //export WDVisualEpisodesFree
 func WDVisualEpisodesFree(p *C.WDVisualEpisodesResult) {
 	if p == nil {
