@@ -15,6 +15,7 @@
     "@slidev/theme-default": "0.25.0"
   },
   "overrides": {
-    "dompurify": "3.4.12"
+    "dompurify": "3.4.17",
+    "image-size": "2.1.0"
   }
 }
