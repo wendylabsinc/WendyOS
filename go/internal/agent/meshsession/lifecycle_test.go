@@ -265,6 +265,13 @@ func TestClosingPoolDuringSuccessfulDialClosesLateConnection(t *testing.T) {
 	dial := client.dial
 	established := make(chan *quic.Conn, 1)
 	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
 	client.dial = func(ctx context.Context, address netip.AddrPort, cfg *tls.Config, qcfg *quic.Config) (*quic.Conn, error) {
 		conn, err := dial(ctx, address, cfg, qcfg)
 		if err != nil {
@@ -290,8 +297,17 @@ func TestClosingPoolDuringSuccessfulDialClosesLateConnection(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("dial did not connect")
 	}
-	client.Close()
+	closed := make(chan error, 1)
+	go func() { closed <- client.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned before the pending dial owner released its connection")
+	case <-time.After(20 * time.Millisecond):
+	}
 	close(release)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
 	if err := <-done; !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("late dial was accepted: %v", err)
 	}
