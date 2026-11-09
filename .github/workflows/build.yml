@@ -435,7 +435,8 @@ jobs:
           # Build outputs contain absolute paths. Separate custom runners with
           # different workspaces as well as toolchains and dependencies.
           WORKSPACE_HASH=$(printf '%s' "$GITHUB_WORKSPACE" | shasum -a 256 | cut -c 1-16)
-          echo "name=macos-release-build-v1-${RUNNER_ARCH}-${XCODE_BUILD}-${WORKSPACE_HASH}-${DEPENDENCY_HASH}" >> "$GITHUB_OUTPUT"
+          RUNNER_IMAGE="${ImageVersion:-$(sw_vers -buildVersion)}"
+          echo "name=macos-release-build-v1-${RUNNER_ARCH}-${RUNNER_IMAGE}-${XCODE_BUILD}-${WORKSPACE_HASH}-${DEPENDENCY_HASH}" >> "$GITHUB_OUTPUT"
 
       - name: Restore Release build cache from main
         continue-on-error: true
