@@ -217,6 +217,12 @@ struct ProvisioningStore {
 
     private func writeFile(_ url: URL, data: Data, permissions: Int) throws {
         if self.fileMatches(url, data: data, permissions: permissions) { return }
+        try Self.writeDurableFile(url, data: data, permissions: permissions)
+    }
+
+    // Shared with delivery admission and registry publication: persist bytes and
+    // the directory entry before acknowledging a time-scoped authorization.
+    static func writeDurableFile(_ url: URL, data: Data, permissions: Int) throws {
         let directory = url.deletingLastPathComponent()
         let tmpURL = directory.appendingPathComponent(
             ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
@@ -264,22 +270,26 @@ struct ProvisioningStore {
                 throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             }
             // Make the directory entry durable after the replacement.
-            let parent = unsafe Darwin.open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-            guard parent >= 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-            let synced = Darwin.fsync(parent)
-            let syncError = errno
-            let closed = Darwin.close(parent)
-            guard synced == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: syncError) ?? .EIO)
-            }
-            guard closed == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
+            try Self.synchronizeDirectory(directory)
         } catch {
             try? FileManager.default.removeItem(at: tmpURL)
             throw error
+        }
+    }
+
+    static func synchronizeDirectory(_ directory: URL) throws {
+        let parent = unsafe Darwin.open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard parent >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let synced = Darwin.fsync(parent)
+        let syncError = errno
+        let closed = Darwin.close(parent)
+        guard synced == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: syncError) ?? .EIO)
+        }
+        guard closed == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }
 }

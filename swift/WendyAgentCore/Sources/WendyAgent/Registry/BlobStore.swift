@@ -3,7 +3,8 @@ import Foundation
 
 /// On-disk content store shared by the registry and the WriteLayer RPC.
 /// Blobs live at `<root>/blobs/sha256/<hex>`; manifests at
-/// `<root>/manifests/<repo>/<reference>`.
+/// `<root>/manifests/<repo>/<tag>`, with digest entries in a distinct
+/// `@digests` directory so an immutable digest cannot alias a mutable tag.
 struct BlobStore: Sendable {
     let root: URL
 
@@ -99,28 +100,70 @@ struct BlobStore: Sendable {
             return nil
         }
         let url = manifestPath(repository: repository, reference: reference)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        // Read existing installations without writing ambiguous legacy names.
+        let legacy = root.appendingPathComponent("manifests").appendingPathComponent(repository)
+            .appendingPathComponent(reference.replacingOccurrences(of: ":", with: "_"))
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return nil }
+        if Self.isValidSHA256Digest(reference) {
+            guard let data = try? Data(contentsOf: legacy), data.count <= 4 * 1024 * 1024,
+                Self.contentDigest(data) == reference
+            else { return nil }
+        }
+        return legacy
+    }
+
+    static func contentDigest(_ data: Data) -> String {
+        "sha256:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func manifestDigest(repository: String, reference: String) throws -> String? {
+        guard let url = manifestURL(repository: repository, reference: reference) else {
+            return nil
+        }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 4 * 1024 * 1024 else {
+            throw BlobError.badDigest("oversized saved manifest")
+        }
+        return Self.contentDigest(data)
     }
 
     func writeManifest(_ data: Data, repository: String, reference: String) throws {
-        // Callers (the manifest PUT handler) must validate `repository` and
-        // `reference` with `isValidRepository`/`isValidReference` before
-        // calling this — this method trusts its inputs to build a path.
+        guard Self.isValidRepository(repository), Self.isValidReference(reference),
+            data.count <= 4 * 1024 * 1024
+        else { throw BlobError.badDigest("invalid manifest reference or size") }
         let url = manifestPath(repository: repository, reference: reference)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+        let digest = Self.contentDigest(data)
+        if Self.isValidSHA256Digest(reference), reference != digest {
+            throw BlobError.digestMismatch(expected: reference, actual: digest)
+        }
+        let byDigest = manifestPath(repository: repository, reference: digest)
+        for directory in [url.deletingLastPathComponent(), byDigest.deletingLastPathComponent()] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        let repositoryDirectory = root.appendingPathComponent("manifests").appendingPathComponent(
+            repository
         )
-        try data.write(to: url, options: .atomic)
-        // Also index by content digest so pulls by digest resolve.
-        let hex = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let byDigest = manifestPath(repository: repository, reference: "sha256:\(hex)")
-        try? data.write(to: byDigest, options: .atomic)
+        try ProvisioningStore.synchronizeDirectory(repositoryDirectory)
+        try ProvisioningStore.synchronizeDirectory(repositoryDirectory.deletingLastPathComponent())
+        try ProvisioningStore.synchronizeDirectory(root)
+        // Persist digest-addressed content before changing the tag.
+        try ProvisioningStore.writeDurableFile(byDigest, data: data, permissions: 0o600)
+        if url != byDigest {
+            try ProvisioningStore.writeDurableFile(url, data: data, permissions: 0o600)
+        }
     }
 
     private func manifestPath(repository: String, reference: String) -> URL {
-        root.appendingPathComponent("manifests")
-            .appendingPathComponent(repository)
-            .appendingPathComponent(reference.replacingOccurrences(of: ":", with: "_"))
+        let directory = root.appendingPathComponent("manifests").appendingPathComponent(repository)
+        if Self.isValidSHA256Digest(reference) {
+            return directory.appendingPathComponent("@digests").appendingPathComponent(
+                String(reference.dropFirst("sha256:".count))
+            )
+        }
+        return directory.appendingPathComponent(reference)
     }
 }

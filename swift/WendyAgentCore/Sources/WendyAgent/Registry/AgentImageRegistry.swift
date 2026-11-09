@@ -1,5 +1,6 @@
 import Crypto
 import Foundation
+import GRPCCore
 import HTTPTypes
 import Hummingbird
 import HummingbirdCore
@@ -7,263 +8,320 @@ import HummingbirdTLS
 import Logging
 import NIOCore
 
-/// Minimal OCI Distribution v2 server backed by `BlobStore`. Handles the subset
-/// docker/container use to push and pull: version check, blob uploads
-/// (monolithic + chunked), blob read, manifest put/get.
-///
-/// Repository names are treated as a single path segment (`{repo}`); nested
-/// repository names (e.g. `library/app`) are out of scope for this minimal
-/// server. The behavior contract is what matters here — routes, statuses,
-/// digest verification, and `Location` headers — verified end-to-end in
-/// Task 9.
-///
-/// One instance serves one listener. The agent runs two over a shared
-/// `BlobStore` (see `LocalRegistryRef`): a wildcard push listener (plain HTTP
-/// unprovisioned, TLS + client-cert verification provisioned) and a
-/// loopback-only plain-HTTP pull listener for the on-device container
-/// backends. Blob and manifest writes are digest-addressed and atomic, so two
-/// instances over one store directory are concurrent-safe; the in-memory
-/// chunked-upload sessions are per-instance, which is fine because only the
-/// push listener registers write routes.
+/// One push listener and one loopback-only pull listener share the existing
+/// blob store. Enrolled device credentials require an admitted operator grant;
+/// the pull listener remains read-only for the local container backends.
 struct AgentImageRegistry: Sendable {
-    /// One listener's shape: where it binds, whether it terminates TLS, and
-    /// which route set it exposes.
     struct ListenerConfiguration: Sendable {
-        enum Routes: Sendable {
-            /// Full OCI push+pull surface (uploads, manifest PUT, reads).
-            case pushAndPull
-            /// Read-only surface (blob/manifest GET+HEAD, /v2 check).
-            case pullOnly
-        }
-
+        enum Routes: Sendable { case pushAndPull, pullOnly }
         var host: String
         var port: Int
-        /// Non-nil terminates TLS with the device identity and verifies client
-        /// certificates; nil serves plain HTTP.
         var tls: RegistryTLS.Configuration?
         var routes: Routes
-        /// Short name ("push"/"pull") for log lines.
         var label: String
     }
-
-    /// Maximum accepted blob size (container image layers can be several GiB).
-    private static let maxBlobSize = 8 * 1024 * 1024 * 1024
-    /// Maximum accepted manifest size (JSON, always small).
-    private static let maxManifestSize = 16 * 1024 * 1024
-
     private let store: BlobStore
     private let configuration: ListenerConfiguration
+    private let authority: BuildDeliveryAuthority?
+    private let uploads: RegistryUploads
     private let logger = Logger(label: "sh.wendy.agent.registry")
-    private let uploads = UploadBuffers()
+    private static let digestHeader = HTTPField.Name("Docker-Content-Digest")!
+    private static let uploadHeader = HTTPField.Name("Docker-Upload-UUID")!
+    private static let maxManifestSize = 4 * 1024 * 1024
 
-    /// `Docker-Content-Digest` — clients (notably Apple `container`) require this
-    /// header on blob and manifest GET/HEAD responses to resolve a tag/reference
-    /// to its content digest. The literal is a valid HTTP field token.
-    private static let dockerContentDigest = HTTPField.Name("Docker-Content-Digest")!
-
-    /// The canonical `sha256:<hex>` content digest of `data`.
-    private static func contentDigest(of data: Data) -> String {
-        let hex = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        return "sha256:\(hex)"
-    }
-
-    /// The manifest's own `mediaType`, defaulting to the OCI image manifest type.
-    /// Clients (Apple `container`) require `Content-Type` on both GET *and* HEAD
-    /// manifest responses.
-    private static func manifestMediaType(_ data: Data) -> String {
-        (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["mediaType"]
-            as? String ?? "application/vnd.oci.image.manifest.v1+json"
-    }
-
-    init(store: BlobStore, configuration: ListenerConfiguration) {
+    init(
+        store: BlobStore,
+        configuration: ListenerConfiguration,
+        authority: BuildDeliveryAuthority? = nil
+    ) {
         self.store = store
         self.configuration = configuration
+        self.authority = authority
+        uploads = RegistryUploads(store: store, authority: authority)
     }
-
-    /// Accumulates in-progress chunked uploads keyed by upload UUID.
-    private actor UploadBuffers {
-        private var buffers: [String: Data] = [:]
-
-        func start() -> String {
-            let id = UUID().uuidString
-            buffers[id] = Data()
-            return id
-        }
-
-        func append(_ data: Data, to id: String) {
-            buffers[id, default: Data()].append(data)
-        }
-
-        func take(_ id: String) -> Data? {
-            buffers.removeValue(forKey: id)
+    private func authorized(
+        _ request: Request,
+        _ context: RegistryRequestContext,
+        repository: String = "",
+        operation: RegistryAuthorization.Operation,
+        perform: @Sendable (RegistryAccess) async throws -> Response
+    ) async throws -> Response {
+        do {
+            if !repository.isEmpty && !BlobStore.isValidRepository(repository) {
+                throw HTTPError(.badRequest)
+            }
+            let access = try await RegistryAuthorization.access(
+                request: request,
+                context: context,
+                tls: configuration.tls,
+                authority: authority,
+                repository: repository,
+                operation: operation
+            )
+            return try await perform(access)
+        } catch let error as BuildDeliveryContract.Failure {
+            throw HTTPError(.forbidden, message: error.description)
+        } catch let error as RPCError { throw HTTPError(.forbidden, message: error.message) }
+    }
+    private static func mediaType(_ data: Data) -> String {
+        (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["mediaType"] as? String
+            ?? "application/vnd.oci.image.manifest.v1+json"
+    }
+    private func manifest(
+        _ request: Request,
+        _ context: RegistryRequestContext,
+        head: Bool
+    ) async throws -> Response {
+        let repo = context.parameters.get("repo") ?? ""
+        let reference = context.parameters.get("reference") ?? ""
+        guard BlobStore.isValidReference(reference) else { throw HTTPError(.notFound) }
+        return try await authorized(
+            request,
+            context,
+            repository: repo,
+            operation: head ? .metadata : .read
+        ) { access in
+            if let session = access.session, let leaf = access.leaf, let authority {
+                let claims = try await authority.policy(session, leaf: leaf, repository: repo)
+                guard
+                    BlobStore.isValidSHA256Digest(reference)
+                        || claims.reference == repo + ":" + reference
+                else { throw HTTPError(.forbidden) }
+            }
+            guard let url = store.manifestURL(repository: repo, reference: reference),
+                let data = try? Data(contentsOf: url), data.count <= Self.maxManifestSize
+            else { return Response(status: .notFound) }
+            let headers: HTTPFields = [
+                .contentType: Self.mediaType(data),
+                Self.digestHeader: BlobStore.contentDigest(data),
+                .contentLength: String(data.count),
+            ]
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: head ? .init() : .init(byteBuffer: ByteBuffer(bytes: data))
+            )
         }
     }
-
-    /// Builds the route table. Write routes (blob uploads, manifest PUT) are
-    /// registered only for `.pushAndPull` listeners; the pull listener exposes
-    /// just the read surface the container backends need.
-    func buildRouter() -> Router<BasicRequestContext> {
-        let router = Router()
-        router.addMiddleware {
-            LogRequestsMiddleware(.info)
-        }
-        let store = self.store
-
-        router.get("/v2") { _, _ in
-            Response(status: .ok)
-        }
-
-        if case .pushAndPull = self.configuration.routes {
-            self.addWriteRoutes(to: router)
-        }
-
-        router.head("/v2/{repo}/blobs/{digest}") { _, context -> Response in
-            let digest = context.parameters.get("digest") ?? ""
-            guard BlobStore.isValidSHA256Digest(digest) else { return Response(status: .notFound) }
+    private func blob(
+        _ request: Request,
+        _ context: RegistryRequestContext,
+        head: Bool
+    ) async throws -> Response {
+        let repo = context.parameters.get("repo") ?? ""
+        let digest = context.parameters.get("digest") ?? ""
+        guard BlobStore.isValidSHA256Digest(digest) else { throw HTTPError(.notFound) }
+        return try await authorized(
+            request,
+            context,
+            repository: repo,
+            operation: head ? .metadata : .read
+        ) { access in
             guard store.hasBlob(digest: digest) else { return Response(status: .notFound) }
-            return Response(
-                status: .ok,
-                headers: [
-                    .contentType: "application/octet-stream",
-                    Self.dockerContentDigest: digest,
-                ]
-            )
-        }
-
-        router.get("/v2/{repo}/blobs/{digest}") { _, context -> Response in
-            let digest = context.parameters.get("digest") ?? ""
-            guard BlobStore.isValidSHA256Digest(digest) else { return Response(status: .notFound) }
-            guard let data = store.readBlob(digest: digest) else {
-                return Response(status: .notFound)
+            let url = store.blobURL(digest: digest)
+            let size =
+                (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
+                .intValue ?? 0
+            let headers: HTTPFields = [
+                .contentType: "application/octet-stream", Self.digestHeader: digest,
+                .contentLength: String(size),
+            ]
+            if head { return Response(status: .ok, headers: headers) }
+            let body = ResponseBody(contentLength: size) { writer in
+                let file = try FileHandle(forReadingFrom: url)
+                defer { try? file.close() }
+                while let data = try file.read(upToCount: 64 * 1024), !data.isEmpty {
+                    try Task.checkCancellation()
+                    try access.checkTime()
+                    try await writer.write(ByteBuffer(bytes: data))
+                }
+                try await writer.finish(nil)
             }
-            return Response(
-                status: .ok,
-                headers: [
-                    .contentType: "application/octet-stream",
-                    Self.dockerContentDigest: digest,
-                ],
-                body: .init(byteBuffer: ByteBuffer(bytes: data))
-            )
+            return Response(status: .ok, headers: headers, body: body)
         }
-
-        router.head("/v2/{repo}/manifests/{reference}") { _, context -> Response in
-            let repo = context.parameters.get("repo") ?? ""
-            let reference = context.parameters.get("reference") ?? ""
-            guard BlobStore.isValidRepository(repo), BlobStore.isValidReference(reference) else {
-                return Response(status: .notFound)
-            }
-            guard let url = store.manifestURL(repository: repo, reference: reference),
-                let data = try? Data(contentsOf: url)
-            else { return Response(status: .notFound) }
-            return Response(
-                status: .ok,
-                headers: [
-                    .contentType: Self.manifestMediaType(data),
-                    Self.dockerContentDigest: Self.contentDigest(of: data),
-                ]
-            )
+    }
+    private static func uploadResponse(
+        repo: String,
+        id: String,
+        size: Int64,
+        status: HTTPResponse.Status = .accepted
+    ) -> Response {
+        Response(
+            status: status,
+            headers: [
+                .location: "/v2/\(repo)/blobs/uploads/\(id)", uploadHeader: id,
+                .range: "0-\(max(0,size - 1))",
+            ]
+        )
+    }
+    func buildRouter() -> Router<RegistryRequestContext> {
+        let router = Router(context: RegistryRequestContext.self)
+        router.addMiddleware { LogRequestsMiddleware(.info) }
+        router.get("/v2") { request, context in
+            try await authorized(request, context, operation: .ping) { _ in Response(status: .ok) }
         }
-
-        router.get("/v2/{repo}/manifests/{reference}") { _, context -> Response in
-            let repo = context.parameters.get("repo") ?? ""
-            let reference = context.parameters.get("reference") ?? ""
-            guard BlobStore.isValidRepository(repo), BlobStore.isValidReference(reference) else {
-                return Response(status: .notFound)
-            }
-            guard let url = store.manifestURL(repository: repo, reference: reference),
-                let data = try? Data(contentsOf: url)
-            else { return Response(status: .notFound) }
-            // Content-Type must echo the stored manifest's mediaType; default to OCI.
-            return Response(
-                status: .ok,
-                headers: [
-                    .contentType: Self.manifestMediaType(data),
-                    Self.dockerContentDigest: Self.contentDigest(of: data),
-                ],
-                body: .init(byteBuffer: ByteBuffer(bytes: data))
-            )
+        router.head("/v2/{repo}/blobs/{digest}") { request, context in
+            try await blob(request, context, head: true)
         }
-
+        router.get("/v2/{repo}/blobs/{digest}") { request, context in
+            try await blob(request, context, head: false)
+        }
+        router.head("/v2/{repo}/manifests/{reference}") { request, context in
+            try await manifest(request, context, head: true)
+        }
+        router.get("/v2/{repo}/manifests/{reference}") { request, context in
+            try await manifest(request, context, head: false)
+        }
+        if case .pushAndPull = configuration.routes { addWriteRoutes(to: router) }
         return router
     }
-
-    /// Registers the push-side (write) routes: blob uploads and manifest PUT.
-    private func addWriteRoutes(to router: Router<BasicRequestContext>) {
-        let store = self.store
-        let uploads = self.uploads
-        let maxBlobSize = Self.maxBlobSize
-        let maxManifestSize = Self.maxManifestSize
-
-        // Begin an upload session, or perform a monolithic push when `digest`
-        // is supplied on the initial POST (the whole blob is the body).
-        router.post("/v2/{repo}/blobs/uploads") { request, context -> Response in
+    private func addWriteRoutes(to router: Router<RegistryRequestContext>) {
+        router.post("/v2/{repo}/blobs/uploads") { request, context in
             let repo = context.parameters.get("repo") ?? ""
-            if let digest = request.uri.queryParameters["digest"].map(String.init) {
-                let buffer = try await request.body.collect(upTo: maxBlobSize)
-                do {
-                    try store.writeBlob(Data(buffer.readableBytesView), expectedDigest: digest)
-                } catch is BlobStore.BlobError {
-                    return Response(status: .badRequest)
+            return try await authorized(request, context, repository: repo, operation: .stage) {
+                access in
+                let id = try await uploads.start(access: access, repository: repo)
+                if let digest = request.uri.queryParameters["digest"].map(String.init) {
+                    return try await RegistryAuthorization.beforeDeadline(
+                        access: access,
+                        channel: context.channel
+                    ) {
+                        _ = try await uploads.append(
+                            id,
+                            request: request,
+                            access: access,
+                            repository: repo
+                        )
+                        try await uploads.commit(
+                            id,
+                            digest: digest,
+                            access: access,
+                            repository: repo
+                        )
+                        return Response(
+                            status: .created,
+                            headers: [
+                                .location: "/v2/\(repo)/blobs/\(digest)", Self.digestHeader: digest,
+                            ]
+                        )
+                    }
                 }
-                return Response(
-                    status: .created,
-                    headers: [.location: "/v2/\(repo)/blobs/\(digest)"]
-                )
+                // Cross-repository mounts deliberately take the ordinary upload path.
+                return Self.uploadResponse(repo: repo, id: id, size: 0)
             }
-            let id = await uploads.start()
-            return Response(
-                status: .accepted,
-                headers: [
-                    .location: "/v2/\(repo)/blobs/uploads/\(id)",
-                    HTTPField.Name("Docker-Upload-UUID")!: id,
-                ]
-            )
         }
-
-        // Chunk append (PATCH) — used by chunked pushers.
-        router.patch("/v2/{repo}/blobs/uploads/{id}") { request, context -> Response in
+        router.get("/v2/{repo}/blobs/uploads/{id}") { request, context in
             let repo = context.parameters.get("repo") ?? ""
             let id = context.parameters.get("id") ?? ""
-            let buffer = try await request.body.collect(upTo: maxBlobSize)
-            await uploads.append(Data(buffer.readableBytesView), to: id)
-            return Response(
-                status: .accepted,
-                headers: [.location: "/v2/\(repo)/blobs/uploads/\(id)"]
-            )
+            return try await authorized(request, context, repository: repo, operation: .stage) {
+                access in
+                let size = try await uploads.size(id, access: access, repository: repo)
+                return Self.uploadResponse(repo: repo, id: id, size: size, status: .noContent)
+            }
         }
-
-        // Commit upload (PUT ...?digest=<d>), optionally with a final chunk body.
-        router.put("/v2/{repo}/blobs/uploads/{id}") { request, context -> Response in
+        router.patch("/v2/{repo}/blobs/uploads/{id}") { request, context in
+            let repo = context.parameters.get("repo") ?? ""
+            let id = context.parameters.get("id") ?? ""
+            return try await authorized(request, context, repository: repo, operation: .stage) {
+                access in
+                try await RegistryAuthorization.beforeDeadline(
+                    access: access,
+                    channel: context.channel
+                ) {
+                    let size = try await uploads.append(
+                        id,
+                        request: request,
+                        access: access,
+                        repository: repo
+                    )
+                    return Self.uploadResponse(repo: repo, id: id, size: size)
+                }
+            }
+        }
+        router.put("/v2/{repo}/blobs/uploads/{id}") { request, context in
             let repo = context.parameters.get("repo") ?? ""
             let id = context.parameters.get("id") ?? ""
             let digest = request.uri.queryParameters["digest"].map(String.init) ?? ""
-            var data = await uploads.take(id) ?? Data()
-            let buffer = try await request.body.collect(upTo: maxBlobSize)
-            data.append(Data(buffer.readableBytesView))
-            do {
-                try store.writeBlob(data, expectedDigest: digest)
-            } catch is BlobStore.BlobError {
-                return Response(status: .badRequest)
+            return try await authorized(request, context, repository: repo, operation: .stage) {
+                access in
+                try await RegistryAuthorization.beforeDeadline(
+                    access: access,
+                    channel: context.channel
+                ) {
+                    _ = try await uploads.append(
+                        id,
+                        request: request,
+                        access: access,
+                        repository: repo
+                    )
+                    try await uploads.commit(id, digest: digest, access: access, repository: repo)
+                    return Response(
+                        status: .created,
+                        headers: [
+                            .location: "/v2/\(repo)/blobs/\(digest)", Self.digestHeader: digest,
+                        ]
+                    )
+                }
             }
-            return Response(
-                status: .created,
-                headers: [.location: "/v2/\(repo)/blobs/\(digest)"]
-            )
         }
-
-        router.put("/v2/{repo}/manifests/{reference}") { request, context -> Response in
+        router.put("/v2/{repo}/manifests/{reference}") { request, context in
             let repo = context.parameters.get("repo") ?? ""
             let reference = context.parameters.get("reference") ?? ""
-            guard BlobStore.isValidRepository(repo), BlobStore.isValidReference(reference) else {
-                return Response(status: .badRequest)
+            guard BlobStore.isValidReference(reference) else { throw HTTPError(.badRequest) }
+            return try await authorized(request, context, repository: repo, operation: .publish) {
+                access in
+                if let session = access.session, let leaf = access.leaf, let authority {
+                    let claims = try await authority.policy(session, leaf: leaf, repository: repo)
+                    guard
+                        BlobStore.isValidSHA256Digest(reference)
+                            || claims.reference == repo + ":" + reference
+                    else { throw HTTPError(.forbidden) }
+                }
+                let declared: Int?
+                if let length = request.headers[.contentLength] {
+                    guard let count = Int(length), count >= 0, count <= Self.maxManifestSize else {
+                        throw HTTPError(.contentTooLarge)
+                    }
+                    declared = count
+                    if let session = access.session, let leaf = access.leaf, let authority {
+                        try await authority.reserve(session, leaf: leaf, bytes: Int64(count))
+                    }
+                } else {
+                    declared = nil
+                }
+                let data = try await RegistryAuthorization.beforeDeadline(
+                    access: access,
+                    channel: context.channel
+                ) {
+                    Data(
+                        try await request.body.collect(upTo: Self.maxManifestSize).readableBytesView
+                    )
+                }
+                guard declared == nil || declared == data.count else {
+                    throw HTTPError(.badRequest)
+                }
+                if declared == nil, let session = access.session, let leaf = access.leaf,
+                    let authority
+                {
+                    try await authority.reserve(session, leaf: leaf, bytes: Int64(data.count))
+                }
+                try access.checkTime()
+                if let authority {
+                    try await authority.publish(
+                        data,
+                        repository: repo,
+                        reference: reference,
+                        session: access.session,
+                        leaf: access.leaf
+                    )
+                } else {
+                    try store.writeManifest(data, repository: repo, reference: reference)
+                }
+                return Response(
+                    status: .created,
+                    headers: [Self.digestHeader: BlobStore.contentDigest(data)]
+                )
             }
-            let buffer = try await request.body.collect(upTo: maxManifestSize)
-            try store.writeManifest(
-                Data(buffer.readableBytesView),
-                repository: repo,
-                reference: reference
-            )
-            return Response(status: .created)
         }
     }
 
@@ -275,7 +333,7 @@ struct AgentImageRegistry: Sendable {
     /// actually-bound address (tests bind port 0).
     func buildApplication(
         onServerRunning: @escaping @Sendable (any Channel) async -> Void = { _ in }
-    ) throws -> Application<RouterResponder<BasicRequestContext>> {
+    ) throws -> Application<RouterResponder<RegistryRequestContext>> {
         let server: HTTPServerBuilder
         if let tls = self.configuration.tls {
             server = try .tls(.http1(), configuration: RegistryTLS.channelConfiguration(tls))

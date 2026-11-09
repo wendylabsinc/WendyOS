@@ -46,6 +46,44 @@ import Testing
         #expect(try Data(contentsOf: url) == manifest)
     }
 
+    @Test func digestStagingCannotOverwriteAnAliasingTag() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BlobStore(root: root)
+        let child = Data("staged child manifest".utf8)
+        let digest = BlobStore.contentDigest(child)
+        let tag = digest.replacingOccurrences(of: ":", with: "_")
+        let ambient = Data("unrelated operator publication".utf8)
+        try store.writeManifest(ambient, repository: "app", reference: tag)
+        try store.writeManifest(child, repository: "app", reference: digest)
+        let tagURL = try #require(store.manifestURL(repository: "app", reference: tag))
+        let digestURL = try #require(store.manifestURL(repository: "app", reference: digest))
+        #expect(tagURL != digestURL)
+        #expect(try Data(contentsOf: tagURL) == ambient)
+        #expect(try Data(contentsOf: digestURL) == child)
+    }
+
+    @Test func legacyManifestReadsVerifyDigestBeforeUsingAnAmbiguousFilename() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BlobStore(root: root)
+        let directory = root.appendingPathComponent("manifests/app")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = Data("legacy manifest".utf8)
+        let digest = BlobStore.contentDigest(data)
+        try data.write(to: directory.appendingPathComponent("latest"))
+        try data.write(
+            to: directory.appendingPathComponent(digest.replacingOccurrences(of: ":", with: "_"))
+        )
+        #expect(store.manifestURL(repository: "app", reference: "latest") != nil)
+        #expect(store.manifestURL(repository: "app", reference: digest) != nil)
+        let wrong = "sha256:" + String(repeating: "a", count: 64)
+        try data.write(
+            to: directory.appendingPathComponent(wrong.replacingOccurrences(of: ":", with: "_"))
+        )
+        #expect(store.manifestURL(repository: "app", reference: wrong) == nil)
+    }
+
     // MARK: - Digest validation (path traversal fix)
 
     @Test func isValidSHA256DigestAcceptsRealDigest() {

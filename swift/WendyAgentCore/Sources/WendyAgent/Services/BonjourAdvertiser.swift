@@ -16,6 +16,7 @@ struct BonjourAdvertiser {
     var assetID: Int32? = nil
     var orgID: Int32? = nil
     var caps: [String] = []
+    var principalURI: String? = nil
 
     private let logger = Logger(label: "sh.wendy.agent.bonjour")
 
@@ -39,7 +40,8 @@ struct BonjourAdvertiser {
             tls: self.tls,
             assetID: self.assetID,
             orgID: self.orgID,
-            caps: self.caps
+            caps: self.caps,
+            principalURI: self.principalURI
         )
     }
 
@@ -54,7 +56,8 @@ struct BonjourAdvertiser {
         tls: Bool,
         assetID: Int32?,
         orgID: Int32?,
-        caps: [String]
+        caps: [String],
+        principalURI: String? = nil
     ) -> Data {
         var fields = ["displayname=\(displayName)", "id=\(deviceID)", "tls=\(tls)"]
         if let assetID {
@@ -63,10 +66,16 @@ struct BonjourAdvertiser {
         if let orgID {
             fields.append("orgid=\(orgID)")
         }
+        if tls, let principalURI,
+            (try? BuildDeliveryContract.principal(principalURI, kind: "device")) != nil
+        {
+            fields.append("principal=\(principalURI)")
+        }
         if !caps.isEmpty {
             fields.append("caps=\(caps.joined(separator: ","))")
         }
         return fields.reduce(into: Data()) { data, field in
+            guard field.utf8.count <= 255 else { return }
             data.append(UInt8(field.utf8.count))
             data.append(contentsOf: field.utf8)
         }
