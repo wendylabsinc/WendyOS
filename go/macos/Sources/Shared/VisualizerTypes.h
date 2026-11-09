@@ -34,6 +34,7 @@ void WDVisualExportFree(WDVisualExportResult *value);
 typedef enum { WD_RECORDING_STATUS, WD_RECORDING_START, WD_RECORDING_STOP } WDVisualRecordingAction;
 WDVisualEpisodesResult *WDVisualRecording(uint64_t session, WDVisualRecordingAction action, char *name, char **sources, size_t source_count);
 WDVisualEpisodesResult *WDVisualEpisodes(uint64_t session);
+WDVisualEpisodesResult *WDVisualEpisodesAt(char *selector);
 void WDVisualEpisodesFree(WDVisualEpisodesResult *value);
 WDVisualSnapshotResult *WDVisualEpisodeLoad(uint64_t session, char *episode);
 void WDVisualSnapshotFree(WDVisualSnapshotResult *value);

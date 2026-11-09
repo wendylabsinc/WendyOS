@@ -25,6 +25,18 @@ func WDVisualEpisodes(session C.uint64_t) *C.WDVisualEpisodesResult {
 	return p
 }
 
+//export WDVisualEpisodesAt
+func WDVisualEpisodesAt(selector *C.char) *C.WDVisualEpisodesResult {
+	p := alloc[C.WDVisualEpisodesResult](1)
+	rows, err := desktop.VisualEpisodesAt(C.GoString(selector))
+	p.status = status(err)
+	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
+	for i, r := range rows {
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(r.GetId()), name: C.CString(r.GetName()), state: C.CString(r.GetState()), started_ns: C.int64_t(r.GetStartedUnixNanos()), size_bytes: C.int64_t(r.GetSizeBytes())}
+	}
+	return p
+}
+
 //export WDVisualEpisodesFree
 func WDVisualEpisodesFree(p *C.WDVisualEpisodesResult) {
 	if p == nil {
