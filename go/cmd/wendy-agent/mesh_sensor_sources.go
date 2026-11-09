@@ -22,9 +22,10 @@ func meshSensorSources(snapshot localmesh.NodeSnapshot) []models.LANDevice {
 	if !snapshot.Self.Tenant().IsValid() {
 		return nil
 	}
+	now := time.Now()
 	for _, manifest := range snapshot.Devices {
 		if manifest.Platform != localmesh.PlatformLite || manifest.AgentTransport != localmesh.AgentMTLS ||
-			!slices.Contains(manifest.Caps, localmesh.CapabilitySensors) || manifest.Withdraw || manifest.Expires <= time.Now().UnixMilli() {
+			!slices.Contains(manifest.Caps, localmesh.CapabilitySensors) || manifest.Withdraw || manifest.LeaseRemaining(now) <= 0 {
 			continue
 		}
 		owner := meshid.NewDevice(snapshot.Self.Tenant(), manifest.Device)

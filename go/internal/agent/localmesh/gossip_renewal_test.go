@@ -186,8 +186,8 @@ func TestManifestGossipLoaderExpiryCannotRollBack(t *testing.T) {
 	if err != nil || len(replies) != 1 || replies[0].Gossip == nil || replies[0].Gossip.Op != "unavailable" {
 		t.Fatal("cached bytes bypassed latched expiry", replies, err)
 	}
-	if !f.source.entries[f.wire.Principal].expired || !f.source.wallHighWater.Equal(future) {
-		t.Fatal("loader overwrote expiry state")
+	if _, retained := f.source.entries[f.wire.Principal]; retained || !f.source.wallHighWater.Equal(future) {
+		t.Fatal("loader retained expired full payload")
 	}
 }
 

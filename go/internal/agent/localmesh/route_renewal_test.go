@@ -84,7 +84,7 @@ func TestRouteAuthorizationRenewalPreservesOriginalLeaseAndReplayFloor(t *testin
 				t.Fatalf("same revision recovery changed=%v sameKey=%v err=%v", changed, sameKey, err)
 			}
 			after := d.entries[wire.Principal]
-			if !after.activeUntil.Equal(before.activeUntil) || after.expired != before.expired || !after.retainUntil.Equal(before.retainUntil) || after.hash != before.hash || d.history[wire.Principal] != receipt || saves != 1 {
+			if !after.activeUntil.Equal(before.activeUntil) || after.expired != before.expired || !after.retainUntil.Equal(before.retainUntil) || after.hash != before.hash || d.history[wire.Principal] != receipt || saves != 0 {
 				t.Fatal("re-sign changed original deadline, retention or replay receipt")
 			}
 			if !d.RouteAuthorizations(now.Add(time.Second))[*m.Route] {
@@ -139,35 +139,29 @@ func TestRouteRenewalTickRemovesAndRestoresAppliedForwarding(t *testing.T) {
 func TestRouteRenewalResignCannotReviveElapsedRemainingLease(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	d, old, renewed, renew := routeRenewalDirectory(t, now, false)
+	clock := &directoryElapsedClock{now: now}
+	d.monotonicNow = clock.read
 	m := routeManifest(old.Device, now)
 	m.Expires = now.Add(2 * time.Minute).UnixMilli()
-	// Admit under a rolled-back clock with only thirty seconds of known
-	// remaining lifetime, despite a signed absolute expiry ninety seconds away.
-	d.RouteAuthorizations(now.Add(90 * time.Second))
-	wire := signRenewedRoute(t, m, old, now.Add(30*time.Second))
-	if _, err := d.Accept(wire, now.Add(30*time.Second)); err != nil {
+	wire := signRenewedRoute(t, m, old, now)
+	if _, err := d.Accept(wire, now); err != nil {
 		t.Fatal(err)
 	}
-	before, receipt := d.entries[wire.Principal], d.history[wire.Principal]
-	if !before.activeUntil.Equal(now.Add(time.Minute)) {
-		t.Fatalf("unexpected remaining deadline: %v", before.activeUntil)
+	receipt := d.history[wire.Principal]
+	clock.advance(2 * time.Minute)
+	if _, ok := d.CurrentRecordChain(wire, now); ok || len(d.entries) != 0 {
+		t.Fatal("public lookup retained elapsed payload")
 	}
-	// CurrentRecordChain must itself latch expiry, before looking up the wire.
-	if _, ok := d.CurrentRecordChain(wire, now.Add(time.Minute)); ok || !d.entries[wire.Principal].expired {
-		t.Fatal("public current-record lookup did not latch elapsed lease")
+	renew(now)
+	resigned := signRenewedRoute(t, m, renewed, now)
+	if changed, err := d.Accept(resigned, now); changed || !errors.Is(err, ErrStaleManifest) {
+		t.Fatal("re-sign revived consumed local TTL", changed, err)
 	}
-	rolledBack := now.Add(45 * time.Second)
-	renew(rolledBack)
-	resigned := signRenewedRoute(t, m, renewed, rolledBack)
-	if changed, err := d.Accept(resigned, rolledBack); err != nil || !changed {
-		t.Fatalf("same-body re-sign: %v %v", changed, err)
+	if len(d.entries) != 0 || d.history[wire.Principal] != receipt {
+		t.Fatal("re-sign changed expired payload/watermark state")
 	}
-	after := d.entries[wire.Principal]
-	if !after.expired || !after.activeUntil.Equal(before.activeUntil) || !after.retainUntil.Equal(before.retainUntil) || d.history[wire.Principal] != receipt {
-		t.Fatal("signature replacement reset elapsed lease or replay protection")
-	}
-	if _, ok := d.CurrentRecordChain(resigned, rolledBack); ok || len(d.RouteAuthorizations(rolledBack)) != 0 || len(d.Records(rolledBack)) != 0 || len(d.Snapshot(rolledBack)) != 0 {
-		t.Fatal("re-sign or clock rollback resurrected consumed route authorization")
+	if len(d.RouteAuthorizations(now)) != 0 || len(d.Records(now)) != 0 || len(d.Snapshot(now)) != 0 {
+		t.Fatal("re-sign resurrected route/exports")
 	}
 }
 

@@ -49,7 +49,7 @@ func newVetoFixture(vetoed bool) *vetoFixture {
 	f := &vetoFixture{}
 	if vetoed {
 		f.snapshot = localmesh.NodeSnapshot{Links: []localmesh.PeerLink{
-			{Device: numberedBLEDevice(358), Cost: 64},
+			{Device: numberedBLEDevice(358), Cost: 64, ForwardingReady: true},
 		}}
 	}
 	f.sel = localmesh.NewPeerSelection(func() localmesh.NodeSnapshot {
@@ -65,7 +65,7 @@ func (f *vetoFixture) setVeto(vetoed bool) {
 	defer f.mu.Unlock()
 	if vetoed {
 		f.snapshot = localmesh.NodeSnapshot{Links: []localmesh.PeerLink{
-			{Device: numberedBLEDevice(358), Cost: 64},
+			{Device: numberedBLEDevice(358), Cost: 64, ForwardingReady: true},
 		}}
 	} else {
 		f.snapshot = localmesh.NodeSnapshot{}

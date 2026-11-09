@@ -66,7 +66,7 @@ type Client struct {
 
 type pooledSession struct {
 	peer      meshid.Device
-	expires   time.Time
+	lifetime  *sessionLifetime
 	address   netip.AddrPort
 	ready     chan struct{}
 	closing   chan struct{}
@@ -113,8 +113,16 @@ func (c *Client) reap() {
 		var stale []appRetirement
 		c.mu.Lock()
 		for _, entry := range c.peers {
-			if entry.ready != nil || entry.closing != nil || entry.active != 0 ||
-				entry.conn != nil && entry.conn.Context().Err() == nil && now.Before(entry.expires) && now.Sub(entry.used) < clientIdleLimit && now.Sub(entry.born) < clientAgeLimit {
+			if entry.ready != nil || entry.closing != nil {
+				continue
+			}
+			credentialLive := false
+			if entry.lifetime != nil {
+				_, err := entry.lifetime.current()
+				credentialLive = err == nil
+			}
+			if credentialLive && entry.conn != nil && entry.conn.Context().Err() == nil &&
+				(entry.active > 0 || now.Sub(entry.used) < clientIdleLimit && now.Sub(entry.born) < clientAgeLimit) {
 				continue
 			}
 			stale = append(stale, c.retireEntryLocked(entry)...)
@@ -283,7 +291,7 @@ func quicProofCurrent(snapshot localmesh.NodeSnapshot, peer meshid.Device, addre
 		if device.Device != peer.UUID() {
 			continue
 		}
-		if device.Withdraw || device.Expires <= time.Now().UnixMilli() {
+		if device.Withdraw || !device.LeaseDeadline().After(time.Now()) {
 			return false
 		}
 		for _, endpoint := range device.AppEndpoints {
@@ -453,8 +461,13 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 				return nil, false, ctx.Err()
 			}
 		}
+		credentialLive := false
+		if entry != nil && entry.lifetime != nil {
+			_, err := entry.lifetime.current()
+			credentialLive = err == nil
+		}
 		if entry != nil && entry.address == address && entry.conn != nil && entry.conn.Context().Err() == nil &&
-			now.Before(entry.expires) && (entry.active > 0 || now.Sub(entry.born) < clientAgeLimit && now.Sub(entry.used) < clientIdleLimit) {
+			credentialLive && (entry.active > 0 || now.Sub(entry.born) < clientAgeLimit && now.Sub(entry.used) < clientIdleLimit) {
 			entry.active++
 			entry.used = now
 			c.mu.Unlock()
@@ -480,7 +493,7 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 			conn, err = c.dial(dialCtx, address, cfg, quicConfig())
 		}
 		if err == nil {
-			newEntry.expires, err = limitSessionLifetime(c.credentials, conn)
+			newEntry.lifetime, err = limitSessionLifetime(c.credentials, conn)
 		}
 		dialCancel()
 		c.mu.Lock()
