@@ -2,6 +2,10 @@ import Foundation
 @preconcurrency import SceneKit
 
 enum SiteRobotGeometry {
+    private struct Failure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
     struct ChairFootprint: Sendable {
         var minX, maxX, minZ, maxZ: Double
         func contains(x: Double, z: Double) -> Bool {
@@ -29,6 +33,16 @@ enum SiteRobotGeometry {
         var ancestor: SCNNode? = node
         while let current = ancestor {
             if current.name?.hasPrefix("Door") == true { return true }
+            ancestor = current.parent
+        }
+        return false
+    }
+
+    private static func isRoomPlanFloor(_ node: SCNNode) -> Bool {
+        var ancestor: SCNNode? = node
+        while let current = ancestor {
+            if let name = current.name, name.hasPrefix("Floor"),
+               !name.dropFirst(5).isEmpty, name.dropFirst(5).allSatisfy(\.isNumber) { return true }
             ancestor = current.parent
         }
         return false
@@ -68,7 +82,7 @@ enum SiteRobotGeometry {
     }
 
     static func chairFootprints(_ url: URL, scale: Double) throws -> [ChairFootprint] {
-        guard scale.isFinite, scale > 0 else { throw WendyError(message: "Invalid room scale.") }
+        guard scale.isFinite, scale > 0 else { throw Failure(message: "Invalid room scale.") }
         let scene = try SCNScene(url: url, options: [.checkConsistency: true, .convertToYUp: true, .convertUnitsToMeters: 1.0])
         scene.rootNode.scale = SCNVector3(scale, scale, scale)
         var result: [ChairFootprint] = []
@@ -104,7 +118,7 @@ enum SiteRobotGeometry {
     }
 
     static func triangles(_ url: URL, scale: Double, furnitureOnly: Bool = false) throws -> [Double] {
-        guard scale.isFinite, scale > 0 else { throw WendyError(message: "Invalid room scale.") }
+        guard scale.isFinite, scale > 0 else { throw Failure(message: "Invalid room scale.") }
         let scene = try SCNScene(url: url, options: [.checkConsistency: true, .convertToYUp: true, .convertUnitsToMeters: 1.0])
         scene.rootNode.scale = SCNVector3(scale, scale, scale)
         var result: [Double] = []
@@ -132,12 +146,12 @@ enum SiteRobotGeometry {
                       source.usesFloatComponents, source.componentsPerVector >= 3,
                       [4, 8].contains(source.bytesPerComponent), source.vectorCount <= 1_000_000,
                       source.dataOffset >= 0, source.dataStride >= source.bytesPerComponent*3 else {
-                    throw WendyError(message: "This room uses unsupported vertex data.")
+                    throw Failure(message: "This room uses unsupported vertex data.")
                 }
                 let positions = try source.data.withUnsafeBytes { bytes -> [SCNVector3] in
                     try (0..<source.vectorCount).map { i in
                         let offset = source.dataOffset + i*source.dataStride
-                        guard offset <= bytes.count-source.bytesPerComponent*3 else { throw WendyError(message: "Incomplete room vertices.") }
+                        guard offset <= bytes.count-source.bytesPerComponent*3 else { throw Failure(message: "Incomplete room vertices.") }
                         func component(_ axis: Int) -> Double {
                             let at = offset+axis*source.bytesPerComponent
                             return source.bytesPerComponent == 4 ? Double(bytes.loadUnaligned(fromByteOffset: at, as: Float.self)) : bytes.loadUnaligned(fromByteOffset: at, as: Double.self)
@@ -145,32 +159,40 @@ enum SiteRobotGeometry {
                         return node.convertPosition(SCNVector3(component(0), component(1), component(2)), to: nil)
                     }
                 }
+                // RoomPlan exports a solid floor slab. Its underside is not a
+                // second walkable floor. Match the upper surface that picking
+                // and rendering see, independent of triangle winding.
+                let floorTop = isRoomPlanFloor(node) ? positions.map { Double($0.y) }.max() : nil
                 for element in geometry.elements {
                     guard element.primitiveType == .triangles else { continue }
                     guard [1,2,4].contains(element.bytesPerIndex), element.primitiveCount <= 100_000,
                           result.count/9+element.primitiveCount <= 100_000,
                           element.data.count >= element.primitiveCount*3*element.bytesPerIndex else {
-                        throw WendyError(message: "This room mesh is too complex for local scan matching.")
+                        throw Failure(message: "This room mesh is too complex for local scan matching.")
                     }
                     try element.data.withUnsafeBytes { bytes in
-                        for i in 0..<(element.primitiveCount*3) {
-                            let offset = i*element.bytesPerIndex
-                            let index: Int
-                            switch element.bytesPerIndex {
-                            case 1: index = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt8.self))
-                            case 2: index = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
-                            default: index = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
+                        for triangle in 0..<element.primitiveCount {
+                            var vertices: [SCNVector3] = []
+                            for corner in 0..<3 {
+                                let offset = (triangle*3+corner)*element.bytesPerIndex
+                                let index: Int
+                                switch element.bytesPerIndex {
+                                case 1: index = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt8.self))
+                                case 2: index = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
+                                default: index = Int(bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
+                                }
+                                guard positions.indices.contains(index) else { throw Failure(message: "Invalid room triangle.") }
+                                vertices.append(positions[index])
                             }
-                            guard positions.indices.contains(index) else { throw WendyError(message: "Invalid room triangle.") }
-                            let p = positions[index]
-                            result.append(contentsOf: [Double(p.x), Double(p.y), Double(p.z)])
+                            if let floorTop, !vertices.allSatisfy({ abs(Double($0.y)-floorTop) < 0.005 }) { continue }
+                            for p in vertices { result.append(contentsOf: [Double(p.x), Double(p.y), Double(p.z)]) }
                         }
                     }
                 }
             } catch { failure = error; stop.pointee = true }
         }
         if let failure { throw failure }
-        guard !result.isEmpty || furnitureOnly else { throw WendyError(message: "The room has no triangle geometry to match.") }
+        guard !result.isEmpty || furnitureOnly else { throw Failure(message: "The room has no triangle geometry to match.") }
         return result
     }
 }

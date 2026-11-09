@@ -24,6 +24,7 @@ WDUnitreeVideoFrame *WDSiteRobotVideoNext(uint64_t handle);
 void WDSiteRobotStateFree(WDSiteRobotState *state);
 WDStatus *WDSiteRobotAlign(uint64_t handle, uint64_t sequence, char *frame, double x, double z, double floor_y, double yaw);
 WDStatus *WDSiteRobotDestination(uint64_t handle, uint64_t sequence, char *frame, double x, double z, int32_t move);
+WDStatus *WDSiteRobotSummon(uint64_t handle, uint64_t sequence, char *frame, double x, double z, double wearer_x, double wearer_z, int32_t move);
 WDStatus *WDSiteRobotLook(uint64_t handle, uint64_t sequence, int32_t direction);
 void WDSiteRobotStop(uint64_t handle, uint64_t sequence);
 WDStatus *WDSiteRobotArrivalTiming(uint64_t handle, uint64_t sequence, int32_t enabled);

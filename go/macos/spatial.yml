@@ -1,0 +1,100 @@
+name: WendySpatial
+options:
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    ENABLE_DEBUG_DYLIB: NO
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+targets:
+  WendySpatial:
+    type: application
+    platform: visionOS
+    deploymentTarget: "26.0"
+    info:
+      path: Resources/Spatial-Info.plist
+      properties:
+        WendySharedKeychainGroup: "$(AppIdentifierPrefix)dev.wendy.shared-login"
+        CFBundleDisplayName: Wendy
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        ITSAppUsesNonExemptEncryption: false
+        NSWorldSensingUsageDescription: Wendy anchors device labels and aligns your robot with your surroundings.
+        NSLocalNetworkUsageDescription: Wendy discovers and connects to nearby devices and robot gateways.
+        NSBluetoothAlwaysUsageDescription: Wendy discovers nearby devices.
+        NSBonjourServices: ["_wendyos._udp", "_wendyos._tcp", "_wendy._tcp", "_wendy-lite._tcp", "_wendy-net._tcp", "_wendy-net._udp"]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Wendy site
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [dev.wendy.site, com.pixar.universal-scene-description-mobile]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: dev.wendy.site
+            UTTypeDescription: Wendy site
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [wendysite]
+    sources:
+      - Sources/visionOS
+      - path: Resources/Spatial
+        type: folder
+        buildPhase: resources
+      - Sources/App/H264VideoDecoder.swift
+      - Sources/App/CameraCalibrationFrame.swift
+      - Sources/App/SiteTwin/SiteCameraColorFrame.swift
+      - Sources/App/BlockingWork.swift
+      - Sources/App/AsyncActions.swift
+      - Sources/App/AsyncCallback.swift
+      - Sources/App/SharedLoginView.swift
+      - Sources/App/SiteTwin/Site.swift
+      - Sources/App/SiteTwin/SiteArchivePayload.swift
+      - Sources/App/SiteTwin/SiteRobotGeometry.swift
+      - Sources/App/SiteTwin/SiteRobotSession.swift
+      - Sources/App/SiteTwin/SiteRobotSearch.swift
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Resources/Spatial.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.spatial
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Wendy
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_NSWorldSensingUsageDescription: Wendy anchors device labels and aligns your robot with your surroundings.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Wendy connects to your nearby devices and robot gateways.
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy discovers nearby devices.
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
+        OTHER_LDFLAGS: ["-lwendydesktop", "-lresolv"]
+    dependencies:
+      - sdk: CoreBluetooth.framework
+      - sdk: Security.framework
+      - sdk: NetworkExtension.framework
+    preBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
+        name: Check structured concurrency
+        basedOnDependencyAnalysis: false
+      - path: Scripts/build-spatial-go.sh
+        name: Build embedded Wendy backend
+        basedOnDependencyAnalysis: false
+  WendySpatialTests:
+    type: bundle.unit-test
+    platform: visionOS
+    deploymentTarget: "26.0"
+    sources: [VisionTests]
+    dependencies:
+      - target: WendySpatial
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  WendySpatial:
+    build:
+      targets:
+        WendySpatial: all
+    test:
+      targets: [WendySpatialTests]

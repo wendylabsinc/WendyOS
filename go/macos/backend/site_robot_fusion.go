@@ -93,6 +93,11 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	r.mu.Unlock()
 	model, err := sitenav.NewLayeredRoom(architecture, furniture)
 	if err != nil {
+		// Failed geometry used to bypass opt-in evidence recording entirely.
+		report.Message = err.Error()
+		r.mu.Lock()
+		r.recordLocalizationEvidence(request, input, report, time.Now())
+		r.mu.Unlock()
 		return report, err
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)

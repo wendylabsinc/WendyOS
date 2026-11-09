@@ -10,7 +10,7 @@ public struct StoredSite: Sendable, Identifiable {
 /// Site data contains no connection credentials. Import never initiates network
 /// access; the host app supplies cameras from its authenticated connection.
 public actor SiteStore {
-    public static let maximumModelBytes = 128 * 1024 * 1024
+    public static let maximumModelBytes = SiteArchivePayload.maximumModelBytes
     private let directory: URL
 
     public init(directory: URL) { self.directory = directory }

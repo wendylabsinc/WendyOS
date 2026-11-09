@@ -92,36 +92,21 @@ func roomFromMeshAtHeight(triangles []Triangle, height float64) (RoomMap, error)
 	if len(triangles) < 4 || len(triangles) > 100000 {
 		return room, errors.New("The room geometry is too small or too complex for scan matching.")
 	}
-	minimum := math.Inf(1)
 	for _, t := range triangles {
 		for _, p := range t {
 			if !finite(p.X) || !finite(p.Y) || !finite(p.Z) || math.Max(math.Abs(p.X), math.Max(math.Abs(p.Y), math.Abs(p.Z))) > 1000 {
 				return room, errors.New("Invalid room coordinates.")
 			}
-			minimum = math.Min(minimum, p.Y)
 		}
 	}
-	// Choose a substantial horizontal surface near the bottom of the model.
-	areas, levels := map[int]float64{}, map[int]float64{}
-	for _, t := range triangles {
-		area, up := triangleArea(t)
-		y := (t[0].Y + t[1].Y + t[2].Y) / 3
-		if up > .98 && y < minimum+.25 {
-			k := int(math.Round(y / .05))
-			areas[k] += area
-			levels[k] += area * y
-		}
+	// Wall bounds and stray vertices can extend below the detected floor.
+	// Select the lowest substantial horizontal patch by its own height support,
+	// rather than discarding it based on the minimum vertex of unrelated geometry.
+	var err error
+	room.FloorY, err = roomFloorHeight(triangles)
+	if err != nil {
+		return room, err
 	}
-	best, bestArea := 0, 0.0
-	for k, a := range areas {
-		if a > bestArea+1e-6 || (math.Abs(a-bestArea) <= 1e-6 && k > best) {
-			best, bestArea = k, a
-		}
-	}
-	if bestArea < 1 {
-		return room, errors.New("Scan matching needs a visible, level room floor of at least one square metre.")
-	}
-	room.FloorY = levels[best] / bestArea
 	room.low = Point{math.Inf(1), math.Inf(1)}
 	room.high = Point{math.Inf(-1), math.Inf(-1)}
 	section := room.FloorY + height
@@ -221,6 +206,35 @@ func roomFromMeshAtHeight(triangles []Triangle, height float64) (RoomMap, error)
 		}
 	}
 	return room, nil
+}
+
+// Group by measured height instead of rounded 5 cm bins, whose boundaries
+// split coplanar patches. Small lower fragments cannot nominate a floor.
+func roomFloorHeight(triangles []Triangle) (float64, error) {
+	type patch struct{ y, area float64 }
+	var patches []patch
+	for _, t := range triangles {
+		area, up := triangleArea(t)
+		if up > .98 && area > 0 {
+			patches = append(patches, patch{(t[0].Y + t[1].Y + t[2].Y) / 3, area})
+		}
+	}
+	sort.Slice(patches, func(i, j int) bool { return patches[i].y < patches[j].y })
+	end, area, weighted, best := 0, 0.0, 0.0, 0.0
+	for start, first := range patches {
+		for end < len(patches) && patches[end].y-first.y <= .05 {
+			area += patches[end].area
+			weighted += patches[end].area * patches[end].y
+			end++
+		}
+		best = math.Max(best, area)
+		if area >= 1 {
+			return weighted / area, nil
+		}
+		area -= patches[start].area
+		weighted -= patches[start].area * patches[start].y
+	}
+	return 0, fmt.Errorf("The room geometry supplied for scan matching contains %.2f m² of usable level floor; at least 1 m² is required.", best)
 }
 
 func triangleArea(t Triangle) (area, up float64) {
