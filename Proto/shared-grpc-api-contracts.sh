@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # One immutable source pin for Go and embedded Swift generation.
-SHARED_GRPC_API_CONTRACTS_REF="507da555d9a4851347734e916d30ee68c6c4bfa6"
+SHARED_GRPC_API_CONTRACTS_REF="1fceb41cdf10c3d4136e74991d2e18efe22c88cf"
 # Canonical root files are staged under cloud/ to preserve existing descriptors.
 SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "apps.proto"
@@ -8,9 +8,50 @@ SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "tunnel.proto"
     "users.proto"
 )
-SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
+SHARED_GRPC_API_CONTRACTS_AGENT_V1_PROTOS=(
+    "wendy/agent/services/v1/shared.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_service.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_container_service.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_shell_service.proto"
     "wendy/agent/services/v1/wendy_agent_v1_audio_service.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto"
     "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto"
-    "wendy/agent/services/v2/file_sync_service.proto"
-    "wendy/agent/services/v2/tunnel_service.proto"
+    "wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
 )
+SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS=(
+    "wendy/agent/services/v2/shared.proto"
+    "wendy/agent/services/v2/device_info_service.proto"
+    "wendy/agent/services/v2/agent_update_service.proto"
+    "wendy/agent/services/v2/os_update_service.proto"
+    "wendy/agent/services/v2/driver_service.proto"
+    "wendy/agent/services/v2/wifi_service.proto"
+    "wendy/agent/services/v2/bluetooth_service.proto"
+    "wendy/agent/services/v2/container_service.proto"
+    "wendy/agent/services/v2/provisioning_service.proto"
+    "wendy/agent/services/v2/audio_service.proto"
+    "wendy/agent/services/v2/telemetry_service.proto"
+    "wendy/agent/services/v2/file_sync_service.proto"
+    "wendy/agent/services/v2/mesh_service.proto"
+    "wendy/agent/services/v2/local_mesh_admin_service.proto"
+    "wendy/agent/services/v2/ros2_service.proto"
+    "wendy/agent/services/v2/timesync_service.proto"
+    "wendy/agent/services/v2/build_service.proto"
+    "wendy/agent/services/v2/calibrated_frame_service.proto"
+    "wendy/agent/services/v2/robot_arm_service.proto"
+    "wendy/agent/services/v2/sensor_pairing_service.proto"
+    "wendy/agent/services/v2/unitree_service.proto"
+    "wendy/agent/services/v2/unitree_robot_service.proto"
+    "wendy/agent/services/v2/sensor_service.proto"
+    "wendy/agent/services/v2/tunnel_service.proto"
+    "wendy/agent/services/v2/data_service.proto"
+)
+SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
+    "${SHARED_GRPC_API_CONTRACTS_AGENT_V1_PROTOS[@]}"
+    "${SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS[@]}"
+    "wendy/agent/apps/v1/recording.proto"
+    "wendy/system/v1/notifications.proto"
+    "wendylite/v1/sensorlink.proto"
+)
+SHARED_GRPC_API_CONTRACTS_INPUT="https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF"

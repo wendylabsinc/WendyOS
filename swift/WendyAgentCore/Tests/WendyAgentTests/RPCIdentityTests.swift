@@ -377,7 +377,7 @@ struct RPCIdentityTests {
                     var request = Wendy_Agent_Services_V2_StreamSensorsRequest()
                     request.channelID = [1, 2]
                     let frames = try await sensors.streamSensors(request) { response in
-                        var frames: [Wendy_Lite_Sensorlink_SensorData] = []
+                        var frames: [Wendylite_V1_SensorData] = []
                         for try await frame in response.messages { frames.append(frame) }
                         return frames
                     }
@@ -436,8 +436,8 @@ private struct RPCSensorAudio: AudioManaging {
 }
 
 private struct RPCSensorCamera: CameraCapturing {
-    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor? {
-        var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
+    func descriptor() -> Wendylite_V1_SensorDescriptor? {
+        var descriptor = Wendylite_V1_SensorDescriptor()
         descriptor.channelID = 2
         descriptor.name = "cam0"
         descriptor.video.codec = .h264
