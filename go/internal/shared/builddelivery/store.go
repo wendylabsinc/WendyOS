@@ -56,6 +56,17 @@ func Open(dir string, roots []*x509.Certificate, target meshid.Device, clock fun
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
+	// A durable record alone cannot preserve a newly created store if a power
+	// loss drops its directory from an unsynced parent. Include all ancestors
+	// because MkdirAll may have created more than one directory.
+	for parent := filepath.Clean(dir); ; parent = filepath.Dir(parent) {
+		if err := atomicfile.SyncDirectory(parent); err != nil {
+			return nil, err
+		}
+		if filepath.Dir(parent) == parent {
+			break
+		}
+	}
 	release, err := flock.Acquire(filepath.Join(dir, ".lock"), 0)
 	if err != nil {
 		return nil, err

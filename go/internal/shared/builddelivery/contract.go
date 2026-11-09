@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"time"
 
@@ -313,6 +314,28 @@ func strictJSON(data []byte, out any) error {
 	}
 	if _, err := d.Token(); err != io.EOF {
 		return errors.New("trailing JSON")
+	}
+	// encoding/json otherwise accepts case-insensitive field aliases ("ISS")
+	// and null strings. Signed artifacts must have exactly the same meaning in
+	// every verifier, including Swift's case-sensitive Codable decoder.
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil || members == nil {
+		return errors.New("expected delivery JSON object")
+	}
+	typ := reflect.TypeOf(out).Elem()
+	for i := 0; i < typ.NumField(); i++ {
+		name, options, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		value, exists := members[name]
+		if !exists && options != "omitempty" {
+			return fmt.Errorf("missing delivery JSON member %q", name)
+		}
+		if exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("null delivery JSON member %q", name)
+		}
+		delete(members, name)
+	}
+	if len(members) != 0 {
+		return errors.New("unknown delivery JSON member")
 	}
 	d = json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()

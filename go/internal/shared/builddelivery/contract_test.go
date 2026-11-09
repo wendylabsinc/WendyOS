@@ -1,6 +1,7 @@
 package builddelivery
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/mldsa"
 	"crypto/rand"
@@ -205,7 +206,7 @@ func TestSignedJSONCannotHaveAmbiguousOrExtendedMeaning(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		h, p []byte
-	}{{"duplicate claim", h, append([]byte(`{"exp":1,`), p[1:]...)}, {"unknown claim", h, append([]byte(`{"future_authority":true,`), p[1:]...)}, {"duplicate header", append([]byte(`{"alg":"none",`), h[1:]...), p}, {"unknown header", append([]byte(`{"jku":"https://evil.invalid",`), h[1:]...), p}} {
+	}{{"aliased claim", h, bytes.Replace(p, []byte(`"iss"`), []byte(`"ISS"`), 1)}, {"null expected digest", h, bytes.Replace(p, []byte(`"expected_digest":""`), []byte(`"expected_digest":null`), 1)}, {"aliased header", bytes.Replace(h, []byte(`"alg"`), []byte(`"ALG"`), 1), p}, {"duplicate claim", h, append([]byte(`{"exp":1,`), p[1:]...)}, {"unknown claim", h, append([]byte(`{"future_authority":true,`), p[1:]...)}, {"duplicate header", append([]byte(`{"alg":"none",`), h[1:]...), p}, {"unknown header", append([]byte(`{"jku":"https://evil.invalid",`), h[1:]...), p}} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Admit(resign(tc.h, tc.p), f.roots, f.target, f.now); err == nil {
 				t.Fatal("ambiguous/extended artifact accepted")
