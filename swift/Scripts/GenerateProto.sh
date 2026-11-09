@@ -15,34 +15,27 @@ esac
 LOCAL_PROTO_DIR="$(cd "$SWIFT_DIR/../Proto" && pwd)"
 source "$LOCAL_PROTO_DIR/shared-grpc-api-contracts.sh"
 
-# Reject maintained copies before export or any change to committed outputs.
-if [ -e "$LOCAL_PROTO_DIR/wendy/lite/sensorlink.proto" ] || [ -L "$LOCAL_PROTO_DIR/wendy/lite/sensorlink.proto" ]; then
-    echo "error: remove Proto/wendy/lite/sensorlink.proto; sensorlink is generated from service-protos" >&2
-    exit 1
-fi
 PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}" "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
-  if [ -e "$LOCAL_PROTO_DIR/$proto" ] || [ -L "$LOCAL_PROTO_DIR/$proto" ]; then
-    echo "error: remove Proto/$proto; it is generated from service-protos" >&2
-    exit 1
-  fi
   PATH_ARGS+=(--path "$proto")
-done
-for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
-  if [ -e "$LOCAL_PROTO_DIR/cloud/$proto" ] || [ -L "$LOCAL_PROTO_DIR/cloud/$proto" ]; then
-    echo "error: remove Proto/cloud/$proto; it is generated from service-protos" >&2
-    exit 1
-  fi
 done
 if [ "$(buf --version)" != "1.75.0" ] || [ "$(protoc --version)" != "libprotoc 34.0" ]; then
   echo "error: install buf 1.75.0 and protoc 34.0 (same versions as Go generation)" >&2
   exit 1
 fi
 TEMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TEMP_DIR"' EXIT
+trap 'finish_shared_grpc_api_contracts "$?" "$TEMP_DIR"' EXIT
+buf export "$SHARED_GRPC_API_CONTRACTS_INPUT" --output "$TEMP_DIR/catalogue"
+check_shared_grpc_api_contracts_sources "$LOCAL_PROTO_DIR" "$TEMP_DIR/catalogue"
 buf export \
   "$SHARED_GRPC_API_CONTRACTS_INPUT" \
   "${PATH_ARGS[@]}" --output "$TEMP_DIR/shared"
+for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}" "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
+  if [ ! -f "$TEMP_DIR/shared/$proto" ]; then
+    echo "error: selected shared proto missing from export: $proto" >&2
+    exit 1
+  fi
+done
 
 # Keep existing proto names, local imports and module layout in temporary staging.
 PROTO_DIR="$TEMP_DIR/Proto"

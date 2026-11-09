@@ -22,6 +22,62 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// What a role may contain and where it binds (AccessService).
+type RoleKind int32
+
+const (
+	RoleKind_ROLE_KIND_UNSPECIFIED RoleKind = 0
+	// Permissions that are not device-targeted only; it grants no device
+	// access. Binds at organization scope only. Built-ins: Owner, Admin,
+	// Developer, Member, Viewer.
+	RoleKind_ROLE_KIND_ORGANIZATION RoleKind = 1
+	// Device-targeted permissions only; the only way to device access. Binds at
+	// organization, site, tag or device scope. Built-ins: Device viewer, Device
+	// operator, Device manager.
+	RoleKind_ROLE_KIND_DEVICE RoleKind = 2
+)
+
+// Enum value maps for RoleKind.
+var (
+	RoleKind_name = map[int32]string{
+		0: "ROLE_KIND_UNSPECIFIED",
+		1: "ROLE_KIND_ORGANIZATION",
+		2: "ROLE_KIND_DEVICE",
+	}
+	RoleKind_value = map[string]int32{
+		"ROLE_KIND_UNSPECIFIED":  0,
+		"ROLE_KIND_ORGANIZATION": 1,
+		"ROLE_KIND_DEVICE":       2,
+	}
+)
+
+func (x RoleKind) Enum() *RoleKind {
+	p := new(RoleKind)
+	*p = x
+	return p
+}
+
+func (x RoleKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RoleKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendycloud_v2_roles_proto_enumTypes[0].Descriptor()
+}
+
+func (RoleKind) Type() protoreflect.EnumType {
+	return &file_wendycloud_v2_roles_proto_enumTypes[0]
+}
+
+func (x RoleKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RoleKind.Descriptor instead.
+func (RoleKind) EnumDescriptor() ([]byte, []int) {
+	return file_wendycloud_v2_roles_proto_rawDescGZIP(), []int{0}
+}
+
 type PermissionSource int32
 
 const (
@@ -61,11 +117,11 @@ func (x PermissionSource) String() string {
 }
 
 func (PermissionSource) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendycloud_v2_roles_proto_enumTypes[0].Descriptor()
+	return file_wendycloud_v2_roles_proto_enumTypes[1].Descriptor()
 }
 
 func (PermissionSource) Type() protoreflect.EnumType {
-	return &file_wendycloud_v2_roles_proto_enumTypes[0]
+	return &file_wendycloud_v2_roles_proto_enumTypes[1]
 }
 
 func (x PermissionSource) Number() protoreflect.EnumNumber {
@@ -74,7 +130,7 @@ func (x PermissionSource) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PermissionSource.Descriptor instead.
 func (PermissionSource) EnumDescriptor() ([]byte, []int) {
-	return file_wendycloud_v2_roles_proto_rawDescGZIP(), []int{0}
+	return file_wendycloud_v2_roles_proto_rawDescGZIP(), []int{1}
 }
 
 type Permission struct {
@@ -164,9 +220,12 @@ type Role struct {
 	// System-owned and read-only; shared by every organization.
 	IsBuiltin bool `protobuf:"varint,4,opt,name=is_builtin,json=isBuiltin,proto3" json:"is_builtin,omitempty"`
 	// Catalog permission names (Permission.name).
-	Permissions   []string               `protobuf:"bytes,5,rep,name=permissions,proto3" json:"permissions,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Permissions []string               `protobuf:"bytes,5,rep,name=permissions,proto3" json:"permissions,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Chosen at creation, never changed (WDY-4052). Roles created before kinds
+	// existed are ORGANIZATION.
+	Kind          RoleKind `protobuf:"varint,8,opt,name=kind,proto3,enum=wendycloud.v2.RoleKind" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -248,6 +307,13 @@ func (x *Role) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *Role) GetKind() RoleKind {
+	if x != nil {
+		return x.Kind
+	}
+	return RoleKind_ROLE_KIND_UNSPECIFIED
 }
 
 type EffectivePermission struct {
@@ -625,8 +691,10 @@ type CreateRoleRequest struct {
 	Name           string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Description    *string                `protobuf:"bytes,3,opt,name=description,proto3,oneof" json:"description,omitempty"`
 	Permissions    []string               `protobuf:"bytes,4,rep,name=permissions,proto3" json:"permissions,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// UNSPECIFIED = ORGANIZATION, so callers that predate kinds keep working.
+	Kind          RoleKind `protobuf:"varint,5,opt,name=kind,proto3,enum=wendycloud.v2.RoleKind" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateRoleRequest) Reset() {
@@ -685,6 +753,13 @@ func (x *CreateRoleRequest) GetPermissions() []string {
 		return x.Permissions
 	}
 	return nil
+}
+
+func (x *CreateRoleRequest) GetKind() RoleKind {
+	if x != nil {
+		return x.Kind
+	}
+	return RoleKind_ROLE_KIND_UNSPECIFIED
 }
 
 type CloneRoleRequest struct {
@@ -1022,7 +1097,7 @@ const file_wendycloud_v2_roles_proto_rawDesc = "" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x14\n" +
 	"\x05label\x18\x03 \x01(\tR\x05label\x12 \n" +
 	"\vdescription\x18\x04 \x01(\tR\vdescription\x12#\n" +
-	"\rplatform_only\x18\x05 \x01(\bR\fplatformOnly\"\x98\x02\n" +
+	"\rplatform_only\x18\x05 \x01(\bR\fplatformOnly\"\xc5\x02\n" +
 	"\x04Role\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
@@ -1033,7 +1108,8 @@ const file_wendycloud_v2_roles_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAtB\x0e\n" +
+	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12+\n" +
+	"\x04kind\x18\b \x01(\x0e2\x17.wendycloud.v2.RoleKindR\x04kindB\x0e\n" +
 	"\f_description\"\x8d\x01\n" +
 	"\x13EffectivePermission\x12\x1e\n" +
 	"\n" +
@@ -1055,12 +1131,13 @@ const file_wendycloud_v2_roles_proto_rawDesc = "" +
 	"\x05roles\x18\x01 \x03(\v2\x13.wendycloud.v2.RoleR\x05roles\"R\n" +
 	"\x0eGetRoleRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x17\n" +
-	"\arole_id\x18\x02 \x01(\tR\x06roleId\"\xa9\x01\n" +
+	"\arole_id\x18\x02 \x01(\tR\x06roleId\"\xd6\x01\n" +
 	"\x11CreateRoleRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
 	"\vdescription\x18\x03 \x01(\tH\x00R\vdescription\x88\x01\x01\x12 \n" +
-	"\vpermissions\x18\x04 \x03(\tR\vpermissionsB\x0e\n" +
+	"\vpermissions\x18\x04 \x03(\tR\vpermissions\x12+\n" +
+	"\x04kind\x18\x05 \x01(\x0e2\x17.wendycloud.v2.RoleKindR\x04kindB\x0e\n" +
 	"\f_description\"u\n" +
 	"\x10CloneRoleRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12$\n" +
@@ -1081,7 +1158,11 @@ const file_wendycloud_v2_roles_proto_rawDesc = "" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\"h\n" +
 	" ListEffectivePermissionsResponse\x12D\n" +
-	"\vpermissions\x18\x01 \x03(\v2\".wendycloud.v2.EffectivePermissionR\vpermissions*\x8e\x01\n" +
+	"\vpermissions\x18\x01 \x03(\v2\".wendycloud.v2.EffectivePermissionR\vpermissions*W\n" +
+	"\bRoleKind\x12\x19\n" +
+	"\x15ROLE_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16ROLE_KIND_ORGANIZATION\x10\x01\x12\x14\n" +
+	"\x10ROLE_KIND_DEVICE\x10\x02*\x8e\x01\n" +
 	"\x10PermissionSource\x12!\n" +
 	"\x1dPERMISSION_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16PERMISSION_SOURCE_ROLE\x10\x01\x12\x1b\n" +
@@ -1114,60 +1195,63 @@ func file_wendycloud_v2_roles_proto_rawDescGZIP() []byte {
 	return file_wendycloud_v2_roles_proto_rawDescData
 }
 
-var file_wendycloud_v2_roles_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_wendycloud_v2_roles_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_wendycloud_v2_roles_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_wendycloud_v2_roles_proto_goTypes = []any{
-	(PermissionSource)(0),                    // 0: wendycloud.v2.PermissionSource
-	(*Permission)(nil),                       // 1: wendycloud.v2.Permission
-	(*Role)(nil),                             // 2: wendycloud.v2.Role
-	(*EffectivePermission)(nil),              // 3: wendycloud.v2.EffectivePermission
-	(*ListPermissionsRequest)(nil),           // 4: wendycloud.v2.ListPermissionsRequest
-	(*ListPermissionsResponse)(nil),          // 5: wendycloud.v2.ListPermissionsResponse
-	(*GetOrganizationCeilingRequest)(nil),    // 6: wendycloud.v2.GetOrganizationCeilingRequest
-	(*GetOrganizationCeilingResponse)(nil),   // 7: wendycloud.v2.GetOrganizationCeilingResponse
-	(*ListRolesRequest)(nil),                 // 8: wendycloud.v2.ListRolesRequest
-	(*ListRolesResponse)(nil),                // 9: wendycloud.v2.ListRolesResponse
-	(*GetRoleRequest)(nil),                   // 10: wendycloud.v2.GetRoleRequest
-	(*CreateRoleRequest)(nil),                // 11: wendycloud.v2.CreateRoleRequest
-	(*CloneRoleRequest)(nil),                 // 12: wendycloud.v2.CloneRoleRequest
-	(*UpdateRoleRequest)(nil),                // 13: wendycloud.v2.UpdateRoleRequest
-	(*DeleteRoleRequest)(nil),                // 14: wendycloud.v2.DeleteRoleRequest
-	(*DeleteRoleResponse)(nil),               // 15: wendycloud.v2.DeleteRoleResponse
-	(*ListEffectivePermissionsRequest)(nil),  // 16: wendycloud.v2.ListEffectivePermissionsRequest
-	(*ListEffectivePermissionsResponse)(nil), // 17: wendycloud.v2.ListEffectivePermissionsResponse
-	(*timestamppb.Timestamp)(nil),            // 18: google.protobuf.Timestamp
-	(*SignedRequest)(nil),                    // 19: wendycloud.v2.SignedRequest
+	(RoleKind)(0),                            // 0: wendycloud.v2.RoleKind
+	(PermissionSource)(0),                    // 1: wendycloud.v2.PermissionSource
+	(*Permission)(nil),                       // 2: wendycloud.v2.Permission
+	(*Role)(nil),                             // 3: wendycloud.v2.Role
+	(*EffectivePermission)(nil),              // 4: wendycloud.v2.EffectivePermission
+	(*ListPermissionsRequest)(nil),           // 5: wendycloud.v2.ListPermissionsRequest
+	(*ListPermissionsResponse)(nil),          // 6: wendycloud.v2.ListPermissionsResponse
+	(*GetOrganizationCeilingRequest)(nil),    // 7: wendycloud.v2.GetOrganizationCeilingRequest
+	(*GetOrganizationCeilingResponse)(nil),   // 8: wendycloud.v2.GetOrganizationCeilingResponse
+	(*ListRolesRequest)(nil),                 // 9: wendycloud.v2.ListRolesRequest
+	(*ListRolesResponse)(nil),                // 10: wendycloud.v2.ListRolesResponse
+	(*GetRoleRequest)(nil),                   // 11: wendycloud.v2.GetRoleRequest
+	(*CreateRoleRequest)(nil),                // 12: wendycloud.v2.CreateRoleRequest
+	(*CloneRoleRequest)(nil),                 // 13: wendycloud.v2.CloneRoleRequest
+	(*UpdateRoleRequest)(nil),                // 14: wendycloud.v2.UpdateRoleRequest
+	(*DeleteRoleRequest)(nil),                // 15: wendycloud.v2.DeleteRoleRequest
+	(*DeleteRoleResponse)(nil),               // 16: wendycloud.v2.DeleteRoleResponse
+	(*ListEffectivePermissionsRequest)(nil),  // 17: wendycloud.v2.ListEffectivePermissionsRequest
+	(*ListEffectivePermissionsResponse)(nil), // 18: wendycloud.v2.ListEffectivePermissionsResponse
+	(*timestamppb.Timestamp)(nil),            // 19: google.protobuf.Timestamp
+	(*SignedRequest)(nil),                    // 20: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_roles_proto_depIdxs = []int32{
-	18, // 0: wendycloud.v2.Role.created_at:type_name -> google.protobuf.Timestamp
-	18, // 1: wendycloud.v2.Role.updated_at:type_name -> google.protobuf.Timestamp
-	0,  // 2: wendycloud.v2.EffectivePermission.source:type_name -> wendycloud.v2.PermissionSource
-	1,  // 3: wendycloud.v2.ListPermissionsResponse.permissions:type_name -> wendycloud.v2.Permission
-	2,  // 4: wendycloud.v2.ListRolesResponse.roles:type_name -> wendycloud.v2.Role
-	3,  // 5: wendycloud.v2.ListEffectivePermissionsResponse.permissions:type_name -> wendycloud.v2.EffectivePermission
-	4,  // 6: wendycloud.v2.PermissionService.ListPermissions:input_type -> wendycloud.v2.ListPermissionsRequest
-	6,  // 7: wendycloud.v2.PermissionService.GetOrganizationCeiling:input_type -> wendycloud.v2.GetOrganizationCeilingRequest
-	8,  // 8: wendycloud.v2.RoleService.ListRoles:input_type -> wendycloud.v2.ListRolesRequest
-	10, // 9: wendycloud.v2.RoleService.GetRole:input_type -> wendycloud.v2.GetRoleRequest
-	19, // 10: wendycloud.v2.RoleService.CreateRole:input_type -> wendycloud.v2.SignedRequest
-	19, // 11: wendycloud.v2.RoleService.CloneRole:input_type -> wendycloud.v2.SignedRequest
-	19, // 12: wendycloud.v2.RoleService.UpdateRole:input_type -> wendycloud.v2.SignedRequest
-	19, // 13: wendycloud.v2.RoleService.DeleteRole:input_type -> wendycloud.v2.SignedRequest
-	16, // 14: wendycloud.v2.RoleService.ListEffectivePermissions:input_type -> wendycloud.v2.ListEffectivePermissionsRequest
-	5,  // 15: wendycloud.v2.PermissionService.ListPermissions:output_type -> wendycloud.v2.ListPermissionsResponse
-	7,  // 16: wendycloud.v2.PermissionService.GetOrganizationCeiling:output_type -> wendycloud.v2.GetOrganizationCeilingResponse
-	9,  // 17: wendycloud.v2.RoleService.ListRoles:output_type -> wendycloud.v2.ListRolesResponse
-	2,  // 18: wendycloud.v2.RoleService.GetRole:output_type -> wendycloud.v2.Role
-	2,  // 19: wendycloud.v2.RoleService.CreateRole:output_type -> wendycloud.v2.Role
-	2,  // 20: wendycloud.v2.RoleService.CloneRole:output_type -> wendycloud.v2.Role
-	2,  // 21: wendycloud.v2.RoleService.UpdateRole:output_type -> wendycloud.v2.Role
-	15, // 22: wendycloud.v2.RoleService.DeleteRole:output_type -> wendycloud.v2.DeleteRoleResponse
-	17, // 23: wendycloud.v2.RoleService.ListEffectivePermissions:output_type -> wendycloud.v2.ListEffectivePermissionsResponse
-	15, // [15:24] is the sub-list for method output_type
-	6,  // [6:15] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	19, // 0: wendycloud.v2.Role.created_at:type_name -> google.protobuf.Timestamp
+	19, // 1: wendycloud.v2.Role.updated_at:type_name -> google.protobuf.Timestamp
+	0,  // 2: wendycloud.v2.Role.kind:type_name -> wendycloud.v2.RoleKind
+	1,  // 3: wendycloud.v2.EffectivePermission.source:type_name -> wendycloud.v2.PermissionSource
+	2,  // 4: wendycloud.v2.ListPermissionsResponse.permissions:type_name -> wendycloud.v2.Permission
+	3,  // 5: wendycloud.v2.ListRolesResponse.roles:type_name -> wendycloud.v2.Role
+	0,  // 6: wendycloud.v2.CreateRoleRequest.kind:type_name -> wendycloud.v2.RoleKind
+	4,  // 7: wendycloud.v2.ListEffectivePermissionsResponse.permissions:type_name -> wendycloud.v2.EffectivePermission
+	5,  // 8: wendycloud.v2.PermissionService.ListPermissions:input_type -> wendycloud.v2.ListPermissionsRequest
+	7,  // 9: wendycloud.v2.PermissionService.GetOrganizationCeiling:input_type -> wendycloud.v2.GetOrganizationCeilingRequest
+	9,  // 10: wendycloud.v2.RoleService.ListRoles:input_type -> wendycloud.v2.ListRolesRequest
+	11, // 11: wendycloud.v2.RoleService.GetRole:input_type -> wendycloud.v2.GetRoleRequest
+	20, // 12: wendycloud.v2.RoleService.CreateRole:input_type -> wendycloud.v2.SignedRequest
+	20, // 13: wendycloud.v2.RoleService.CloneRole:input_type -> wendycloud.v2.SignedRequest
+	20, // 14: wendycloud.v2.RoleService.UpdateRole:input_type -> wendycloud.v2.SignedRequest
+	20, // 15: wendycloud.v2.RoleService.DeleteRole:input_type -> wendycloud.v2.SignedRequest
+	17, // 16: wendycloud.v2.RoleService.ListEffectivePermissions:input_type -> wendycloud.v2.ListEffectivePermissionsRequest
+	6,  // 17: wendycloud.v2.PermissionService.ListPermissions:output_type -> wendycloud.v2.ListPermissionsResponse
+	8,  // 18: wendycloud.v2.PermissionService.GetOrganizationCeiling:output_type -> wendycloud.v2.GetOrganizationCeilingResponse
+	10, // 19: wendycloud.v2.RoleService.ListRoles:output_type -> wendycloud.v2.ListRolesResponse
+	3,  // 20: wendycloud.v2.RoleService.GetRole:output_type -> wendycloud.v2.Role
+	3,  // 21: wendycloud.v2.RoleService.CreateRole:output_type -> wendycloud.v2.Role
+	3,  // 22: wendycloud.v2.RoleService.CloneRole:output_type -> wendycloud.v2.Role
+	3,  // 23: wendycloud.v2.RoleService.UpdateRole:output_type -> wendycloud.v2.Role
+	16, // 24: wendycloud.v2.RoleService.DeleteRole:output_type -> wendycloud.v2.DeleteRoleResponse
+	18, // 25: wendycloud.v2.RoleService.ListEffectivePermissions:output_type -> wendycloud.v2.ListEffectivePermissionsResponse
+	17, // [17:26] is the sub-list for method output_type
+	8,  // [8:17] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_roles_proto_init() }
@@ -1185,7 +1269,7 @@ func file_wendycloud_v2_roles_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_roles_proto_rawDesc), len(file_wendycloud_v2_roles_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   2,
