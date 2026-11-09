@@ -20,7 +20,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
+// ALPN retains the original single-UDP-flow protocol for older peers.
 const ALPN = "wendy-app-mesh/1"
+const multiplexALPN = "wendy-app-mesh/2"
 const Port = localmesh.AppSessionPort
 const appSessionSetupTimeout = 60 * time.Second
 
@@ -42,7 +44,7 @@ func quicConfig() *quic.Config {
 	// Bound the initial burst on BLE paths with limited buffering; normal
 	// congestion control grows the window as packets are acknowledged.
 	return &quic.Config{MaxCryptoStreamSize: localmesh.MaxQUICCryptoStreamSize, InitialRTT: time.Second, InitialCongestionWindowPackets: 4, HandshakeIdleTimeout: 30 * time.Second, MaxIdleTimeout: 45 * time.Second,
-		MaxIncomingStreams: 8, MaxIncomingUniStreams: -1, EnableDatagrams: true, Allow0RTT: false,
+		MaxIncomingStreams: 8 + udpmessage.PeerFlows, MaxIncomingUniStreams: -1, EnableDatagrams: true, Allow0RTT: false,
 		// The routed TUN carries at most 1320 bytes end to end. quic-go's
 		// default 1280-byte UDP payload exceeds that once IPv6/UDP headers
 		// are added; the kernel drops the Initial before it reaches the TUN.
@@ -216,7 +218,7 @@ func NewServer(credentials *localmesh.Credentials, authorizer Authorizer, manage
 
 func (s *Server) TLSConfig() *tls.Config {
 	config := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-		NextProtos: []string{ALPN}, Certificates: []tls.Certificate{s.credentials.Certificate},
+		NextProtos: []string{multiplexALPN, ALPN}, Certificates: []tls.Certificate{s.credentials.Certificate},
 		ClientAuth: tls.RequireAnyClientCert,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
@@ -348,7 +350,14 @@ func (s *Server) serve(parent context.Context, conn *quic.Conn) {
 		}
 	}()
 	protocol := &sessionProtocol{}
-	sem := make(chan struct{}, 8)
+	capacity := 8
+	if localmesh.ApplicationProtocol(conn.ConnectionState().TLS.NegotiatedProtocol) == multiplexALPN {
+		protocol.mux = newUDPMultiplexer(conn)
+		protocol.tcpSlots = make(chan struct{}, 8)
+		capacity += udpmessage.PeerFlows
+		go protocol.mux.receive()
+	}
+	sem := make(chan struct{}, capacity)
 	for {
 		stream, err := conn.AcceptStream(conn.Context())
 		if err != nil {
@@ -375,9 +384,14 @@ func (s *Server) serve(parent context.Context, conn *quic.Conn) {
 type sessionProtocol struct {
 	mu       sync.Mutex
 	tcp, udp bool
+	mux      *udpMultiplexer
+	tcpSlots chan struct{}
 }
 
 func (p *sessionProtocol) admit(udp bool) bool {
+	if p.mux != nil {
+		return !udp
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if udp {
@@ -408,7 +422,17 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 		return
 	}
 	port := binary.BigEndian.Uint16(hello[4:])
+	if string(hello[:4]) == "WAU4" {
+		if protocol.mux != nil {
+			s.serveMultiplexedDatagrams(parent, conn, port, stream, protocol.mux)
+		}
+		return
+	}
 	if string(hello[:4]) == "WAU2" {
+		if protocol.mux != nil {
+			_ = writeUDPAck(stream, 2)
+			return
+		}
 		s.serveDatagrams(parent, conn, port, stream, protocol)
 		return
 	}
@@ -418,6 +442,15 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 	}
 	if string(hello[:4]) != "WAS1" {
 		return
+	}
+	if protocol.tcpSlots != nil {
+		select {
+		case protocol.tcpSlots <- struct{}{}:
+			defer func() { <-protocol.tcpSlots }()
+		default:
+			deny(stream)
+			return
+		}
 	}
 	local, err := s.authorizer.DialAuthorized(port, func(address string) (net.Conn, error) {
 		return net.DialTimeout("tcp4", address, 5*time.Second)

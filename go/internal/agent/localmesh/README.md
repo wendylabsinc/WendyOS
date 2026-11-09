@@ -615,6 +615,40 @@ QUIC and, when available, TCP with TLS. Lite can use the TLS endpoint without
 QUIC. These signed destination endpoints are independent of the carrier used
 by any particular hop; clients still authenticate the destination end to end.
 
+## Shared application QUIC sessions
+
+The application client retains one reusable QUIC connection per destination
+principal and advertised endpoint. Concurrent TCP and UDP dials share its pinned
+TLS handshake. An old connection may drain active flows while a replacement
+accepts new ones after expiry or retirement. This pool is separate from the
+hop-by-hop carrier connections and the native TLS application transport.
+
+ALPN `wendy-app-mesh/2` permits reliable `WAS1` TCP streams and multiplexed UDP
+flows in the same connection. Each UDP flow opens a reliable `WAU4` control
+stream naming an authorized destination port and negotiating message/chunk
+capacity; `WUA4` acknowledges admission. That control stream remains open for
+the flow's lifetime. Each QUIC DATAGRAM starts with the control stream ID as an
+8-byte big-endian integer, followed by the existing version-2 UDP message
+fragment. Stream IDs are never reused within a connection. Unknown or closed
+IDs are dropped, and closing or revoking one flow does not close other flows.
+
+The maximum framed chunk remains 1,000 bytes: the flow prefix leaves 992 bytes
+for the UDP message fragment, including its 20-byte fragment header. A lower
+QUIC DATAGRAM capacity subtracts the 8-byte prefix before the message scheduler
+reduces its chunk size. Complete application UDP messages still support 65,507
+bytes and are delivered only after complete reassembly. DATAGRAM fragments
+remain unreliable; they are not repaired through a reliable stream. Existing
+per-flow, peer and node message/socket budgets and fragment scheduling continue
+to apply. A session admits at most eight active TCP streams and 32 UDP flows,
+subject to those resource budgets, so UDP controls do not consume TCP capacity.
+
+Servers also accept ALPN `wendy-app-mesh/1` for older clients, retaining its
+single-UDP-flow connection ownership and wire framing. Updated clients offer
+both protocols during the authenticated handshake. TCP can use negotiated v1;
+shared UDP requires v2 and returns an unsupported-protocol error for a v1 peer,
+which must be upgraded. There is no second connection or downgrade retry after
+an authentication failure. Native TLS UDP retains its separate framing.
+
 ## Application service discovery
 
 Applications with the mesh network entitlement can browse signed Wendy Net

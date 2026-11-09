@@ -49,8 +49,8 @@ type Client struct {
 	ownsUDPManager bool
 	mu             sync.Mutex
 	peers          map[meshid.Device]*pooledSession
-	sessions       map[*pooledSession]struct{} // includes retired sessions with active streams
-	udpSessions    map[*udpSession]struct{}    // dedicated datagram sessions, including pending setup
+	sessions       map[*pooledSession]struct{} // includes retired sessions with active flows
+	udpSessions    map[*udpSession]struct{}    // QUIC/TLS datagram flows, including pending setup
 	tlsApps        map[*tlsAppConn]struct{}
 	tlsDials       map[*tlsAppDial]struct{}
 	closed         bool
@@ -71,6 +71,7 @@ type pooledSession struct {
 	used    time.Time
 	active  int
 	retired bool
+	mux     *udpMultiplexer
 }
 
 func NewClient(credentials *localmesh.Credentials, managers ...*udpmessage.Manager) (*Client, error) {
@@ -386,7 +387,7 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 			}
 		}
 		if entry != nil && entry.address == address && entry.conn != nil && entry.conn.Context().Err() == nil &&
-			now.Before(entry.expires) && now.Sub(entry.born) < clientAgeLimit && now.Sub(entry.used) < clientIdleLimit {
+			now.Before(entry.expires) && now.Sub(entry.born) < clientAgeLimit && (entry.active > 0 || now.Sub(entry.used) < clientIdleLimit) {
 			entry.active++
 			entry.used = now
 			c.mu.Unlock()
@@ -407,9 +408,10 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 		if oldConn != nil {
 			_ = oldConn.CloseWithError(0, "wendy net app session replaced")
 		}
-		cfg, err := c.credentials.PeerTLSWithTickets(peer, ALPN, "app-quic")
+		cfg, err := c.credentials.PeerTLSWithTickets(peer, multiplexALPN, "app-quic")
 		var conn *quic.Conn
 		if err == nil {
+			c.credentials.ConfigureTLSClient(cfg, multiplexALPN, ALPN)
 			conn, err = c.dial(ctx, address, cfg, quicConfig())
 		}
 		if err == nil {
@@ -421,6 +423,10 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 		valid := err == nil && !c.closed && c.peers[peer] == newEntry
 		if valid {
 			newEntry.active = 1
+			if localmesh.ApplicationProtocol(conn.ConnectionState().TLS.NegotiatedProtocol) == multiplexALPN {
+				newEntry.mux = newUDPMultiplexer(conn)
+				go newEntry.mux.receive()
+			}
 			c.sessions[newEntry] = struct{}{}
 			go func() {
 				<-conn.Context().Done()
