@@ -47,6 +47,9 @@ const legacyRedirects: Record<string, string> = {
   'get-started/mac': '/installation/wendy-agent-macos/',
   'installation/developer-machine-setup': '/',
   'advanced/wendyos/mender-update': '/advanced/wendyos/ota-update/',
+  'advanced/clients/wendy-cli/commands/analytics/disable': '/reference/cli/analytics/disable/',
+  'advanced/clients/wendy-cli/commands/analytics/enable': '/reference/cli/analytics/enable/',
+  'advanced/clients/wendy-cli/commands/cache/clear': '/reference/cli/cache/clear/',
 };
 
 function getLegacyRedirect(slug?: string[]) {

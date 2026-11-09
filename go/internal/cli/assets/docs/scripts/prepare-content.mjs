@@ -41,6 +41,13 @@ const publicAssetExtensions = new Set([
   '.zip',
 ]);
 const appFiles = new Set(['package-lock.json', 'package.json', 'tsconfig.json']);
+// Internal process pages stay in the repository but are not published.
+const unpublishedPages = new Set([
+  'RELEASES.md',
+  'incident_response.md',
+  'roadmap.md',
+  'wendy-data-platform-demo.md',
+]);
 
 await rm(contentRoot, { recursive: true, force: true });
 await rm(publicRoot, { recursive: true, force: true });
@@ -67,7 +74,7 @@ async function walk(dir) {
     if (entry.isDirectory()) {
       await walk(absolutePath);
     } else if (entry.isFile() && isMarkdownFile(entry.name)) {
-      markdownFiles.push({ absolutePath, relativePath });
+      if (!isUnpublishedPage(relativePath)) markdownFiles.push({ absolutePath, relativePath });
     } else if (entry.isFile() && entry.name === 'meta.json') {
       metaFiles.push({ absolutePath, relativePath });
     } else if (entry.isFile() && shouldPublishAsset(relativePath)) {
@@ -134,6 +141,13 @@ function normalizeMarkdownPath(relativePath) {
   }
 
   return targetPath;
+}
+
+// development/ is contributor documentation, except for this one user guide.
+function isUnpublishedPage(relativePath) {
+  const page = relativePath.replaceAll(path.sep, '/');
+
+  return unpublishedPages.has(page) || (page.startsWith('development/') && page !== 'development/local-mesh-radio.md');
 }
 
 function isMarkdownFile(filename) {
@@ -295,7 +309,7 @@ async function writePublishedSitemap(pages) {
 
 async function writeAdvancedIndexPage() {
   const targetPath = path.join(contentRoot, 'advanced', 'index.md');
-  const body = `---\ntitle: "Detailed reference"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Detailed reference\n\nBehavioral explanations and lower-level WendyOS documentation live here.\n\n## Reference areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](../reference/app-configuration/)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n- [Development](./development/)\n`;
+  const body = `---\ntitle: "Detailed reference"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Detailed reference\n\nBehavioral explanations and lower-level WendyOS documentation live here.\n\n## Reference areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](../reference/app-configuration/)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n`;
 
   await writeFile(targetPath, body, 'utf8');
 }
@@ -312,16 +326,14 @@ async function writeAdvancedMeta() {
         'cloud',
         'wendyos',
         'debugging',
-        'development',
+        '...development',
         'architecture',
         'pki',
         'vscode',
         'wendy-lite',
         'wendy-os-publisher',
         'Examples',
-        'RELEASES',
         'entitlements',
-        'roadmap',
       ],
     },
     null,
