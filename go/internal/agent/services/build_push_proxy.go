@@ -47,9 +47,10 @@ type PeerDialer interface {
 // terminal outcome. Cleanup cancellation is retained only when no actionable
 // failure preceded it, so teardown cannot erase the cause a user can fix.
 type pushProxy struct {
-	addr string
-	ln   net.Listener
-	stop func()
+	deliverySession string
+	addr            string
+	ln              net.Listener
+	stop            func()
 	// credential is this build's loopback password. The listener is on
 	// 127.0.0.1, which is not a boundary on a shared build host: every local
 	// user can reach it, and without a credential any of them could push an
@@ -141,10 +142,13 @@ func validatePushTarget(t *agentpbv2.PushTarget) error {
 // This does not change how the image is named: the target's registry derives
 // its image prefix from its own listen address, so the image lands there as
 // localhost:<regPort>/<repo>:<tag> regardless of how the pusher reached it.
-func startPushProxy(ctx context.Context, dialer PeerDialer, target DeliveryTarget, registryPort uint16, tlsCfg *tls.Config) (*pushProxy, error) {
+func startPushProxy(ctx context.Context, dialer PeerDialer, target DeliveryTarget, registryPort uint16, tlsCfg *tls.Config, session ...string) (*pushProxy, error) {
 	p, err := newPushProxy(dialer, target, registryPort, tlsCfg)
 	if err != nil {
 		return nil, err
+	}
+	if len(session) == 1 {
+		p.deliverySession = session[0]
 	}
 	p.serve(ctx)
 	return p, nil
@@ -247,6 +251,11 @@ func (p *pushProxy) serve(ctx context.Context) {
 			// The loopback credential is ours, not the registry's. The registry
 			// authenticates us by client certificate.
 			pr.Out.Header.Del("Authorization")
+			// Never forward a header supplied by BuildKit or the Dockerfile.
+			pr.Out.Header.Del("Wendy-Build-Delivery")
+			if p.deliverySession != "" {
+				pr.Out.Header.Set("Wendy-Build-Delivery", p.deliverySession)
+			}
 			// Count only this request body's reads. BuildKit can retry a failed
 			// upload and pushes several layers concurrently, so a proxy-wide total
 			// would be traffic volume rather than a meaningful completion point.

@@ -47,9 +47,10 @@ const (
 // device: DeleteAsset inside the reset authorization, and the postbox
 // request_jws of the deployment methods.
 var relayedSignatures = map[string]bool{
-	cloudpbv2.AssetService_DeleteAsset_FullMethodName:           true,
-	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName: true,
-	cloudpbv2.DeploymentService_ControlContainer_FullMethodName: true,
+	cloudpbv2.OperatorCertificateService_RequestEntitledCertificate_FullMethodName: true,
+	cloudpbv2.AssetService_DeleteAsset_FullMethodName:                              true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:                    true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:                    true,
 }
 
 // Signer creates the JWS request descriptors required by Wendy Cloud for
@@ -148,10 +149,11 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 // forwards verbatim to devices (PostboxEntry.request_jws), which cannot
 // resolve a kid.
 var x5cOnly = map[string]bool{
-	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:   true,
-	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: true,
-	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:            true,
-	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
+	cloudpbv2.OperatorCertificateService_RequestEntitledCertificate_FullMethodName: true,
+	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:           true,
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName:         true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:                    true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:                    true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -410,6 +412,13 @@ func (s *Signer) principalRevocationManagementRequest(deviceID string) ([]byte, 
 // target.resource (cloud RequestSigning.md). The type assertion is what keeps
 // payload_type equal to the method's request message.
 var signedResources = map[string]func(tenant string, req proto.Message) (string, bool){
+	cloudpbv2.OperatorCertificateService_RequestEntitledCertificate_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RequestEntitledCertificateRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant || in.GetCsrPem() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/entitled-certificate", true
+	},
 	cloudpbv2.OrganizationService_AddMembersByEmails_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.AddMembersByEmailsRequest)
 		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(len(in.GetMembers()) > 0) {
@@ -571,6 +580,10 @@ func (s *Signer) sign(operation, resource, bodyDigest string, byKID bool, correl
 	// validates only the leaf through PKI, which owns the issuer chain).
 	if byKID {
 		return s.signPayload(payload, map[string]any{"kid": s.kid})
+	}
+	if "/"+operation == cloudpbv2.OperatorCertificateService_RequestEntitledCertificate_FullMethodName {
+		// PKI re-verifies the relayed descriptor independently of Cloud.
+		return s.signPayload(payload, map[string]any{"x5c": s.x5c})
 	}
 	return s.signPayload(payload, map[string]any{"x5c": s.x5c[:1]})
 }

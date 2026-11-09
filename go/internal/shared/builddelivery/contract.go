@@ -94,6 +94,23 @@ func Fingerprint(leaf *x509.Certificate) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// VerifyAuthority checks a cached/issued entitlement credential against local
+// trust before the operator uses it. It does not admit a delivery job.
+func VerifyAuthority(chain [][]byte, roots []*x509.Certificate, target meshid.Device, operator string, now time.Time) error {
+	op, err := meshoperator.VerifyPrimary(chain, roots, target.Tenant(), now)
+	if err != nil {
+		return err
+	}
+	if op.Operator().Principal() != operator {
+		return errors.New("operator delivery credential has a different identity")
+	}
+	leaf, err := x509.ParseCertificate(op.LeafDER())
+	if err != nil {
+		return err
+	}
+	return authorizeEntitlements(leaf, target)
+}
+
 // VerifyBuilderCertificate resolves an authorization key independently of the
 // RPC tunnel used to submit a build. The expected device must come from the
 // user's existing inventory/enrollment binding, never this certificate bundle.

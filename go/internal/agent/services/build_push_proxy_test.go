@@ -129,7 +129,7 @@ func TestPushProxy_RecordsCleanupWhenItIsTheOnlyCause(t *testing.T) {
 
 // proxyToBackend wires a proxy whose outbound hop is a plain-TCP test backend.
 // The mesh dial and TLS wrapping are orthogonal to what these tests check.
-func proxyToBackend(t *testing.T, handler http.Handler) *pushProxy {
+func proxyToBackend(t *testing.T, handler http.Handler, session ...string) *pushProxy {
 	t.Helper()
 	backend := httptest.NewServer(handler)
 	t.Cleanup(backend.Close)
@@ -144,6 +144,9 @@ func proxyToBackend(t *testing.T, handler http.Handler) *pushProxy {
 	// Set before serve, so no goroutine can be reading dial yet.
 	proxy.dial = func(ctx context.Context) (net.Conn, error) {
 		return net.Dial("tcp", backend.Listener.Addr().String())
+	}
+	if len(session) == 1 {
+		proxy.deliverySession = session[0]
 	}
 	proxy.serve(context.Background())
 	return proxy
@@ -521,5 +524,28 @@ func TestValidatePushTarget_AcceptsRealAppRepositories(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("repository %q was rejected: %v", repo, err)
 		}
+	}
+}
+
+func TestPushProxyReplacesUntrustedDeliveryHeader(t *testing.T) {
+	for _, session := range []string{"", "target-admitted-session"} {
+		t.Run(session, func(t *testing.T) {
+			got := make(chan string, 1)
+			proxy := proxyToBackend(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got <- r.Header.Get("Wendy-Build-Delivery")
+				w.WriteHeader(http.StatusOK)
+			}), session)
+			req, _ := http.NewRequest(http.MethodGet, "http://"+proxy.addr+"/v2/", nil)
+			req.SetBasicAuth(pushProxyUser, proxy.credential)
+			req.Header.Set("Wendy-Build-Delivery", "injected-by-buildkit")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if value := <-got; value != session {
+				t.Fatalf("forwarded session %q, want %q", value, session)
+			}
+		})
 	}
 }

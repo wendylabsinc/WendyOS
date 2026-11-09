@@ -13,11 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/builddelivery"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
@@ -98,8 +100,8 @@ const (
 
 // targetDialer opens a gRPC connection to a target device's agent. A field on
 // the service rather than a method so tests can point delivery at an
-// in-process fake; production resolves the PushTarget's asset UUID against
-// this tenant's roster, dials the mesh peer, and pins TLS to its principal.
+// in-process fake; production resolves the signed target identity, dials the
+// mesh peer, and pins TLS to its principal.
 type targetDialer func(ctx context.Context, target *agentpbv2.PushTarget) (*grpc.ClientConn, error)
 
 // meshTargetDialer reaches a target's agent the way the registry push reached
@@ -116,7 +118,7 @@ func meshTargetDialer(peers PeerDialer, resolve func(string) (DeliveryTarget, er
 		if err != nil {
 			return nil, err
 		}
-		resolved, err := resolve(target.GetAssetUuid())
+		resolved, err := resolveBuildDeliveryTarget(ctx, resolve, target.GetAssetUuid())
 		if err != nil {
 			return nil, fmt.Errorf("resolving delivery target device %s: %w", target.GetAssetUuid(), err)
 		}
@@ -426,11 +428,23 @@ var deliveryBackoff = func(attempt int) time.Duration {
 // layers by diff ID across attempts and is owned by the caller.
 func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryReporter, img *exportedImage, target *agentpbv2.PushTarget, resolved map[string]*deliveryLayer) error {
 	assetUUID := target.GetAssetUuid()
+	if target.GetDeliverySession() != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, builddelivery.MetadataKey, target.GetDeliverySession())
+	}
 	cc, err := s.dialTarget(ctx, target)
 	if err != nil {
 		return &transientDeliveryError{fmt.Errorf("reaching device %s over the wendy net: %w", assetUUID, err)}
 	}
 	defer cc.Close()
+	if target.GetDeliverySession() != "" {
+		done, err := deliveryAlreadyComplete(ctx, cc, target)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
 	cs := agentpb.NewWendyContainerServiceClient(cc)
 
 	// Capability probe, before any layer is decompressed: an agent without a

@@ -64,6 +64,51 @@ as does a build run with `--chunking=off`. The build log says which route it too
 These delivery modes apply to the build host's own connection to the target.
 They are unchanged by the separate [CLI upload rules for Cloud v2](../run.md#uploads-over-cloud-v2).
 
+## Operator authorization
+
+Update the CLI, build host and target agents together before remote delivery.
+The CLI refuses a host or target without operator authorization support. Switching
+to registry delivery does not bypass that requirement.
+
+Before submitting a build, the CLI verifies the builder's public certificate
+against its locally trusted PKI and selected device identity. It obtains a
+short-lived operator certificate carrying `deployment:create` for each target,
+then signs and admits a separate job on each target. The job binds the build
+inputs, builder identity and public key, exact image reference, previous image
+digest, a 64 GiB transfer budget and a delivery deadline of 24 hours. An intervening
+change to the image reference causes publication to fail rather than overwrite it.
+
+The worker presents its own device certificate and the admitted session for both
+chunk delivery and OCI registry push. It receives the signed contract and public
+operator certificate chain; the operator's signing key stays on the CLI machine.
+The contract authorizes delivery of a build whose output digest is not yet known.
+It is independent of image signing.
+
+For an airgapped deployment, prepare a target-scoped operator credential while
+Cloud is reachable:
+
+```sh
+wendy auth prepare-build-delivery --device camera-one
+```
+
+The command prints its admission deadline (at most 15 minutes). Create the job
+before that deadline, using `--skip-cloud-registration` if Cloud is unavailable.
+The target must be reachable to admit the job. After admission, delivery and
+retries use the target's durable record and can continue without Cloud or the
+operator connection until the job deadline, including after the signing
+certificate expires. The worker uses the signed target identity and authenticated
+LAN or mesh routing, so it does not need a fresh Cloud roster after restarting.
+Base images and other build dependencies must also be available locally.
+
+The cached credential uses the platform credential store when available, with
+the same owner-only file fallback as other CLI credentials. `wendy auth logout`
+removes cached delivery signing credentials. Already admitted jobs remain valid
+until their deadline or the target's enrollment reset.
+
+A builder certificate renewed with the same key can continue the job. A key
+rotation requires a new job authorization; current agent renewal rekeys, so a job
+that spans that renewal fails closed and must be authorized again.
+
 ## Delivery credentials
 
 On the registry-push route, the agent exposes a loopback endpoint for BuildKit to

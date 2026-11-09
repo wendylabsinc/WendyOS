@@ -505,6 +505,13 @@ func runRemoteBuild(
 		} else {
 			spec.PushTargets = pushTargets
 		}
+		destinations := map[string]*grpcclient.AgentConnection{pushTargets[0].GetAssetUuid(): target}
+		for i, conn := range fleetConns {
+			destinations[pushTargets[i+1].GetAssetUuid()] = conn
+		}
+		if err := authorizeRemoteBuild(buildCtx, builder, spec, destinations); err != nil {
+			return err
+		}
 		buildResult, err = streamRemoteBuild(buildCtx, builder, spec, stream)
 		return err
 	}); err != nil {

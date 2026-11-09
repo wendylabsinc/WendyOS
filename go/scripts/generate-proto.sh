@@ -89,6 +89,7 @@ SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS=(
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/pki_admin.proto"
+    "wendycloud/v2/operator_certificate.proto"
     "wendy/options.proto"
 )
 # PKIAdminService returns the PKI ledger's own response messages.
