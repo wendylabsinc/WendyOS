@@ -103,6 +103,8 @@ func TestOperatorFailureRecordSingleFileAndUnknownPayloadIgnored(t *testing.T) {
 		func(f *operatorFailure) { f.Version++ },
 		func(f *operatorFailure) { f.Kind = "future-kind" },
 		func(f *operatorFailure) { f.Transport = "secret transport" },
+		func(f *operatorFailure) { f.ExitReason = "secret exit reason" },
+		func(f *operatorFailure) { f.ExitKind = "secret exit kind" },
 		func(f *operatorFailure) { f.At = time.Now().Add(-3 * operatormesh.JoinSetupTimeout).UnixMilli() },
 	} {
 		failure := *d.last
@@ -171,6 +173,18 @@ func TestOperatorFailureChildStartupCauseSurvivesDetachedBoundary(t *testing.T) 
 	_, err = connectOrStartOperator(ctx, spec, &credential)
 	if !strings.Contains(err.Error(), "issuer chain") || !strings.Contains(err.Error(), "ble") || strings.Contains(err.Error(), "sensitive original error") {
 		t.Fatalf("detached cause is still hidden: %v", err)
+	}
+	dir, dirErr := brokerDir()
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
+	data, readErr := os.ReadFile(operatorFailurePath(dir, spec))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var terminal operatorFailure
+	if json.Unmarshal(data, &terminal) != nil || terminal.ExitReason != "startup_failed" || terminal.ExitKind != "timeout" || terminal.Kind != "issuer_chain" {
+		t.Fatalf("Run dropped terminal reason or preceding concrete cause: %s", data)
 	}
 }
 

@@ -32,6 +32,9 @@ type operatorFailure struct {
 	Kind        string `json:"kind"`
 	Transport   string `json:"transport,omitempty"`
 	At          int64  `json:"atUnixMs"`
+	ExitReason  string `json:"exitReason,omitempty"`
+	ExitKind    string `json:"exitKind,omitempty"`
+	ExitAt      int64  `json:"exitAtUnixMs,omitempty"`
 }
 
 type operatorDiagnostics struct {
@@ -141,6 +144,8 @@ func (f operatorFailure) message() string {
 		return "the connection to a nearby router closed"
 	case "attachment_failed":
 		return "the connection to a nearby router failed"
+	case "broker_exit":
+		return "the local Wendy Net background router stopped"
 	}
 	return ""
 }
@@ -176,7 +181,7 @@ func operatorStartupError(spec Spec, cause error) error {
 	data, err := io.ReadAll(io.LimitReader(file, operatorFailureBytes+1))
 	var failure operatorFailure
 	now := time.Now()
-	if err != nil || len(data) > operatorFailureBytes || json.Unmarshal(data, &failure) != nil || failure.Version != 1 || failure.Fingerprint != spec.CertFingerprint || failure.Generation != spec.DiagnosticGeneration || failure.message() == "" || failure.At > now.Add(time.Second).UnixMilli() || now.Sub(time.UnixMilli(failure.At)) > 2*operatormesh.JoinSetupTimeout {
+	if err != nil || len(data) > operatorFailureBytes || json.Unmarshal(data, &failure) != nil || failure.Version != 1 || failure.Fingerprint != spec.CertFingerprint || failure.Generation != spec.DiagnosticGeneration || failure.message() == "" || (failure.ExitReason != "" && !validOperatorExitReason(failure.ExitReason)) || (failure.ExitKind != "" && !validOperatorExitKind(failure.ExitKind)) || failure.At > now.Add(time.Second).UnixMilli() || now.Sub(time.UnixMilli(failure.At)) > 2*operatormesh.JoinSetupTimeout {
 		return fmt.Errorf("could not join Wendy Net from this computer: %w", cause)
 	}
 	switch failure.Transport {
@@ -185,4 +190,53 @@ func operatorStartupError(spec Spec, cause error) error {
 		return fmt.Errorf("could not join Wendy Net from this computer: %w", cause)
 	}
 	return &operatorStartupFailure{cause: cause, failure: failure}
+}
+
+// recordExit runs only after runOperator has joined its producers. A generic
+// shutdown annotates, rather than erases, the latest concrete carrier failure.
+func (d *operatorDiagnostics) recordExit(cause *operatorExitCause) {
+	if cause == nil || !validOperatorExitReason(cause.reason) {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if validatePrivateDir(filepath.Dir(d.path)) != nil {
+		return
+	}
+	now := d.now().UnixMilli()
+	failure := operatorFailure{Version: 1, Fingerprint: d.spec.CertFingerprint, Generation: d.spec.DiagnosticGeneration, Kind: "broker_exit", At: now}
+	if d.last != nil {
+		failure = *d.last
+	} else if cause.err != nil && !errors.Is(cause.err, context.Canceled) {
+		// Initial explicit attachment errors precede any carrier callback.
+		// Keep their existing explanation and recovery classification.
+		failure.Kind = operatorFailureKind(cause.err)
+	}
+	failure.ExitAt = now
+	failure.ExitReason = cause.reason
+	failure.ExitKind = ""
+	if cause.err != nil {
+		failure.ExitKind = operatorFailureKind(cause.err)
+		if errors.Is(cause.err, context.Canceled) {
+			failure.ExitKind = "canceled"
+		}
+	}
+	data, err := json.Marshal(failure)
+	if err != nil || len(data) > operatorFailureBytes {
+		return
+	}
+	if err = validatePrivateFile(d.path, false); err != nil && !os.IsNotExist(err) {
+		return
+	}
+	if atomicfile.Write(d.path, data, 0600) == nil {
+		d.last = &failure
+	}
+}
+
+func validOperatorExitKind(kind string) bool {
+	switch kind {
+	case "issuer_chain", "device_pin", "certificate", "timeout", "connection_closed", "attachment_failed", "canceled":
+		return true
+	}
+	return false
 }

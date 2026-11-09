@@ -28,6 +28,9 @@ type nodePeer struct {
 	babelConfirmed  bool // Actor-owned: this incarnation once had two-way Babel liveness.
 	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
 	retire          chan struct{}
+	retireOnce      sync.Once
+	capacityRetire  atomic.Bool      // Local cause survives asynchronous owned cleanup.
+	capacityLease   *ConnectionLease // Immutable: signal-only publication to the owning provider.
 	closeDiagnostic sync.Once
 	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
@@ -110,6 +113,7 @@ type Node struct {
 	started          time.Time
 	routingClock     func() time.Duration // Internal clock injection; nil uses elapsed monotonic process time.
 	nextLink         babel.LinkID
+	capacityRetiring babel.LinkID // Actor-owned: one global-capacity retirement pending removal.
 	advertisement    Manifest
 	publicationDirty bool
 	nextPublication  time.Time
@@ -122,6 +126,10 @@ type Node struct {
 	routeInput       routeInput
 	routeDiagnostics []routeTransition
 	timestampWorkers chan struct{}
+
+	capacityHoldRelease babel.LinkID               // Actor-owned: exact closing slot selected for actual new-peer demand.
+	capacityHoldUntil   time.Duration              // Actor-owned: new-peer opportunity after actual capacity removal.
+	capacityHoldPeers   map[meshid.Device]struct{} // Owned identities; recovery does not serve external demand.
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
@@ -298,7 +306,7 @@ func (n *Node) refresh() {
 	n.retireExpiredBabelPeers(routing)
 	links := make([]PeerLink, 0, len(n.peers))
 	for _, p := range n.peers {
-		link := PeerLink{ID: p.id, Device: p.device, Cost: p.cost, Transport: p.transport, assembler: &p.assembler}
+		link := PeerLink{ID: p.id, Device: p.device, Cost: p.cost, Transport: p.transport, Retiring: p.retiring(), assembler: &p.assembler}
 		if carrier, ok := p.link.(*quicNodeLink); ok {
 			link.carrier = carrier.sendIP
 		}
@@ -320,12 +328,13 @@ func (n *Node) refresh() {
 	}
 	markForwardingReady(links, routing, n.forwardRoutes, authorizations)
 	for i := range links {
-		if p := n.peers[links[i].ID]; p != nil && p.babelRetiring {
+		if p := n.peers[links[i].ID]; p != nil && p.retiring() {
 			// Retirement is terminal for this incarnation, even while its owned
 			// transport closer is waiting to finish.
 			links[i].ForwardingReady = false
 		}
 	}
+	n.diagnostics.emitWarm(now, n.Credentials.Device, links, routing, proofs, n.routing.HasUsableOriginOnLink, logWarmCarrierDiagnostic)
 	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: routing.Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations, RouteProofs: proofs})
 }
 
@@ -493,11 +502,39 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.add != nil {
-		if len(n.peers) >= 64 {
-			return errors.New("wendy net link capacity reached")
-		}
 		if e.add.device == n.Credentials.Device {
 			return errors.New("self link")
+		}
+		newPeer := true
+		if _, recovering := n.capacityHoldPeers[e.add.device]; recovering {
+			newPeer = false
+		}
+		for _, p := range n.peers {
+			if p.device == e.add.device {
+				newPeer = false
+				break
+			}
+		}
+		if n.capacityHoldActive() {
+			// A normal retry must observe current liveness/proof state before
+			// classifying an incoming carrier as dispensable redundancy.
+			if err := n.step(babel.Tick{}); err != nil {
+				return err
+			}
+			if view := n.view.Load(); len(n.peers) >= 63 && view != nil && view.HasOtherForwardingLink(e.add.device, 0) {
+				return ErrCarrierCapacityRetry
+			}
+		}
+		if len(n.peers) >= 64 {
+			// Refresh elapsed liveness and the verified proof projection before
+			// deciding whether any existing incarnation is safely redundant.
+			if err := n.step(babel.Tick{}); err != nil {
+				return err
+			}
+			if n.reclaimGlobalRedundancy(e.add.device) {
+				return ErrCarrierCapacityRetry
+			}
+			return errors.New("Wendy Net connection limit reached")
 		}
 		n.nextLink++
 		e.add.id = n.nextLink
@@ -520,6 +557,13 @@ func (n *Node) handle(e nodeEvent) error {
 		now := time.Now()
 		n.queue(e.add, e.add.sync.bootstrapOwn(n.Credentials.Device.Key(), now, cap(e.add.control)-len(e.add.control)))
 		n.reconcilePeer(e.add, now)
+		if newPeer {
+			// The slot actually admitted a distinct peer. Failed setup or an
+			// old standby's deferred retry must never consume this opportunity.
+			n.capacityHoldUntil = 0
+			n.capacityHoldRelease = 0
+			n.capacityHoldPeers = nil
+		}
 		return nil
 	}
 	p := n.peers[e.id]
@@ -527,6 +571,7 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.remove {
+		capacityRelease := n.capacityHoldRelease == e.id
 		p.sync.Close()
 		if err := n.step(babel.RemoveLink{ID: e.id}); err != nil {
 			return err
@@ -534,11 +579,18 @@ func (n *Node) handle(e nodeEvent) error {
 		close(p.done)
 		delete(n.peers, e.id)
 		_ = n.kernel.RemovePeer(e.id)
+		if n.capacityRetiring == e.id {
+			n.capacityRetiring = 0
+		}
+		if capacityRelease {
+			n.capacityHoldRelease = 0
+			n.capacityHoldUntil = n.routingElapsed() + FailedConnectPenalty
+		}
 		n.refresh()
 		return nil
 	}
 	if e.packet != nil {
-		if p.babelRetiring {
+		if p.retiring() {
 			// Packets queued before cancellation cannot revive a closing link.
 			return nil
 		}
@@ -946,13 +998,18 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
 	}
-	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{}), retire: make(chan struct{})}
-	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
+	lease, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
+	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{}), retire: make(chan struct{}), capacityLease: lease}
+	if !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {
 		return nil
 	}
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
+		if errors.Is(err, ErrCarrierCapacityRetry) {
+			markConnectionRetry(ctx)
+		}
 		return err
 	}
+	BindConnectionLink(ctx, p.id, p.cost, p.signalCapacityRetire)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -978,6 +1035,10 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	// instead: the event loop may still be finishing a FIB operation. Closing
 	// the descriptor here would destroy its link before that operation ends.
 	wg.Wait()
+	if p.capacityRetire.Load() {
+		markConnectionRetry(ctx)
+		return errors.Join(ErrCarrierCapacityRetry, err, removeErr)
+	}
 	return errors.Join(err, removeErr)
 }
 

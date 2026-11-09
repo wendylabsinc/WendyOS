@@ -111,9 +111,6 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 		fmt.Fprintf(os.Stderr, "wendy: mesh %s authenticated %s\n", candidate.Transport, peer.Principal())
 	}
 	candidate.Authenticated(peer)
-	if s.Snapshot().HasCheaperLink(peer, candidate.Cost) {
-		return nil
-	}
 	s.linkMu.Lock()
 	s.links[link] = managedCarrier{peer: peer, cost: candidate.Cost}
 	s.choosePreferredLocked()
@@ -137,6 +134,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 			_ = retired.Close()
 		}
 	}()
+	ctx = localmesh.WithLinkAttachmentReceiver(ctx, candidate.AttachedLink)
 	return s.Node.AttachOperatorRouterLink(localmesh.WithCarrier(ctx, candidate.Transport), link, candidate.Cost)
 }
 

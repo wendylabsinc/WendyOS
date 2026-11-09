@@ -35,6 +35,8 @@ type PeerLink struct {
 	// is selected and installed through this exact carrier. Only such a link may
 	// make a useful slower carrier redundant.
 	ForwardingReady bool
+	// Retiring marks a terminal local incarnation awaiting owned cleanup.
+	Retiring bool
 	// CarrierIP reports router QUIC enqueue/capability diagnostics.
 	CarrierIP *CarrierIPStats
 	carrier   *carrierIPSender
@@ -80,7 +82,31 @@ type ipQueueSnapshotter interface{ snapshot() IPQueueStats }
 
 func (s NodeSnapshot) HasCheaperLink(device meshid.Device, cost uint16) bool {
 	for _, link := range s.Links {
-		if link.Device == device && link.Cost < cost && link.ForwardingReady {
+		if link.Device == device && link.Cost < cost && link.ForwardingReady && !link.Retiring {
+			return true
+		}
+	}
+	return false
+}
+
+// HasInstalledRouteOnLink conservatively protects every currently installed
+// finite route on an incarnation, including transit prefixes whose replacement
+// carrier may not yet be primed. A cheaper direct peer /128 alone is insufficient.
+func (s NodeSnapshot) HasInstalledRouteOnLink(link babel.LinkID) bool {
+	for _, route := range s.ForwardingRoutes {
+		if route.Link == link && !route.Local && !route.Unreachable && route.Metric != babel.Infinity {
+			return true
+		}
+	}
+	return false
+}
+
+// HasOtherForwardingLink proves another exact authenticated direct carrier is
+// already forwarding this peer. Configured cost is not path health: a stale
+// low-cost carrier may be unused while a higher-cost carrier actually forwards.
+func (s NodeSnapshot) HasOtherForwardingLink(peer meshid.Device, excluded babel.LinkID) bool {
+	for _, link := range s.Links {
+		if link.ID != excluded && link.Device == peer && link.ForwardingReady && !link.Retiring {
 			return true
 		}
 	}

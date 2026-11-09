@@ -254,6 +254,21 @@ func (e *Engine) HasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16) b
 	return false
 }
 
+// HasUsableOriginOnLink observes a received candidate on this exact incarnation,
+// including a nonselected standby. A direct lookup keeps per-peer diagnostics
+// independent of the global candidate-table size. Serialize the query with Step.
+func (e *Engine) HasUsableOriginOnLink(id RouterID, prefix netip.Prefix, seq uint16, link LinkID) bool {
+	if link == 0 || e.stopped || e.pending != 0 {
+		return false
+	}
+	if _, local := e.local[prefix]; local {
+		return false
+	}
+	r := e.routes[routeKey{prefix: prefix, link: link}]
+	return r != nil && r.id == id && r.seq == seq && r.expires > e.now &&
+		r.advertised != Infinity && e.metric(r) != Infinity && e.feasible(r)
+}
+
 // The zero origin is reserved for short-lived Route Request coalescing. Real
 // origin requests always have a nonzero router ID, so both share MaxRequests
 // without changing sequence-recovery semantics or retaining packet payloads.
