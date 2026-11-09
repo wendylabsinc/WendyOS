@@ -271,7 +271,7 @@ Declare `{ "type": "usb" }` for raw USB device access. Wendy mounts `/dev/bus/us
 only when that directory exists on the host. Hosts without a USB bus, including
 VMs, can start the container without a missing-mount OCI error. This does not
 emulate a camera or other USB hardware. Apps with hardware drivers need an
-explicit [simulator backend](/docs/apps/wendy-services#simulation-backends) on
+explicit [simulator backend](/docs/advanced/apps/wendy-services#simulation-backends) on
 robot VMs. Redeploy if the USB directory appears after deployment.
 
 ### Serial / UART Entitlement

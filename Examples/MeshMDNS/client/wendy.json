@@ -8,5 +8,6 @@
       "mode": "mesh",
       "serviceCIDR": "10.99.0.0/16"
     }
-  ]
+  ],
+  "restartPolicy": "no"
 }

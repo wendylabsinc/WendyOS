@@ -173,20 +173,29 @@ if info and info.properties.get(b"demo") == b"learn-mesh":
         url = f"http://{addresses[0]}:{info.port}/"
 ```
 
-After unzipping, run:
+After unzipping, set the two device hostnames or IP addresses from `wendy discover`.
+Replace both example values with your connected devices, then run:
 
 ```sh
+PUBLISHER_DEVICE='publisher-device.local'
+CLIENT_DEVICE='client-device.local'
 cd mesh-mdns/publisher
-wendy run --detach
+wendy run --device "$PUBLISHER_DEVICE" --detach
 cd ../client
-wendy run
+wendy run --device "$CLIENT_DEVICE"
 ```
 
-Select the publisher device first, then the other connected device for the client.
-Expect a resolved `10.99.x.x:18080` endpoint and JSON with `instance` and
+The explicit selectors keep both apps on their intended devices, even if you have
+a saved default. Expect a resolved `10.99.x.x:18080` endpoint and JSON with `instance` and
 `status: "ok"`. The client exits after success or a 60-second discovery timeout.
-Restart the publisher and rerun the client to check recovery. Stop the publisher
-app when finished.
+Its manifest sets `restartPolicy: "no"` so it stays stopped after exiting.
+To check recovery, run `wendy run --device "$PUBLISHER_DEVICE" --detach` again
+from `publisher/`, then rerun the client from `client/`. When finished, stop the
+publisher:
+
+```sh
+wendy --device "$PUBLISHER_DEVICE" device apps stop com.example.learn-mdns-publisher
+```
 
 No Avahi entitlement or UDP 5353 mapping is needed for this app-owned socket.
 The TXT marker filters demo instances; it is not authentication. See the
