@@ -275,6 +275,7 @@ func (f *pbFixture) newPostbox() *Postbox {
 		return f.cloud, io.NopCloser(nil), nil
 	}
 	p.checkpoint = f.cloud.notarize
+	p.dialArtifacts = refuseArtifacts
 	p.UpdateIdentity("https://cloud.test", f.certPEM, f.keyPEM, f.chainPEM)
 	return p
 }
@@ -703,7 +704,7 @@ func TestPostboxHoldsWithoutVerifiedCheckpoint(t *testing.T) {
 	}
 }
 
-func TestPostboxAssignmentHeldUntilMaterialPull(t *testing.T) {
+func TestPostboxAssignmentHeldWhenThePullIsRefused(t *testing.T) {
 	f := newPBFixture(t)
 	dep := uuid.NewString()
 	resource := "org/" + f.tenant + "/deployment/" + dep + "/device/" + f.uuid
@@ -719,7 +720,7 @@ func TestPostboxAssignmentHeldUntilMaterialPull(t *testing.T) {
 		t.Fatalf("assignment not held: %+v", f.p.snapshot().Assignments)
 	}
 	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED {
-		t.Fatalf("outcome = %+v, want the T14 seam's pull refusal", o)
+		t.Fatalf("outcome = %+v, want the registry's refusal", o)
 	}
 
 	unassign := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, ValidUntil: timestamppb.New(f.now.Add(time.Hour))}

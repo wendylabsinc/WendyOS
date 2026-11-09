@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/hpke"
 	"crypto/mldsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -57,6 +58,9 @@ type Postbox struct {
 	retry      time.Duration
 	now        func() time.Time
 	dial       func(cloudURL, certPEM, keyPEM, chainPEM string) (cloudpbv2.DevicePostboxServiceClient, io.Closer, error)
+	// dialArtifacts and encryptionKey serve the registry pull (registry_pull.go).
+	dialArtifacts func(cloudURL, certPEM, keyPEM, chainPEM string) (cloudpbv2.DeviceArtifactServiceClient, io.Closer, error)
+	encryptionKey func(principal string) (hpke.PrivateKey, error)
 	// checkpoint verifies PullChangesResponse.checkpoint (verifyCheckpoint).
 	checkpoint func(raw []byte, roots *x509.CertPool, tenant, target string, mark int64, now time.Time) (postboxCheckpoint, error)
 	write      func(configPath, name string, data []byte) error
@@ -86,6 +90,8 @@ type postboxControl interface {
 	// AppOf is the app a container name addresses: the app whose service
 	// container it names ("{appID}_{service}"), else the name itself, whole.
 	AppOf(ctx context.Context, name string) string
+	// ImportRelease imports a verified registry release into containerd.
+	ImportRelease(ctx context.Context, img ReleaseImage) error
 }
 
 // postboxState is everything that must survive a restart. It belongs to one
@@ -122,8 +128,7 @@ type postboxPending struct {
 	AppID         string `json:"appId,omitempty"`
 }
 
-// postboxAssignment is a verified DeviceAssignment held as desired state; the
-// registry pull that acts on it is T14.
+// postboxAssignment is a verified DeviceAssignment held as desired state.
 type postboxAssignment struct {
 	AppID           string `json:"appId"`
 	AppReleaseID    string `json:"appReleaseId"`
@@ -151,8 +156,6 @@ const (
 	// call to cloud only and are not checked here (reqsig README, WDY-4015).
 	postboxPlatformCap = 365 * 24 * time.Hour
 	postboxAudience    = "https://cloud.wendy.sh/broker"
-	// materialPending is the one T14 seam's answer until the registry pull exists.
-	materialPending = "material pull pending (T14)"
 )
 
 // postboxOperations maps each postbox-relayed method (the descriptor's
@@ -167,18 +170,23 @@ var postboxOperations = map[string]string{
 // NewPostbox builds the client; it pulls nothing until UpdateIdentity supplies
 // an enrolled identity (the agent passes its boot identity straight away).
 func NewPostbox(logger *zap.Logger, pub TelemetryPublisher, configPath string, control postboxControl) *Postbox {
-	return &Postbox{
+	p := &Postbox{
 		logger: logger, pub: pub, configPath: configPath, control: control,
 		poll:            5 * time.Minute, // the nudge is the fast path; this is the fallback
 		retry:           30 * time.Second,
 		now:             time.Now,
 		dial:            dialPostbox,
+		dialArtifacts:   dialDeviceArtifacts,
 		checkpoint:      verifyCheckpoint,
 		write:           writeProvisioningFile,
 		wake:            make(chan struct{}, 1),
 		identityChanged: make(chan struct{}, 1),
 		refusals:        map[string]int64{},
 	}
+	p.encryptionKey = func(principal string) (hpke.PrivateKey, error) {
+		return loadDeviceEncryptionKey(p.configPath, principal)
+	}
+	return p
 }
 
 func dialPostbox(cloudURL, certPEM, keyPEM, chainPEM string) (cloudpbv2.DevicePostboxServiceClient, io.Closer, error) {
@@ -457,7 +465,7 @@ func (p *Postbox) process(ctx context.Context, client cloudpbv2.DevicePostboxSer
 	if verr != nil {
 		return p.decide(ctx, e, desc.Correlation, app, outcome, reason, verr)
 	}
-	app, outcome, reason, aerr := p.apply(ctx, req)
+	app, outcome, reason, aerr := p.apply(ctx, id, req)
 	return p.decide(ctx, e, desc.Correlation, app, outcome, reason, aerr)
 }
 
@@ -816,7 +824,7 @@ func bindsThisDevice(req proto.Message, resource string, id *postboxIdentity) er
 
 // apply acts on a verified request through the agent's existing paths. Every
 // failure leaves what is running alone and runs nothing new.
-func (p *Postbox) apply(ctx context.Context, req proto.Message) (string, cloudpbv2.ApplyOutcome, string, error) {
+func (p *Postbox) apply(ctx context.Context, id *postboxIdentity, req proto.Message) (string, cloudpbv2.ApplyOutcome, string, error) {
 	switch r := req.(type) {
 	case *cloudpbv2.ControlContainerRequest:
 		app := p.postboxApp(ctx, r)
@@ -840,7 +848,7 @@ func (p *Postbox) apply(ctx context.Context, req proto.Message) (string, cloudpb
 			DeploymentKeyID: r.GetDeploymentKeyId(), DesiredState: r.GetDesiredState().String(),
 		}
 		p.mu.Unlock()
-		outcome, reason, err := p.pullMaterial(ctx, r.GetAppReleaseId(), r)
+		outcome, reason, err := p.pullAssignment(ctx, id, r)
 		return r.GetAppId(), outcome, reason, err
 	case *cloudpbv2.UnassignDeviceRequest:
 		p.mu.Lock()
@@ -852,17 +860,12 @@ func (p *Postbox) apply(ctx context.Context, req proto.Message) (string, cloudpb
 		p.mu.Unlock()
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 	case *cloudpbv2.CreateDeploymentRequest:
-		outcome, reason, err := p.pullMaterial(ctx, r.GetAppReleaseId(), nil)
-		return "", outcome, reason, err // names a release, not an app
+		// Registry material is pulled per DeviceAssignment, which carries this
+		// device's wrap; a deployment names a release, not an app, and no key.
+		return "", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED, "material",
+			fmt.Errorf("release %q: registry material is pulled per device assignment", r.GetAppReleaseId())
 	}
 	return "", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "apply", fmt.Errorf("no apply path for %T", req)
-}
-
-// pullMaterial is the single seam for the registry pull, unwrap and decrypt
-// (T14). Until then a verified deployment or assignment is held as desired
-// state and reported, and nothing new runs.
-func (p *Postbox) pullMaterial(_ context.Context, releaseID string, _ *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
-	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED, "material", fmt.Errorf("%s for release %q", materialPending, releaseID)
 }
 
 // decide audits, counts and records one postbox decision. The record is
@@ -1244,6 +1247,15 @@ func (c containerControl) AppOf(ctx context.Context, name string) string {
 		}
 	}
 	return name
+}
+
+// ImportRelease imports through the containerd client when it can.
+func (c containerControl) ImportRelease(ctx context.Context, img ReleaseImage) error {
+	importer, ok := c.svc.containerd.(ReleaseImporter)
+	if !ok {
+		return errors.New("this container runtime cannot import registry releases")
+	}
+	return importer.ImportRelease(ctx, img)
 }
 
 func (c containerControl) StartApp(ctx context.Context, name string) error {
