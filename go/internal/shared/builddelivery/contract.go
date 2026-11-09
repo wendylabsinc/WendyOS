@@ -287,6 +287,9 @@ func validate(c Claims) error {
 	return nil
 }
 func encode(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
+// Strict base64 decoding still ignores CR/LF; require the canonical encoding
+// so all language implementations accept the same signed artifacts.
 func decode(s string) ([]byte, error) {
 	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
 	if err != nil || encode(b) != s {
