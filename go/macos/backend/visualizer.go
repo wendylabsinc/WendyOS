@@ -21,6 +21,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	recording "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -73,7 +74,7 @@ func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
 	if conn == nil {
 		return nil, errors.New("recordings require a WendyOS agent")
 	}
-	result, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{})
+	result, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
 	if err != nil {
 		return nil, err
 	}
