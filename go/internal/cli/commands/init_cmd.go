@@ -77,6 +77,7 @@ type entitlementQuestion struct {
 type initOptions struct {
 	appID               string
 	here                bool
+	force               bool
 	target              string
 	language            string
 	template            string
@@ -264,6 +265,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos (writes \"linux\" to wendy.json), wendy-lite, or darwin")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, cpp, or mojo")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
+	cmd.Flags().BoolVar(&opts.force, "force", false, "Overwrite template files in an existing directory (requires --template)")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
 	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
@@ -322,12 +324,15 @@ func runInitWizard(args []string, opts initOptions) error {
 	if err := validateInitAssistantOptions(opts); err != nil {
 		return err
 	}
+	if opts.force && !opts.templateSet {
+		return fmt.Errorf("--force requires --template; manual initialization does not support forced overwrites")
+	}
 
 	// An explicit template and destination can be checked before contacting
 	// the registry. Refusal must not depend on network availability.
 	templateName := normalizeInitChoice(opts.template)
 	hasDestination := opts.here || opts.appIDSet || len(args) > 0
-	if opts.templateSet && templateName != "" && templateName != bareTemplatePickSentinel && hasDestination {
+	if !opts.force && opts.templateSet && templateName != "" && templateName != bareTemplatePickSentinel && hasDestination {
 		destDir, _, err := resolveInitDestAndID(cwd, args, opts)
 		if err != nil {
 			return err
@@ -803,7 +808,7 @@ func validateTemplateDestination(cwd, destDir string) error {
 	// Preserve the existing --here diagnostic for a Wendy project.
 	if filepath.Clean(destDir) == filepath.Clean(cwd) {
 		if _, err := os.Stat(filepath.Join(destDir, "wendy.json")); err == nil {
-			return fmt.Errorf("wendy.json already exists here; run from an empty directory or remove it first")
+			return fmt.Errorf("wendy.json already exists here; choose a new or empty directory, or use --force to overwrite template files")
 		}
 	}
 	// Templates write a complete project tree. Refuse populated destinations
@@ -813,7 +818,7 @@ func validateTemplateDestination(cwd, destDir string) error {
 		return fmt.Errorf("reading project directory %s: %w", destDir, err)
 	}
 	if len(entries) > 0 {
-		return fmt.Errorf("project directory %s is not empty; choose a new or empty directory", destDir)
+		return fmt.Errorf("project directory %s is not empty; choose a new or empty directory, or use --force to overwrite template files", destDir)
 	}
 
 	return nil
@@ -822,8 +827,10 @@ func validateTemplateDestination(cwd, destDir string) error {
 // runTemplateFlow handles init when a template is selected.
 // destDir is the resolved project directory (either cwd or a new subdir).
 func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
-	if err := validateTemplateDestination(cwd, destDir); err != nil {
-		return err
+	if !opts.force {
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
+		}
 	}
 
 	language, err := resolveTemplateLanguage(target, tmpl, meta, opts)
@@ -878,8 +885,10 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 
 	// Preparation may have taken time. Refuse files that arrived meanwhile;
 	// exclusive creation in the writer closes the remaining check/write race.
-	if err := validateTemplateDestination(cwd, destDir); err != nil {
-		return err
+	if !opts.force {
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
+		}
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -887,7 +896,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 	}
 
 	// Render and write all template files.
-	if err := renderAndWriteTemplate(files, destDir, appID, tmpl, vals); err != nil {
+	if err := renderAndWriteTemplate(files, destDir, appID, tmpl, vals, opts.force); err != nil {
 		return err
 	}
 

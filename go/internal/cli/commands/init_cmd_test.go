@@ -19,6 +19,7 @@ func TestNewInitCmd_Flags(t *testing.T) {
 	expectedFlags := []string{
 		"app-id",
 		"here",
+		"force",
 		"target",
 		"language",
 		"entitlement",
@@ -401,7 +402,7 @@ func TestRunTemplateFlow_HereGuardsExistingWendyJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected runTemplateFlow to fail when wendy.json already exists in the current directory")
 	}
-	if got, want := err.Error(), "wendy.json already exists here; run from an empty directory or remove it first"; got != want {
+	if got, want := err.Error(), "wendy.json already exists here; choose a new or empty directory, or use --force to overwrite template files"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
 }

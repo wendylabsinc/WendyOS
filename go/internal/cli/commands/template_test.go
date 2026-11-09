@@ -907,7 +907,7 @@ func TestRenderAndWriteTemplate_PreservesFileArrivingDuringDownload(t *testing.T
 		t.Fatal(err)
 	}
 	vals := map[string]interface{}{"APP_ID": "sapi"}
-	err = renderAndWriteTemplate(files, dest, "sapi", "simple-api", vals)
+	err = renderAndWriteTemplate(files, dest, "sapi", "simple-api", vals, false)
 	if !errors.Is(err, os.ErrExist) {
 		t.Errorf("want an existing-file error, got %v", err)
 	}
@@ -921,7 +921,7 @@ func TestRenderAndWriteTemplate_PreservesFileArrivingDuringDownload(t *testing.T
 
 	// The same downloaded fixture must still render normally into a fresh tree.
 	fresh := filepath.Join(cwd, "fresh")
-	if err := renderAndWriteTemplate(files, fresh, "sapi", "simple-api", vals); err != nil {
+	if err := renderAndWriteTemplate(files, fresh, "sapi", "simple-api", vals, false); err != nil {
 		t.Fatal(err)
 	}
 	got, err = os.ReadFile(filepath.Join(fresh, "Package.swift"))

@@ -79,12 +79,18 @@ func TestInitTemplate_ForceOverlayAndDefaultEmptyDestinations(t *testing.T) {
 			precious := []byte("keep unrelated bytes\x00\xff\n")
 			if force {
 				for name, content := range map[string][]byte{
-					"Package.swift": []byte("old package\n"),
-					"wendy.json":    []byte(`{"appId":"old-project"}`),
-					"asset.bin":     []byte("old asset"),
-					"IMPORTANT.txt": precious,
+					"Package.swift":              []byte("old package\n"),
+					"wendy.json":                 []byte(`{"appId":"old-project"}`),
+					"asset.bin":                  []byte("old asset"),
+					"IMPORTANT.txt":              precious,
+					"Sources/sapi/App.swift":     []byte("old source\n"),
+					"Sources/sapi/IMPORTANT.txt": precious,
 				} {
-					if err := os.WriteFile(filepath.Join(dest, name), content, 0o644); err != nil {
+					path := filepath.Join(dest, name)
+					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, content, 0o644); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -118,12 +124,14 @@ func TestInitTemplate_ForceOverlayAndDefaultEmptyDestinations(t *testing.T) {
 				}
 			}
 			if force {
-				got, err := os.ReadFile(filepath.Join(dest, "IMPORTANT.txt"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !bytes.Equal(got, precious) {
-					t.Fatalf("unrelated file changed: %q", got)
+				for _, name := range []string{"IMPORTANT.txt", "Sources/sapi/IMPORTANT.txt"} {
+					got, err := os.ReadFile(filepath.Join(dest, name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(got, precious) {
+						t.Fatalf("unrelated %s changed: %q", name, got)
+					}
 				}
 			}
 		})
