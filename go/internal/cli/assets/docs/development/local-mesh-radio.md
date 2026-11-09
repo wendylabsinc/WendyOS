@@ -51,27 +51,6 @@ activity or transit traffic. Later discovery can start it again unless you expli
 router status or opening the Wendy Client Networks view only observes an
 existing router.
 
-## Check connection status
-
-Inspect the background router on this computer without starting it:
-
-```sh
-wendy --json net topology --local-cli
-```
-
-To inspect a device's mesh settings and running connections, select that device:
-
-```sh
-wendy --device DEVICE_SELECTOR net status
-```
-
-A ready Bluetooth connection can carry mesh traffic while LAN is still waiting
-for a usable network interface. The status describes the available connections;
-it does not guarantee that every device is reachable. Verify the destination
-with `wendy --device DEVICE_SELECTOR device info`. In the desktop Networks view,
-Cloud display names help identify devices; use their returned selectors for
-commands.
-
 ## Select a device or application service
 
 Use the `mesh://TENANT_UUID/DEVICE_UUID` selector returned by discovery with
