@@ -101,7 +101,7 @@ func TestPooledAppFlowsReauthorizeAndRouteCut(t *testing.T) {
 	transport := &quic.Transport{Conn: packets}
 	defer transport.Close()
 	client.dial = func(ctx context.Context, address netip.AddrPort, tlsConfig *tls.Config, config *quic.Config) (*quic.Conn, error) {
-		return transport.Dial(ctx, net.UDPAddrFromAddrPort(address), tlsConfig, config)
+		return transport.Dial(ctx, net.UDPAddrFromAddrPort(endpoint), tlsConfig, config)
 	}
 	var firstSession any
 	var coldBytes int64
@@ -109,16 +109,17 @@ func TestPooledAppFlowsReauthorizeAndRouteCut(t *testing.T) {
 
 	// The production dialer resolves from the current Babel route before
 	// calling Client.Dial; model that gate for each flow. The destination
-	// follows from the target UUID alone — no manifest is required here.
+	// follows from the target UUID, with the advertised listener in its manifest.
 	snapshot := localmesh.NodeSnapshot{
-		Devices: []localmesh.Manifest{{Device: b.Device.UUID(), Expires: time.Now().Add(time.Minute).UnixMilli()}},
+		Devices: []localmesh.Manifest{{Device: b.Device.UUID(), Expires: time.Now().Add(time.Minute).UnixMilli(), AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: endpoint.Port()}}}},
 		Routes:  []babel.Route{{Prefix: netip.PrefixFrom(b.Device.MeshAddress(), 128)}},
 	}
 	dial := func(port uint16) (net.Conn, error) {
-		if _, err := Resolve(snapshot, b.Device); err != nil {
+		address, err := ResolveApp(snapshot, b.Device)
+		if err != nil {
 			return nil, err
 		}
-		return client.Dial(ctx, b.Device, endpoint, port)
+		return client.Dial(ctx, b.Device, address.Address, port)
 	}
 	for i := 0; i < 2; i++ {
 		started := time.Now()
@@ -173,36 +174,32 @@ func TestPooledAppFlowsReauthorizeAndRouteCut(t *testing.T) {
 	if authorizer.calls.Load() != 3 {
 		t.Fatal("route cut reached remote authorizer")
 	}
-	// The route watcher must retire the old transport during the cut. Otherwise
-	// a heal before QUIC's 45-second idle timeout reuses its dead path.
+	// A route-only cut keeps the authenticated transport. A new signed-route
+	// check still blocks every new flow until forwarding is restored.
 	cutAt := time.Now()
 	client.PruneRoutes(snapshot)
 	client.mu.Lock()
 	entry := client.peers[b.Device]
 	client.mu.Unlock()
-	if entry != nil {
-		t.Fatal("route cut retained pooled session")
-	}
 	old := firstSession.(*quic.Conn)
-	select {
-	case <-old.Context().Done():
-	case <-time.After(time.Second):
-		t.Fatal("route cut did not close old QUIC session promptly")
+	if entry == nil || entry.conn != old || old.Context().Err() != nil {
+		t.Fatal("route-only cut discarded the live QUIC session")
 	}
 	snapshot.Routes[0].Unreachable = false
+	client.PruneRoutes(snapshot)
 	conn, err := dial(port)
 	if err != nil {
 		t.Fatalf("healed route did not reconnect: %v", err)
 	}
 	_ = conn.Close()
 	if elapsed := time.Since(cutAt); elapsed >= clientIdleLimit {
-		t.Fatalf("recovery waited for old session idle timeout: %s", elapsed)
+		t.Fatalf("recovery waited for session idle timeout: %s", elapsed)
 	}
 	client.mu.Lock()
 	replacement := client.peers[b.Device]
 	client.mu.Unlock()
-	if replacement == nil || replacement.conn == old {
-		t.Fatal("healed route reused old QUIC session")
+	if replacement == nil || replacement.conn != old {
+		t.Fatal("healed route repeated the authenticated handshake")
 	}
 	if authorizer.calls.Load() != 4 {
 		t.Fatal("reconnected session did not reauthorize")
@@ -278,10 +275,17 @@ func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = warm.Close()
+	defer warm.Close()
 	client.mu.Lock()
 	old := client.peers[b.Device].conn
 	client.mu.Unlock()
+	baseDial := client.dial
+	client.dial = func(ctx context.Context, address netip.AddrPort, cfg *tls.Config, qc *quic.Config) (*quic.Conn, error) {
+		if old.Context().Err() == nil {
+			t.Error("replacement handshake overlapped old active TCP session")
+		}
+		return baseDial(ctx, address, cfg, qc)
+	}
 	start := time.Now()
 	var retryChecks atomic.Int32
 	recovered, err := client.DialWithRetryCheck(ctx, b.Device, endpoint, port, func() error {
