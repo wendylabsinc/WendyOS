@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -491,15 +492,24 @@ func isExplicitTLSRejection(err error) bool {
 // var so tests can stub it. The question must not carry a "[Y/n]" suffix — the
 // prompt renders its own hint. A cancelled prompt (Ctrl+C / q) counts as no.
 var confirmFn = func(question string) bool {
-	ok, err := tui.ConfirmDefaultYes(question, tea.WithOutput(os.Stderr))
+	ok, err := tui.ConfirmDefaultYes(question, tea.WithOutput(stderrPromptWriter()))
 	return err == nil && ok
+}
+
+// stderrPromptWriter is stderr unless a command chose another terminal for
+// its prompts.
+func stderrPromptWriter() io.Writer {
+	if w, ok := tui.PromptOutput(); ok {
+		return w
+	}
+	return os.Stderr
 }
 
 // confirmDefaultNoFn asks a yes/no question defaulting to No (empty input /
 // Enter counts as no). Used for actions such as applying an OS update. Stubbed
 // in tests.
 var confirmDefaultNoFn = func(question string) bool {
-	ok, err := tui.Confirm(question, tea.WithOutput(os.Stderr))
+	ok, err := tui.Confirm(question, tea.WithOutput(stderrPromptWriter()))
 	return err == nil && ok
 }
 

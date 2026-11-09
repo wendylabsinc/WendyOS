@@ -4,7 +4,6 @@ package commands
 
 import (
 	"archive/zip"
-	"bufio"
 	"compress/gzip"
 	"context"
 	"encoding/binary"
@@ -108,6 +107,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			}
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			defer startInstallSession(cmd)()
 			if len(drivers) > 0 {
 				if len(args) != 0 || deviceType == "" || deviceName == "" {
 					return usageErrorf("--driver requires --device-type and --device-name, and cannot be combined with positional image/drive arguments")
@@ -247,16 +247,8 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	if err := confirmOverwriteInternalDrive(*targetDrive, force, yesOverwriteInternal); err != nil {
 		return err
 	}
-
-	if !force {
-		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			fmt.Println("Cancelled.")
-			return ErrUserCancelled
-		}
+	if err := confirmEraseDrive(*targetDrive, force); err != nil {
+		return err
 	}
 
 	stream, err := openLocalImageStream(imagePath)
@@ -617,6 +609,9 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 
 		if target, ok := strings.CutPrefix(selected, "wlite_target_"); ok {
+			if err := requireInstallChoice("choosing a Wendy Lite board", "Wendy Lite installs only from the interactive picker"); err != nil {
+				return err
+			}
 			board, err := pickWendyLiteBoard(target, nightly)
 			if err != nil {
 				return err
@@ -943,16 +938,8 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	if err := confirmOverwriteInternalDrive(targetDrive, force, yesOverwriteInternal); err != nil {
 		return err
 	}
-	if !force {
-		fmt.Println()
-		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			fmt.Println("Cancelled.")
-			return ErrUserCancelled
-		}
+	if err := confirmEraseDrive(targetDrive, force); err != nil {
+		return err
 	}
 
 	// Step 5: Resolve image metadata for the target storage. A USB-attached
@@ -1435,6 +1422,9 @@ func pickManifestVersion(title string, manifest *deviceManifest) (string, error)
 const externalDrivePickerRefreshInterval = 2 * time.Second
 
 func pickExternalDrive(ctx context.Context) (drive, error) {
+	if err := requireInstallChoice("choosing a drive", "pass --drive (list them with 'wendy os list-drives')"); err != nil {
+		return drive{}, err
+	}
 	item, err := pickRefreshingItem(ctx, "Select target drive", externalDrivePickerRefreshInterval, func(context.Context) ([]tui.PickerItem, error) {
 		drives, err := listExternalDrives()
 		if err != nil {
@@ -2493,8 +2483,8 @@ type wifiScanSelection struct {
 func selectWifiNetworkStreaming() (wifiScanSelection, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := tea.NewProgram(newLocalWifiPickerModel(ctx))
-	fmt.Println()
+	p := tui.NewProgram(newLocalWifiPickerModel(ctx))
+	fmt.Fprintln(tui.PromptWriter())
 	finalModel, runErr := tui.RunProgram(p)
 	if errors.Is(runErr, tea.ErrInterrupted) {
 		return wifiScanSelection{}, ErrUserCancelled
@@ -2695,13 +2685,32 @@ func confirmOverwriteInternalDrive(d drive, force bool, yesOverwriteInternal boo
 	if force {
 		return fmt.Errorf("refusing to wipe non-removable drive %s (%s) with --force; pass --yes-overwrite-internal to confirm you really want to overwrite an internal drive", d.Name, d.DevicePath)
 	}
-	fmt.Printf("\n%s (%s) is an internal (non-removable) drive.\n", d.Name, d.DevicePath)
-	fmt.Println("Typically WendyOS is installed to an SD card or USB drive — overwriting an internal drive will destroy whatever filesystem currently lives on it.")
-	fmt.Printf("To proceed, type the device path exactly:\n  %s\n> ", d.DevicePath)
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	if strings.TrimSpace(line) != d.DevicePath {
+	if !isInteractiveTerminal() {
+		return usageErrorf("%s (%s) is an internal drive and there is no terminal to confirm it: pass --yes-overwrite-internal to overwrite it", d.Name, d.DevicePath)
+	}
+	w := tui.PromptWriter()
+	fmt.Fprintf(w, "\n%s (%s) is an internal (non-removable) drive.\n", d.Name, d.DevicePath)
+	fmt.Fprintln(w, "Typically WendyOS is installed to an SD card or USB drive — overwriting an internal drive will destroy whatever filesystem currently lives on it.")
+	fmt.Fprintf(w, "To proceed, type the device path exactly:\n  %s\n> ", d.DevicePath)
+	if readLineFn() != d.DevicePath {
 		return fmt.Errorf("internal-drive overwrite cancelled (typed value did not match %s)", d.DevicePath)
+	}
+	return nil
+}
+
+// confirmEraseDrive asks before d is erased; --force skips the question.
+func confirmEraseDrive(d drive, force bool) error {
+	if !force && isInteractiveTerminal() {
+		fmt.Fprintln(tui.PromptWriter())
+	}
+	ok, err := confirmInstallStep(fmt.Sprintf("erasing %s (%s)", d.Name, d.DevicePath),
+		fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", d.Name, d.DevicePath), false, force)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		fmt.Println("Cancelled.")
+		return ErrUserCancelled
 	}
 	return nil
 }
