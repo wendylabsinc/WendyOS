@@ -77,7 +77,8 @@ Read wendy://docs/integrations/mcp.mdx for compatibility and CLI coverage gaps.
 Enable the setup group with wendy_tools first. Initial installation does not require a device connection:
 1. os_install_plan — choose the board/carrier, published version and installation method.
 2. os_list_drives — inspect host media for raw-image writes, then plan with the exact drive.
-3. os_install_start creates a saved job for supported image installs. Show its physical instructions.
+3. Ask the user for a device name and Wi-Fi first. os_install_start creates a saved job for supported
+   image installs; pass device_name and wifi, or no_wifi. Show its physical instructions.
 4. os_install_resume probes the hardware and returns an exact target fingerprint. Obtain the user's
    erase authorization for that target and scope before resuming with confirm_erase and target_id.
 5. os_install_status reports worker progress and physical waits, even after MCP restarts. If elevated
@@ -85,8 +86,11 @@ Enable the setup group with wendy_tools first. Initial installation does not req
 6. Follow the boot instructions, then resume with the explicit device address. os_install_verify can
    also check first boot independently. Pin a known public key when available.
 
-Jobs support raw-media writes and Jetson developer-kit recovery. They do not configure first-boot
-WiFi or enrollment; use Ethernet. Agent-only installs use the plan's terminal instructions.
+Jobs support raw-media writes and Jetson developer-kit recovery. They write the first-boot name and
+Wi-Fi when given; without either, the image is written as published. Without wifi the board needs
+Ethernet or USB. Jobs do not pre-enroll Cloud. Hosted chats cannot send Wi-Fi passwords: the user
+can run wendy install jobs start --wifi in a terminal and share the job_id. Agent-only installs use
+the plan's terminal instructions.
 An interrupted write is never retried automatically. Inspect its outcome before creating a new job.
 
 An empty discovery scan does not prove a network failure. Confirm whether the board
