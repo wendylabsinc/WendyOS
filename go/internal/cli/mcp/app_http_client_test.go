@@ -14,12 +14,14 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -497,6 +499,80 @@ func TestAppHTTPFailedConnectCancellationNotification(t *testing.T) {
 	cmd.Env = append(os.Environ(), "MCPGODEBUG=blockingcancelnotify=1")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("initialization cancellation waited for a notification: %v\n%s", err, output)
+	}
+}
+
+func TestAppHTTPInitializationCancellationWinsSuccessfulHandshake(t *testing.T) {
+	protocol := server.NewMCPServer("app", "1")
+	conn, lifetimeCtx, _ := appHTTPFixture(t, server.NewStreamableHTTPServer(protocol))
+	address, closeProxy, err := startMCPProxy(lifetimeCtx, conn, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeProxy()
+	initCtx, cancelInit := context.WithCancel(context.Background())
+	defer cancelInit()
+	closing, release := make(chan struct{}), make(chan struct{})
+	releaseClose := sync.OnceFunc(func() { close(release) })
+	defer releaseClose()
+	var closes atomic.Int32
+	var completed *sdk.ClientSession
+	client := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "1"}, nil)
+	client.AddSendingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+		return func(ctx context.Context, method string, request sdk.Request) (sdk.Result, error) {
+			result, err := next(ctx, method, request)
+			if method == "notifications/initialized" && err == nil {
+				completed = request.GetSession().(*sdk.ClientSession)
+				cancelInit()
+				// Finish a real successful SDK handshake only after the
+				// constructor's cancellation callback has started closing.
+				<-closing
+			}
+			return result, err
+		}
+	})
+	type connected struct {
+		client *appHTTPClient
+		err    error
+	}
+	done := make(chan connected, 1)
+	go func() {
+		got, err := newAppHTTPClientWithSDK(lifetimeCtx, initCtx, "http://"+address, func() {
+			close(closing)
+			<-release
+			closeProxy()
+			closes.Add(1)
+		}, client)
+		done <- connected{got, err}
+	}()
+	select {
+	case <-closing:
+	case <-lifetimeCtx.Done():
+		t.Fatal("initialization cancellation did not start proxy cleanup")
+	}
+	releaseClose()
+	select {
+	case got := <-done:
+		if got.client != nil {
+			_ = got.client.Close()
+			t.Fatal("canceled initialization returned a client backed by a closing proxy")
+		}
+		if !errors.Is(got.err, context.Canceled) || closes.Load() != 1 {
+			t.Fatalf("canceled initialization: err=%v proxy closes=%d", got.err, closes.Load())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled successful handshake did not finish cleanup")
+	}
+	if c, err := net.DialTimeout("tcp", address, time.Second); err == nil {
+		_ = c.Close()
+		t.Fatal("canceled successful handshake left proxy listener open")
+	}
+	waited := make(chan struct{})
+	go func() { _ = completed.Wait(); close(waited) }()
+	select {
+	case <-waited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled successful handshake leaked its SDK session")
 	}
 }
 

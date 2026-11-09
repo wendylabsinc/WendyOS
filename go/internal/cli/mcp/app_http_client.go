@@ -28,6 +28,12 @@ type appHTTPClient struct {
 }
 
 func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, closeProxy func()) (*appHTTPClient, error) {
+	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
+		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
+	return newAppHTTPClientWithSDK(lifetimeCtx, initCtx, endpoint, closeProxy, client)
+}
+
+func newAppHTTPClientWithSDK(lifetimeCtx, initCtx context.Context, endpoint string, closeProxy func(), client *sdk.Client) (*appHTTPClient, error) {
 	ctx, cancel := context.WithCancel(lifetimeCtx)
 	initCtx, cancelInit := context.WithCancel(initCtx)
 	stop := context.AfterFunc(ctx, cancelInit)
@@ -46,8 +52,6 @@ func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, clo
 	// successful handshake; initialization no longer owns the live session.
 	stopClosingProxy := context.AfterFunc(initCtx, closeProxy)
 	defer stopClosingProxy()
-	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
-		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
 	// Keep the app proxy on the session-based protocol: cancellation and
 	// shutdown depend on initialize and session termination.
 	session, err := client.Connect(initCtx, &sdk.StreamableClientTransport{
@@ -57,9 +61,17 @@ func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, clo
 			return http.ErrUseLastResponse
 		}},
 	}, &sdk.ClientSessionOptions{ProtocolVersion: mcpgo.ProtocolVersion20251125})
+	// Transfer ownership only if initialization cancellation has not already
+	// started closing the proxy, even if the SDK just completed its handshake.
+	if !stopClosingProxy() && err == nil {
+		err = initCtx.Err()
+	}
 	if err != nil {
 		cancel()
 		closeProxy()
+		if session != nil {
+			_ = session.Close()
+		}
 		transport.CloseIdleConnections()
 		return nil, err
 	}
