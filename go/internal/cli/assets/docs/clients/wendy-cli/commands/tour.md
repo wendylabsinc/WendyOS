@@ -35,7 +35,7 @@ also offers to install or start a Docker runtime when a build needs one; on
 Linux, install and start Docker yourself. These prompts default to Yes. A healthy
 existing simulation can run again without starting Docker.
 
-See the [quickstart](/docs/#try-the-robot-tour) for prerequisites. Windows users
+See the [quickstart](/docs/getting-started/robot) for prerequisites. Windows users
 can use the physical-device route or the separate
 [local Docker robot demo](https://wendy.dev/quickstart?target=simulator).
 For device inspection with a generic virtual device on native Windows, see
@@ -107,7 +107,7 @@ use the printed VM stop command when you also want to shut down its virtual devi
 
 `wendy tour --hardware` guides you through device setup, discovery, optional
 Wi-Fi configuration, and a sample app. Use an interactive terminal. Check the
-[board-specific setup guide](/docs/#2-set-up-a-device) for storage, power,
+[board-specific setup guide](/docs/installation) for storage, power,
 recovery mode, and cable requirements. Review the selected storage before
 confirming a flash, which erases that storage.
 

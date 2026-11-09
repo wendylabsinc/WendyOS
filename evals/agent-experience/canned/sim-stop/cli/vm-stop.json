@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "vm",
+    "stop"
+  ],
+  "stdout": "Stopped VM \"bench-sim\".\n",
+  "stderr": "",
+  "exit_code": 0
+}

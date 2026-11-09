@@ -21,6 +21,12 @@ func signPeerTestCertificate(t *testing.T, child, issuer *x509.Certificate, key 
 		t.Fatal(err)
 	}
 	tbs.Issuer = asn1.RawValue{FullBytes: issuer.RawSubject}
+	// The server verifier also requires the known test device identity.
+	nameDER, err := asn1.Marshal(pkix.Name{CommonName: "sh/wendy/7/42"}.ToRDNSequence())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbs.Subject = asn1.RawValue{FullBytes: nameDER}
 	eku, err := buildEKUExt([]asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 1}, {1, 3, 6, 1, 5, 5, 7, 3, 2}})
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +64,7 @@ func TestPeerMLDSAIntermediateChains(t *testing.T) {
 	leaf = signPeerTestCertificate(t, leaf, issuer, issuerKey)
 	now := time.Now()
 	rootPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
-	serverVerify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: rootPEM})
+	serverVerify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: rootPEM, ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +136,7 @@ func TestDirectMLDSAChainsEnforcePolicy(t *testing.T) {
 			client := buildVerifyPeerCertificate(x509.NewCertPool(), []*x509.Certificate{root}, nil, time.Time{})
 			clientErr := client([][]byte{leaf.Raw}, nil)
 			rootPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
-			server, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: rootPEM})
+			server, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{ChainPEM: rootPEM, ExpectedIdentity: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}})
 			if err != nil {
 				t.Fatal(err)
 			}

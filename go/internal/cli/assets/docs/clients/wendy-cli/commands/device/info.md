@@ -95,6 +95,9 @@ Loopback, down, and container/virtual bridge interfaces are omitted, as are link
 |---|---|---|
 | `networkInterfaces[].name` | (row label) | Interface name (e.g. `eth0`, `wlan0`). |
 | `networkInterfaces[].ipAddresses` | (row value) | Routable IPv4/IPv6 addresses assigned to the interface. |
+| `networkInterfaces[].isDefaultRoute` | `default route` | `true` on the interface the device's internet traffic leaves through now. Absent on other interfaces and from older agents. |
+| `networkInterfaces[].routeMetric` | `metric N` | Lowest metric of the interface's default routes; the kernel prefers the lowest. Absent when the interface has no default route. |
+| `networkInterfaces[].connectivity` | `internet: <state>` | NetworkManager's connectivity check for the interface: `full`, `limited`, `portal` or `none`. Absent when NetworkManager runs no connectivity check, which is the case on current WendyOS images. |
 
 ### OS Update output
 

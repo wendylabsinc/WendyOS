@@ -1,0 +1,9 @@
+{
+  "argv_prefix": [
+    "device",
+    "telemetry-stream"
+  ],
+  "stdout": "{\"type\":\"metric\",\"timestamp\":\"2026-11-07T00:45:57.009625783Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"dev\"},\"name\":\"process.cpu.time\",\"value\":162.632172,\"metricType\":\"sum\",\"unit\":\"s\",\"attributes\":{\"cpu.mode\":\"system\"}}\n{\"type\":\"metric\",\"timestamp\":\"2026-11-07T00:45:57.00968545Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"dev\"},\"name\":\"process.memory.usage\",\"value\":264028160,\"metricType\":\"gauge\",\"unit\":\"By\"}\n{\"type\":\"metric\",\"timestamp\":\"2026-11-07T00:46:09.707878558Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"dev\"},\"name\":\"process.cpu.time\",\"value\":163.316399,\"metricType\":\"sum\",\"unit\":\"s\",\"attributes\":{\"cpu.mode\":\"system\"}}\n{\"type\":\"metric\",\"timestamp\":\"2026-11-07T00:46:09.708011011Z\",\"service\":\"wendy-agent\",\"resource\":{\"service.instance.id\":\"scrubbed\",\"service.name\":\"wendy-agent\",\"service.namespace\":\"wendy\",\"service.version\":\"dev\"},\"name\":\"process.memory.usage\",\"value\":269021184,\"metricType\":\"gauge\",\"unit\":\"By\"}\n",
+  "stderr": "",
+  "exit_code": 0
+}

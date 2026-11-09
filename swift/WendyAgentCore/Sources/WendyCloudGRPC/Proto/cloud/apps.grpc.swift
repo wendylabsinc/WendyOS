@@ -111,9 +111,8 @@ extension Wendycloud_V1_AppService {
     /// This protocol is the lowest-level of the service protocols generated for this service
     /// giving you the most flexibility over the implementation of your service. This comes at
     /// the cost of more verbose and less strict APIs. Each RPC requires you to implement it in
-    /// terms of a request stream and response stream. Where the RPC expects only a single
-    /// request or response message, you are responsible for ensuring your implementation
-    /// maintains this invariant.
+    /// terms of a request stream and response stream. Where only a single request or response
+    /// message is expected, you are responsible for enforcing this invariant is maintained.
     ///
     /// Where possible, prefer using the stricter, less-verbose ``ServiceProtocol``
     /// or ``SimpleServiceProtocol`` instead.
@@ -552,9 +551,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_UpsertAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func upsertApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_UpsertAppRequest>,
@@ -571,9 +570,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_GetAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func getApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppRequest>,
@@ -590,9 +589,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_UpdateAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func updateApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAppRequest>,
@@ -609,9 +608,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_DeleteAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_DeleteAppResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func deleteApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_DeleteAppRequest>,
@@ -628,9 +627,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_ListAppsRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_ListAppsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func listApps<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppsRequest>,
@@ -664,9 +663,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_UpsertAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func upsertApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_UpsertAppRequest>,
@@ -694,9 +693,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_GetAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func getApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppRequest>,
@@ -724,9 +723,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_UpdateAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func updateApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAppRequest>,
@@ -754,9 +753,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_DeleteAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_DeleteAppResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func deleteApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_DeleteAppRequest>,
@@ -784,9 +783,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_ListAppsRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_ListAppsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func listApps<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppsRequest>,
@@ -817,9 +816,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_UpsertAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func upsertApp<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_UpsertAppRequest>,
@@ -842,9 +841,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_GetAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getApp<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppRequest>,
@@ -867,9 +866,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_UpdateAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateApp<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAppRequest>,
@@ -892,9 +891,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_DeleteAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func deleteApp<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_DeleteAppRequest>,
@@ -917,9 +916,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_ListAppsRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listApps<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppsRequest>,
@@ -947,9 +946,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func upsertApp<Result>(
         _ message: Wendycloud_V1_UpsertAppRequest,
@@ -976,9 +975,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getApp<Result>(
         _ message: Wendycloud_V1_GetAppRequest,
@@ -1005,9 +1004,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateApp<Result>(
         _ message: Wendycloud_V1_UpdateAppRequest,
@@ -1034,9 +1033,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func deleteApp<Result>(
         _ message: Wendycloud_V1_DeleteAppRequest,
@@ -1063,9 +1062,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func listApps<Result>(
         _ message: Wendycloud_V1_ListAppsRequest,

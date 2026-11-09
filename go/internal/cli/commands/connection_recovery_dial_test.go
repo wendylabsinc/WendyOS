@@ -52,7 +52,9 @@ func serveRecoveryRejection(t *testing.T, reject func(net.Conn)) string {
 
 func TestConnectionRecoveryRetainsTLSRejectionAcrossPorts(t *testing.T) {
 	expired := selfSignedCLICertUntil(t, 2, time.Now().Add(-time.Hour))
-	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{{Certificates: []config.CertificateInfo{expired}}}})
+	cfg := &config.Config{Auth: []config.AuthConfig{{Certificates: []config.CertificateInfo{expired}}}}
+	cfg.SetDevicePin("recovery-test.local", 2, "cloud.test:443", "42", "")
+	setTempConfig(t, cfg)
 	setPinCache(t)
 	withTempCertOrderCache(t)
 	addr := serveRecoveryRejection(t, func(conn net.Conn) {
@@ -120,7 +122,9 @@ func TestConnectionRecoveryDiagnosesStoredCredentialsBeforeFiltering(t *testing.
 			if tc.orgCert.OrganizationID != 0 {
 				credentials = append(credentials, config.AuthConfig{Certificates: []config.CertificateInfo{tc.orgCert}})
 			}
-			setTempConfig(t, &config.Config{Auth: credentials})
+			cfg := &config.Config{Auth: credentials}
+			cfg.SetDevicePin("recovery-test.local", 2, "cloud.test:443", "42", "")
+			setTempConfig(t, cfg)
 			setPinCache(t)
 			withTempCertOrderCache(t)
 			stubOrgNameResolver(t, nil)
@@ -166,10 +170,23 @@ func TestConnectionRecoveryRetainsClientAuthRejection(t *testing.T) {
 				// failure must not obscure the agent's explicit clientAuth diagnosis.
 				auth = append(auth, config.AuthConfig{Certificates: []config.CertificateInfo{selfSignedCLICert(t, 2)}})
 			}
-			setTempConfig(t, &config.Config{Auth: auth})
+			cfg := &config.Config{Auth: auth}
+			cfg.SetDevicePin("127.0.0.1", 2, "cloud.test:443", "42", "")
+			setTempConfig(t, cfg)
 			setPinCache(t)
 			withTempCertOrderCache(t)
 			pair, err := tls.X509KeyPair([]byte(credential.PemCertificate), []byte(credential.PemPrivateKey))
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalLeaf, err := x509.ParseCertificate(pair.Certificate[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			serverLeaf := *originalLeaf
+			serverLeaf.Subject.CommonName = "sh/wendy/2/42"
+			serverLeaf.RawSubject = nil
+			pair.Certificate[0], err = x509.CreateCertificate(rand.Reader, &serverLeaf, originalLeaf, originalLeaf.PublicKey, pair.PrivateKey)
 			if err != nil {
 				t.Fatal(err)
 			}

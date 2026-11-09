@@ -27,7 +27,7 @@ command from inside `go/`.**
 | --- | --- |
 | `go/cmd/wendy` | The `wendy` CLI (macOS, Linux, Windows) |
 | `go/cmd/wendy-agent` | The `wendy-agent` runtime (Linux only) |
-| `go/cmd/test_mtls`, `go/cmd/local-pki-test` | Small standalone mTLS/PKI test harnesses |
+| `go/cmd/test_mtls` | Standalone mTLS connection test harness |
 | `go/internal/cli/...` | CLI commands, providers, gRPC client, TUI |
 | `go/proto/gen/` | **Generated** Go protobuf/gRPC code (do not hand-edit) |
 | `go/Makefile` | Build / test / proto / lint entrypoints |
@@ -196,15 +196,12 @@ in-process end-to-end test of the agent's gRPC surface. It stands up a real gRPC
 server over an in-memory `bufconn` listener with mock managers — no hardware or
 containerd needed — and runs as part of `go test ./...`.
 
-**mTLS / PKI harnesses** (standalone `main` programs, run with `go run`, not part
+**mTLS probe** (a standalone `main` program, run with `go run`, not part
 of `go test`):
 
 ```sh
 # Quick "does my client cert connect over mTLS" probe against a provisioned agent
 go run ./cmd/test_mtls -addr <host>:<port>
-
-# Full local enrollment + mTLS pipeline against a local pkicore instance
-go run ./cmd/local-pki-test --cloud localhost:50051 --agent localhost:50053
 ```
 
 **CI** (`.github/workflows/go-tests.yml`) runs the race suite, `go vet`, and a
@@ -534,3 +531,22 @@ Swift Testing, `make proto`). See [`swift/README.md`](swift/README.md) and
 - If you touched anything under `Proto/`, run `make proto` and commit the
   regenerated `go/proto/gen/`.
 - If you added or bumped a dependency, run `make licenses`.
+
+
+## Reviewing documentation journeys
+
+For a user-facing change, review the path a reader follows: entry page,
+prerequisites, task, observable result, and next step. Read the linked pages and
+sidebar together. The automated docs review checks the affected journey as well
+as the diff; existing obstacles are concerns, while demonstrated inaccuracies
+introduced by the change can block the PR.
+
+Give each tutorial one outcome. Extend the previous tutorial's project when
+teaching a new capability. Keep platform setup in the target's installation
+guide and field definitions in the configuration reference. Link to those
+instructions instead of copying them. Preserve old URLs when moving content.
+
+In the PR, name the journey reviewed and report which commands and outputs you
+verified. A docs build checks rendering, not successful deployment. If a device
+or simulator run was unavailable, state that limit. For navigation or onboarding
+changes, inspect the rendered pages and follow the path as a new reader would.

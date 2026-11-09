@@ -34,6 +34,8 @@ struct PresentedFailure {
             message = "This Cloud server needs an update before app ports can be reached through the VPN."
         } else if lower.contains("not sending video") {
             message = "This camera is not sending video. Check its source, or choose another camera."
+        } else if lower.contains("sends vp8 video") {
+            message = "This device sends VP8 video, which the Wendy app cannot play yet. Update the device’s Wendy agent, or install gstreamer1.0-plugins-bad on it."
         } else if lower.contains("no route to host") || lower.contains("deadline exceeded") || lower.contains("connection refused") || lower.contains("offline") {
             message = "The device could not be reached. Find it again to refresh its address. Its saved identity will be kept."
         } else if lower.contains("not logged in") || lower.contains("no login") || lower.contains("sign in") || lower.contains("unauthenticated") {

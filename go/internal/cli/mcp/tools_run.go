@@ -50,10 +50,42 @@ func (s *mcpServer) runTarget(req mcpgo.CallToolRequest) (commandTarget, error) 
 	return target, nil
 }
 
-func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	if os.Getenv("WENDY_AGENT_SOCKET") != "" {
-		return errResult(errCodeUnsupported, "run from a host MCP session without WENDY_AGENT_SOCKET overriding the selected deployment target"), nil
+// localDeviceSelector names the device this server runs on when it is inside
+// an admin-entitled container and reaches the agent over WENDY_AGENT_SOCKET.
+const localDeviceSelector = "local"
+
+// inDeviceContainer reports whether the agent socket is set, so every
+// connection and `wendy run` goes to the local agent.
+func inDeviceContainer() bool {
+	return os.Getenv("WENDY_AGENT_SOCKET") != ""
+}
+
+// isLocalSelector reports whether device names the local agent.
+func isLocalSelector(device string) bool {
+	switch strings.ToLower(strings.TrimSpace(device)) {
+	case localDeviceSelector, "localhost", "127.0.0.1":
+		return true
 	}
+	hostname := os.Getenv("WENDY_DEVICE_HOSTNAME")
+	return hostname != "" && strings.EqualFold(strings.TrimSpace(device), hostname)
+}
+
+// localRunTarget is the run target inside a device container. The agent socket
+// silently overrides any --device, so a request naming another device is
+// refused rather than deployed to the wrong place.
+func (s *mcpServer) localRunTarget(req mcpgo.CallToolRequest) (commandTarget, error) {
+	if device := stringParam(req, "device"); device != "" && !isLocalSelector(device) {
+		return commandTarget{}, fmt.Errorf("run inside a device container deploys only to the local device; the agent socket would override %q", device)
+	}
+	for _, key := range []string{"device_name", "cloud_grpc", "broker_url"} {
+		if stringParam(req, key) != "" {
+			return commandTarget{}, fmt.Errorf("run inside a device container deploys only to the local device; the agent socket would override %s", key)
+		}
+	}
+	return commandTarget{Device: localDeviceSelector, Transport: "socket"}, nil
+}
+
+func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	projectPath := stringParam(req, "project_path")
 	if projectPath == "" {
 		return errResult(errCodeInvalidArgument, "project_path is required"), nil
@@ -67,9 +99,17 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	if info, err := os.Stat(projectPath); err != nil || !info.IsDir() {
 		return errResult(errCodeInvalidArgument, "project_path must be an existing project directory"), nil
 	}
-	target, err := s.runTarget(req)
-	if err != nil {
-		return s.runTargetErrResult(req, err), nil
+	var target commandTarget
+	if inDeviceContainer() {
+		target, err = s.localRunTarget(req)
+		if err != nil {
+			return errResult(errCodeUnsupported, err.Error()), nil
+		}
+	} else {
+		target, err = s.runTarget(req)
+		if err != nil {
+			return s.runTargetErrResult(req, err), nil
+		}
 	}
 	timeout, err := ros2Int(req, "timeout_seconds", 300, 1, 3600)
 	if err != nil {
@@ -230,13 +270,17 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 			result["status"] = "failed"
 			result["readiness"] = "not_checked"
 		}
-		if result["message"] == nil {
+		refusalMessage, refusalNext, refused := runRefusal(output)
+		if refused {
+			result["message"] = refusalMessage
+			result["suggested_next_step"] = refusalNext
+		} else if result["message"] == nil {
 			result["message"] = "Deployment or readiness verification did not complete. Inspect device state before retrying; the command may already have created or started the container."
 		}
 		if output == "" && runErr != nil {
 			result["output"] = runErr.Error()
 		}
-		if next := runFailureNextStep(target, code); next != "" {
+		if next := runFailureNextStep(target, code); next != "" && !refused {
 			result["suggested_next_step"] = next
 		}
 		r := okResult(result)

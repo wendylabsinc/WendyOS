@@ -376,7 +376,9 @@ func TestDiscoveryIdentityRecoveryUsesGoverningPin(t *testing.T) {
 // A TLS-only endpoint can reject our cert while its port+1 is simply closed.
 func TestDiscoveryLadderPreservesTLSRejectionBeforePortRefusal(t *testing.T) {
 	cert := selfSignedCLICert(t, 7)
-	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{{Certificates: []config.CertificateInfo{cert}}}})
+	cfg := &config.Config{Auth: []config.AuthConfig{{Certificates: []config.CertificateInfo{cert}}}}
+	cfg.SetDevicePin("127.0.0.1", 7, "cloud.test:443", "42", "")
+	setTempConfig(t, cfg)
 	setPinCache(t)
 	t.Setenv("WENDY_AGENT_SOCKET", "")
 	listener, err := net.Listen("tcp", deadAgentAddr(t))

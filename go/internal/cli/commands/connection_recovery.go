@@ -97,6 +97,7 @@ func stopConnectionRecovery(err error) bool {
 	var identity *certs.IdentityMismatchError
 	var pin certs.BlockingPinError
 	return errors.Is(err, context.Canceled) || errors.Is(err, ErrUserCancelled) ||
+		errors.Is(err, certs.ErrExpectedDeviceIdentity) ||
 		errors.Is(err, errDeviceIdentityRefused) || errors.As(err, &org) ||
 		errors.As(err, &identity) || errors.As(err, &pin)
 }

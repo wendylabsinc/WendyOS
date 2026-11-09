@@ -1,6 +1,6 @@
 ---
 title: Hello World in TypeScript
-description: Create your first WendyOS application using TypeScript
+description: Create your first application using TypeScript
 language: typescript
 ---
 
@@ -10,9 +10,12 @@ This guide will walk you through creating your first WendyOS application using T
 
 ### Prerequisites
 
-- Wendy CLI installed on your development machine
-- Node.js 22 or later installed
-- A WendyOS device plugged in over USB or connectable over Wi-Fi
+- [Wendy CLI installed](/docs/installation/cli) on your development computer.
+- Docker running with Buildx. Check with `docker info` and `docker buildx version`.
+- A [Linux device or WendyOS VM](/docs/installation) ready to run your app.
+
+The Dockerfile installs the language toolchain inside the builder. You only need
+a local language installation if you choose to run the source outside Docker.
 
 <Callout type="info">
   **Containerized Deployment**: TypeScript applications run inside containers on your WendyOS device. This guide shows you how to package the Node.js runtime for deployment with the Wendy CLI.

@@ -13,32 +13,45 @@ final class SiteReferenceCapture {
     private var frames = 0
     private var lastTransform: simd_float4x4?
     private var interrupted = false
+    private var stopped = false
+
+    func stop() { stopped = true }
 
     func run(session: ARSession) async {
-        while !Task.isCancelled {
+        while !Task.isCancelled && !stopped {
             if frames >= 200 { message = "Visual reference frame limit reached"; return }
-            if let frame = session.currentFrame {
-                if case .normal = frame.camera.trackingState {
-                    if interrupted { message = "Tracking was interrupted. Restart this scan for camera alignment."; return }
-                    let transform = frame.camera.transform
-                    let moved = lastTransform.map { simd_distance($0.columns.3, transform.columns.3) > 0.12 || simd_dot($0.columns.2, transform.columns.2) < 0.985 } ?? true
-                    if moved, let reference = Self.copy(frame) {
-                        do {
-                            landmarkCount = try await engine.add(reference)
-                            frames += 1; lastTransform = transform
-                            message = landmarkCount >= 12000
-                                ? "Updating visual references from new viewpoints"
-                                : "\(landmarkCount) visual references"
-                        } catch { message = error.localizedDescription; return }
-                    }
-                } else if frames > 0 {
-                    // A relocalization may change the world frame. Do not mix
-                    // landmarks from coordinate frames we cannot reconcile.
-                    if case .limited(.relocalizing) = frame.camera.trackingState { interrupted = true }
-                }
+            // Copy in a synchronous scope so no ARFrame or camera/depth pixel
+            // buffer survives the await while SIFT runs on the worker queue.
+            if let sample = autoreleasepool(invoking: { nextReference(session: session) }) {
+                do {
+                    let count = try await engine.add(sample.reference)
+                    guard !Task.isCancelled, !stopped else { return }
+                    landmarkCount = count
+                    frames += 1
+                    lastTransform = sample.transform
+                    message = landmarkCount >= 12000
+                        ? "Updating visual references from new viewpoints"
+                        : "\(landmarkCount) visual references"
+                } catch { message = error.localizedDescription; return }
             }
+            if interrupted { message = "Tracking was interrupted. Restart this scan for camera alignment."; return }
             do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
         }
+    }
+
+    private func nextReference(session: ARSession) -> (reference: SiteReferenceFrame, transform: simd_float4x4)? {
+        guard let frame = session.currentFrame else { return nil }
+        guard case .normal = frame.camera.trackingState else {
+            // A relocalization may change the world frame. Do not mix landmarks
+            // from coordinate frames we cannot reconcile.
+            if frames > 0, case .limited(.relocalizing) = frame.camera.trackingState { interrupted = true }
+            return nil
+        }
+        guard !interrupted else { return nil }
+        let transform = frame.camera.transform
+        let moved = lastTransform.map { simd_distance($0.columns.3, transform.columns.3) > 0.12 || simd_dot($0.columns.2, transform.columns.2) < 0.985 } ?? true
+        guard moved, let reference = Self.copy(frame) else { return nil }
+        return (reference, transform)
     }
 
     func snapshot(model: Data, revision: UUID) async throws -> SiteVisualMap {
