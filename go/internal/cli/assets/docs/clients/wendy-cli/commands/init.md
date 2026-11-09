@@ -27,6 +27,8 @@ wendy init \
 
 An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that name. With neither, the wizard offers to scaffold into the current directory instead. Pass `--here` to scaffold into the current directory directly instead of nesting a subdirectory — with an app ID it still writes that as `wendy.json`'s app ID; without one, it infers the app ID from the current directory's name.
 
+With a template, the destination must be a new or empty directory, including when using `--here`. A populated directory is rejected before scaffolding, even if it has no `wendy.json`. Choose a different destination or an empty directory to keep existing files safe.
+
 ## What it produces
 
 1. Picks a **deployment group** within the Linux, Mac, or Microcontrollers tab. A concrete `--template <name>` resolves first instead: when the template supports exactly one target, the question is skipped and the target is inferred with a notice; when it supports several, the picker is narrowed to those.

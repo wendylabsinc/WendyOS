@@ -796,6 +796,15 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 			return fmt.Errorf("wendy.json already exists here; run from an empty directory or remove it first")
 		}
 	}
+	// Templates write a complete project tree. Refuse populated destinations
+	// before any scaffolding, even when they do not contain a Wendy manifest.
+	entries, err := os.ReadDir(destDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reading project directory %s: %w", destDir, err)
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("project directory %s is not empty; choose a new or empty directory", destDir)
+	}
 
 	language, err := resolveTemplateLanguage(target, tmpl, meta, opts)
 	if err != nil {

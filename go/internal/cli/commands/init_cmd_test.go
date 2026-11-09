@@ -1992,3 +1992,72 @@ func TestResolveTemplateLanguage_DarwinMojo(t *testing.T) {
 		t.Fatalf("language=%q error=%v", language, err)
 	}
 }
+
+// Populated destinations are rejected before language resolution or downloading,
+// including directories with only hidden files or subdirectories.
+func TestRunTemplateFlow_RejectsPopulatedDestination(t *testing.T) {
+	for _, here := range []bool{false, true} {
+		for _, entry := range []string{"Package.swift", ".gitignore", "Sources"} {
+			t.Run(fmt.Sprintf("here=%t/%s", here, entry), func(t *testing.T) {
+				cwd := t.TempDir()
+				dest := filepath.Join(cwd, "sapi")
+				if here {
+					dest = cwd
+				}
+				if err := os.MkdirAll(dest, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dest, entry)
+				original := []byte("valuable original bytes\n")
+				if entry == "Sources" {
+					if err := os.Mkdir(path, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, original, 0o644); err != nil {
+					t.Fatal(err)
+				}
+
+				err := runTemplateFlow(cwd, dest, "sapi", "simple-api", targetWendyOS, nil, initOptions{here: here})
+				if err == nil || !strings.Contains(err.Error(), "not empty") || !strings.Contains(err.Error(), dest) {
+					t.Fatalf("want destination-specific refusal, got %v", err)
+				}
+				entries, err := os.ReadDir(dest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 1 || entries[0].Name() != entry {
+					t.Fatalf("destination changed: %v", entries)
+				}
+				if entry != "Sources" {
+					got, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(got, original) {
+						t.Fatalf("existing bytes changed: %q", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunTemplateFlow_ReportsDestinationReadError(t *testing.T) {
+	cwd := t.TempDir()
+	dest := filepath.Join(cwd, "sapi")
+	original := []byte("valuable file\n")
+	if err := os.WriteFile(dest, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runTemplateFlow(cwd, dest, "sapi", "simple-api", targetWendyOS, nil, initOptions{})
+	if err == nil || !strings.Contains(err.Error(), "reading project directory") || !strings.Contains(err.Error(), dest) {
+		t.Fatalf("want wrapped destination read error, got %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing bytes changed: %q", got)
+	}
+}

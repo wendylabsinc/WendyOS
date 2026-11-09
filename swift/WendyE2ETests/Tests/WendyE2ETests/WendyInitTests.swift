@@ -174,6 +174,68 @@ struct `'wendy init'` {
     }
 
     /**
+     Templates still initialize a new subdirectory, an existing empty
+     subdirectory, or an empty current directory with `--here`. The actual
+     public template is extracted and rendered into a usable project tree.
+     */
+    @Test
+    func `creates a template project in new and empty directories`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            for destination in ["new", "empty", "here"] {
+                let project = destination + "/sapi"
+                let setupDirectory = destination == "new" ? destination : project
+                try await cli.sh(
+                    posix: "mkdir -p " + setupDirectory,
+                    power: "New-Item -ItemType Directory -Path '" + setupDirectory
+                        + "' -Force | Out-Null"
+                )
+                let command =
+                    "wendy init --app-id sapi --target wendyos --language swift"
+                    + " --template simple-api --assistant skip --git-init no"
+                    + (destination == "here" ? " --here" : "")
+                let workingDirectory = destination == "here" ? project : destination
+                try await cli.sh(
+                    posix: "cd " + workingDirectory + " && " + command,
+                    power: "Set-Location '" + workingDirectory + "'; " + command
+                ) { result in
+                    #expect(result.status.isSuccess)
+                    #expect(result.stderr.contains("Your project is ready!"))
+                }
+                try await cli.sh(
+                    posix: """
+                        test -f \(project)/Package.swift && test -f \(project)/Sources/sapi/App.swift &&
+                          test ! -e \(project)/.git && test ! -e \(project)/sapi && cat \(project)/wendy.json
+                        """,
+                    power: """
+                        foreach ($path in @('\(project)/Package.swift', '\(project)/Sources/sapi/App.swift')) {
+                            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$path missing" }
+                        }
+                        if (Test-Path -LiteralPath '\(project)/.git') { throw 'git unexpectedly initialized' }
+                        if (Test-Path -LiteralPath '\(project)/sapi') { throw 'project unexpectedly nested' }
+                        Get-Content -LiteralPath '\(project)/wendy.json'
+                        """
+                ) { result in
+                    #expect(result.status.isSuccess)
+                    let json = try #require(
+                        try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
+                            as? [String: Any]
+                    )
+                    #expect(json["appId"] as? String == "sapi")
+                    #expect(json["platform"] as? String == "linux")
+                }
+                try await cli.sh(
+                    posix: "cat " + project + "/Package.swift",
+                    power: "Get-Content -LiteralPath '" + project + "/Package.swift'"
+                ) { result in
+                    #expect(result.status.isSuccess)
+                    #expect(result.stdout.contains("name: \"sapi\""))
+                    #expect(!result.stdout.contains("{{.APP_ID}}"))
+                }
+            }
+        }
+    }
+
+    /**
      Entitlements that need extra data, such as GPIO pins, validate those
      fields before any files are written. A `gpio` entitlement without pins
      fails and creates no `wendy.json`.
