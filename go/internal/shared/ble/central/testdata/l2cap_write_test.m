@@ -139,25 +139,32 @@ int main(void) {
 
         // Renewed progress is shared with the calling waiter, not just the
         // stream owner: total duration exceeds the idle budget several times.
+        // Leave room for CI scheduling delays between 40ms timer callbacks;
+        // use more writes so the larger idle budget still has to be renewed.
+        NSData *pacedData = [@"abcdefghijklmnopqrstuvwxyz012345" dataUsingEncoding:NSUTF8StringEncoding];
+        NSMutableArray<NSNumber *> *pacedWrites = [NSMutableArray array];
+        for (NSUInteger i = 0; i < pacedData.length; i++) [pacedWrites addObject:@1];
+        const NSTimeInterval pacedIdleTimeout = 0.5;
         FakeOutput *paced = [FakeOutput new];
-        paced.writes = @[@1, @1, @1, @1, @1, @1, @1, @1];
+        paced.writes = pacedWrites;
         paced.pauseAfterPositive = 0.04;
         FakeConnection *pacedConn = start(paced);
         NSTimeInterval pacedStart = NSProcessInfo.processInfo.systemUptime;
         assert(wendyBLEL2CAPSend((__bridge WendyBLEConn)pacedConn,
-            (const uint8_t *)"abcdefgh", 8, 0.12, 1.5) == WENDY_BLE_OK);
-        assert(NSProcessInfo.processInfo.systemUptime - pacedStart > 0.20);
-        assert([paced.received isEqualToData:[@"abcdefgh" dataUsingEncoding:NSUTF8StringEncoding]]);
+            pacedData.bytes, (int)pacedData.length, pacedIdleTimeout, 5.0) == WENDY_BLE_OK);
+        assert(NSProcessInfo.processInfo.systemUptime - pacedStart > 2 * pacedIdleTimeout);
+        assert([paced.received isEqualToData:pacedData]);
         stop(pacedConn);
 
         // Positive progress never extends the finite whole-write ceiling.
+        // Keep the idle budget longer so only the whole-write cap can expire.
         FakeOutput *finite = [FakeOutput new];
         finite.writes = @[@1, @1, @1, @1, @1, @1, @1, @1];
         finite.pauseAfterPositive = 0.04;
         FakeConnection *finiteConn = start(finite);
         NSTimeInterval finiteStart = NSProcessInfo.processInfo.systemUptime;
         assert(wendyBLEL2CAPSend((__bridge WendyBLEConn)finiteConn,
-            (const uint8_t *)"abcdefgh", 8, 0.12, 0.15) == WENDY_BLE_ERR_TIMEOUT);
+            (const uint8_t *)"abcdefgh", 8, 0.5, 0.15) == WENDY_BLE_ERR_TIMEOUT);
         assert(NSProcessInfo.processInfo.systemUptime - finiteStart < 0.5);
         stop(finiteConn);
         assert(finite.received.length > 0 && finite.received.length < 8);
