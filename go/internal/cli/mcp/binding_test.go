@@ -19,6 +19,7 @@ import (
 func bindingServer(t *testing.T, p *BindingPolicy) *server.MCPServer {
 	t.Helper()
 	s := New(&config.Config{}, nil)
+	s.toolGroups = []string{"all"}
 	s.setBindingPolicy(p)
 	srv, err := s.newProtocolServer()
 	if err != nil {
@@ -35,11 +36,42 @@ func callProtocolTool(t *testing.T, srv *server.MCPServer, name string, args ...
 	}
 	msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, name, encodedArgs)
 	encoded, _ := json.Marshal(srv.HandleMessage(context.Background(), []byte(msg)))
-	var reply struct{ Result mcpgo.CallToolResult }
+	var reply struct {
+		Result mcpgo.CallToolResult
+		Error  json.RawMessage
+	}
 	if err := json.Unmarshal(encoded, &reply); err != nil {
 		t.Fatal(err)
 	}
+	if len(reply.Error) > 0 {
+		t.Fatalf("tool call returned JSON-RPC error: %s", reply.Error)
+	}
 	return reply.Result
+}
+
+// mcp-go rejects filtered tools before invoking tool middleware. Verify the
+// wire error as well as the tests' confirmation and visibility checks.
+func assertProtocolToolHidden(t *testing.T, srv *server.MCPServer, name string) {
+	t.Helper()
+	msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":{}}}`, name)
+	response := srv.HandleMessage(context.Background(), []byte(msg))
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply struct {
+		Result json.RawMessage
+		Error  *struct {
+			Code    int
+			Message string
+		}
+	}
+	if err := json.Unmarshal(encoded, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Result) != 0 || reply.Error == nil || reply.Error.Code != mcpgo.INVALID_PARAMS || !strings.Contains(reply.Error.Message, "tool '"+name+"' not found") {
+		t.Fatalf("filtered tool %s was not rejected: %s", name, encoded)
+	}
 }
 
 func deniedByBinding(r mcpgo.CallToolResult) bool {
@@ -56,9 +88,7 @@ func TestBindingAllowListRefusesUnlistedTools(t *testing.T) {
 	}}
 	srv := bindingServer(t, p)
 
-	if r := callProtocolTool(t, srv, "device_disconnect"); !deniedByBinding(r) {
-		t.Fatalf("device_disconnect outside the read-only preset: got %+v, want DENIED", r)
-	}
+	assertProtocolToolHidden(t, srv, "device_disconnect")
 	if len(asked) != 0 {
 		t.Fatalf("a refused tool must not reach confirmation; asked %v", asked)
 	}
@@ -112,9 +142,7 @@ func TestBindingAllowReadConfirmsMutatingCallsNotReads(t *testing.T) {
 	if len(asked) != 0 {
 		t.Fatalf("a read must not ask for confirmation; asked %v", asked)
 	}
-	if r := callProtocolTool(t, srv, "container_stop"); !deniedByBinding(r) {
-		t.Fatalf("--allow-read must not allow unlisted mutations: %+v", r)
-	}
+	assertProtocolToolHidden(t, srv, "container_stop")
 	if len(asked) != 0 {
 		t.Fatalf("an unlisted mutation must not reach confirmation; asked %v", asked)
 	}
@@ -229,9 +257,7 @@ func TestBindingAllowReadStaysOffTheHost(t *testing.T) {
 		}
 	}
 	for _, name := range probes {
-		if r := callProtocolTool(t, srv, name); !deniedByBinding(r) {
-			t.Errorf("%s without --allow-tool: got %+v, want DENIED", name, r)
-		}
+		assertProtocolToolHidden(t, srv, name)
 	}
 	if len(asked) != 0 {
 		t.Fatalf("a refused tool must not reach confirmation; asked %v", asked)
@@ -279,6 +305,7 @@ func TestBindingPinsTheStartingSession(t *testing.T) {
 		return false
 	}}
 	s := New(cfg, nil)
+	s.toolGroups = []string{"all"}
 	s.setBindingPolicy(p)
 	srv, err := s.newProtocolServer()
 	if err != nil {
