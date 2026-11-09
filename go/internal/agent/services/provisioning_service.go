@@ -535,6 +535,7 @@ func (s *ProvisioningService) clearCredentialFiles() error {
 	files := []string{
 		filepath.Join(s.configPath, "device-key.pem"),
 		filepath.Join(s.configPath, pendingDeviceKeyFile),
+		filepath.Join(s.configPath, deviceEncryptionKeyFile),
 		filepath.Join(s.configPath, "device.pem"),
 		filepath.Join(s.configPath, "ca.pem"),
 		filepath.Join(s.configPath, ".provisioned"),
