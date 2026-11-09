@@ -242,6 +242,35 @@ func TestInstallCommandRunsInOneSession(t *testing.T) {
 	}
 }
 
+func TestInstallCommandRejectsBadFlagsBeforeAnyWork(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	origFetch := fetchInstallMainManifest
+	t.Cleanup(func() { fetchInstallMainManifest = origFetch })
+	fetchInstallMainManifest = func(context.Context, int) (*mainManifest, error) {
+		t.Fatal("fetched the manifest before rejecting the flags")
+		return nil, nil
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--device-type", "raspberry-pi-5", "--no-wifi", "--wifi-password", "pw"}, "--no-wifi cannot be combined"},
+		{[]string{"--device-type", "raspberry-pi-5", "--no-wifi", "--wifi", "ssid=Home"}, "--no-wifi cannot be combined"},
+		{[]string{"--device-type", "raspberry-pi-5", "--wifi-password", "pw"}, "--wifi-password requires --wifi-ssid"},
+		{[]string{"--device-type", "raspberry-pi-5", "--wifi", "password=pw"}, "ssid is required"},
+		{[]string{"--device-type", "raspberry-pi-5", "--no-wifi", "--device-name", "Lab_1"}, "--device-name"},
+	} {
+		cmd := newOSInstallCmd()
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		cmd.SetArgs(tc.args)
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !IsUsageError(err) {
+			t.Errorf("%v: got %v; want a usage error containing %q", tc.args, err, tc.want)
+		}
+	}
+}
+
 // stubInstallConfirms records the install confirm prompts and answers answer.
 func stubInstallConfirms(t *testing.T, answer bool) *[]string {
 	t.Helper()
