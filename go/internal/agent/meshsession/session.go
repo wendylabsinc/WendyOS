@@ -435,6 +435,11 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 	if owned, ok := local.(interface{ Done() <-chan struct{} }); ok {
 		revoked = owned.Done()
 	}
+	var closed <-chan struct{}
+	if pipe, ok := local.(interface{ Closed() <-chan struct{} }); ok {
+		closed = pipe.Closed()
+	}
+	drained := make(chan struct{})
 	localDone := make(chan struct{})
 	defer close(localDone)
 	go func() {
@@ -447,6 +452,19 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 			// Revocation closes this stream, not other apps sharing the session.
 			stream.CancelRead(1)
 			stream.CancelWrite(1)
+		case <-closed:
+			// A local full close ends the reverse direction too, but only
+			// after forwarding accepted bytes and queuing their FIN.
+			select {
+			case <-drained:
+				stream.CancelRead(0)
+			case <-revoked:
+				stream.CancelRead(1)
+				stream.CancelWrite(1)
+			case <-parent.Done():
+			case <-conn.Context().Done():
+			case <-localDone:
+			}
 		case <-localDone:
 		}
 	}()
@@ -465,6 +483,7 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 	go func() {
 		_, _ = io.Copy(stream, local)
 		_ = stream.Close()
+		close(drained)
 		done <- struct{}{}
 	}()
 	<-done

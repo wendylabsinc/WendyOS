@@ -94,3 +94,34 @@ func TestMeshTLSListenerClosingEitherEndReleasesOwnership(t *testing.T) {
 		t.Fatal("closed handoffs retained ownership", count)
 	}
 }
+
+func TestMeshTLSListenerOrdinaryCloseDoesNotRevokeAcceptedBytes(t *testing.T) {
+	l := NewMeshTLSListener()
+	defer l.Close()
+	dialed := make(chan net.Conn, 1)
+	go func() { c, _ := l.DialContext(context.Background()); dialed <- c }()
+	server, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := (<-dialed).(*meshTLSConn)
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-client.Closed():
+	default:
+		t.Fatal("ordinary full close was not reported")
+	}
+	select {
+	case <-client.Done():
+		t.Fatal("ordinary EOF was advertised as owner revocation")
+	default:
+	}
+	l.Close()
+	select {
+	case <-client.Done():
+	default:
+		t.Fatal("owner shutdown did not revoke its stream")
+	}
+}
