@@ -93,7 +93,10 @@ func (m *Manager) RunDirect(ctx context.Context) {
 			return
 		}
 		observation := m.applyDirect(result)
-		if !observation.ApplyAttempted {
+		// A verified query is not a successful clock discipline when the
+		// write or its observation failed. Retry those failures on the same
+		// bounded schedule instead of leaving recovery stalled for six hours.
+		if !observation.ApplyAttempted || observation.ApplyError != nil || observation.ObservationError != nil {
 			if !m.waitBackoff(ctx, attempt) {
 				return
 			}
