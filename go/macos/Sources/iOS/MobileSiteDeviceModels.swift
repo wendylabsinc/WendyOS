@@ -111,7 +111,7 @@ struct MobileSiteDeviceModels: View {
             defer { busy = false }
             await model.connect(target)
             guard !Task.isCancelled, scope == model.mobileCloudSelectionKey else { return }
-            guard model.selectedDeviceReady, model.connected?.id == target.id else { error = model.connectionError ?? "Could not connect to this device."; return }
+            guard model.selectedDeviceReady, model.connected?.id == target.id else { error = model.connectionError?.message ?? "Could not connect to this device."; return }
             let captured = model.deviceSession
             do {
                 // Probe support before offering upload, too.

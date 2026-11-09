@@ -427,7 +427,7 @@ struct MobileSiteCameraLive: View {
     let alreadyConnected = model.selectedDeviceReady && model.connected?.id == device.id
     await model.connect(device)
     try Task.checkCancellation()
-    guard model.selectedDeviceReady, model.connected?.id == device.id else { throw WendyError(message: model.connectionError ?? "Could not connect to the camera device.") }
+    guard model.selectedDeviceReady, model.connected?.id == device.id else { throw model.connectionError ?? WendyError(message: "Could not connect to the camera device.") }
     let session = model.deviceSession
     if alreadyConnected { await model.refreshDetails() }
     if let error = model.camerasError { throw WendyError(message: error) }
