@@ -6,15 +6,19 @@ SWIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SWIFT_DIR"
 
 DEV_BUILD=0
+CLEAN_BUILD=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dev)
       DEV_BUILD=1
       ;;
+    --clean)
+      CLEAN_BUILD=1
+      ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [--dev]" >&2
+      echo "Usage: $0 [--dev] [--clean]" >&2
       exit 1
       ;;
   esac
@@ -163,10 +167,10 @@ rm -rf "$APP_PATH"
 rm -rf "$NOTARY_ZIP"
 rm -f "$ARTIFACT_PATH"
 
-if [[ "$DEV_BUILD" -eq 1 ]]; then
-  echo "Preserving derived data for incremental dev build: $DERIVED_DATA_PATH"
-else
+if [[ "$CLEAN_BUILD" -eq 1 ]]; then
   rm -rf "$DERIVED_DATA_PATH"
+else
+  echo "Preserving derived data for incremental $BUILD_CONFIGURATION build: $DERIVED_DATA_PATH"
 fi
 
 xcodebuild build \

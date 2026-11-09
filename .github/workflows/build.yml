@@ -401,6 +401,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     needs: [determine-version, build-macos-runtime-guest]
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -420,6 +423,32 @@ jobs:
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Identify Release build cache
+        id: release_cache
+        env:
+          DEPENDENCY_HASH: ${{ hashFiles('swift/**/Package.resolved', 'swift/**/Package.swift', 'swift/**/*.pbxproj') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_BUILD=$(xcodebuild -version | awk '/Build version/ { print $3 }')
+          # Build outputs contain absolute paths. Separate custom runners with
+          # different workspaces as well as toolchains and dependencies.
+          WORKSPACE_HASH=$(printf '%s' "$GITHUB_WORKSPACE" | shasum -a 256 | cut -c 1-16)
+          echo "name=macos-release-build-v1-${RUNNER_ARCH}-${XCODE_BUILD}-${WORKSPACE_HASH}-${DEPENDENCY_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Release build cache from main
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_CACHE_WORKFLOW_FILE: build.yml
+          BUILD_CACHE_TRUSTED_EVENTS: push workflow_dispatch
+          CACHE_NAME: ${{ steps.release_cache.outputs.name }}
+        shell: bash
+        run: |
+          # Use the same verified run artifacts as the Swift test workflows.
+          # This also survives checkout cleanup on a persistent custom runner.
+          .github/scripts/restore-trusted-build-cache.sh "$CACHE_NAME" swift/Build/Xcode
 
       - name: Setup macOS signing
         id: signing
@@ -450,6 +479,32 @@ jobs:
           NET_PROXY_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.net_proxy_provisioning_profile_path }}
         shell: bash
         run: bash ./Scripts/Build.sh
+
+      - name: Archive Release build cache
+        id: archive_release_cache
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        continue-on-error: true
+        env:
+          CACHE_NAME: ${{ steps.release_cache.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # DerivedData includes SourcePackages and compiled dependency outputs.
+          # GNU tar preserves the nanosecond mtimes Xcode compares. The signed
+          # app and signing assets live outside this directory.
+          gtar --posix -cf - --exclude=swift/Build/Xcode/Logs swift/Build/Xcode \
+            | zstd -T0 -3 -q -f -o "$RUNNER_TEMP/$CACHE_NAME.tar.zst"
+
+      - name: Upload Release build cache
+        if: ${{ !cancelled() && steps.archive_release_cache.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ steps.release_cache.outputs.name }}
+          path: ${{ runner.temp }}/${{ steps.release_cache.outputs.name }}.tar.zst
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Upload notarized app bundle
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1201,6 +1256,8 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
+          # Build caches are internal and can be much larger than the release.
+          pattern: '!macos-release-build-*'
           merge-multiple: true
       - name: List files
         run: |
