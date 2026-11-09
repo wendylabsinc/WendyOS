@@ -6,7 +6,7 @@
 // Source: wendy/agent/services/v2/bluetooth_service.proto
 //
 // For information on using the generated types, please see the documentation:
-//   https://github.com/grpc/grpc-swift-2
+//   https://github.com/grpc/grpc-swift
 
 public import GRPCCore
 public import GRPCProtobuf
@@ -125,9 +125,8 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
     /// This protocol is the lowest-level of the service protocols generated for this service
     /// giving you the most flexibility over the implementation of your service. This comes at
     /// the cost of more verbose and less strict APIs. Each RPC requires you to implement it in
-    /// terms of a request stream and response stream. Where the RPC expects only a single
-    /// request or response message, you are responsible for ensuring your implementation
-    /// maintains this invariant.
+    /// terms of a request stream and response stream. Where only a single request or response
+    /// message is expected, you are responsible for enforcing this invariant is maintained.
     ///
     /// Where possible, prefer using the stricter, less-verbose ``ServiceProtocol``
     /// or ``SimpleServiceProtocol`` instead.
@@ -637,9 +636,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_GetBluetoothRadioRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_BluetoothRadioStatus` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func getBluetoothRadio<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_GetBluetoothRadioRequest>,
@@ -656,9 +655,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ConfigureBluetoothRadioRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_BluetoothRadioStatus` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func configureBluetoothRadio<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ConfigureBluetoothRadioRequest>,
@@ -675,9 +674,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ScanBluetoothPeripheralsRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ScanBluetoothPeripheralsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func scanBluetoothPeripherals<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V2_ScanBluetoothPeripheralsRequest>,
@@ -694,9 +693,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ConnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ConnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func connectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ConnectBluetoothPeripheralRequest>,
@@ -713,9 +712,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func disconnectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralRequest>,
@@ -732,9 +731,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ForgetBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ForgetBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         func forgetBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ForgetBluetoothPeripheralRequest>,
@@ -768,9 +767,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_GetBluetoothRadioRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_BluetoothRadioStatus` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func getBluetoothRadio<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_GetBluetoothRadioRequest>,
@@ -798,9 +797,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ConfigureBluetoothRadioRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_BluetoothRadioStatus` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func configureBluetoothRadio<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ConfigureBluetoothRadioRequest>,
@@ -828,9 +827,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ScanBluetoothPeripheralsRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ScanBluetoothPeripheralsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func scanBluetoothPeripherals<Result>(
             request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V2_ScanBluetoothPeripheralsRequest>,
@@ -856,9 +855,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ConnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ConnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func connectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ConnectBluetoothPeripheralRequest>,
@@ -886,9 +885,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func disconnectBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralRequest>,
@@ -916,9 +915,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService {
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_ForgetBluetoothPeripheralRequest` messages.
         ///   - deserializer: A deserializer for `Wendy_Agent_Services_V2_ForgetBluetoothPeripheralResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response and returns its result to
-        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-        ///       already finished.
+        ///   - handleResponse: A closure which handles the response, the result of which is
+        ///       returned to the caller. Returning from the closure will cancel the RPC if it
+        ///       hasn't already finished.
         /// - Returns: The result of `handleResponse`.
         public func forgetBluetoothPeripheral<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ForgetBluetoothPeripheralRequest>,
@@ -949,9 +948,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_GetBluetoothRadioRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getBluetoothRadio<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_GetBluetoothRadioRequest>,
@@ -974,9 +973,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_ConfigureBluetoothRadioRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func configureBluetoothRadio<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ConfigureBluetoothRadioRequest>,
@@ -999,9 +998,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     /// - Parameters:
     ///   - request: A streaming request producing `Wendy_Agent_Services_V2_ScanBluetoothPeripheralsRequest` messages.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func scanBluetoothPeripherals<Result>(
         request: GRPCCore.StreamingClientRequest<Wendy_Agent_Services_V2_ScanBluetoothPeripheralsRequest>,
@@ -1022,9 +1021,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_ConnectBluetoothPeripheralRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func connectBluetoothPeripheral<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ConnectBluetoothPeripheralRequest>,
@@ -1047,9 +1046,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func disconnectBluetoothPeripheral<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralRequest>,
@@ -1072,9 +1071,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendy_Agent_Services_V2_ForgetBluetoothPeripheralRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetBluetoothPeripheral<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_ForgetBluetoothPeripheralRequest>,
@@ -1102,9 +1101,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func getBluetoothRadio<Result>(
         _ message: Wendy_Agent_Services_V2_GetBluetoothRadioRequest,
@@ -1131,9 +1130,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func configureBluetoothRadio<Result>(
         _ message: Wendy_Agent_Services_V2_ConfigureBluetoothRadioRequest,
@@ -1159,11 +1158,11 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     /// - Parameters:
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - producer: A closure producing request messages to send to the server. Returning
-    ///       from the closure closes the request stream.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - producer: A closure producing request messages to send to the server. The request
+    ///       stream is closed when the closure returns.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func scanBluetoothPeripherals<Result>(
         metadata: GRPCCore.Metadata = [:],
@@ -1188,9 +1187,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func connectBluetoothPeripheral<Result>(
         _ message: Wendy_Agent_Services_V2_ConnectBluetoothPeripheralRequest,
@@ -1217,9 +1216,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func disconnectBluetoothPeripheral<Result>(
         _ message: Wendy_Agent_Services_V2_DisconnectBluetoothPeripheralRequest,
@@ -1246,9 +1245,9 @@ extension Wendy_Agent_Services_V2_WendyBluetoothService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response and returns its result to
-    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
-    ///       already finished.
+    ///   - handleResponse: A closure which handles the response, the result of which is
+    ///       returned to the caller. Returning from the closure will cancel the RPC if it
+    ///       hasn't already finished.
     /// - Returns: The result of `handleResponse`.
     public func forgetBluetoothPeripheral<Result>(
         _ message: Wendy_Agent_Services_V2_ForgetBluetoothPeripheralRequest,
