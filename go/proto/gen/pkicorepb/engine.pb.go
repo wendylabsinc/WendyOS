@@ -7782,12 +7782,10 @@ type RenewCertificateRequest struct {
 	// with or without a grant (WDY-3437). Device lineages do not use it.
 	// JWS Compact signed with presented_cert's key (alg per the key: ML-DSA-44/
 	// 65/87, ES256, ES384, EdDSA), payload JSON, no other members:
-	//
-	//	{"op":"renew",
-	//	 "cert_sha256":"<base64url, no padding, SHA-256 of presented_cert>",
-	//	 "csr_sha256":"<base64url, no padding, SHA-256 of csr>",
-	//	 "jti":"<unique, at most 128 bytes>","iat":<unix seconds>}
-	//
+	//   {"op":"renew",
+	//    "cert_sha256":"<base64url, no padding, SHA-256 of presented_cert>",
+	//    "csr_sha256":"<base64url, no padding, SHA-256 of csr>",
+	//    "jti":"<unique, at most 128 bytes>","iat":<unix seconds>}
 	// iat must be within the last 5 minutes (60s future skew); jti is single-use
 	// per tenant.
 	PossessionProof []byte `protobuf:"bytes,6,opt,name=possession_proof,json=possessionProof,proto3" json:"possession_proof,omitempty"`
@@ -8280,9 +8278,8 @@ type PickupOverDurationCertificateRequest struct {
 	CollectionId  string                 `protobuf:"bytes,1,opt,name=collection_id,json=collectionId,proto3" json:"collection_id,omitempty"`    // RequestOverDurationIssuanceResponse.collection_id
 	PresentedCert []byte                 `protobuf:"bytes,2,opt,name=presented_cert,json=presentedCert,proto3" json:"presented_cert,omitempty"` // DER of the collecting operator's leaf
 	// Operator-signed JWS (compact) whose payload is the pickup descriptor:
-	//
-	//	{"op":"over_duration_pickup","tenant":<uuid>,"collection_id":<handle>,
-	//	 "iat":<unix>,"exp":<unix>,"jti":<unique>}
+	//   {"op":"over_duration_pickup","tenant":<uuid>,"collection_id":<handle>,
+	//    "iat":<unix>,"exp":<unix>,"jti":<unique>}
 	//
 	// REQUIRED (WDY-2691). Without it the presented certificate proves only
 	// POSSESSION of a key, never INTENT to collect: any earlier JWS from that
@@ -9176,25 +9173,23 @@ type ValidateOperatorCertificateResponse struct {
 	// principal has no disabled_principals record.
 	Valid bool `protobuf:"varint,1,opt,name=valid,proto3" json:"valid,omitempty"`
 	// Machine-readable cause when !valid — the FIRST failure in check order:
-	//
-	//	"malformed"          — leaf does not parse as an X.509 certificate
-	//	"untrusted"          — does not chain to the tenant's Operator-Authority
-	//	                       CA (also covers a leaf of a DIFFERENT tenant:
-	//	                       anchors are strictly per-tenant; a Lite operator
-	//	                       leaf never chains here)
-	//	"operator_class"     — chains, but is not an ML-DSA operator leaf (a
-	//	                       non-ML-DSA key or the Lite marker; lite-relay-v1
-	//	                       § Operator dual-key). This RPC has no Lite opt-in.
-	//	"not_operator"       — chains, but the SPIFFE SAN is not an operator
-	//	                       principal of the tenant
-	//	"not_yet_valid"      — NotBefore is in the future
-	//	"expired"            — NotAfter has passed (no roll-forward: an expired
-	//	                       operator re-onboards via wendy-auth)
-	//	"not_issued"         — no certificate_ledger row: pki-core never minted
-	//	                       this leaf (definite refusal, not a lookup miss)
-	//	"revoked"            — certificate_ledger revoked_at is set
-	//	"principal_disabled" — sticky SSF-driven disabled_principals kill switch
-	//
+	//   "malformed"          — leaf does not parse as an X.509 certificate
+	//   "untrusted"          — does not chain to the tenant's Operator-Authority
+	//                          CA (also covers a leaf of a DIFFERENT tenant:
+	//                          anchors are strictly per-tenant; a Lite operator
+	//                          leaf never chains here)
+	//   "operator_class"     — chains, but is not an ML-DSA operator leaf (a
+	//                          non-ML-DSA key or the Lite marker; lite-relay-v1
+	//                          § Operator dual-key). This RPC has no Lite opt-in.
+	//   "not_operator"       — chains, but the SPIFFE SAN is not an operator
+	//                          principal of the tenant
+	//   "not_yet_valid"      — NotBefore is in the future
+	//   "expired"            — NotAfter has passed (no roll-forward: an expired
+	//                          operator re-onboards via wendy-auth)
+	//   "not_issued"         — no certificate_ledger row: pki-core never minted
+	//                          this leaf (definite refusal, not a lookup miss)
+	//   "revoked"            — certificate_ledger revoked_at is set
+	//   "principal_disabled" — sticky SSF-driven disabled_principals kill switch
 	// Empty when valid.
 	Reason string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Server-derived SPIFFE URI of the operator principal, set only when valid.

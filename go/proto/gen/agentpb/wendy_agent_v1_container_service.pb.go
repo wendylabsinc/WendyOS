@@ -717,7 +717,7 @@ type RunContainerLayersRequest struct {
 	Cmd string `protobuf:"bytes,3,opt,name=cmd,proto3" json:"cmd,omitempty"`
 	// The layers that will be uploaded to the agent.
 	Layers []*RunContainerLayerHeader `protobuf:"bytes,4,rep,name=layers,proto3" json:"layers,omitempty"`
-	// / The `wendy.json` file as found in the project
+	/// The `wendy.json` file as found in the project
 	AppConfig []byte `protobuf:"bytes,5,opt,name=app_config,json=appConfig,proto3" json:"app_config,omitempty"`
 	// Optional restart policy override for Docker runtime.
 	RestartPolicy *RestartPolicy `protobuf:"bytes,6,opt,name=restart_policy,json=restartPolicy,proto3,oneof" json:"restart_policy,omitempty"`
