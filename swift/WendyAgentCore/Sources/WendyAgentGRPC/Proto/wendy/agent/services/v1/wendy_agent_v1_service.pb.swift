@@ -782,6 +782,18 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
     set {_uniqueStorage()._entitlementTypes = newValue}
   }
 
+  /// Which agent runs and how the last agent update went, from the WendyOS
+  /// agent supervisor. Absent when no supervisor started this agent (older
+  /// images, generic Linux, macOS).
+  public var supervision: Wendy_Agent_Services_V1_AgentSupervision {
+    get {_storage._supervision ?? Wendy_Agent_Services_V1_AgentSupervision()}
+    set {_uniqueStorage()._supervision = newValue}
+  }
+  /// Returns true if `supervision` has been explicitly set.
+  public var hasSupervision: Bool {_storage._supervision != nil}
+  /// Clears the value of `supervision`. Subsequent reads from it will return its default value.
+  public mutating func clearSupervision() {_uniqueStorage()._supervision = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -2119,6 +2131,33 @@ public nonisolated struct Wendy_Agent_Services_V1_GpuCapabilities: Sendable {
   public init() {}
 }
 
+public nonisolated struct Wendy_Agent_Services_V1_AgentSupervision: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// "image" (the agent in the OS image), "approved" (a checked update kept
+  /// on /data) or "trial" (a new update still being checked).
+  public var role: String = String()
+
+  /// Version of the agent in the OS image, the one the device falls back to.
+  public var imageVersion: String = String()
+
+  /// How the last agent update went: "" (none), "trial", "approved" or "rejected".
+  public var updateState: String = String()
+
+  /// Why the last update was rejected, or why the image agent runs.
+  public var reason: String = String()
+
+  /// sha256 of the agent update_state and reason are about, so a client can
+  /// tell its own upload's verdict from an earlier one.
+  public var updateSha256: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "wendy.agent.services.v1"
@@ -2854,7 +2893,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}power_mode\0\u{3}entitlement_types\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}power_mode\0\u{3}entitlement_types\0\u{1}supervision\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -2886,6 +2925,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
     var _npuBackends: [String] = []
     var _powerMode: Wendy_Agent_Services_V1_PowerMode? = nil
     var _entitlementTypes: [String] = []
+    var _supervision: Wendy_Agent_Services_V1_AgentSupervision? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2925,6 +2965,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       _npuBackends = source._npuBackends
       _powerMode = source._powerMode
       _entitlementTypes = source._entitlementTypes
+      _supervision = source._supervision
     }
   }
 
@@ -2972,6 +3013,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         case 27: try { try decoder.decodeRepeatedStringField(value: &_storage._npuBackends) }()
         case 28: try { try decoder.decodeSingularMessageField(value: &_storage._powerMode) }()
         case 29: try { try decoder.decodeRepeatedStringField(value: &_storage._entitlementTypes) }()
+        case 30: try { try decoder.decodeSingularMessageField(value: &_storage._supervision) }()
         default: break
         }
       }
@@ -3071,6 +3113,9 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       if !_storage._entitlementTypes.isEmpty {
         try visitor.visitRepeatedStringField(value: _storage._entitlementTypes, fieldNumber: 29)
       }
+      try { if let v = _storage._supervision {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 30)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -3109,6 +3154,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         if _storage._npuBackends != rhs_storage._npuBackends {return false}
         if _storage._powerMode != rhs_storage._powerMode {return false}
         if _storage._entitlementTypes != rhs_storage._entitlementTypes {return false}
+        if _storage._supervision != rhs_storage._supervision {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -5259,6 +5305,56 @@ nonisolated extension Wendy_Agent_Services_V1_GpuCapabilities: SwiftProtobuf.Mes
     if lhs.computeBackends != rhs.computeBackends {return false}
     if lhs.vendor != rhs.vendor {return false}
     if lhs.path != rhs.path {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_AgentSupervision: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AgentSupervision"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}role\0\u{3}image_version\0\u{3}update_state\0\u{1}reason\0\u{3}update_sha256\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.role) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.imageVersion) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.updateState) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.reason) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.updateSha256) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.role.isEmpty {
+      try visitor.visitSingularStringField(value: self.role, fieldNumber: 1)
+    }
+    if !self.imageVersion.isEmpty {
+      try visitor.visitSingularStringField(value: self.imageVersion, fieldNumber: 2)
+    }
+    if !self.updateState.isEmpty {
+      try visitor.visitSingularStringField(value: self.updateState, fieldNumber: 3)
+    }
+    if !self.reason.isEmpty {
+      try visitor.visitSingularStringField(value: self.reason, fieldNumber: 4)
+    }
+    if !self.updateSha256.isEmpty {
+      try visitor.visitSingularStringField(value: self.updateSha256, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_AgentSupervision, rhs: Wendy_Agent_Services_V1_AgentSupervision) -> Bool {
+    if lhs.role != rhs.role {return false}
+    if lhs.imageVersion != rhs.imageVersion {return false}
+    if lhs.updateState != rhs.updateState {return false}
+    if lhs.reason != rhs.reason {return false}
+    if lhs.updateSha256 != rhs.updateSha256 {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
