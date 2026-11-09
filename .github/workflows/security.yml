@@ -22,7 +22,7 @@ concurrency:
 jobs:
   govulncheck:
     name: govulncheck
-    runs-on: runs-on,runner=2cpu-linux-x64
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
