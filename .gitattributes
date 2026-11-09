@@ -17,3 +17,6 @@ scripts/test/plugin-launcher/* text eol=lf
 # Skill entrypoints are parsed and embedded byte-for-byte. Keep their YAML
 # frontmatter delimiters intact on Windows, including packaging sources.
 **/SKILL.md text eol=lf
+
+# Stored Swift E2E output compiled from the four English experiment specs.
+swift/WendyE2ETests/Tests/WendyE2ETests/GeneratedEnglishSpecs/*.swift linguist-generated=true
