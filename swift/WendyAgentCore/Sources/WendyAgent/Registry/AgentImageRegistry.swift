@@ -284,7 +284,11 @@ struct AgentImageRegistry: Sendable {
                     }
                     declared = count
                     if let session = access.session, let leaf = access.leaf, let authority {
-                        try await authority.reserve(session, leaf: leaf, bytes: Int64(count))
+                        try await authority.reserveManifest(
+                            session,
+                            leaf: leaf,
+                            bytes: Int64(count)
+                        )
                     }
                 } else {
                     declared = nil
@@ -303,7 +307,11 @@ struct AgentImageRegistry: Sendable {
                 if declared == nil, let session = access.session, let leaf = access.leaf,
                     let authority
                 {
-                    try await authority.reserve(session, leaf: leaf, bytes: Int64(data.count))
+                    try await authority.reserveManifest(
+                        session,
+                        leaf: leaf,
+                        bytes: Int64(data.count)
+                    )
                 }
                 try access.checkTime()
                 if let authority {

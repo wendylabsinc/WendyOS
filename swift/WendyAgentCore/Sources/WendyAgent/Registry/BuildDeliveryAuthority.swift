@@ -149,7 +149,15 @@ actor BuildDeliveryAuthority {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        try ProvisioningStore.synchronizeDirectory(directory.deletingLastPathComponent())
+        // The state root can itself be new on first enrollment. Persist every
+        // parent entry before acknowledging any admission in the new store.
+        var parent = directory
+        while parent.path != "/" {
+            try ProvisioningStore.synchronizeDirectory(parent)
+            let next = parent.deletingLastPathComponent()
+            if next.path == parent.path { break }
+            parent = next
+        }
         let descriptor = unsafe Darwin.open(
             directory.appendingPathComponent(".lock").path,
             O_CREAT | O_RDWR | O_CLOEXEC,
@@ -285,12 +293,20 @@ actor BuildDeliveryAuthority {
     }
     func reserve(_ id: String, leaf: Certificate, bytes: Int64) throws {
         var session = try live(id, leaf: leaf)
-        guard bytes >= 0, bytes <= session.verified.claims.max_bytes - session.record.bytes else {
+        guard !session.record.completed, bytes >= 0,
+            bytes <= session.verified.claims.max_bytes - session.record.bytes
+        else {
             throw Failure("delivery byte budget exhausted")
         }
         session.record.bytes += bytes
         try persist(id, session.record)
         sessions[id] = session
+    }
+    // A completed final-manifest retry only compares bytes and the current tag
+    // in publish; it cannot stage content or consume more durable authority.
+    func reserveManifest(_ id: String, leaf: Certificate, bytes: Int64) throws {
+        if try live(id, leaf: leaf).record.completed { return }
+        try reserve(id, leaf: leaf, bytes: bytes)
     }
     func stage(_ id: String, leaf: Certificate, repository: String) throws {
         _ = try policy(id, leaf: leaf, repository: repository)

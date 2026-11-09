@@ -109,6 +109,13 @@ struct BuildDeliveryAuthorityTests {
         )
         let status = try await recovered.status(session, leaf: fixture.builder.certificate)
         #expect(status.completed && status.output == BlobStore.contentDigest(data))
+        let savedRecord = path.appendingPathComponent(session + ".json")
+        let beforeReplay = try Data(contentsOf: savedRecord)
+        try await recovered.reserveManifest(session, leaf: fixture.builder.certificate, bytes: 1000)
+        #expect(try Data(contentsOf: savedRecord) == beforeReplay)
+        await #expect(throws: (any Error).self) {
+            try await recovered.reserve(session, leaf: fixture.builder.certificate, bytes: 1)
+        }
         // Replay is read-only, including after an ambient operator changes the tag.
         try await recovered.publish(
             data,
