@@ -148,28 +148,30 @@ type streamNodeLink struct {
 	lastPriority bool // owned by the single writer: alternate priority with waiting IP
 	lastRouting  bool // at most one routing frame before another waiting class gets a turn
 
-	conn          net.Conn
-	once          sync.Once
-	controls      chan ControlMessage
-	packets       chan []byte
-	routing       chan streamFrame
-	priority      chan streamFrame
-	fastIP        chan streamFrame
-	ip            chan streamFrame
-	ipPackets     *streamIPSendQueue
-	stop          chan struct{}
-	done          chan struct{}
-	errMu         sync.Mutex
-	err           error
-	activeIPStart atomic.Int64
-	activeIPBytes atomic.Int64
-	lastIPWriteMS atomic.Int64
-	rxBytes       atomic.Int64
-	lastRxUnixNS  atomic.Int64
-	talkMu        sync.Mutex
-	talkersOut    map[talkerKey]*talkerStat
-	talkersIn     map[talkerKey]*talkerStat
-	diagIP        bool
+	conn                net.Conn
+	once                sync.Once
+	controls            chan ControlMessage
+	packets             chan []byte
+	routingPackets      chan []byte
+	lastReceivedRouting atomic.Bool
+	routing             chan streamFrame
+	priority            chan streamFrame
+	fastIP              chan streamFrame
+	ip                  chan streamFrame
+	ipPackets           *streamIPSendQueue
+	stop                chan struct{}
+	done                chan struct{}
+	errMu               sync.Mutex
+	err                 error
+	activeIPStart       atomic.Int64
+	activeIPBytes       atomic.Int64
+	lastIPWriteMS       atomic.Int64
+	rxBytes             atomic.Int64
+	lastRxUnixNS        atomic.Int64
+	talkMu              sync.Mutex
+	talkersOut          map[talkerKey]*talkerStat
+	talkersIn           map[talkerKey]*talkerStat
+	diagIP              bool
 }
 
 // sockQueueProber is implemented by CoC connections that report raw Bluetooth
@@ -272,7 +274,7 @@ func newStreamNodeLink(conn net.Conn) *streamNodeLink {
 }
 
 func newBoundedStreamNodeLink(conn net.Conn, receiveCapacity int) *streamNodeLink {
-	l := &streamNodeLink{conn: conn, controls: make(chan ControlMessage, receiveCapacity), packets: make(chan []byte, receiveCapacity), routing: make(chan streamFrame, streamRoutingQueue), priority: make(chan streamFrame, streamPriorityQueue), fastIP: make(chan streamFrame, streamFastIPQueue), ip: make(chan streamFrame, streamIPQueue), ipPackets: newStreamIPSendQueue(), stop: make(chan struct{}), done: make(chan struct{}), diagIP: os.Getenv("WENDY_MESH_BLE_QUEUE_DIAG") == "1"}
+	l := &streamNodeLink{conn: conn, controls: make(chan ControlMessage, receiveCapacity), packets: make(chan []byte, receiveCapacity), routingPackets: make(chan []byte, streamRoutingQueue), routing: make(chan streamFrame, streamRoutingQueue), priority: make(chan streamFrame, streamPriorityQueue), fastIP: make(chan streamFrame, streamFastIPQueue), ip: make(chan streamFrame, streamIPQueue), ipPackets: newStreamIPSendQueue(), stop: make(chan struct{}), done: make(chan struct{}), diagIP: os.Getenv("WENDY_MESH_BLE_QUEUE_DIAG") == "1"}
 	go l.readLoop()
 	go l.writeLoop()
 	if l.diagIP {
@@ -372,7 +374,7 @@ func smallWholeIP(data []byte) bool {
 // nextFrame gives routing the next frame boundary, with at most one routing
 // frame before waiting metadata/IP gets a turn. Metadata and IP alternate;
 // within IP, bulk still gets a turn after at most four small packets. A frame
-// already being written, including all fragments of one IP packet, is atomic.
+// already being written is atomic; Babel may pass between complete IP fragments.
 func (l *streamNodeLink) nextFrame(fastServed *int) (streamFrame, bool) {
 	for {
 		select {
@@ -480,11 +482,20 @@ func (l *streamNodeLink) writeLoop() {
 			l.activeIPStart.Store(started.UnixNano())
 			var fragments [][]byte
 			fragments, err = EncodeIP(frame.sequence, frame.data)
-			for _, fragment := range fragments {
+			for i, fragment := range fragments {
 				if err != nil {
 					break
 				}
 				err = l.writeFrameNow(streamPacket, fragment)
+				if err == nil && i+1 < len(fragments) {
+					// Reassembly keys include packet/offset, so Babel may safely
+					// pass between fragments without reordering IP fragments.
+					select {
+					case routing := <-l.routing:
+						err = l.writeFrameNow(routing.kind, routing.data)
+					default:
+					}
+				}
 			}
 			if err == nil {
 				l.ipPackets.recordWrite(len(frame.data), time.Since(started))
@@ -590,10 +601,15 @@ func (l *streamNodeLink) readLoop() {
 				return
 			}
 		case streamPacket:
+			queue := l.packets
+			if len(buf) > 0 && buf[0] == PacketBabel {
+				queue = l.routingPackets
+			}
 			select {
-			case l.packets <- buf:
+			case queue <- buf:
 			case <-l.stop:
 				return
+			default: // IP overload must not block parsing subsequent Babel.
 			}
 		default:
 			// The bounded frame body is already consumed. Optional future kinds
@@ -612,8 +628,26 @@ func (l *streamNodeLink) ReadControl() (ControlMessage, error) {
 }
 
 func (l *streamNodeLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	if l.lastReceivedRouting.Load() {
+		select {
+		case packet := <-l.packets:
+			l.lastReceivedRouting.Store(false)
+			return packet, nil
+		default:
+		}
+	}
 	select {
+	case packet := <-l.routingPackets:
+		l.lastReceivedRouting.Store(true)
+		return packet, nil
+	default:
+	}
+	select {
+	case packet := <-l.routingPackets:
+		l.lastReceivedRouting.Store(true)
+		return packet, nil
 	case packet := <-l.packets:
+		l.lastReceivedRouting.Store(false)
 		return packet, nil
 	case <-l.done:
 		return nil, l.terminalError()

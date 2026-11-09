@@ -1,5 +1,13 @@
 #import "../ble_darwin.m"
 #include <assert.h>
+#include <stdio.h>
+
+static void scenario(const char *name) {
+    // CombinedOutput publishes these markers only on failure. Leave the
+    // original signals and assertions intact so macOS can write crash reports.
+    fprintf(stderr, "native BLE scenario: %s\n", name);
+    fflush(stderr);
+}
 
 // Exercise the real native send path with an NSOutputStream that applies
 // deterministic backpressure. No CoreBluetooth manager or radio is started.
@@ -117,14 +125,20 @@ static void exercise(NSArray<NSNumber *> *writes, BOOL resume, BOOL disconnect,
 
 int main(void) {
     @autoreleasepool {
+        scenario("partial positive writes");
         exercise(@[@2, @1, @3, @2], NO, NO, WENDY_BLE_OK, @"abcdefgh");
+        scenario("resumed zero writes");
         exercise(@[@0, @2, @0, @6], YES, NO, WENDY_BLE_OK, @"abcdefgh");
+        scenario("negative write");
         exercise(@[@3, @(-1)], NO, NO, WENDY_BLE_ERR_WRITE_FAILED, @"abc");
+        scenario("idle timeout");
         exercise(@[@3, @0], NO, NO, WENDY_BLE_ERR_TIMEOUT, @"abc");
+        scenario("disconnect during zero write");
         exercise(@[@2, @0], NO, YES, WENDY_BLE_ERR_DISCONNECTED, @"ab");
 
         // A certificate-sized ordinary request keeps exact bytes across the
         // 16KiB boundary, transient backpressure and multiple partial writes.
+        scenario("certificate-sized request");
         FakeOutput *certificateOutput = [FakeOutput new];
         certificateOutput.writes = @[@16384, @0, @3678, @0, @5584];
         certificateOutput.resumeAfterZero = YES;
@@ -141,6 +155,7 @@ int main(void) {
         // stream owner: total duration exceeds the idle budget several times.
         // Leave room for CI scheduling delays between 40ms timer callbacks;
         // use more writes so the larger idle budget still has to be renewed.
+        scenario("renewed idle progress");
         NSData *pacedData = [@"abcdefghijklmnopqrstuvwxyz012345" dataUsingEncoding:NSUTF8StringEncoding];
         NSMutableArray<NSNumber *> *pacedWrites = [NSMutableArray array];
         for (NSUInteger i = 0; i < pacedData.length; i++) [pacedWrites addObject:@1];
@@ -158,6 +173,7 @@ int main(void) {
 
         // Positive progress never extends the finite whole-write ceiling.
         // Keep the idle budget longer so only the whole-write cap can expire.
+        scenario("finite whole-write ceiling");
         FakeOutput *finite = [FakeOutput new];
         finite.writes = @[@1, @1, @1, @1, @1, @1, @1, @1];
         finite.pauseAfterPositive = 0.04;
@@ -173,6 +189,7 @@ int main(void) {
 
         // A caller can shorten an in-flight budget without waiting for the
         // stream owner's idle limit, or clear a previously expired deadline.
+        scenario("shortened caller deadline");
         FakeOutput *callerOutput = [FakeOutput new];
         callerOutput.writes = @[@1, @1, @1, @1, @1, @1, @1, @1];
         callerOutput.pauseAfterPositive = 0.04;
@@ -188,6 +205,7 @@ int main(void) {
         stop(callerConn);
         assert(callerOutput.received.length > 0 && callerOutput.received.length < 8);
 
+        scenario("cleared expired deadline");
         FakeOutput *cleared = [FakeOutput new];
         FakeConnection *clearedConn = start(cleared);
         wendy_ble_l2cap_set_write_deadline((__bridge WendyBLEConn)clearedConn, -1, 1);
@@ -198,6 +216,7 @@ int main(void) {
         stop(clearedConn);
 
         // Expired caller deadlines are consulted before the first native write.
+        scenario("expired caller deadline");
         FakeOutput *expired = [FakeOutput new];
         FakeConnection *expiredConn = start(expired);
         wendy_ble_l2cap_set_write_deadline((__bridge WendyBLEConn)expiredConn, -1, 1);
@@ -209,6 +228,7 @@ int main(void) {
         // Both the waiter and stream owner observe clearing or extending a
         // pending caller deadline, while retaining the independent idle cap.
         for (NSNumber *clear in @[@YES, @NO]) {
+            scenario(clear.boolValue ? "clear pending deadline" : "extend pending deadline");
             FakeOutput *updated = [FakeOutput new];
             updated.writes = @[@1, @1, @1, @1, @1, @1, @1, @1];
             updated.pauseAfterPositive = 0.04;
@@ -227,6 +247,7 @@ int main(void) {
 
         // A request queued onto an I/O thread that has already exited never
         // runs. The sender must notice the dead thread long before its deadline.
+        scenario("already-exited I/O thread");
         FakeOutput *output = [FakeOutput new];
         FakeConnection *conn = start(output);
         stop(conn);
@@ -240,6 +261,7 @@ int main(void) {
 
         // Close aborts a send stalled under backpressure rather than waiting
         // out the write timeout.
+        scenario("abort stalled send");
         FakeOutput *stalled = [FakeOutput new];
         stalled.writes = @[@3, @0];
         FakeConnection *stalledConn = start(stalled);
@@ -253,6 +275,7 @@ int main(void) {
         assert(NSProcessInfo.processInfo.systemUptime - before < 1.0);
         stop(stalledConn);
         assert([stalled.received isEqualToData:[@"abc" dataUsingEncoding:NSUTF8StringEncoding]]);
+        scenario("autorelease pool teardown");
     }
     return 0;
 }

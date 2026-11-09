@@ -1,31 +1,28 @@
 ---
 title: Get started
-description: Choose your first Wendy project, then run it and make a change.
+description: Install the Wendy CLI and start building on Wendy.
 ---
 
-Wendy builds your code, runs it on a robot or edge device, and streams its logs to your computer.
-Choose one tutorial below. Each covers setup, a working example, and your first change.
-Neither requires a Wendy Cloud account.
+Wendy is a full-stack platform that offers an operating system for NVIDIA Jetson, AGX Orin, Thor, Raspberry Pi, Qualcomm Dragonwing, and ESP32 systems, with app deployments, logging, crash reporting, AI inference, networking, simulations, vision, fleet management, and data integration.
 
-Already using Docker or Ubuntu? [See what Wendy adds](/docs/concepts/why-wendy),
-including the difference between installing Wendy Agent and choosing WendyOS.
+## Install the Wendy CLI
 
-Keep your Dockerfiles and standard ROS 2 nodes, messages, and launch files. Stagefiles are optional. App configuration handles deployment, permissions, and networking; it does not replace your application APIs.
+```bash title="macOS and Linux"
+curl -fsSL https://install.wendy.dev/cli.sh | bash
+```
 
-## Choose your first project
+```powershell title="Windows"
+winget install WendyLabs.Wendy --source winget
+```
+
+Run `wendy --version` to confirm. If the command is not found, open a new terminal.
+
+To build apps on Windows, run the macOS and Linux command inside WSL2 instead.
+
+## Next steps
 
 <Cards>
-  <Card title="Program a simulated robot" href="/docs/getting-started/robot">Start here to try robotics without hardware. Watch a Go2 walk, edit a Python patrol app, and run your own route. Requires macOS or Linux.</Card>
-  <Card title="Deploy your first app" href="/docs/getting-started/app">Run a web server on a Linux device or a local virtual device. Change its response and deploy your edit. Use macOS, Linux, or Windows with WSL2.</Card>
+  <Card title="Program a simulated robot" href="/docs/getting-started/robot">Edit a Python app for a simulated Go2. No hardware needed.</Card>
+  <Card title="Deploy your first app" href="/docs/getting-started/app">Run a web server on a device or a local virtual device.</Card>
+  <Card title="Set up a device" href="/docs/installation">Install WendyOS or Wendy Agent on your hardware.</Card>
 </Cards>
-
-## Have a board to set up?
-
-Follow the [setup guide for your device](/docs/installation), then continue with
-[Deploy your first app](/docs/getting-started/app). Already running WendyOS or Wendy Agent? Go straight to the app tutorial.
-
-WendyOS includes the device agent. On an existing Linux computer, you can install
-Wendy Agent and keep your OS. The tutorials install the Wendy CLI on your development computer.
-
-Native [Mac apps](/docs/installation/wendy-agent-macos) and
-[ESP32 apps](/docs/installation/wendy-lite-esp32) have separate setup guides.

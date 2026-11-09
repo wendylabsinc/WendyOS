@@ -14,8 +14,9 @@ Run these commands in an interactive terminal. Select the intended device when p
 ## 1. Prepare your devices
 
 Use current WendyOS images with Wendy Net support and enroll each device in the
-same Wendy Cloud organization. Sign in with `wendy cloud login`. Keep a working
-management connection while changing network settings.
+same Wendy Cloud organization. Sign in with `wendy cloud login`;
+`wendy auth login` is an equivalent command. Keep a working management connection
+while changing network settings.
 
 ## 2. Enable the connections you want
 
@@ -26,7 +27,7 @@ wendy net configure \
   --participate=true --ethernet=true --infrastructure-wifi=true
 ```
 
-Replace `<device>` with its name or address. For Bluetooth, add `--ble=true`.
+For Bluetooth, add `--ble=true`.
 For supported Wi-Fi Aware hardware, add `--nan=true`.
 
 Start with the normal Bluetooth profile and firmware/controller-default power.
@@ -153,6 +154,20 @@ borrowing, set `--roam=false` on the travelling device. Changes are saved across
 agent restarts. Existing Internet sessions may be interrupted when a gateway or
 uplink changes.
 
+### Keep Cloud access working over the mesh
+
+A WendyOS device can use the shared Internet path for Cloud management too.
+Bluetooth paths can take longer to establish and renew than Ethernet or WiFi.
+Keep the gateway reachable while the agent connects or retries. A working local
+mesh route alone does not confirm Cloud access: run `wendy cloud discover` and
+try a device command through Cloud.
+
+If the device is reachable locally but not through Cloud, check its gateway and
+Internet-sharing state first. See [Cloud connectivity](/docs/cloud/connectivity)
+for network changes, DNS failures and recovery. Sharing and roaming remain
+separate settings; this does not enable Internet access for Lite profiles that
+do not support it.
+
 ### Give an app outbound Internet access
 
 Use this entitlement in the app's `wendy.json`, then redeploy with `wendy run`:
@@ -166,6 +181,13 @@ Internet path, including a borrowed gateway. It does not publish the app's ports
 Wendy Net service mode is separate and does not grant an Internet default route.
 Host-networked apps share the host's network access and expose ports they bind;
 use host mode only when the app needs that access.
+
+### Recover after a clock or certificate error
+
+Keep an Internet-sharing mesh gateway reachable while the device synchronizes
+its clock. If certificate errors persist, follow
+[device troubleshooting](/docs/advanced/wendyos/networking/troubleshooting).
+Do not delete mesh identity files or re-enroll to work around a clock error.
 
 ## 5. Connect your applications
 

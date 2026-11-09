@@ -44,6 +44,9 @@ type Options struct {
 	CarrierSources []carriers.Source
 	StateDirectory string
 	Certificate    config.CertificateInfo
+	// ReportCarrierFailure is an optional local diagnostics sink. It receives
+	// no certificate or request payload and must not change attachment policy.
+	ReportCarrierFailure func(transport string, err error)
 }
 type Info struct {
 	Address  string `json:"address" cbor:"a"`

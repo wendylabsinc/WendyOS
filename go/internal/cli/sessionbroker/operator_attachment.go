@@ -11,8 +11,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type operatorAttachmentState struct {
@@ -60,6 +58,7 @@ func (a *operatorAttachment) open(ctx context.Context) (*operatorAttachmentState
 	// Open reloads the profile trust/pin state and persists a new revision before
 	// dialing. Neither an older key snapshot nor an old proof is reused.
 	options := operatormesh.Options{StateDirectory: a.directory, Certificate: certificate}
+	options.ReportCarrierFailure = operatorCarrierReporter(ctx)
 	session, err := openOperatorSession(ctx, options)
 	if err != nil {
 		return nil, err
@@ -83,7 +82,7 @@ func (a *operatorAttachment) snapshot() (*operatorAttachmentState, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.current == nil {
-		return nil, status.Error(codes.Unavailable, "this computer is reconnecting to Wendy Net; retry shortly")
+		return nil, operatorUnavailable(operatorReconnecting, "this computer is reconnecting to Wendy Net; retry shortly")
 	}
 	return a.current, nil
 }
@@ -103,7 +102,7 @@ func (a *operatorAttachment) adjacent() (*grpc.ClientConn, meshid.Device, error)
 	}
 	peer, live := current.session.AdjacentPeer()
 	if !live {
-		return nil, meshid.Device{}, status.Error(codes.Unavailable, "the connection to a nearby router is reconnecting; retry shortly")
+		return nil, meshid.Device{}, operatorUnavailable(operatorNoPeers, "this computer has no authenticated connections to nearby Wendy Net routers; automatic discovery is reconnecting")
 	}
 	for _, manifest := range current.session.Snapshot().Devices {
 		owner, parseErr := manifest.Peer(peer.Tenant())

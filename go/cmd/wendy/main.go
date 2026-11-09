@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/memguard"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -264,7 +265,14 @@ func renderError(err error) string {
 		// Preserve surrounding action context and any joined sibling errors.
 		return strings.Replace(err.Error(), diagnostic.Error(), diagnostic.CLIMessage(), 1)
 	}
-	return tui.ErrorMessage(formatError(err).Error())
+	message := formatError(err).Error()
+	_, steps := sessionbroker.OperatorRecovery(err)
+	for _, step := range steps {
+		if !strings.Contains(message, step) {
+			message += "\n  " + step
+		}
+	}
+	return tui.ErrorMessage(message)
 }
 
 // formattedError is formatError's result: the text shown to a person, and

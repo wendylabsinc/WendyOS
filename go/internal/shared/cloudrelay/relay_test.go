@@ -661,6 +661,25 @@ func TestAgentRenewsProvenPresence(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("no renewal")
 	}
+	// The server sending Renewed does not mean the agent has received and
+	// applied it. Wait for the acknowledged resume lease before shutting down.
+	r.mu.Lock()
+	expectedLease := r.leaseJWS
+	r.mu.Unlock()
+	for {
+		raw, err := os.ReadFile(filepath.Join(agent.StateDir, "lease.pb"))
+		var saved pb.IssuePresenceLeaseResponse
+		if err == nil && proto.Unmarshal(raw, &saved) == nil && saved.PresenceLeaseJws == expectedLease {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("presence failed before applying renewal: %v", err)
+		case <-ctx.Done():
+			t.Fatal("acknowledged renewal was not persisted")
+		case <-time.After(time.Millisecond):
+		}
+	}
 	cancel()
 	select {
 	case <-done:
@@ -675,7 +694,7 @@ func TestAgentRenewsProvenPresence(t *testing.T) {
 	if proto.Unmarshal(raw, &stored) != nil {
 		t.Fatal("bad persisted lease")
 	}
-	if stored.PresenceLeaseJws != r.leaseJWS {
+	if stored.PresenceLeaseJws != expectedLease {
 		t.Fatal("renewal was not persisted for reconnect")
 	}
 }
