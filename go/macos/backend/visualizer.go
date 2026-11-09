@@ -55,6 +55,31 @@ type VisualVideo struct {
 	Times []int64
 }
 
+// VisualEpisodesAt reads a device's episode index without replacing the active
+// camera/playback session. The short-lived connection is always closed.
+func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, lite, err := b.connectTarget(ctx, selector)
+	if lite != nil {
+		defer lite.Close()
+	}
+	if conn != nil {
+		defer conn.Close()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil {
+		return nil, errors.New("recordings require a WendyOS agent")
+	}
+	result, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return result.GetEpisodes(), nil
+}
+
 func (b *Backend) VisualEpisodes(session uint64) ([]*pb.DataEpisode, error) {
 	ctx, done := b.begin()
 	defer done()
