@@ -217,54 +217,28 @@ enum BuildDeliveryContract {
     }
 
     private static func entitlements(_ leaf: Certificate, device: String) throws {
-        let extensions = leaf.extensions.filter { $0.oid == entitlementOID }
-        guard extensions.count == 1, let value = extensions.first?.value, !value.isEmpty,
-            value.count <= 2048
-        else { throw Failure("operator requires bounded deployment entitlements") }
-        let node = try DER.parse(value)
-        guard node.identifier == .sequence, case .constructed(let nodes) = node.content else {
-            throw Failure("malformed entitlements")
-        }
+        try authorizeDeployment(CertificateEntitlement.fromCertificate(leaf), device: device)
+    }
+
+    // Unsigned site/tag membership can narrow authority through a deny, never
+    // expand it through an allow. All input rules have already been decoded.
+    static func authorizeDeployment(_ rules: [CertificateEntitlement], device: String) throws {
         var allowed = false
-        for node in nodes {
-            let bytes = try ASN1UTF8String(derEncoded: node).bytes
-            guard let text = String(bytes: bytes, encoding: .utf8) else {
-                throw Failure("invalid entitlement UTF-8")
-            }
-            let fields = text.components(separatedBy: ":")
-            guard fields.count >= 4, fields[0] == "entitlement", !fields[1].isEmpty,
-                !fields[2].isEmpty,
-                let effect = fields.last, effect == "allow" || effect == "deny"
-            else { throw Failure("invalid entitlement") }
-            let scope = fields.dropFirst(3).dropLast().joined(separator: ":")
-            guard fields.count == 4 || !scope.isEmpty else {
-                throw Failure("empty explicit entitlement scope")
-            }
-            if !scope.isEmpty && scope != "all" && scope != "*" {
-                let split = scope.split(
-                    separator: ":",
-                    maxSplits: 1,
-                    omittingEmptySubsequences: false
-                )
-                guard split.count == 2, ["device", "site", "tag"].contains(String(split[0])),
-                    !split[1].isEmpty,
-                    !split[1].contains("*"),
-                    split[1].unicodeScalars.allSatisfy({
-                        !CharacterSet.whitespacesAndNewlines.contains($0)
-                            && !CharacterSet.controlCharacters.contains($0)
-                    })
-                else { throw Failure("invalid entitlement scope") }
-            }
-            guard fields[1] == "deployment", fields[2] == "create" || fields[2] == "*" else {
+        for rule in rules {
+            guard rule.category == "deployment",
+                rule.permission == "create" || rule.permission == "*"
+            else {
                 continue
             }
-            let matches =
-                scope.isEmpty || scope == "all" || scope == "*" || scope == "device:" + device
-            if effect == "deny" && (matches || scope.hasPrefix("site:") || scope.hasPrefix("tag:"))
-            {
-                throw Failure("operator deployment denied")
+            let matches = rule.target.matchesDevice(device)
+            switch rule.effect {
+            case .deny:
+                if matches || rule.target.requiresMembership {
+                    throw Failure("operator deployment denied")
+                }
+            case .allow:
+                allowed = allowed || matches
             }
-            if effect == "allow" && matches { allowed = true }
         }
         guard allowed else { throw Failure("operator lacks deployment:create for target") }
     }
