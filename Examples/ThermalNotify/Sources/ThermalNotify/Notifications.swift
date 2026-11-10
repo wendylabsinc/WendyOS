@@ -5,9 +5,10 @@ import SwiftProtobuf
 
 typealias NotificationRequest = Wendy_System_V1_SendRequest
 
-func notification(camera: VideoDevice, reading: ThermalReading) -> NotificationRequest {
+func notification(camera: VideoDevice, reading: ThermalReading, recipients: [String] = []) -> NotificationRequest {
     var request = NotificationRequest()
-    request.audience.roles = [.owner, .admin, .billingManager, .member, .viewer]
+    if recipients.isEmpty { request.audience.roles = [.owner, .admin, .billingManager, .member, .viewer] }
+    else { request.audience.userIds = recipients }
     request.severity = .critical
     request.title = "Thermal camera above 80°C"
     // Bound camera names to leave room within the notification body's byte limit.
@@ -54,6 +55,7 @@ struct PendingAlert: Sendable {
 }
 
 struct AlertState {
+    var recipients: [String] = []
     private var hot: Set<String> = []
     private var queue: [PendingAlert] = []
     private(set) var nextAttempt = Date.distantPast
@@ -69,7 +71,7 @@ struct AlertState {
         // Coalesce repeated excursions while this camera already has an unsent
         // alert. Capture the first event even if other cameras use the send slot.
         guard !queue.contains(where: { $0.cameraKey == key }) else { return }
-        queue.append(.init(cameraKey: key, request: notification(camera: camera, reading: reading)))
+        queue.append(.init(cameraKey: key, request: notification(camera: camera, reading: reading, recipients: recipients)))
     }
 
     mutating func next(now: Date) -> PendingAlert? {
@@ -107,9 +109,9 @@ extension VideoDevice {
 
 actor AlertCoordinator {
     private var state = AlertState()
-    private let sender: NotificationSender
+    private let sender: NotificationSender?
 
-    init(sender: NotificationSender) { self.sender = sender }
+    init(sender: NotificationSender?, recipients: [String] = []) { self.sender = sender; state.recipients = recipients }
 
     func observe(camera: VideoDevice, reading: ThermalReading) {
         state.observe(camera: camera, reading: reading)
@@ -120,6 +122,11 @@ actor AlertCoordinator {
     func run() async throws {
         while !Task.isCancelled {
             if let alert = state.next(now: Date()) {
+                guard let sender else {
+                    state.accepted(alert, now: Date())
+                    log("MONITOR ONLY: \(alert.request.body) Cloud delivery disabled.")
+                    continue
+                }
                 do {
                     try await sender.send(alert.request)
                     state.accepted(alert, now: Date())

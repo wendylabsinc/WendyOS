@@ -1,5 +1,5 @@
 import XCTest
-import Synchronization
+import os
 #if os(iOS)
 @testable import WendyMobile
 #else
@@ -31,7 +31,7 @@ final class ConcurrencyTests: XCTestCase {
     func testCancelledQueuedWorkDoesNotCallTheBridge() async {
         let queue = DispatchQueue(label: "test.cancelled-bridge")
         queue.suspend()
-        let called = Mutex(false)
+        let called = OSAllocatedUnfairLock(initialState: false)
         let started = AsyncCallback<Void>()
         await withTaskGroup(of: Bool.self) { group in
             group.addTask {
@@ -54,7 +54,7 @@ final class ConcurrencyTests: XCTestCase {
         let queue = DispatchQueue(label: "test.running-bridge")
         let release = DispatchSemaphore(value: 0)
         let started = AsyncCallback<Void>()
-        let finished = Mutex(false)
+        let finished = OSAllocatedUnfairLock(initialState: false)
         await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 do {
