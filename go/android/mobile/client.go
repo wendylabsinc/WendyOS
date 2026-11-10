@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/modelhub"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
@@ -104,6 +105,12 @@ func New() *Client {
 		"SaveCameraAlignment": b.SaveCameraAlignment, "SaveCameraLens": b.SaveCameraLens,
 		// Calls added with the redesigned iOS app (#2715).
 		"CameraControls": b.CameraControls, "SetWiFiPriority": b.SetWiFiPriority, "StartHostedChat": b.StartHostedChat,
+		// Lists the models the person's own provider key can use; the key is never stored by Go.
+		"HostedChatModels": func(provider, key string) ([]chat.ModelOption, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return chat.HostedModels(ctx, provider, key)
+		},
 		"ManageDevice": b.ManageDevice, "PrepareLocalReset": b.PrepareLocalReset, "ResetLocalEnrollment": b.ResetLocalEnrollment,
 		"MobileOSUpdate": b.MobileOSUpdate, "SiteModels": b.SiteModels, "HomeCampaign": b.HomeCampaign,
 		"BeginRecordingRead": b.BeginRecordingRead, "EndRecordingRead": b.EndRecordingRead, "RecordingLibrary": b.RecordingLibrary,

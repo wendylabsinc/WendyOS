@@ -131,7 +131,7 @@ fun AskWendyBar(model: WendyModel, open: () -> Unit) {
         Row(Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.AutoAwesome, null, Modifier.size(18.dp), tint = LensStyle.accent)
             Text("Ask Wendy about ${if (model.session != 0L) model.selected?.title ?: "a device" else "a device"}…", Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.bodyMedium)
-            if (chat?.approval != null || (chat?.streaming == true)) Box(Modifier.size(8.dp).background(LensStyle.danger, CircleShape))
+            if ((chat?.unreadReplies ?: 0) > 0 || chat?.approval != null) Box(Modifier.size(8.dp).background(LensStyle.danger, CircleShape))
         }
     }
 }

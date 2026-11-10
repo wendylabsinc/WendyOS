@@ -208,31 +208,47 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     }
 }
 
-/** Ask Wendy (iOS MobileLensChat): the connected device's chat, or a device to ask about. */
+/**
+ * Ask Wendy (iOS MobileLensChat): the connected device's chat, or a remembered device with verified
+ * models. Choosing one connects and checks its models again before chatting.
+ */
 @Composable
 private fun AskWendySheet(model: WendyModel, dismiss: () -> Unit, chooseDevice: () -> Unit) {
-    NavigationSheet("Ask Wendy", dismiss) {
-        if (model.session != 0L && !model.lite && model.deviceChat != null) key(model.session) { ChatScreen(model) }
-        else AskWendyDevices(model, chooseDevice)
+    val remembered = rememberAIDevices()
+    var suggestions by remember { mutableStateOf(false) }
+    var selection by remember { mutableStateOf<Pair<RememberedAIDevice, Device>?>(null) }
+    var selectionError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(model.account, model.organization) { selection = null; selectionError = null; suggestions = false }
+    LaunchedEffect(model.inForeground) { if (!model.inForeground) selection = null }
+    LaunchedEffect(selection) {
+        val (record, device) = selection ?: return@LaunchedEffect
+        val account = model.account; val organization = model.organization
+        val ready = model.connectAndWait(device)
+        if (selection?.first?.id != record.id || account != model.account || organization != model.organization || !model.inForeground) return@LaunchedEffect
+        if (!ready || model.selected?.let(::recordingDeviceID) != record.id) {
+            selectionError = model.detailError?.let { PresentedFailure(it).message } ?: "Could not connect. Try another device."
+            suggestions = true; selection = null; return@LaunchedEffect
+        }
+        val chat = model.deviceChat ?: run { selection = null; return@LaunchedEffect }
+        chat.verifySuggestedModel(record.preferred?.id, record.preferred?.port)
+        if (selection?.first?.id == record.id && model.session == chat.session) { suggestions = false; selection = null }
     }
-}
-
-@Composable
-private fun AskWendyDevices(model: WendyModel, chooseDevice: () -> Unit) {
-    val candidates = model.devices.filter { !it.lite }.sortedBy { it.title.lowercase() }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("Choose a device to ask about", style = MaterialTheme.typography.titleMedium)
-        SecondaryText("Wendy answers with the models, apps and logs on the device you choose.")
-        if (model.connecting) LensLoading("Connecting to ${model.selected?.title ?: "the device"}…")
-        model.detailError?.let { FailureNote(it) }
-        if (model.lite && model.session != 0L) SecondaryText("${model.selected?.title ?: "This device"} runs Wendy Lite, which has no chat. Choose another device.")
-        if (candidates.isNotEmpty()) LensSection("Devices") {
-            candidates.take(12).forEachIndexed { index, device ->
-                if (index > 0) LensDivider()
-                LensRow(device.title, if (device.selector.startsWith("cloud://")) "Cloud" else "Nearby", Icons.Outlined.Memory, enabled = !model.connecting) { model.connect(device) }
+    val chat = model.deviceChat
+    DisposableEffect(chat) { chat?.setPresented(true); onDispose { chat?.setPresented(false) } }
+    NavigationSheet("Ask Wendy", dismiss) {
+        when {
+            selection != null -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
+                LensLoading("Checking device and models…"); TextButton(onClick = { selection = null }) { Text("Cancel") }
             }
-        } else EmptyMessage("No devices yet", "Set up a device or sign in to Wendy Cloud to ask about it.", Icons.Outlined.AutoAwesome)
-        LensButton("Browse devices", modifier = Modifier.fillMaxWidth(), onClick = chooseDevice)
+            !suggestions && model.session != 0L && !model.lite && chat != null -> key(model.session) { ChatScreen(model) { suggestions = true } }
+            else -> Column(Modifier.fillMaxSize()) {
+                selectionError?.let { SecondaryText(it, Modifier.padding(horizontal = 20.dp)) }
+                Box(Modifier.weight(1f)) {
+                    AIDeviceSuggestions(model, remembered, if (suggestions) model.selected?.let(::recordingDeviceID) else null, chooseDevice) { record, device -> selectionError = null; selection = record to device }
+                }
+                if (suggestions && model.session != 0L) TextButton(onClick = { suggestions = false }, Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp)) { Text("Back to chat") }
+            }
+        }
     }
 }
 

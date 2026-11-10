@@ -79,9 +79,19 @@ data class ChatApproval(val id: Long, val action: String, val app: String) {
     val clipSummary get() = "${arguments.optInt("before_seconds")}s before · ${arguments.optInt("after_seconds")}s after detection"
 }
 
-/** One device's conversation. It outlives the Chat pane, as iOS keeps DeviceChatModel per session. */
-class DeviceChat(private val model: WendyModel, val session: Long, private val scope: CoroutineScope) {
+/**
+ * One device's conversation. It outlives the Chat pane, as iOS keeps DeviceChatModel per session.
+ * Inference runs on the device's model server, or in the person's own cloud provider account with
+ * the device's tools; either way device changes need approval.
+ */
+class DeviceChat(private val model: WendyModel, val session: Long, private val scope: CoroutineScope, private val credentials: ChatCredentialStore) {
     private val ids = AtomicLong(1)
+    /** Called with each device model list, so Ask Wendy can suggest this device later. */
+    var onDeviceDiscovery: ((List<ChatModelOption>) -> Unit)? = null
+    var onDeviceModelUsed: ((String) -> Unit)? = null
+    var inference by mutableStateOf(ChatInference.Device); private set
+    var cloudProvider by mutableStateOf(ChatCloudProvider.OpenAI); private set
+    var hasCloudKey by mutableStateOf(false); private set
     var port by mutableStateOf("11434")
     var models by mutableStateOf(emptyList<ChatModelOption>())
     var selected by mutableStateOf("")
@@ -93,31 +103,53 @@ class DeviceChat(private val model: WendyModel, val session: Long, private val s
     var activity by mutableStateOf(""); private set
     var approval by mutableStateOf<ChatApproval?>(null); private set
     var resolvingApproval by mutableStateOf(false); private set
-    private var activeResponse: Long? = null
+    var unreadReplies by mutableIntStateOf(0); private set
+    var activeResponse by mutableStateOf<Long?>(null); private set
+    private var presented = false
     private var turn = 0L
     private var loadedPort: Long? = null
+    private var discoveryGeneration = 0L
     private var job: Job? = null
     val portNumber get() = port.toLongOrNull()?.takeIf { it in 1..65535 }
     val unavailableReason get() = models.firstOrNull { it.id == selected }?.unavailableReason ?: ""
     val modelName get() = models.firstOrNull { it.id == selected }?.displayName ?: ChatModelOption.readableName(selected)
-    val canSend get() = unavailableReason.isEmpty() && !streaming && !loading && selected.isNotEmpty() && portNumber == loadedPort && prompt.isNotBlank()
-    fun choose(id: String) { selected = id; models.firstOrNull { it.id == id }?.let { port = it.port.toString(); loadedPort = it.port } }
-    suspend fun discoverIfNeeded() { if (loadedPort == null && !loading) discover() }
+    val canSend get() = unavailableReason.isEmpty() && !streaming && !loading && selected.isNotEmpty() &&
+        (if (inference == ChatInference.Cloud) hasCloudKey else portNumber == loadedPort) && prompt.isNotBlank()
+    /** Replies that arrived while Ask Wendy was closed; opening it marks them read. */
+    fun setPresented(value: Boolean) { presented = value; if (value) unreadReplies = 0 }
+    private fun receivedReply() { if (!presented) unreadReplies++ }
+    fun choose(id: String) {
+        selected = id
+        if (inference == ChatInference.Device) models.firstOrNull { it.id == id }?.let { port = it.port.toString(); loadedPort = it.port }
+    }
+    suspend fun discoverIfNeeded() { if (!loading && (if (inference == ChatInference.Cloud) models.isEmpty() else loadedPort == null)) discover() }
     suspend fun discover() {
-        val requested = portNumber ?: return
         if (streaming || loading) return
         val previous = selected
+        val generation = discoveryGeneration
+        val source = inference
+        val provider = cloudProvider
+        val requested = portNumber
         loading = true; error = null
         try {
-            val result = model.backend.call("ChatModels", session, requested).items().map { ChatModelOption(it.text("ID"), it.text("Name"), it.number("Port").takeIf { p -> p > 0 } ?: requested, it.text("UnavailableReason")) }
-            if (portNumber != requested) return
+            val result = if (source == ChatInference.Cloud) {
+                val key = credentials.read(provider) ?: run { hasCloudKey = false; return }
+                hasCloudKey = true
+                model.backend.call("HostedChatModels", provider.raw, key).items().map { ChatModelOption(it.text("ID"), it.text("Name"), 0) }
+            } else {
+                requested ?: return
+                model.backend.call("ChatModels", session, requested).items().map { ChatModelOption(it.text("ID"), it.text("Name"), it.number("Port").takeIf { p -> p > 0 } ?: requested, it.text("UnavailableReason")) }
+            }
+            if (generation != discoveryGeneration || source != inference || (source == ChatInference.Device && portNumber != requested)) return
             models = result
             choose(if (result.any { it.id == previous }) previous else result.firstOrNull()?.id ?: "")
-            loadedPort = if (result.isEmpty()) null else requested
-        } catch (e: CancellationException) { throw e } catch (e: Exception) { if (portNumber == requested) error = e.message } finally { loading = false }
+            if (source == ChatInference.Device) { loadedPort = if (result.isEmpty()) null else requested; onDeviceDiscovery?.invoke(result) }
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { if (generation == discoveryGeneration) error = e.message }
+        finally { if (generation == discoveryGeneration) loading = false }
     }
     fun send() {
         if (!canSend) return
+        if (inference == ChatInference.Device) onDeviceModelUsed?.invoke(selected)
         val text = prompt.trim()
         prompt = ""; error = null; streaming = true
         messages.add(ChatMessage(ids.getAndIncrement(), true, text))
@@ -129,10 +161,15 @@ class DeviceChat(private val model: WendyModel, val session: Long, private val s
         // Each request owns its history and cannot switch models mid-generation.
         val history = JSONArray(messages.filter { it.user || it.text.isNotEmpty() }.map { json("Role" to if (it.user) "user" else "assistant", "Content" to it.text) })
         val selectedModel = selected
+        val source = inference
+        val provider = cloudProvider
         val requestedPort = portNumber ?: 11434
         job = scope.launch {
             try {
-                model.backend.call("StartChat", session, request, requestedPort, selectedModel, history)
+                if (source == ChatInference.Cloud) {
+                    val key = credentials.read(provider) ?: throw IllegalStateException("Add your API key in Cloud models.")
+                    model.backend.call("StartHostedChat", session, request, provider.raw, selectedModel, key, history)
+                } else model.backend.call("StartChat", session, request, requestedPort, selectedModel, history)
                 while (turn == request) {
                     val result = model.backend.call("PollChat", session, request).obj()
                     if (turn != request) break
@@ -141,10 +178,13 @@ class DeviceChat(private val model: WendyModel, val session: Long, private val s
                     activity = result.text("Activity")
                     approval = result.number("ApprovalID").takeIf { it != 0L }?.let { ChatApproval(it, result.text("ApprovalAction"), result.text("ApprovalApp")) }
                     result.text("Error").takeIf { it.isNotEmpty() }?.let { error = it }
-                    if (result.flag("Done")) break
+                    if (result.flag("Done")) {
+                        if (response.text.isNotEmpty() || response.cards.isNotEmpty() || result.text("Error").isNotEmpty()) receivedReply()
+                        break
+                    }
                     delay(100)
                 }
-            } catch (e: CancellationException) { throw e } catch (e: Exception) { if (turn == request) error = e.message }
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { if (turn == request) { error = e.message; receivedReply() } }
             finally {
                 if (turn == request) { streaming = false; activeResponse = null; approval = null; activity = "" }
                 withContext(NonCancellable) { try { model.backend.call("StopChat", session, request) } catch (_: Exception) {} }
@@ -167,8 +207,36 @@ class DeviceChat(private val model: WendyModel, val session: Long, private val s
         streaming = false; activeResponse = null; approval = null; activity = ""
         job?.cancel()
     }
-    fun clear() { stop(); messages.clear(); error = null }
+    fun clear() { stop(); messages.clear(); error = null; unreadReplies = 0 }
+    /** Switching where the model runs starts a new chat (iOS selectInference). */
+    fun selectInference(source: ChatInference) {
+        if (source == inference) return
+        resetInference(); inference = source
+        if (source == ChatInference.Cloud) refreshCloudKey()
+    }
+    fun selectProvider(provider: ChatCloudProvider) {
+        if (provider == cloudProvider) return
+        resetInference(); cloudProvider = provider; refreshCloudKey()
+    }
+    private fun resetInference() {
+        clear(); prompt = ""; discoveryGeneration++; loading = false
+        models = emptyList(); selected = ""; loadedPort = null
+    }
+    /** A remembered model is only a suggestion: check the device again before it can be used. */
+    suspend fun verifySuggestedModel(name: String?, suggestedPort: Long?) {
+        resetInference()
+        inference = ChatInference.Device
+        if (suggestedPort != null && suggestedPort > 0) port = suggestedPort.toString()
+        discover()
+        if (name != null && models.any { it.id == name && it.unavailableReason.isEmpty() }) choose(name)
+    }
+    fun refreshCloudKey() {
+        hasCloudKey = try { credentials.read(cloudProvider) != null } catch (e: Exception) { error = e.message; false }
+    }
+    fun saveCloudKey(key: String): Boolean = try { credentials.save(key, cloudProvider); resetInference(); hasCloudKey = true; true } catch (e: Exception) { error = e.message; false }
+    fun removeCloudKey() { try { credentials.remove(cloudProvider); resetInference(); hasCloudKey = false } catch (e: Exception) { error = e.message } }
     fun useModel(name: String, newPort: Long) {
+        selectInference(ChatInference.Device)
         clear(); port = newPort.toString(); loadedPort = newPort
         models = models.filter { it.id != name } + ChatModelOption(name, name, newPort)
         selected = name
@@ -176,7 +244,7 @@ class DeviceChat(private val model: WendyModel, val session: Long, private val s
 }
 
 @Composable
-fun ChatScreen(model: WendyModel) {
+fun ChatScreen(model: WendyModel, chooseAIDevice: (() -> Unit)? = null) {
     val nav = LocalNavigator.current
     val chat = model.deviceChat ?: return
     val deviceName = model.selected?.title ?: "this device"
@@ -188,41 +256,75 @@ fun ChatScreen(model: WendyModel) {
     LaunchedEffect(chat.messages.size, chat.messages.lastOrNull()?.text, chat.approval?.id) { if (chat.messages.isNotEmpty()) list.animateScrollToItem(list.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1) }
     fun openConnection() = nav.push("Connection") { ChatConnectionPage(chat, deviceName) }
     fun openLibrary() = nav.push("Models") { ModelLibraryScreen(model, chat.port) { name, port -> chat.useModel(name, port) } }
+    fun openCloud() = nav.push("Cloud models") { ChatCloudSettingsPage(chat) }
+    fun selectInference(source: ChatInference) {
+        chat.selectInference(source)
+        if (source == ChatInference.Cloud) openCloud() else scope.launch { chat.discover() }
+    }
     Column(Modifier.fillMaxSize().imePadding()) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) {
-                TextButton(onClick = { menu = true }, enabled = !chat.streaming && !chat.loading) {
-                    Text(if (chat.selected.isEmpty()) "Choose a model" else chat.modelName, maxLines = 1, style = MaterialTheme.typography.titleSmall)
-                    Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
+        // The iOS principal toolbar menu: where the model runs, the model, and its settings.
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
+            TextButton(onClick = { menu = true }, enabled = !chat.streaming && !chat.loading, modifier = Modifier.heightIn(min = 44.dp)) {
+                Text(if (chat.loading) "Finding models…" else if (chat.selected.isEmpty()) "Ask Wendy" else chat.modelName, maxLines = 1, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Icon(Icons.Outlined.ExpandMore, "Chat settings", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurface)
+            }
+            DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                Text(deviceName, Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ChatInference.entries.forEach { source ->
+                    DropdownMenuItem(text = { Text(source.title) }, onClick = { menu = false; selectInference(source) },
+                        leadingIcon = { Icon(if (source == ChatInference.Device) Icons.Outlined.Memory else Icons.Outlined.Cloud, null) },
+                        trailingIcon = if (source == chat.inference) ({ Icon(Icons.Outlined.Check, "Selected") }) else null)
                 }
-                DropdownMenu(menu, onDismissRequest = { menu = false }) {
-                    chat.models.forEach { option -> DropdownMenuItem(text = { Text(option.displayName) }, onClick = { menu = false; chat.choose(option.id) },
-                        trailingIcon = if (option.id == chat.selected) ({ Icon(Icons.Outlined.Check, null) }) else null) }
-                    if (chat.models.isNotEmpty()) HorizontalDivider()
+                HorizontalDivider()
+                chat.models.forEach { option -> DropdownMenuItem(text = { Text(option.displayName) }, onClick = { menu = false; chat.choose(option.id) },
+                    trailingIcon = if (option.id == chat.selected) ({ Icon(Icons.Outlined.Check, "Selected") }) else null) }
+                if (chat.models.isNotEmpty()) HorizontalDivider()
+                if (chat.inference == ChatInference.Device) {
                     DropdownMenuItem(text = { Text("Browse models") }, leadingIcon = { Icon(Icons.Outlined.Layers, null) }, onClick = { menu = false; openLibrary() })
                     DropdownMenuItem(text = { Text("Connection settings") }, leadingIcon = { Icon(Icons.Outlined.Lan, null) }, onClick = { menu = false; openConnection() })
-                    DropdownMenuItem(text = { Text("Refresh models") }, leadingIcon = { Icon(Icons.Outlined.Refresh, null) }, onClick = { menu = false; scope.launch { chat.discover() } })
-                }
+                } else DropdownMenuItem(text = { Text("Cloud models & API key") }, leadingIcon = { Icon(Icons.Outlined.Cloud, null) }, onClick = { menu = false; openCloud() })
+                DropdownMenuItem(text = { Text("Refresh models") }, leadingIcon = { Icon(Icons.Outlined.Refresh, null) }, onClick = { menu = false; scope.launch { chat.discover() } })
+                if (chooseAIDevice != null) DropdownMenuItem(text = { Text("Change device") }, leadingIcon = { Icon(Icons.Outlined.Memory, null) }, onClick = { menu = false; chooseAIDevice() })
+                if (chat.messages.isNotEmpty()) { HorizontalDivider(); DropdownMenuItem(text = { Text("New chat") }, leadingIcon = { Icon(Icons.Outlined.EditNote, null) }, onClick = { menu = false; chat.clear() }) }
             }
-            if (chat.loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            IconButton(onClick = chat::clear) { Icon(Icons.Outlined.EditNote, "New chat") }
         }
         LazyColumn(Modifier.weight(1f), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (chat.messages.isEmpty()) item { EmptyMessage("Ask about your device", "Inspect apps, diagnose issues, or manage campaigns. Changes that need approval will ask first.", Icons.Outlined.Forum) }
+            if (chat.messages.isEmpty()) item {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Ask about your device", style = MaterialTheme.typography.titleMedium)
+                    if (!chat.loading) SecondaryText(when {
+                        chat.inference == ChatInference.Cloud && !chat.hasCloudKey -> "Connect a cloud provider to start a conversation."
+                        chat.selected.isEmpty() -> "Choose a model from this device or a cloud provider."
+                        else -> "Ask about apps, logs, or recordings. Device changes need your confirmation."
+                    })
+                    if (!chat.loading && chat.selected.isEmpty()) Button(onClick = { if (chat.inference == ChatInference.Device) openLibrary() else openCloud() }, colors = ButtonDefaults.buttonColors(containerColor = LensStyle.green, contentColor = Color.White)) {
+                        Icon(if (chat.inference == ChatInference.Device) Icons.Outlined.Layers else Icons.Outlined.Cloud, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+                        Text(if (chat.inference == ChatInference.Device) "Browse device models" else "Connect cloud provider")
+                    }
+                    if (chat.inference == ChatInference.Device && !chat.loading && chat.selected.isEmpty() && chooseAIDevice != null) OutlinedButton(onClick = chooseAIDevice) { Text("Use another AI device") }
+                }
+            }
             items(chat.messages, key = { it.id }) { message -> ChatMessageView(model, chat, message) }
             chat.approval?.let { pending -> item(key = "approval") { ChatApprovalCard(pending, deviceName, !chat.resolvingApproval) { chat.resolve(pending, it) } } }
+            if (chat.error != null || chat.unavailableReason.isNotEmpty()) item(key = "notice") {
+                ChatConnectionNotice(chat, deviceName, { scope.launch { chat.discover() } }, { if (chat.inference == ChatInference.Device) openConnection() else openCloud() }) { details = true }
+            }
         }
-        if (chat.error != null || chat.unavailableReason.isNotEmpty()) ChatConnectionNotice(chat, deviceName, { scope.launch { chat.discover() } }, ::openConnection) { details = true }
-        if (chat.approval == null && chat.streaming && chat.activity.isNotEmpty()) Text(chat.activity, Modifier.padding(horizontal = 28.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (chat.messages.isEmpty() && chat.selected.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(Triple("Running apps", "Which apps are running?", Icons.Outlined.GridView), Triple("Recent errors", "Explain recent device errors", Icons.Outlined.ErrorOutline),
+                Triple("Recordings", "Show recent recordings", Icons.Outlined.PlayCircle)).forEach { (title, prompt, icon) ->
+                AssistChip(onClick = { chat.prompt = prompt }, label = { Text(title) }, leadingIcon = { Icon(icon, null, Modifier.size(16.dp)) }, enabled = !chat.streaming, shape = CircleShape)
+            }
+        }
         Surface(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
             Row(Modifier.padding(6.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextField(chat.prompt, { chat.prompt = it }, Modifier.weight(1f), placeholder = { Text("Message") }, maxLines = 6,
                     colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
                 val active = chat.streaming || chat.canSend
                 IconButton(onClick = { if (chat.streaming) chat.stop() else chat.send() }, enabled = active,
-                    modifier = Modifier.size(44.dp).background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, CircleShape)) {
+                    modifier = Modifier.size(44.dp).background(if (active) LensStyle.green else MaterialTheme.colorScheme.surfaceVariant, CircleShape)) {
                     Icon(if (chat.streaming) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (chat.streaming) "Stop response" else "Send message",
-                        tint = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        tint = if (active) Color.White else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -244,9 +346,15 @@ private fun ChatMessageView(model: WendyModel, chat: DeviceChat, message: ChatMe
             if (trace) SelectionContainer { Text(message.trace, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
         }
         when {
-            chat.isWaiting(message) -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            chat.isWaiting(message) -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text(chat.activity.ifEmpty { "Thinking…" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             message.user -> SelectionContainer { Text(message.text, style = MaterialTheme.typography.bodyLarge) }
             else -> ChatMarkdown(message.text)
+        }
+        if (!chat.isWaiting(message) && chat.activeResponse == message.id && chat.approval == null && chat.streaming && chat.activity.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp); Text(chat.activity, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (message.interrupted) SecondaryText("Response stopped")
         ChatDeviceCards(model, message.cards)
@@ -260,10 +368,11 @@ private fun ChatConnectionNotice(chat: DeviceChat, deviceName: String, retry: ()
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(if (unavailable) "Model server unavailable" else if (chat.messages.isEmpty()) "Could not load models" else "Chat request failed", style = MaterialTheme.typography.titleSmall)
             Text(if (unavailable) "${chat.modelName} is downloaded on $deviceName, but Wendy could not reach its server. Check that the model app is running, then retry."
+                else if (chat.inference == ChatInference.Cloud) "Check your API key, account credits, and internet connection."
                 else "The request could not finish. Check the connection to $deviceName and try again. Your conversation is still here.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = retry, enabled = !chat.loading && !chat.streaming) { Text(if (chat.loading) "Checking…" else "Retry connection") }
-                TextButton(onClick = settings, enabled = !chat.streaming) { Text("Connection settings") }
+                TextButton(onClick = settings, enabled = !chat.streaming) { Text(if (chat.inference == ChatInference.Device) "Connection settings" else "Cloud settings") }
             }
             TextButton(onClick = details) { Text("Technical details", style = MaterialTheme.typography.bodySmall) }
         }
@@ -282,7 +391,10 @@ private fun ChatConnectionPage(chat: DeviceChat, deviceName: String) {
             if (chat.loading) LoadingRow("Finding models…")
         }
         if (chat.selected.isNotEmpty()) formSection("Model ID") { SelectionContainer { Text(chat.selected, Modifier.padding(vertical = 8.dp), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) } }
-        item { SecondaryText("Wendy skills and MCP tools are available in this chat.") }
+        formSection("Where the model runs") {
+            Text("Inference runs on $deviceName, not this phone. Wendy Cloud can relay the connection to that device.", Modifier.padding(vertical = 6.dp))
+            SecondaryText("The selected model determines its license. A locally running model is not necessarily open source.")
+        }
     }
 }
 

@@ -209,7 +209,13 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 val resolved = device.copy(lite = lite)
                 selected = resolved
                 session = result.number("session")
-                deviceChat = DeviceChat(this@WendyModel, session, viewModelScope)
+                deviceChat = DeviceChat(this@WendyModel, session, viewModelScope, AskWendyStores.credentials(getApplication())).also { chat ->
+                    // Remember devices with verified models for Ask Wendy, in this account and organization only.
+                    val remembered = AskWendyStores.remembered(getApplication())
+                    val aiAccount = account; val aiOrganization = organization
+                    chat.onDeviceDiscovery = { models -> if (account == aiAccount && organization == aiOrganization) remembered.discovered(resolved, models, aiAccount, aiOrganization) }
+                    chat.onDeviceModelUsed = { name -> if (account == aiAccount && organization == aiOrganization) remembered.used(recordingDeviceID(resolved), name, aiAccount, aiOrganization) }
+                }
                 recordExperience("Connected", "connected", resolved)
                 refreshDetails()
             } catch (e: CancellationException) { throw e }
