@@ -28,6 +28,10 @@ struct NearbySetupView: View {
     var initialDevice: NearbySetupDevice? = nil
     @State private var actions = AsyncActions()
     @State private var devices: [NearbySetupDevice] = []
+    @State private var candidate: NearbySetupDevice?
+    @State private var flow = NearbySetupFlow()
+    @State private var scanned = false
+    @State private var closing = false
     @State private var selected: NearbySetupDevice?
     @State private var state = NearbySetupSnapshot()
     @State private var organizations: [EnrollmentOrganization] = []
@@ -36,8 +40,8 @@ struct NearbySetupView: View {
     @State private var ssid = ""
     @State private var password = ""
     @State private var wifiExpanded = false
-    @State private var customizing = false
     @State private var organizationsLoaded = false
+    @State private var organizationError: String?
     @State private var busy = false
     @State private var opening = false
     @State private var progress = ""
@@ -65,6 +69,7 @@ struct NearbySetupView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 28) {
+                    if !finished { stepIndicator }
                     DeviceEmblem(lite: state.lite, size: 104, completed: finished)
                         .padding(.top, 32)
                     VStack(spacing: 10) {
@@ -84,19 +89,15 @@ struct NearbySetupView: View {
                             } else {
                                 primaryButton("Open device", symbol: "arrow.right") { actions.submit { await finish() } }
                             }
-                        case "discovering":
+                        case "discovering": discovery
+                        case "connecting":
                             ProgressView().controlSize(.large)
-                            ForEach(devices) { device in
-                                Button { actions.submit { await choose(device) } } label: {
-                                    HStack(spacing: 14) {
-                                        DeviceEmblem(size: 40)
-                                        Text(device.title).font(.headline)
-                                        Spacer()
-                                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                                    }.padding(16).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
-                                }.buttonStyle(.plain)
+                            if !busy {
+                                if let selected {
+                                    Button("Retry connection") { actions.submit { await connect(selected) } }
+                                }
+                                Button("Choose another device") { actions.submit { await chooseAnother() } }
                             }
-                        case "connecting": ProgressView().controlSize(.large)
                         case "attention":
                             if state.canResume {
                                 primaryButton("Continue setup", symbol: "arrow.right") { submit(.enroll) }
@@ -112,7 +113,9 @@ struct NearbySetupView: View {
                         case "working":
                             ProgressView().controlSize(.large)
                             if !editingLocked { wifiControls }
-                        default: confirmation
+                        default:
+                            if flow.step == .network { networkStep }
+                            else { confirmation }
                         }
                     }
                     if let error, stage == "ready" || stage == "done" || stage == "attention" {
@@ -138,15 +141,26 @@ struct NearbySetupView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Close setup").disabled(editingLocked)
+                    Button {
+                        if editingLocked || state.pending { closing = true } else { dismiss() }
+                    } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close setup")
                 }
             }
         }
         #if os(macOS)
         .frame(width: 500, height: 640)
         #endif
-        .interactiveDismissDisabled(editingLocked)
+        .interactiveDismissDisabled(editingLocked || state.pending)
+        .confirmationDialog("Close setup?", isPresented: $closing, titleVisibility: .visible) {
+            Button("Close setup", role: .destructive) { password = ""; dismiss() }
+            Button("Keep checking", role: .cancel) { }
+        } message: {
+            Text("A request already sent to the device may still finish. Closing stops checks here; it does not undo enrollment or Wi-Fi changes. Reopen setup to check the same device.")
+        }
+        #if os(iOS)
+        .onChange(of: app.mobileCloudSelectionKey) { _, _ in password = ""; dismiss() }
+        #endif
         .task {
             app.setupSessions += 1
             defer { app.setupSessions -= 1 }
@@ -164,12 +178,12 @@ struct NearbySetupView: View {
         switch stage {
         case "attention": return "Setup needs attention."
         case "done": return state.completed ? "You’re all set." : "Already part of Wendy."
-        case "discovering": return "Find your Wendy."
+        case "discovering": return observationError == nil ? "Choose a device" : "Bluetooth unavailable"
         case "connecting": return "Connecting to your Wendy…"
         case "working":
             if !state.attempted && !state.pending { return progress }
             return state.attempted && !editingLocked ? "Checking enrollment…" : "Making it yours…"
-        default: return "Make it yours."
+        default: return flow.step == .network ? "Connect to Wi-Fi" : "Name & organization"
         }
     }
 
@@ -178,16 +192,17 @@ struct NearbySetupView: View {
         case "attention": return state.failure
         case "done": return "Your device is enrolled and ready to open."
         case "discovering": return "Power on your device and keep it nearby. We’ll find it automatically."
-        case "connecting": return "Keep your device nearby. We’re taking care of the connection."
+        case "connecting": return "Keep your device nearby."
         case "working":
             if !state.attempted && !state.pending && progress == "Connecting to Wi-Fi…" { return "We’ll continue when your device is connected." }
             if state.attempted && !state.pending && !editingLocked {
                 return "We haven’t received confirmation yet. Your enrollment won’t be sent twice."
             }
             return state.wifiConnected
-                ? "Your device is joining your organization. We’ll keep checking automatically."
-                : "Your device needs internet to finish. Connect it to Wi-Fi below, or plug in Ethernet. We’ll keep checking automatically."
+                ? "Your device is joining your organization."
+                : "Connect to Wi-Fi below or plug in Ethernet to finish."
         default:
+            if flow.step == .network { return "Credentials are sent over Bluetooth. You can also use an Ethernet connection." }
             if let choice { return "Add this device to \(choice.name)." }
             return organizations.isEmpty ? "Sign in to add this device to your organization." : "Choose the organization this device belongs to."
         }
@@ -195,22 +210,95 @@ struct NearbySetupView: View {
 
     @ViewBuilder private var confirmation: some View {
         VStack(spacing: 20) {
-            if organizations.isEmpty {
+            if let organizationError {
+                Text(organizationError).foregroundStyle(.secondary)
+                Button("Retry organizations") { actions.submit { await loadOrganizations() } }
+            } else if organizations.isEmpty {
                 primaryButton("Sign in", symbol: "arrow.right") { signIn(); dismiss() }
             } else {
-                if choice == nil { organizationPicker }
-                primaryButton(choice.map { "Add to \($0.name)" } ?? "Add device", symbol: "arrow.right") { submit(.enroll) }
+                TextField("Device name", text: $name).textFieldStyle(.roundedBorder).autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                if !nameValid { Text("Use a lowercase name with letters, numbers, and hyphens.").font(.caption).foregroundStyle(.secondary) }
+                organizationPicker
+                primaryButton(choice.map { "Enroll in \($0.name)" } ?? "Enroll device", symbol: "arrow.right") { submit(.enroll) }
                     .disabled(choice == nil || !nameValid || editingLocked)
-                DisclosureGroup("Name & organization", isExpanded: $customizing) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        TextField("Device name", text: $name).textFieldStyle(.roundedBorder).autocorrectionDisabled()
-                        if !nameValid { Text("Use a lowercase name with letters, numbers, and hyphens.").font(.caption).foregroundStyle(.secondary) }
-                        organizationPicker
-                    }.padding(.top, 12)
-                }
+
             }
-            wifiControls
+            Button("Back to connection") { flow.backToNetwork(); wifiExpanded = true }
+                .disabled(editingLocked)
         }.tint(.accentColor)
+    }
+
+    private var stepIndicator: some View {
+        let step = state.pending || state.attempted || editingLocked && progress == "Preparing enrollment…" ? NearbySetupFlow.Step.enroll : selected == nil ? .device : flow.step
+        return VStack(spacing: 8) {
+            Text("Step \(step.rawValue) of 4 · \(step.title)").font(.subheadline.weight(.semibold))
+            HStack(spacing: 6) {
+                ForEach(1...4, id: \.self) { number in
+                    Capsule().fill(number <= step.rawValue ? Color.accentColor : Color.secondary.opacity(0.18)).frame(height: 4)
+                }
+            }.accessibilityHidden(true)
+        }.accessibilityIdentifier("setup.steps")
+    }
+
+    private var discovery: some View {
+        VStack(spacing: 16) {
+            if !scanned { ProgressView("Scanning over Bluetooth…") }
+            if let observationError {
+                Text(PresentedFailure(observationError).message).foregroundStyle(.secondary)
+                #if os(iOS)
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }
+                #endif
+            } else if scanned && devices.isEmpty {
+                Text("No nearby devices found. Keep the device powered on and within a few metres, then scan again.").foregroundStyle(.secondary)
+            }
+            ForEach(devices) { device in
+                Button { candidate = device } label: {
+                    HStack(spacing: 14) {
+                        DeviceEmblem(size: 40)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(device.title).font(.headline)
+                            Text(device.rssi < 0 ? "Bluetooth signal \(device.rssi) dBm" : "Bluetooth signal unavailable")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: candidate?.id == device.id ? "checkmark.circle.fill" : "circle")
+                    }.padding(16).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 20))
+                }.buttonStyle(.plain)
+            }
+            Button("Scan again") { actions.submit { await discover() } }.disabled(busy)
+            primaryButton("Continue", symbol: "arrow.right") {
+                if let candidate { actions.submit { await choose(candidate) } }
+            }.disabled(candidate == nil || busy || !devices.contains { $0.id == candidate?.id })
+        }
+    }
+
+    private var networkStep: some View {
+        VStack(spacing: 20) {
+            wifiControls
+            if state.wifiConnected {
+                primaryButton("Continue", symbol: "arrow.right") { flow.continueFromNetwork(connected: true) }
+            } else {
+                Button("Use Ethernet instead") { flow.continueFromNetwork(connected: false, useEthernet: true) }
+                Text("Ethernet connectivity will be checked when the device enrolls.").font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Choose another device") { actions.submit { await chooseAnother() } }.disabled(editingLocked)
+        }
+    }
+
+    private func chooseAnother() async {
+        guard !busy, !state.attempted, !state.pending, !editingLocked else { return }
+        busy = true
+        defer { busy = false }
+        await GoClient.shared.closeNearbySetup(state.session)
+        guard !Task.isCancelled else { return }
+        selected = nil; candidate = nil; state = NearbySetupSnapshot(); flow = NearbySetupFlow()
+        password = ""; ssid = ""; error = nil; observationError = nil
+        nextReconnect = .distantPast; reconnectDelay = 3
     }
 
     private var wifiControls: some View {
@@ -223,10 +311,15 @@ struct NearbySetupView: View {
                         if !ssid.isEmpty && !state.networks.contains(ssid) { Text(ssid).tag(ssid) }
                         ForEach(Array(Set(state.networks)).sorted(), id: \.self) { Text($0).tag($0) }
                     }
-                } else { ProgressView("Finding networks…") }
+                } else if lastWiFiScan == .distantPast { ProgressView("Finding networks…") }
+                else { Text("No networks found. Enter a network name or scan again.").font(.caption).foregroundStyle(.secondary) }
+                Button("Scan networks") { submit(.scanWiFi) }.disabled(!state.connected || editingLocked)
                 TextField("Network name", text: $ssid).textFieldStyle(.roundedBorder).autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
                 SecureField("Password", text: $password).textFieldStyle(.roundedBorder)
-                Button("Connect") { submit(.connectWiFi) }.buttonStyle(.borderedProminent).disabled(ssid.isEmpty || editingLocked)
+                Button("Connect") { submit(.connectWiFi) }.buttonStyle(.borderedProminent).disabled(!NearbySetupFlow.validWiFi(ssid: ssid, password: password) || !state.connected || editingLocked)
             }.padding(.top, 12)
         }
         .font(.subheadline).disabled(editingLocked)
@@ -281,17 +374,21 @@ struct NearbySetupView: View {
         busy = true; automatic = true
         defer { busy = false; automatic = false }
         do {
-            devices = try await GoClient.shared.discoverSetupDevices()
+            let found = try await GoClient.shared.discoverSetupDevices()
+            guard !Task.isCancelled else { return }
+            devices = found; scanned = true
+            if let candidate, !found.contains(where: { $0.id == candidate.id }) { self.candidate = nil }
             observationError = nil
-        } catch { if !Task.isCancelled { observationError = error.localizedDescription } }
+        } catch { if !Task.isCancelled { devices = []; candidate = nil; scanned = true; observationError = error.localizedDescription } }
     }
 
     private func choose(_ device: NearbySetupDevice) async {
         while busy {
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
         }
-        guard selected == nil, !Task.isCancelled else { return }
+        guard selected == nil, !Task.isCancelled, devices.contains(where: { $0.id == device.id }) else { return }
         name = DeviceEnrollmentForm.suggestedName(device.title)
+        flow.choseDevice(); wifiExpanded = true
         await connect(device)
     }
 
@@ -300,7 +397,9 @@ struct NearbySetupView: View {
         busy = true; automatic = true; selected = device
         defer { busy = false; automatic = false }
         do {
-            state = try await GoClient.shared.openNearbySetup(device.id)
+            let result = try await GoClient.shared.openNearbySetup(device.id)
+            guard !Task.isCancelled else { await GoClient.shared.closeNearbySetup(result.session); return }
+            state = result
             observationError = state.error; lastStatus = .now
         } catch { if !Task.isCancelled { observationError = error.localizedDescription } }
         nextReconnect = .now.addingTimeInterval(reconnectDelay)
@@ -330,13 +429,14 @@ struct NearbySetupView: View {
             if action == .status { lastStatus = .now }
         }
         do {
-            state = try await GoClient.shared.nearbySetupAction(action, session: state.session, ssid: ssid, password: password,
+            let result = try await GoClient.shared.nearbySetupAction(action, session: state.session, ssid: ssid, password: password,
                 account: choice?.account ?? "", organization: choice?.organizationID ?? "", name: name)
+            guard !Task.isCancelled else { return }
+            state = result
             if automatically || state.pending { observationError = state.error }
             else if let detail = state.error, ConnectionRecovery.canRetry(detail) { observationError = detail }
             else {
                 error = state.error
-                if state.error?.contains("name is already in use") == true { customizing = true }
             }
             if (state.pending || state.canResume) && !state.wifiConnected && action == .enroll { wifiExpanded = true }
             if state.completed { error = nil; observationError = nil }
@@ -349,13 +449,12 @@ struct NearbySetupView: View {
         }
     }
 
-    private func watch() async {
-        if let initialDevice {
-            name = DeviceEnrollmentForm.suggestedName(initialDevice.title)
-            selected = initialDevice
-        }
+    private func loadOrganizations() async {
         do {
-            organizations = try await GoClient.shared.enrollmentOrganizations()
+            let loaded = try await GoClient.shared.enrollmentOrganizations()
+            guard !Task.isCancelled else { return }
+            organizations = loaded
+            organizationError = nil
             #if os(iOS)
             let current = app.mobileCloudAccount
             #else
@@ -363,8 +462,17 @@ struct NearbySetupView: View {
             #endif
             organization = DeviceEnrollmentForm.defaultOrganization(organizations, currentAccount: current)
         }
-        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        catch { if !Task.isCancelled { organizationError = error.localizedDescription } }
         organizationsLoaded = true
+    }
+
+    private func watch() async {
+        if let initialDevice {
+            name = DeviceEnrollmentForm.suggestedName(initialDevice.title)
+            selected = initialDevice
+            flow.choseDevice(); wifiExpanded = true
+        }
+        await loadOrganizations()
         while !Task.isCancelled {
             if !busy {
                 if scenePhase != .active {

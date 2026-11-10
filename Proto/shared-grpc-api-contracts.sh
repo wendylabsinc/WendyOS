@@ -46,6 +46,7 @@ SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS=(
     "wendy/agent/services/v2/sensor_service.proto"
     "wendy/agent/services/v2/tunnel_service.proto"
     "wendy/agent/services/v2/data_service.proto"
+    "wendy/agent/services/v2/site_model_service.proto"
 )
 SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
     "${SHARED_GRPC_API_CONTRACTS_AGENT_V1_PROTOS[@]}"

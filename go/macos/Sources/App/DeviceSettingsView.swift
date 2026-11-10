@@ -90,6 +90,9 @@ extension GoClient {
     func forgetWiFi(session: UInt64, ssid: String) async throws {
         try await perform { try Self.withCString(ssid) { try Self.finish(WDForgetWiFi(session, $0)) } }
     }
+    func setWiFiPriority(session: UInt64, ssid: String, priority: Int32) async throws {
+        try await perform { try Self.withCString(ssid) { try Self.finish(WDSetWiFiPriority(session, $0, priority)) } }
+    }
     func configureMesh(session: UInt64, changed: UInt32, enabled: UInt32) async throws {
         try await perform { try Self.finish(WDConfigureMesh(session, changed, enabled)) }
     }
@@ -114,12 +117,15 @@ struct DeviceSettingsView: View {
     @State private var joining: WiFiJoinTarget?
     @State private var disconnecting = false
     @State private var showingMeshGraph = false
+    @State private var confirmingMesh = false
     @State private var forgetting: DeviceWiFiNetwork?
+    @State private var priorityNetwork: DeviceWiFiNetwork?
+    @State private var expectedWiFi: String?
     private var dirty: Bool { snapshot.map { $0.meshConfig != draft } ?? false }
     private var participates: Bool { draft & 1 != 0 }
 
     private enum Page: String, Hashable {
-        case info = "Device info", wifi = "Wi-Fi", mesh = "Wendy Mesh", bluetooth = "Bluetooth", audio = "Audio", pairing = "Pairing", logs = "Logs", notifications = "Notifications"
+        case management = "Device management", info = "Device info", wifi = "Wi-Fi", mesh = "Wendy Mesh", bluetooth = "Bluetooth", audio = "Audio", pairing = "Pairing", logs = "Logs", notifications = "Notifications"
     }
     @State private var selectedPage: Page?
 
@@ -153,10 +159,19 @@ struct DeviceSettingsView: View {
         .task(id: session) { await refresh() }
         .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && !saving, perform: { actions.submit { await refresh() } }))
         .sheet(item: $joining) { target in
-            WiFiJoinSheet(session: session, deviceName: deviceName, network: target.network) {
-                notice = "Wi-Fi connection requested. Checking the device’s connection…"
+            WiFiJoinSheet(session: session, deviceName: deviceName, network: target.network, requestedNetwork: { expectedWiFi = $0 }) {
+                notice = "Connection requested. Refresh to check the device’s network."
                 actions.submit { await refresh() }
             }
+        }
+        .sheet(item: $priorityNetwork) { network in
+            WiFiPrioritySheet(session: session, network: network) { actions.submit { await refresh() } }
+        }
+        .confirmationDialog("Change mesh settings on \(deviceName)?", isPresented: $confirmingMesh, titleVisibility: .visible) {
+            Button("Apply changes") { actions.submit { await saveMesh() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Changing mesh participation or transports may disconnect this device.")
         }
         .confirmationDialog("Disconnect from Wi-Fi?", isPresented: $disconnecting, titleVisibility: .visible) {
             Button("Disconnect", role: .destructive) { actions.submit { await perform { try await GoClient.shared.disconnectWiFi(session: session) } } }
@@ -168,7 +183,7 @@ struct DeviceSettingsView: View {
                     actions.submit { await perform { try await GoClient.shared.forgetWiFi(session: session, ssid: network.ssid) } }
                 }
             }
-        } message: { Text("The saved Wi-Fi profile will be removed from \(deviceName).") }
+        } message: { Text("The saved profile will be removed from \(deviceName). If it is connected to this network, you may lose access until another connection is available.") }
     }
     private var settingsMenu: some View {
         Form {
@@ -177,6 +192,7 @@ struct DeviceSettingsView: View {
             }
             Section {
                 settingsLink(.info, symbol: "info.circle")
+                settingsLink(.management, symbol: "gearshape.2")
                 settingsLink(.wifi, symbol: "wifi", value: snapshot.map { $0.wifiConnected ? $0.ssid : $0.wifiError.isEmpty ? "Not connected" : "Unavailable" } ?? "")
                 settingsLink(.bluetooth, symbol: "antenna.radiowaves.left.and.right")
                 settingsLink(.audio, symbol: "speaker.wave.2")
@@ -200,13 +216,14 @@ struct DeviceSettingsView: View {
         #else
         NavigationLink { settingsPage(page) } label: {
             settingsLabel(page.rawValue, symbol: symbol, value: value)
-        }
+        }.accessibilityIdentifier("device.settings." + page.rawValue)
         #endif
     }
     private func settingsPage(_ page: Page) -> some View {
             Group {
                 switch page {
                 case .notifications: DeviceNotificationsView(session: session)
+                case .management: DeviceManagementView(session: session, deviceName: deviceName)
                 case .info: DeviceInfoView(session: session, deviceName: deviceName)
                 case .wifi: if let snapshot { wifiPage(snapshot) } else { settingsLoading }
                 case .mesh: if let snapshot { meshPage(snapshot) } else { settingsLoading }
@@ -225,7 +242,16 @@ struct DeviceSettingsView: View {
     }
     @ViewBuilder private var settingsLoading: some View {
         if let error { FailureView(title: "Could not load settings", error: error) { actions.submit { await refresh() } } }
-        else { ProgressView("Loading settings…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+        else {
+            #if os(iOS)
+            ScrollView {
+                MobileLoadingPlaceholder(label: "Loading settings…", rows: 4)
+                    .padding(20).background(RecordingAppearance.card, in: .rect(cornerRadius: 22)).padding(16)
+            }
+            #else
+            ProgressView("Loading settings…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            #endif
+        }
     }
     private func settingsLabel(_ title: String, symbol: String, value: String) -> some View {
         HStack(spacing: 12) {
@@ -236,14 +262,20 @@ struct DeviceSettingsView: View {
         }.padding(.vertical, 4)
     }
     @ViewBuilder private var notices: some View {
-        if let error { Section { FailureNote(message: error) } }
+        if let error {
+            Section {
+                FailureNote(message: error)
+                Button("Check connection") { actions.submit { await refresh() } }.disabled(loading || saving)
+            }
+        }
         if let notice { Section { Text(notice).font(.callout).foregroundStyle(.secondary) } }
     }
     private func visibleNetworks(_ snapshot: DeviceNetworkSettings) -> [DeviceWiFiNetwork] {
         var networks = snapshot.networks.map { network in
             DeviceWiFiNetwork(ssid: network.ssid, security: network.security, signal: network.signal,
                               known: network.known || snapshot.known.contains { $0.ssid == network.ssid },
-                              connected: network.connected || (snapshot.wifiConnected && snapshot.ssid == network.ssid), priority: network.priority)
+                              connected: network.connected || (snapshot.wifiConnected && snapshot.ssid == network.ssid),
+                              priority: snapshot.known.first { $0.ssid == network.ssid }?.priority ?? network.priority)
         }
         if snapshot.wifiConnected && !networks.contains(where: { $0.ssid == snapshot.ssid }) {
             networks.insert(DeviceWiFiNetwork(ssid: snapshot.ssid, security: snapshot.known.first { $0.ssid == snapshot.ssid }?.security ?? 0,
@@ -269,7 +301,7 @@ struct DeviceSettingsView: View {
                         if network.connected || network.known {
                             OverflowMenu {
                                 if network.connected { Button("Disconnect", role: .destructive) { disconnecting = true } }
-                                if network.known { Button("Forget network", role: .destructive) { forgetting = network } }
+                                if network.known { Button("Connection priority") { priorityNetwork = network }; Button("Forget network", role: .destructive) { forgetting = network } }
                             }
                                 .accessibilityLabel("Actions for \(network.ssid)")
                         }
@@ -284,7 +316,9 @@ struct DeviceSettingsView: View {
                     ForEach(saved) { network in
                         HStack {
                             Button { joining = WiFiJoinTarget(network: network) } label: { networkLabel(network) }.buttonStyle(.plain)
-                            OverflowMenu { Button("Forget network", role: .destructive) { forgetting = network } }
+                            OverflowMenu {
+                                Button("Connection priority") { priorityNetwork = network }
+                                Button("Forget network", role: .destructive) { forgetting = network } }
                                 .accessibilityLabel("Actions for \(network.ssid)")
                         }.disabled(saving)
                     }
@@ -304,6 +338,9 @@ struct DeviceSettingsView: View {
                 Button("Show mesh graph", systemImage: "point.3.connected.trianglepath.dotted") { showingMeshGraph = true }
                 LabeledContent("Runtime", value: snapshot.runtimeAvailable ? (snapshot.meshState.isEmpty ? "Available" : snapshot.meshState.capitalized) : "Unavailable")
                 if snapshot.runtimeAvailable { LabeledContent("Authenticated links", value: snapshot.peers.formatted()) }
+                LabeledContent("Perspective", value: deviceName)
+                LabeledContent("Radio signal", value: "Not reported")
+                Text("Device mesh connections. Route cost is not signal strength.").font(.caption).foregroundStyle(.secondary)
                 if !snapshot.gateway.isEmpty { LabeledContent("Internet gateway", value: snapshot.gateway) }
                 if !snapshot.meshDetail.isEmpty { Text(snapshot.meshDetail).font(.caption).foregroundStyle(.secondary) }
                 if !snapshot.meshError.isEmpty { FailureNote(message: snapshot.meshError) }
@@ -323,7 +360,7 @@ struct DeviceSettingsView: View {
                 }.disabled(saving || !participates)
                 if dirty || saving {
                     Section {
-                        Button("Save changes") { actions.submit { await saveMesh() } }.disabled(saving || loading)
+                        Button("Save changes") { confirmingMesh = true }.disabled(saving || loading)
                         Button("Discard changes", role: .cancel) { draft = snapshot.meshConfig }.disabled(saving)
                         if saving { ProgressView() }
                     }
@@ -361,32 +398,48 @@ struct DeviceSettingsView: View {
             guard !Task.isCancelled, model.deviceSession == session else { return }
             if !dirty { draft = value.meshConfig }
             snapshot = value; error = nil
-            if notice != nil, value.wifiAvailable { notice = value.wifiConnected ? "Connected to \(value.ssid)." : nil }
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            if notice != nil, value.wifiAvailable {
+                if let expectedWiFi, value.wifiConnected && value.ssid != expectedWiFi {
+                    notice = "Still connected to \(value.ssid). The requested network has not been verified."
+                } else {
+                    notice = value.wifiConnected ? "Connected to \(value.ssid)." : "Wi-Fi is disconnected."
+                }
+            }
+        } catch { if !Task.isCancelled, settingsSessionIsCurrent(model, session: session) { self.error = error.localizedDescription } }
     }
     private func perform(_ work: () async throws -> Void) async {
-        guard !saving else { return }
-        saving = true; error = nil; notice = nil
+        guard !saving, !Task.isCancelled, settingsSessionIsCurrent(model, session: session) else { return }
+        saving = true; error = nil; notice = nil; expectedWiFi = nil
         defer { saving = false }
-        do { try await work(); await refresh() }
-        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        do {
+            try await work()
+            guard !Task.isCancelled, model.deviceSession == session else { return }
+            await refresh()
+        }
+        catch { if !Task.isCancelled, model.deviceSession == session { self.error = error.localizedDescription; notice = "If the connection dropped, reopen the device and check its network before trying again." } }
     }
     private func saveMesh() async {
         guard let snapshot else { return }
         let changed = snapshot.meshConfig ^ draft
         let enabled = draft
         await perform { try await GoClient.shared.configureMesh(session: session, changed: changed, enabled: enabled) }
+        guard !Task.isCancelled, model.deviceSession == session, error == nil else { return }
+        if let current = self.snapshot, current.meshConfig & changed == enabled & changed {
+            notice = "Mesh settings verified on \(deviceName)."
+        } else { notice = "The change was sent, but the device has not confirmed the requested settings. Refresh after it reconnects." }
     }
 }
 
 struct WiFiJoinSheet: View {
     @State private var actions = AsyncActions()
+    @EnvironmentObject private var model: AppModel
     let session: UInt64
     let deviceName: String
     let network: DeviceWiFiNetwork?
     var networks: [DeviceWiFiNetwork] = []
     var explanation: String? = nil
     var skip: (() -> Void)? = nil
+    var requestedNetwork: ((String) -> Void)? = nil
     let joined: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var ssid = ""
@@ -399,6 +452,10 @@ struct WiFiJoinSheet: View {
     @State private var hidden = false
     @State private var saving = false
     @State private var error: String?
+    @State private var confirmingJoin = false
+    private var validation: String? {
+        WiFiFormValidation.issue(ssid: ssid, password: password, security: security, saved: selectedNetwork?.known == true)
+    }
     var body: some View {
         actionContent.task { await actions.run() }
     }
@@ -410,8 +467,8 @@ struct WiFiJoinSheet: View {
                 Spacer()
                 Text("Join Wi-Fi").font(.headline)
                 Spacer()
-                Button("Join") { actions.submit { await join() } }.keyboardShortcut(.defaultAction)
-                    .disabled(ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || security == 6)
+                Button("Join") { confirmingJoin = true }.keyboardShortcut(.defaultAction)
+                    .disabled(validation != nil || !settingsSessionIsCurrent(model, session: session))
             }.padding().disabled(saving)
             Form {
                 if let explanation { Text(explanation).foregroundStyle(.secondary) }
@@ -442,26 +499,41 @@ struct WiFiJoinSheet: View {
                     if security != 1 && security != 6 { SecureField(selectedNetwork?.known == true ? "Password (leave blank to use saved)" : "Password", text: $password) }
                     if security == 6 { Text("Enterprise authentication is not supported by this connection form.").foregroundStyle(.secondary) }
                 } footer: { Text("Connects \(deviceName) to this network. The device may disconnect from Wendy while switching networks.") }
+                if let validation, !ssid.isEmpty { Text(validation).font(.caption).foregroundStyle(.secondary) }
                 if let error { FailureNote(message: error) }
                 if saving { ProgressView("Connecting…") }
                 if let skip { Button("Continue without Wi-Fi") { password = ""; skip() } }
             }.formStyle(.grouped).disabled(saving)
         }
+        .confirmationDialog("Join \(ssid)?", isPresented: $confirmingJoin, titleVisibility: .visible) {
+            Button("Join network") { actions.submit { await join() } }
+        } message: { Text("This changes Wi-Fi on \(deviceName). Its connection to Wendy may drop while switching.") }
         .desktopFrame(width: 460, height: explanation == nil ? 380 : 520)
         .interactiveDismissDisabled(saving)
         .onAppear { ssid = network?.ssid ?? ""; security = network?.security ?? 4 }
         .onDisappear { password = "" }
+        .onChange(of: security) { _, _ in password = "" }
         #if os(iOS)
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
         #endif
     }
     private func join() async {
+        guard !saving, !Task.isCancelled, validation == nil, settingsSessionIsCurrent(model, session: session) else { return }
         saving = true; error = nil; defer { saving = false }
         do {
             try await GoClient.shared.joinWiFi(session: session, ssid: ssid, password: password, security: security, hidden: hidden)
-            password = ""; joined(); dismiss()
-        } catch { password = ""; if !Task.isCancelled { self.error = error.localizedDescription } }
+            password = ""
+            guard !Task.isCancelled, settingsSessionIsCurrent(model, session: session) else { return }
+            requestedNetwork?(ssid)
+            joined(); dismiss()
+        } catch {
+            password = ""
+            if !Task.isCancelled {
+                let message = error.localizedDescription
+                self.error = message + (ConnectionRecovery.canRetry(message) ? " Close this sheet, reconnect and check the network before retrying." : "")
+            }
+        }
     }
 }
 
@@ -579,5 +651,78 @@ private struct DeviceNotificationsView: View {
             if let index = permissions.firstIndex(where: { $0.name == change.campaign.name }) { permissions[index].enabled = change.enabled }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         saving = false
+    }
+}
+
+
+@MainActor private func settingsSessionIsCurrent(_ model: AppModel, session: UInt64) -> Bool {
+    guard session != 0, model.deviceSession == session else { return false }
+    #if os(iOS)
+    return model.mobileScopeIsCurrent
+    #else
+    return true
+    #endif
+}
+
+enum WiFiFormValidation {
+    static func issue(ssid: String, password: String, security: Int32, saved: Bool) -> String? {
+        guard !ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              ssid.utf8.count <= 32, !ssid.contains("\0") else { return "Use a network name of 1–32 bytes." }
+        guard !password.contains("\0") else { return "The password contains an unsupported character." }
+        if security == 6 { return "Enterprise Wi-Fi needs a different setup method." }
+        if security == 1 { return nil }
+        if password.isEmpty { return saved ? nil : "Enter the network password." }
+        let count = password.utf8.count
+        let hex = password.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }
+        if security == 3 || security == 4 {
+            return (8...63).contains(count) || count == 64 && hex ? nil : "Use an 8–63 byte password or a 64-digit hexadecimal key."
+        }
+        if security == 5 { return count <= 63 ? nil : "Use a password of up to 63 bytes." }
+        if security == 2 { return count == 5 || count == 13 || (count == 10 || count == 26) && hex ? nil : "Enter a valid WEP key." }
+        return nil
+    }
+}
+
+private struct WiFiPrioritySheet: View {
+    let session: UInt64
+    let network: DeviceWiFiNetwork
+    let saved: () -> Void
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var value = ""
+    @State private var saving = false
+    @State private var error: String?
+    @State private var actions = AsyncActions()
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(network.ssid) {
+                    TextField("Priority", text: $value)
+                        #if os(iOS)
+                        .keyboardType(.numbersAndPunctuation)
+                        #endif
+                    Text("Higher numbers are preferred when the device reconnects. This does not switch networks now.").font(.caption).foregroundStyle(.secondary)
+                }
+                if let error { FailureNote(message: error) }
+                if saving { ProgressView("Saving priority…") }
+            }.disabled(saving).navigationTitle("Connection priority")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { actions.submit { await save() } }
+                            .disabled(saving || Int32(value) == nil || !settingsSessionIsCurrent(model, session: session))
+                    }
+                }
+        }.task { value = String(network.priority); await actions.run() }
+            .interactiveDismissDisabled(saving)
+    }
+    private func save() async {
+        guard !saving, let priority = Int32(value), settingsSessionIsCurrent(model, session: session) else { return }
+        saving = true; error = nil; defer { saving = false }
+        do {
+            try await GoClient.shared.setWiFiPriority(session: session, ssid: network.ssid, priority: priority)
+            guard !Task.isCancelled, settingsSessionIsCurrent(model, session: session) else { return }
+            saved(); dismiss()
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }

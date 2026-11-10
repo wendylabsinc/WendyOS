@@ -40,7 +40,17 @@ extension GoClient {
     }
 
     func openNearbySetup(_ address: String) async throws -> NearbySetupSnapshot {
-        try await perform { try Self.withCString(address) { try Self.readNearbySetup(WDNearbyOpen($0)) } }
+        try Task.checkCancellation()
+        // Opening creates a backend session. Receive its identity even if dismissal
+        // cancels this task, so the newly opened BLE connection can be released.
+        let result = try await perform(unlessCancelled: false) {
+            try Self.withCString(address) { try Self.readNearbySetup(WDNearbyOpen($0)) }
+        }
+        if Task.isCancelled {
+            await closeNearbySetup(result.session)
+            throw CancellationError()
+        }
+        return result
     }
 
     func nearbySetupAction(_ action: NearbySetupAction, session: UInt64, ssid: String = "", password: String = "",
@@ -105,5 +115,32 @@ extension NearbySetupSnapshot {
         if statusAge >= 25 { return .status }
         if wifiExpanded && scanAge >= 20 { return .scanWiFi }
         return .idle
+    }
+}
+
+/// Presentation choices never imply that Ethernet or enrollment was verified.
+/// Only device observations advance to a successful enrollment result.
+struct NearbySetupFlow {
+    enum Step: Int, CaseIterable {
+        case device = 1, network, organization, enroll
+        var title: String {
+            switch self {
+            case .device: "Device"
+            case .network: "Connection"
+            case .organization: "Organization"
+            case .enroll: "Enrollment"
+            }
+        }
+    }
+    private(set) var step: Step = .device
+    mutating func choseDevice() { step = .network }
+    mutating func continueFromNetwork(connected: Bool, useEthernet: Bool = false) {
+        guard step == .network, connected || useEthernet else { return }
+        step = .organization
+    }
+    mutating func backToNetwork() { if step == .organization { step = .network } }
+    static func validWiFi(ssid: String, password: String) -> Bool {
+        // These are protocol byte limits, not Swift character counts.
+        !ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && ssid.utf8.count <= 32 && password.utf8.count <= 64
     }
 }

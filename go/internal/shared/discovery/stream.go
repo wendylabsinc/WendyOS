@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/netip"
 	"slices"
@@ -14,6 +15,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
+
+// ErrLocalNetworkDenied means the platform denied the app permission to browse.
+var ErrLocalNetworkDenied = errors.New("local network access denied")
 
 // LANEventKind classifies a LANEvent emitted by a streaming LAN discovery scan.
 type LANEventKind int
@@ -67,7 +71,9 @@ type StreamOptions struct {
 	UseCache bool      // emit cached entries and persist discoveries
 	Prober   LANProber // nil = no probing (mDNS-only confirmation)
 	Exclude  LANFilter // nil = nothing is excluded
-	// OnBackendError, when non-nil, is called at most once, with the platform
+	// A definitive local network permission denial is always reported and
+	// waits for user action instead of restarting the backend.
+	// Otherwise OnBackendError, when non-nil, is called at most once, with the platform
 	// mDNS backend's last error, when the session never listened: the backend
 	// was down as the session ended (every restart failed, or it was waiting
 	// to retry) and no attempt had browsed for backendListenedAfter. A backend
@@ -519,6 +525,11 @@ func (s *lanStream) runBackend() {
 		err := lanBackendFn(s.ctx, wendyServiceType, emit)
 		if err == nil || s.ctx.Err() != nil {
 			return // browsed until the session ended (or stopped cleanly)
+		}
+		if errors.Is(err, ErrLocalNetworkDenied) {
+			// Time spent waiting for a privacy decision is not time spent listening.
+			s.reportNeverListened(false, err)
+			return
 		}
 		if time.Since(start) >= backendListenedAfter {
 			listened = true

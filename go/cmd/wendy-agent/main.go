@@ -815,6 +815,8 @@ func main() {
 		return snapshot()
 	})
 
+	siteModelSvc := services.NewSiteModelService(filepath.Join(filepath.Dir(dataManager.StoreLocation().Path), "site-models"))
+
 	registerAllServices := func(srv *grpc.Server) {
 		// Each authenticated listener is created with the device's current tenant.
 		// The app RPC independently requires a same-tenant device principal and
@@ -887,6 +889,7 @@ func main() {
 		agentpbv2.RegisterWendyAudioServiceServer(srv, audioSvcV2)
 		agentpbv2.RegisterWendyTelemetryServiceServer(srv, telemetrySvcV2)
 		agentpbv2.RegisterDataServiceServer(srv, dataSvc)
+		agentpbv2.RegisterSiteModelServiceServer(srv, siteModelSvc)
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyLocalMeshAdminServiceServer(srv, localMeshAdmin)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)

@@ -5,6 +5,7 @@ package main
 */
 import "C"
 import (
+	"context"
 	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
 	"unsafe"
@@ -99,4 +100,34 @@ func WDStopChat(session, turn C.uint64_t) *C.WDStatus {
 //export WDResolveChatApproval
 func WDResolveChatApproval(session, turn, approval C.uint64_t, allow C.int32_t) *C.WDStatus {
 	return statusResult(desktop.ResolveChatApproval(uint64(session), uint64(turn), uint64(approval), allow != 0))
+}
+
+//export WDHostedChatModels
+func WDHostedChatModels(provider, key *C.char) *C.WDChatModelsResult {
+	p := alloc[C.WDChatModelsResult](1)
+	items, err := chat.HostedModels(context.Background(), C.GoString(provider), C.GoString(key))
+	p.status = status(err)
+	p.items, p.count = alloc[C.WDChatModel](len(items)), C.size_t(len(items))
+	for i, m := range items {
+		unsafe.Slice(p.items, len(items))[i] = C.WDChatModel{id: C.CString(m.ID), name: C.CString(m.Name), unavailable_reason: C.CString("")}
+	}
+	return p
+}
+
+//export WDStartHostedChat
+func WDStartHostedChat(session, turn C.uint64_t, provider, model, key *C.char, messages *C.WDChatMessage, count C.size_t) *C.WDStatus {
+	if count == 0 || count > 200 || messages == nil {
+		return statusResult(errors.New("invalid conversation"))
+	}
+	var items []chat.Message
+	for _, m := range unsafe.Slice(messages, int(count)) {
+		role := "user"
+		if m.role == C.WD_CHAT_ASSISTANT {
+			role = "assistant"
+		} else if m.role != C.WD_CHAT_USER {
+			return statusResult(errors.New("invalid message role"))
+		}
+		items = append(items, chat.Message{Role: role, Content: C.GoString(m.text)})
+	}
+	return statusResult(desktop.StartHostedChat(uint64(session), uint64(turn), C.GoString(provider), C.GoString(model), C.GoString(key), items))
 }

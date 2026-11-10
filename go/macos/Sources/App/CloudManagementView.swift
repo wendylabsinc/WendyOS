@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CloudManagementView: View {
+    var requestSignIn: (() -> Void)? = nil
     @State private var actions = AsyncActions()
     @EnvironmentObject private var app: AppModel
     @StateObject private var model = CloudManagementModel()
@@ -57,6 +58,11 @@ struct CloudManagementView: View {
 
     var body: some View {
         actionContent.task { await actions.run() }
+    }
+
+    private func signIn() {
+        if let requestSignIn { requestSignIn() }
+        else { actions.submit { await app.signIn() } }
     }
 
     @ViewBuilder private var actionContent: some View {
@@ -155,7 +161,7 @@ struct CloudManagementView: View {
                     Text("Sign in to manage your organization.")
                 } actions: {
                     Button(app.signingIn ? "Signing in…" : "Sign in") {
-                        actions.submit { await app.signIn() }
+                        signIn()
                     }.disabled(app.signingIn)
                     if let url = app.loginURL { Link("Continue in browser", destination: url) }
                 }
@@ -234,7 +240,7 @@ struct CloudManagementView: View {
                         description: { Text("Sign in to manage your organization.") }
                         actions: {
                             Button(app.signingIn ? "Signing in…" : "Sign in") {
-                                actions.submit { await app.signIn() }
+                                signIn()
                             }.disabled(app.signingIn)
                             if app.signingIn {
                                 ProgressView()
@@ -342,7 +348,7 @@ struct CloudManagementView: View {
             }
             Divider()
             Button("Sign in", systemImage: "person.crop.circle.badge.plus") {
-                actions.submit { await app.signIn() }
+                signIn()
             }.disabled(app.signingIn)
         } label: {
             Label(selectedAccountTitle, systemImage: "person.crop.circle")

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="position:relative;width:100%;height:100%;border-radius:inherit;overflow:hidden;background:{{ clip.bg }}">
+  <sc-if value="{{ clip.isVideo }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute;inset:0;background:repeating-linear-gradient(135deg,rgba(255,255,255,0.035) 0 10px,transparent 10px 20px)"></div>
+    <sc-if value="{{ full }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:10px;bottom:8px;font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace;color:rgba(255,255,255,0.55)">{{ clip.cam }}</div></sc-if>
+  </sc-if>
+  <sc-if value="{{ clip.isWave }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;display:flex;align-items:center;gap:{{ barGap }};padding:0 {{ barPad }}">
+      <sc-for list="{{ bars }}" as="b" hint-placeholder-count="24"><div style="flex:1;height:{{ b }};border-radius:2px;background:{{ clip.ink }}"></div></sc-for>
+    </div>
+  </sc-if>
+  <sc-if value="{{ clip.isBag }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:{{ bagInset }};display:flex;flex-direction:column;justify-content:space-between">
+      <sc-for list="{{ clip.topics }}" as="t" hint-placeholder-count="3">
+        <div style="display:flex;align-items:center;gap:6px"><sc-if value="{{ full }}" hint-placeholder-val="{{ true }}"><div style="width:44px;font:600 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:rgba(255,255,255,0.5);flex:none">{{ t.n }}</div></sc-if><div style="flex:1;height:6px;display:flex;gap:2px"><sc-for list="{{ t.segs }}" as="s" hint-placeholder-count="4"><div style="flex:{{ s.f }};background:{{ s.c }};border-radius:2px"></div></sc-for></div></div>
+      </sc-for>
+    </div>
+  </sc-if>
+  <sc-if value="{{ clip.isImg }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:50%;top:50%;width:46%;height:52%;transform:translate(-38%,-58%) rotate(6deg);background:#C9C4B8;border-radius:6px;border:2px solid #fff"></div>
+    <div style="position:absolute;left:50%;top:50%;width:46%;height:52%;transform:translate(-56%,-48%) rotate(-4deg);background:#B8B2A5;border-radius:6px;border:2px solid #fff"></div>
+    <div style="position:absolute;left:50%;top:50%;width:46%;height:52%;transform:translate(-50%,-44%);background:#9A978F;border-radius:6px;border:2px solid #fff"></div>
+  </sc-if>
+  <sc-if value="{{ clip.isSet }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:12px 12px 26px;display:grid;grid-template-columns:repeat(6,1fr);gap:3px">
+      <sc-for list="{{ clip.cells }}" as="c" hint-placeholder-count="12"><div style="border-radius:3px;background:{{ c }}"></div></sc-for>
+    </div>
+  </sc-if>
+  <sc-if value="{{ showTrig }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:8px;top:8px;height:22px;padding:0 8px;border-radius:999px;background:rgba(23,28,35,0.72);color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px"><div style="width:7px;height:7px;border-radius:50%;background:{{ clip.trigC }}"></div>{{ clip.trig }}</div>
+  </sc-if>
+  <sc-if value="{{ full }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;right:8px;top:8px;width:20px;height:20px;border-radius:50%;background:rgba(23,28,35,0.55);display:flex;align-items:center;justify-content:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ clip.syncIcon }}"></path></svg></div>
+  <div style="position:absolute;right:8px;bottom:8px;height:18px;padding:0 6px;border-radius:5px;background:rgba(23,28,35,0.72);color:#fff;font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace;display:flex;align-items:center">{{ clip.dur }}</div></sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:200,&quot;height&quot;:120},&quot;clip&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;object&quot;},&quot;showTrig&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;compact&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;}}">class Component extends DCLogic { renderVals() { const c = !!this.props.compact, b = (this.props.clip && this.props.clip.bars) || []; return { full: !c, bars: c ? b.slice(0, 9) : b, barGap: c ? '1px' : '2px', barPad: c ? '6px' : '12px', bagInset: c ? '8px 6px' : (this.props.showTrig ? '38px 12px 30px' : '14px 12px 22px') }; } }</script>
+</body>
+</html>

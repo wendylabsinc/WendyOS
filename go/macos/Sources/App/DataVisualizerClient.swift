@@ -137,33 +137,36 @@ extension GoClient {
         try await Self.visualPerform {
             try Self.withCString(episode) { episode in
                 let result = selector.map { target in Self.withCString(target) { WDVisualEpisodeLoadAt($0, episode) } } ?? WDVisualEpisodeLoad(session, episode)
-                guard let p = result else { throw WendyError(message: "Missing episode data.") }
-                defer { WDVisualSnapshotFree(p) }
-                try Self.check(p.pointee.status)
-                let tracks = UnsafeBufferPointer(start: p.pointee.tracks, count: p.pointee.track_count).map {
-                    DataVisualTrack(id: Self.string($0.id), name: Self.string($0.name), kind: Self.string($0.kind), detail: Self.string($0.detail))
-                }
-                let samples = UnsafeBufferPointer(start: p.pointee.samples, count: p.pointee.sample_count).enumerated().map { index, s in
-                    DataVisualSample(id: index, track: Self.string(s.track), label: Self.string(s.label), detail: Self.string(s.detail), unit: Self.string(s.unit),
-                                     timestamp: s.timestamp_ns, value: s.has_value == 0 ? nil : s.value,
-                                     image: s.image_count > 0 ? s.image.map { Data(bytes: $0, count: s.image_count) } : nil,
-                                     points: UnsafeBufferPointer(start: s.points, count: s.point_count).map { SIMD3<Float>($0.x, $0.y, $0.z) })
-                }
-                let media = DataVisualMediaFiles()
-                let videos = try UnsafeBufferPointer(start: p.pointee.videos, count: p.pointee.video_count).map { video in
-                    let path = Self.string(video.local_path)
-                    guard !path.isEmpty else { throw WendyError(message: "The recorded video file is missing.") }
-                    return DataVisualVideo(track: Self.string(video.track), url: try media.adopt(URL(fileURLWithPath: path)),
-                                           timestamps: UnsafeBufferPointer(start: video.timestamps, count: video.timestamp_count).map { Double($0) / 1_000_000_000 })
-                }
-                let audio = try UnsafeBufferPointer(start: p.pointee.audio, count: p.pointee.audio_count).map { a in
-                    DataVisualAudio(track: Self.string(a.track), url: try media.adopt(URL(fileURLWithPath: Self.string(a.local_path)), extension: "wav"), start: Double(a.start_ns) / 1e9, end: Double(a.end_ns) / 1e9)
-                }
-                return DataVisualSnapshot(clock: Self.string(p.pointee.clock), bootID: Self.string(p.pointee.boot_id), warnings: Self.string(p.pointee.warnings),
-                                          start: Double(p.pointee.start_ns) / 1_000_000_000, end: Double(p.pointee.end_ns) / 1_000_000_000,
-                                          tracks: tracks, samples: samples, videos: videos, mediaFiles: media, audio: audio)
+                return try Self.decodeVisualSnapshot(result)
             }
         }
+    }
+    static func decodeVisualSnapshot(_ p: UnsafeMutablePointer<WDVisualSnapshotResult>?) throws -> DataVisualSnapshot {
+        guard let p else { throw WendyError(message: "Missing episode data.") }
+        defer { WDVisualSnapshotFree(p) }
+        try Self.check(p.pointee.status)
+        let tracks = UnsafeBufferPointer(start: p.pointee.tracks, count: p.pointee.track_count).map {
+            DataVisualTrack(id: Self.string($0.id), name: Self.string($0.name), kind: Self.string($0.kind), detail: Self.string($0.detail))
+        }
+        let samples = UnsafeBufferPointer(start: p.pointee.samples, count: p.pointee.sample_count).enumerated().map { index, s in
+            DataVisualSample(id: index, track: Self.string(s.track), label: Self.string(s.label), detail: Self.string(s.detail), unit: Self.string(s.unit),
+                             timestamp: s.timestamp_ns, value: s.has_value == 0 ? nil : s.value,
+                             image: s.image_count > 0 ? s.image.map { Data(bytes: $0, count: s.image_count) } : nil,
+                             points: UnsafeBufferPointer(start: s.points, count: s.point_count).map { SIMD3<Float>($0.x, $0.y, $0.z) })
+        }
+        let media = DataVisualMediaFiles()
+        let videos = try UnsafeBufferPointer(start: p.pointee.videos, count: p.pointee.video_count).map { video in
+            let path = Self.string(video.local_path)
+            guard !path.isEmpty else { throw WendyError(message: "The recorded video file is missing.") }
+            return DataVisualVideo(track: Self.string(video.track), url: try media.adopt(URL(fileURLWithPath: path)),
+                                   timestamps: UnsafeBufferPointer(start: video.timestamps, count: video.timestamp_count).map { Double($0) / 1_000_000_000 })
+        }
+        let audio = try UnsafeBufferPointer(start: p.pointee.audio, count: p.pointee.audio_count).map { a in
+            DataVisualAudio(track: Self.string(a.track), url: try media.adopt(URL(fileURLWithPath: Self.string(a.local_path)), extension: "wav"), start: Double(a.start_ns) / 1e9, end: Double(a.end_ns) / 1e9)
+        }
+        return DataVisualSnapshot(clock: Self.string(p.pointee.clock), bootID: Self.string(p.pointee.boot_id), warnings: Self.string(p.pointee.warnings),
+                                  start: Double(p.pointee.start_ns) / 1_000_000_000, end: Double(p.pointee.end_ns) / 1_000_000_000,
+                                  tracks: tracks, samples: samples, videos: videos, mediaFiles: media, audio: audio)
     }
 }
 
