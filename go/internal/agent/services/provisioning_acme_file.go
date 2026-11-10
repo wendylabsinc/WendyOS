@@ -11,9 +11,11 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/acmeenroll"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/acme"
 )
 
 // ApplyACMEEnrollmentFile consumes the CLI's imaging handoff on first boot.
+// It waits for the public directory before attempting issuance.
 // Failed or interrupted issuance is never retried on an
 // agent restart: the credential and account key remain for coordinated recovery.
 // Call after OnProvisioned is installed, as with ApplyEnrollmentFile.
@@ -57,6 +59,24 @@ func (s *ProvisioningServiceV2) ApplyACMEEnrollmentFile(ctx context.Context, pat
 	// an uncertain failure (including a crash after issuance but before state
 	// persistence). It contains no credential. Do not automatically remove it.
 	marker := filepath.Join(svc.configPath, "acme-first-boot-attempt.json")
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		svc.logger.Warn("Baked ACME enrollment retained: previous attempt or unreadable attempt marker")
+		return
+	}
+	// Directory discovery is read-only and sends no enrollment credential. Wait
+	// before recording an issuance attempt so a device without Wi-Fi can still
+	// complete first-boot enrollment after the operator configures its network.
+	// The caller runs this in a background goroutine; setup RPCs remain available.
+	svc.logger.Info("Waiting for network connectivity before first-boot enrollment")
+	if err := waitForFirstBootACME(ctx, bake.DirectoryURL); err != nil {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if _, _, _, enrolled := svc.ProvisioningInfo(); enrolled {
+		return
+	}
 	f, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		svc.logger.Warn("Baked ACME enrollment retained: previous attempt requires coordinated recovery")
@@ -107,4 +127,32 @@ func (s *ProvisioningServiceV2) ApplyACMEEnrollmentFile(ctx context.Context, pat
 		return
 	}
 	svc.logger.Info("Baked ACME enrollment completed", zap.String("principalURI", principal))
+}
+
+var waitForFirstBootACME = func(ctx context.Context, directoryURL string) error {
+	return waitForACMEDirectory(ctx, directoryURL, 5*time.Second)
+}
+
+// Only public directory GETs are retried. Once issuance starts, an uncertain
+// result still requires coordinated recovery rather than another redemption.
+func waitForACMEDirectory(ctx context.Context, directoryURL string, retryDelay time.Duration) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		client := &acme.Client{DirectoryURL: directoryURL}
+		_, err := client.Discover(probeCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

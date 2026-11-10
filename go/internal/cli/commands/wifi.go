@@ -22,9 +22,16 @@ import (
 )
 
 var (
-	resolveWifiTargetFn = resolveTarget
+	resolveWifiTargetFn = resolveWifiTarget
 	pickWifiNetworkFn   = pickWifiNetwork
 )
+
+// Wi-Fi is needed before first-boot enrollment can reach Cloud. Only this
+// command family and explicit enrollment may connect to an unbound device that
+// reports NotProvisioned; saved identities still require normal authentication.
+func resolveWifiTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
+	return resolveTarget(withUnboundSetupSelection(ctx), opts...)
+}
 
 func newWifiCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -281,7 +288,7 @@ func newWifiListCmd() *cobra.Command {
 		Short: "List available WiFi networks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -463,7 +470,7 @@ func newWifiStatusCmd() *cobra.Command {
 		Short: "Get current WiFi connection status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -585,7 +592,7 @@ Examples:
 				return errors.New("--priority is required when --ssid is set")
 			}
 
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -639,7 +646,7 @@ func newWifiForgetCmd() *cobra.Command {
 			if ssid == "" {
 				return errors.New("--ssid is required")
 			}
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}

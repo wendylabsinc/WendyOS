@@ -575,8 +575,8 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 	if pinKey == "" {
 		pinKey = pinKeyForAddr(address)
 	}
-	if isEnrollmentSelection(ctx) {
-		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, address); handled {
+	if isUnboundSetupSelection(ctx) {
+		if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, address); handled {
 			if err != nil {
 				return false, nil, err
 			}
@@ -1615,8 +1615,8 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 	if pinKey == "" {
 		pinKey = pinKeyForAddr(addr)
 	}
-	if isEnrollmentSelection(ctx) {
-		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr, lanDialCandidates(ctx, *d.LAN)...); handled {
+	if isUnboundSetupSelection(ctx) {
+		if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, addr, lanDialCandidates(ctx, *d.LAN)...); handled {
 			return target, err
 		}
 	}
@@ -3612,7 +3612,7 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		o(&cfg)
 	}
 	if cfg.enrollmentTrustRecovery {
-		ctx = withEnrollmentSelection(ctx)
+		ctx = withUnboundSetupSelection(ctx)
 	}
 	ctx = robotRuntimePromptContext(ctx, cfg.nonInteractive)
 
@@ -3706,8 +3706,8 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// its retries and the pin check below all use it (see
 		// recheckDialPinKey).
 		pinKey := pinKeyForAddr(addr)
-		if cfg.enrollmentTrustRecovery {
-			if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr); handled {
+		if isUnboundSetupSelection(ctx) {
+			if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, addr); handled {
 				return target, err
 			}
 		}
@@ -4640,7 +4640,7 @@ func connectLocalPickerChoice(ctx context.Context, sel *tui.PickerItem, suppress
 			return picked, err
 		}
 		if d.LAN != nil {
-			if isEnrollmentSelection(ctx) {
+			if isUnboundSetupSelection(ctx) {
 				return connectPickedLANDevice(ctx, d, preferredLANAddress(*d.LAN), suppressUpdateCheck)
 			}
 			addr, _, _, err := resolveLANAgentVersion(ctx, *d.LAN)

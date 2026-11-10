@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/acmeenroll"
 	"go.uber.org/zap"
@@ -16,6 +20,9 @@ import (
 
 func bakedACMEFixture(t *testing.T) string {
 	t.Helper()
+	oldWait := waitForFirstBootACME
+	t.Cleanup(func() { waitForFirstBootACME = oldWait })
+	waitForFirstBootACME = func(context.Context, string) error { return nil }
 	req := acmeProvisionRequest()
 	data, err := json.Marshal(map[string]string{
 		"directoryURL": req.DirectoryUrl, "deviceID": req.DeviceId,
@@ -147,5 +154,100 @@ func TestACMEFirstBootRefusalsPreserveHandoff(t *testing.T) {
 				t.Fatal("refusal generated a device key")
 			}
 		})
+	}
+}
+
+func TestACMEFirstBootWaitsBeforeRecordingAttempt(t *testing.T) {
+	for _, online := range []bool{false, true} {
+		t.Run(fmt.Sprint(online), func(t *testing.T) {
+			path := bakedACMEFixture(t)
+			dir := t.TempDir()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			waited := false
+			waitForFirstBootACME = func(ctx context.Context, directory string) error {
+				waited = true
+				if directory != acmeProvisionRequest().DirectoryUrl {
+					t.Fatal("wrong connectivity target")
+				}
+				for _, name := range []string{"acme-first-boot-attempt.json", "device-key.pem", "acme-account-key.pem"} {
+					if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+						t.Fatalf("offline boot created %s", name)
+					}
+				}
+				if !online {
+					cancel()
+					return ctx.Err()
+				}
+				return nil
+			}
+			attempts := 0
+			stubACMEEnroll(t, func(context.Context, acmeenroll.Config, string, []byte) (string, string, error) {
+				attempts++
+				if !waited {
+					t.Fatal("enrollment started before connectivity")
+				}
+				return "leaf", "chain", nil
+			})
+			NewProvisioningServiceV2(NewProvisioningService(zap.NewNop(), dir)).ApplyACMEEnrollmentFile(ctx, path)
+			if !waited {
+				t.Fatal("first boot did not wait for connectivity")
+			}
+			if online && attempts != 1 {
+				t.Fatal("enrollment did not start after connectivity")
+			}
+			if !online {
+				if attempts != 0 {
+					t.Fatal("offline boot attempted enrollment")
+				}
+				if _, err := os.Stat(path); err != nil {
+					t.Fatal("offline boot lost its handoff")
+				}
+				// A later boot can still complete the first enrollment attempt.
+				waitForFirstBootACME = func(context.Context, string) error { return nil }
+				NewProvisioningServiceV2(NewProvisioningService(zap.NewNop(), dir)).ApplyACMEEnrollmentFile(context.Background(), path)
+				if attempts != 1 {
+					t.Fatal("offline boot blocked later enrollment")
+				}
+			}
+		})
+	}
+}
+
+func TestWaitForACMEDirectoryRetriesOnlyPublicDiscovery(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet || r.URL.Path != "/directory" || r.ContentLength > 0 {
+			t.Error("connectivity probe attempted credential redemption")
+		}
+		if requests == 1 {
+			http.Error(w, "offline", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"newNonce":"/nonce","newAccount":"/account","newOrder":"/order"}`)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := waitForACMEDirectory(ctx, server.URL+"/directory", time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if requests < 2 {
+		t.Fatal("connectivity failure was not retried")
+	}
+}
+
+func TestWaitForACMEDirectoryCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		http.Error(w, "offline", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	defer cancel()
+	if err := waitForACMEDirectory(ctx, server.URL, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation: %v", err)
 	}
 }

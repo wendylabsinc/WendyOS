@@ -57,25 +57,24 @@ type enrollmentTrust struct {
 	pin       config.DevicePin
 }
 
-type enrollmentSelectionKey struct{}
+type unboundSetupSelectionKey struct{}
 
-// This scope is created only by explicit enrollment. It follows a picker
-// selection and its read-only discovery probes, and is never returned to an
-// ordinary management caller as permission to use an unbound connection.
-func withEnrollmentSelection(ctx context.Context) context.Context {
-	return context.WithValue(ctx, enrollmentSelectionKey{}, true)
+// Only explicit enrollment and Wi-Fi setup may use an unbound setup endpoint.
+// The scope follows picker selection and discovery probes, but does not enable
+// enrollment trust recovery or permit overriding any saved device binding.
+func withUnboundSetupSelection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unboundSetupSelectionKey{}, true)
 }
 
-func isEnrollmentSelection(ctx context.Context) bool {
-	allowed, _ := ctx.Value(enrollmentSelectionKey{}).(bool)
+func isUnboundSetupSelection(ctx context.Context) bool {
+	allowed, _ := ctx.Value(unboundSetupSelectionKey{}).(bool)
 	return allowed
 }
 
-// connectUnboundEnrollmentTarget is used only by explicit enrollment, before
-// the ordinary management dial. It never overrides a saved identity, including
-// an older incomplete pin, and never treats an enrolled or unknown state as a
-// setup endpoint. The connection stays scoped to the enrollment callback.
-func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string, extraCandidates ...string) (*SelectedDevice, bool, error) {
+// connectUnboundSetupTarget is used by enrollment and Wi-Fi setup before the
+// ordinary management dial. It never overrides a saved identity, including an
+// older incomplete pin, or treats an enrolled or unknown state as a setup endpoint.
+func connectUnboundSetupTarget(ctx context.Context, pinKey, addr string, extraCandidates ...string) (*SelectedDevice, bool, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, true, err

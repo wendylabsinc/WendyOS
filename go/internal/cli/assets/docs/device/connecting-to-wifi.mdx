@@ -45,6 +45,19 @@ This guide will help you connect your NVIDIA Jetson or Raspberry Pi 5 running We
   **Wireless USB-Free Development**: If your developer machine and the newly connected WendyOS device are on the same SSID and your network allows mDNS/Bonjour/Avahi, you'll be able to connect and use the CLI commands without USB! Simply disconnect the USB cable and continue using `wendy` commands wirelessly.
 </Callout>
 
+## First-boot enrollment
+
+If you selected enrollment during `wendy install`, you can configure Wi-Fi over
+USB-C before enrollment completes. Run `wendy device wifi`, select the device,
+and connect it to your network. The CLI allows this setup connection only when
+there is no saved device binding and the device reports that it is unprovisioned.
+
+The agent waits for the Cloud enrollment directory to become reachable before
+starting its first enrollment attempt. Connecting to Wi-Fi allows that attempt to
+begin. A failed or interrupted issuance still requires explicit recovery; it is
+not automatically repeated. Devices that already recorded a failed attempt on an
+older agent retain that recovery requirement.
+
 ## Troubleshooting
 
 If you're having trouble connecting to Wi-Fi:
