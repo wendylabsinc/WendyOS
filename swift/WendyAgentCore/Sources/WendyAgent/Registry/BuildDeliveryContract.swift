@@ -28,6 +28,19 @@ enum BuildDeliveryContract {
         var operations: [String]
         var max_bytes: Int64
     }
+    // Explicit strength floor: only 65 and 87 are permitted. X509 verification
+    // also requires the selected algorithm to match the leaf's key parameters.
+    private enum SignatureAlgorithm: String {
+        case mldsa65 = "ML-DSA-65"
+        case mldsa87 = "ML-DSA-87"
+
+        var certificateAlgorithm: Certificate.SignatureAlgorithm {
+            switch self {
+            case .mldsa65: .mldsa65
+            case .mldsa87: .mldsa87
+            }
+        }
+    }
     private struct Header: Decodable {
         var alg: String
         var typ: String
@@ -136,7 +149,8 @@ enum BuildDeliveryContract {
                 "max_bytes",
             ]
         )
-        guard header.alg == "ML-DSA-65", header.typ == "wendy-build-delivery+jws",
+        guard let algorithm = SignatureAlgorithm(rawValue: header.alg),
+            header.typ == "wendy-build-delivery+jws",
             !header.x5c.isEmpty,
             header.x5c.count <= 16
         else { throw Failure("invalid delivery JWS header") }
@@ -196,7 +210,7 @@ enum BuildDeliveryContract {
             leaf.publicKey.isValidSignature(
                 signature,
                 for: Data((parts[0] + "." + parts[1]).utf8),
-                signatureAlgorithm: .mldsa65
+                signatureAlgorithm: algorithm.certificateAlgorithm
             )
         else { throw Failure("invalid delivery signature") }
         return Verified(claims: c, compact: compact, admittedAt: time)

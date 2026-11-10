@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import SwiftASN1
 import Testing
@@ -7,8 +8,11 @@ import X509
 
 @Suite("Build delivery contract conformance")
 struct BuildDeliveryContractTests {
-    @Test("Go ML-DSA JWS verifies with the same builder SPKI and session reference")
-    func goConformance() async throws {
+    @Test(
+        "Go ML-DSA JWS verifies with the same builder SPKI and session reference",
+        arguments: ["build-delivery-go.json", "build-delivery-go-mldsa87.json"]
+    )
+    func goConformance(filename: String) async throws {
         guard #available(macOS 26.0, *) else { return }
         struct Vector: Decodable {
             var root_pem: String
@@ -20,7 +24,7 @@ struct BuildDeliveryContractTests {
         }
         let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent(
-                "../../../../go/internal/shared/builddelivery/testdata/build-delivery-go.json"
+                "../../../../go/internal/shared/builddelivery/testdata/" + filename
             )
             .standardizedFileURL
         let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: path))
@@ -50,6 +54,56 @@ struct BuildDeliveryContractTests {
                 target: vector.target,
                 at: vector.verify_at + 1200
             )
+        }
+    }
+    @Test("only 65 and 87 with matching operator keys are accepted")
+    func signatureAlgorithms() async throws {
+        guard #available(macOS 26.0, *) else { return }
+        let keys: [(String, TestPKI.MLDSAKey)] = [
+            ("ML-DSA-65", .init(variant: .mldsa65(try MLDSA65.PrivateKey()))),
+            ("ML-DSA-87", .init(variant: .mldsa87(try MLDSA87.PrivateKey()))),
+        ]
+        for (keyAlgorithm, key) in keys {
+            let fixture = try BuildDeliveryFixture(signingKey: key)
+            for algorithm in ["ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "ES256", "none", "ML-DSA-99"] {
+                let compact = try fixture.sign(fixture.claims(), algorithm: algorithm)
+                if algorithm == keyAlgorithm {
+                    let verified = try await BuildDeliveryContract.verify(
+                        compact,
+                        roots: [fixture.root.certificate],
+                        target: BuildDeliveryFixture.target,
+                        at: fixture.time
+                    )
+                    #expect(verified.claims.iss == BuildDeliveryFixture.issuer)
+                    if algorithm == "ML-DSA-87",
+                        let path = ProcessInfo.processInfo.environment[
+                            "WENDY_BUILD_DELIVERY_SWIFT_87_OUTPUT"
+                        ]
+                    {
+                        let output: [String: Any] = [
+                            "root_pem": fixture.root.pem, "target": BuildDeliveryFixture.target,
+                            "builder_der": Data(fixture.builder.der).base64EncodedString(),
+                            "authorization_jws": compact,
+                            "session": BuildDeliveryContract.sessionID(compact),
+                            "verify_at": fixture.time,
+                        ]
+                        try JSONSerialization.data(
+                            withJSONObject: output,
+                            options: [.prettyPrinted, .sortedKeys]
+                        )
+                        .write(to: URL(fileURLWithPath: path))
+                    }
+                } else {
+                    await #expect(throws: (any Error).self) {
+                        try await BuildDeliveryContract.verify(
+                            compact,
+                            roots: [fixture.root.certificate],
+                            target: BuildDeliveryFixture.target,
+                            at: fixture.time
+                        )
+                    }
+                }
+            }
         }
     }
     @Test("strict JSON refuses duplicate, aliased, fractional and unknown fields")

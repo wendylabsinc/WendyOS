@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
@@ -156,11 +157,14 @@ struct BuildDeliveryRegistryTests {
     }
 
     @Test(
-        "RPC admission binds the actual builder; OCI resumes and publishes after operator disconnect"
+        "RPC admission binds the actual builder; OCI resumes and publishes after operator disconnect",
+        arguments: [false, true]
     )
-    func rpcAndRegistry() async throws {
+    func rpcAndRegistry(operator87: Bool) async throws {
         guard #available(macOS 26.0, *) else { return }
-        let fixture = try BuildDeliveryFixture()
+        let fixture = try BuildDeliveryFixture(
+            signingKey: operator87 ? .init(variant: .mldsa87(try MLDSA87.PrivateKey())) : nil
+        )
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "delivery-tls-\(UUID().uuidString)"
         )

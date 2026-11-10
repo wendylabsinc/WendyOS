@@ -21,7 +21,11 @@ struct BuildDeliveryFixture: Sendable {
     let operatorCertificate: Certificate
     let operatorKey: TestPKI.MLDSAKey
     let time: Int64
-    init(operatorLifetime: TimeInterval = 300, rights: [String]? = nil) throws {
+    init(
+        operatorLifetime: TimeInterval = 300,
+        rights: [String]? = nil,
+        signingKey: TestPKI.MLDSAKey? = nil
+    ) throws {
         time = Int64(Date().timeIntervalSince1970)
         root = try TestPKI.makeCA()
         target = try TestPKI.makeIdentity(commonName: "target", ca: root, uris: [Self.target])
@@ -36,7 +40,7 @@ struct BuildDeliveryFixture: Sendable {
             ca: root,
             uris: [Self.issuer]
         )
-        operatorKey = TestPKI.MLDSAKey(variant: .mldsa65(try MLDSA65.PrivateKey()))
+        operatorKey = try signingKey ?? TestPKI.MLDSAKey(variant: .mldsa65(MLDSA65.PrivateKey()))
         let name = try DistinguishedName { CommonName("synthetic entitled operator") }
         var serializer = DER.Serializer()
         try serializer.appendConstructedNode(identifier: .sequence) { coder in
@@ -94,21 +98,27 @@ struct BuildDeliveryFixture: Sendable {
             max_bytes: budget
         )
     }
-    func sign(_ claims: BuildDeliveryContract.Claims) throws -> String {
+    func sign(_ claims: BuildDeliveryContract.Claims, algorithm: String? = nil) throws -> String {
+        let keyAlgorithm: String
+        switch operatorKey.variant {
+        case .mldsa65: keyAlgorithm = "ML-DSA-65"
+        case .mldsa87: keyAlgorithm = "ML-DSA-87"
+        }
         var serializer = DER.Serializer()
         try serializer.serialize(operatorCertificate)
         let header = try JSONSerialization.data(withJSONObject: [
-            "alg": "ML-DSA-65", "typ": "wendy-build-delivery+jws",
+            "alg": algorithm ?? keyAlgorithm, "typ": "wendy-build-delivery+jws",
             "x5c": [Data(serializer.serializedBytes).base64EncodedString()],
         ])
         let input =
             BuildDeliveryContract.base64URL(header) + "."
             + BuildDeliveryContract.base64URL(try JSONEncoder().encode(claims))
-        guard case .mldsa65(let key) = operatorKey.variant else {
-            throw BuildDeliveryContract.Failure("invalid fixture key")
+        let signature: Data
+        switch operatorKey.variant {
+        case .mldsa65(let key): signature = try key.signature(for: Data(input.utf8))
+        case .mldsa87(let key): signature = try key.signature(for: Data(input.utf8))
         }
-        return input + "."
-            + BuildDeliveryContract.base64URL(try key.signature(for: Data(input.utf8)))
+        return input + "." + BuildDeliveryContract.base64URL(signature)
     }
     func authority(
         root directory: URL,
