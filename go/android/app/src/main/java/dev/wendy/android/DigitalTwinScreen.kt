@@ -152,6 +152,10 @@ private fun TwinWorkspace(model: WendyModel, store: SiteModelStore, current: Sto
             catch (e: CancellationException) { throw e } catch (e: Exception) { setError(e.message) } finally { setBusy(false) }
         }
     }
+    // The gateway's saved alignments, and background alignment of unplaced cameras (iOS NativeSiteView).
+    val records = rememberSiteCameraRecords(model, saved != null && gateway.id.isNotEmpty(), known = gateway.takeIf { it.id.isNotEmpty() }, refresh = revision)
+    val statuses = rememberAutomaticAlignment(model, saved, records, enabled = saved != null && placing == null)
+    val coverage = saved?.let { records.geometry(model, it) }.orEmpty()
     // Fixed cameras of this gateway with a persistent identity, unique on the device.
     val groups = model.cameras.groupBy { it.text("stable_id") }
     val available = model.cameras.filter { val id = it.text("stable_id"); id.isNotEmpty() && groups[id]?.size == 1 }
@@ -163,7 +167,7 @@ private fun TwinWorkspace(model: WendyModel, store: SiteModelStore, current: Sto
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when {
-                geometry != null -> SiteSceneView(geometry, site.cameras.mapNotNull { siteMarker(it, it.id == selected, it.id == placing) }, placing != null && !busy, onSelect = setSelected,
+                geometry != null -> SiteSceneView(geometry, site.cameras.mapNotNull { siteMarker(it, it.id == selected, it.id == placing, coverage[it.id]) }, placing != null && !busy, onSelect = setSelected,
                     onPlace = { point ->
                         val id = placing ?: return@SiteSceneView
                         val i = site.cameras.indexOfFirst { it.id == id }
@@ -196,16 +200,26 @@ private fun TwinWorkspace(model: WendyModel, store: SiteModelStore, current: Sto
                             Icon(if (camera.position == null) Icons.Outlined.PhotoCamera else Icons.Outlined.CheckCircle, null, tint = LensStyle.accent)
                             Column(Modifier.weight(1f)) {
                                 Text(camera.name)
-                                SecondaryText(if (camera.position == null) "Not placed" else if (camera.manualAlignment != null) "Manually aligned" else "Placed manually")
+                                SecondaryText(statuses[camera.sourceID]?.takeIf { coverage[camera.id] == null } ?: alignmentLabel(camera, coverage[camera.id]))
                             }
                             if (feed != null) IconButton(onClick = { nav.push(camera.name) { Column(Modifier.padding(16.dp)) { CameraTile(model, feed) } } }) { Icon(Icons.Outlined.PlayCircle, "Preview ${camera.name}") }
                             Box {
                                 IconButton(onClick = { menu = true }, enabled = !busy) { Icon(Icons.Outlined.MoreHoriz, "Actions for ${camera.name}") }
                                 DropdownMenu(menu, onDismissRequest = { menu = false }) {
                                     DropdownMenuItem(text = { Text(if (camera.position == null) "Place in model" else "Move camera") }, onClick = { menu = false; setPlacing(camera.id) })
-                                    if (feed != null && camera.position != null && saved != null) DropdownMenuItem(text = { Text("Calibrate and Align") }, onClick = {
+                                    if (feed != null && saved != null) DropdownMenuItem(text = { Text("Calibrate and Align") }, onClick = {
                                         menu = false
-                                        nav.push("Manual alignment") { SiteManualAlignmentPage(model, store, camera, saved, model.session) { value -> store.save(value) } }
+                                        val request = SiteAlignmentRequest(saved, camera, gateway, model.session)
+                                        nav.push("Align camera") {
+                                            SiteCameraAlignContent(model, store, request, feed, saveManual = { value -> store.save(value) }, onSaved = { result ->
+                                                withContext(Dispatchers.IO) {
+                                                    val value = store.load(saved.id).site
+                                                    val index = value.cameras.indexOfFirst { it.id == camera.id }
+                                                    if (index >= 0) store.save(value.copy(cameras = value.cameras.toMutableList().also { it[index] = it[index].copy(position = result.pose.position, manualAlignment = null) }))
+                                                }
+                                                changed()
+                                            })
+                                        }
                                     })
                                     DropdownMenuItem(text = { Text("Remove from Model", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; persist(site.copy(cameras = site.cameras.filter { it.id != camera.id })) })
                                 }
@@ -232,6 +246,7 @@ private fun TwinWorkspace(model: WendyModel, store: SiteModelStore, current: Sto
                 model.cameras.filter { it.text("stable_id").isEmpty() }.map { it.text("name") }.takeIf { it.isNotEmpty() }?.let { names ->
                     item { SecondaryText("${model.selected?.title ?: "This gateway"} has no persistent camera ID for ${names.joinToString()}. Those cameras cannot be saved in the model yet.") }
                 }
+                saved?.let { value -> if (value.site.cameras.isNotEmpty()) item { SecondaryText(coverageExplanation(value, records, coverage)) } }
                 item { SecondaryText("Robot maps, localization and controls are not on Android yet.") }
                 if (busy) item { LoadingRow("Saving placement…") }
                 error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }

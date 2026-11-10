@@ -27,10 +27,24 @@ import kotlin.math.sqrt
 /** A camera marker in the scene; [frustum] is its apex then four far corners when the camera has an orientation. */
 class SiteMarker(val id: String, val position: FloatArray, val color: FloatArray, val frustum: FloatArray? = null)
 
-/** Builds the marker for a placed camera, with a view cone for a manually aligned one. */
-fun siteMarker(camera: SiteCamera, selected: Boolean, placing: Boolean): SiteMarker? {
-    val p = camera.position ?: return null
+/**
+ * Builds the marker for a camera: at its aligned pose with a view cone through its lens corners when it has
+ * [geometry] (a gateway alignment or manual visualization), otherwise at its manual placement.
+ */
+fun siteMarker(camera: SiteCamera, selected: Boolean, placing: Boolean, geometry: SiteCameraGeometry? = null): SiteMarker? {
     val color = if (placing) floatArrayOf(1f, .58f, 0f) else if (selected) floatArrayOf(.62f, .89f, .75f) else floatArrayOf(.16f, .44f, .31f)
+    if (geometry != null && !placing) {
+        val p = geometry.pose.position; val r = geometry.pose.matrix(); val lens = geometry.lens
+        val depth = 1.2
+        val corners = lens?.let { l -> listOf(l.ray(0.0, 0.0), l.ray(l.width.toDouble(), 0.0), l.ray(l.width.toDouble(), l.height.toDouble()), l.ray(0.0, l.height.toDouble())) }
+        val frustum = corners?.takeIf { c -> c.all { it != null && it[2] > 0.05 } }?.let { c ->
+            val apex = doubleArrayOf(p.x, p.y, p.z)
+            (listOf(apex) + c.map { ray -> SiteMath.apply3(r, doubleArrayOf(ray!![0] / ray[2] * depth, ray[1] / ray[2] * depth, depth)).let { w -> doubleArrayOf(apex[0] + w[0], apex[1] + w[1], apex[2] + w[2]) } })
+                .flatMap { it.map(Double::toFloat) }.toFloatArray()
+        }
+        return SiteMarker(camera.id, floatArrayOf(p.x.toFloat(), p.y.toFloat(), p.z.toFloat()), color, frustum)
+    }
+    val p = camera.position ?: return null
     val frustum = camera.manualAlignment?.let { manual ->
         val r = manual.rotation()
         val depth = 1.2

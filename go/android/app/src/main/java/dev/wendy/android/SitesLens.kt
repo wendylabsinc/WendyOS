@@ -484,12 +484,25 @@ private fun SiteModelViewer(model: WendyModel, store: SitesStore, siteID: String
     val nav = LocalNavigator.current
     val page = LocalNavPage.current
     val (saved, geometry, error) = rememberSiteModel(store.models, link.id, store.revision)
+    val site = store.sites.firstOrNull { it.id == siteID }
+    // Gateway alignments of the connected site device, and background alignment of its unplaced cameras.
+    val records = rememberSiteCameraRecords(model, saved != null, site?.assets.orEmpty())
+    val statuses = rememberAutomaticAlignment(model, saved, records, enabled = saved != null)
+    val coverage = saved?.let { records.geometry(model, it) }.orEmpty()
     LaunchedEffect(saved != null) { page?.actions = { IconButton(onClick = { nav.push("Place Cameras") { SiteCamerasPage(model, store, siteID, link.id) } }, enabled = saved != null) { Icon(Icons.Outlined.PhotoCamera, "Cameras") } } }
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
             when {
-                geometry != null && saved != null -> SiteSceneView(geometry, saved.site.cameras.mapNotNull { siteMarker(it, false, false) }, false,
-                    onSelect = { id -> saved.site.cameras.firstOrNull { it.id == id }?.let { camera -> nav.push(camera.name) { SiteCameraLivePage(model, store, store.sites.firstOrNull { s -> s.id == siteID }, camera, saved) } } }, onPlace = {}, modifier = Modifier.fillMaxSize())
+                geometry != null && saved != null -> {
+                    SiteSceneView(geometry, saved.site.cameras.mapNotNull { siteMarker(it, false, false, coverage[it.id]) }, false,
+                        onSelect = { id -> saved.site.cameras.firstOrNull { it.id == id }?.let { camera -> nav.push(camera.name) { SiteCameraLivePage(model, store, site, camera, saved) } } }, onPlace = {}, modifier = Modifier.fillMaxSize())
+                    Surface(Modifier.align(Alignment.BottomStart).padding(12.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = .92f)) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(coverageExplanation(saved, records, coverage), style = MaterialTheme.typography.bodySmall)
+                            if (coverage.isEmpty()) saved.site.cameras.forEach { camera -> statuses[camera.sourceID]?.let { Text("${camera.name}: $it", style = MaterialTheme.typography.bodySmall) } }
+                        }
+                    }
+                }
                 error != null -> EmptyMessage("Model unavailable", error, Icons.Outlined.ViewInAr)
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LensLoading("Loading model…") }
             }
@@ -498,6 +511,14 @@ private fun SiteModelViewer(model: WendyModel, store: SitesStore, siteID: String
             LensButton("Save to device", primary = true, enabled = saved != null, modifier = Modifier.fillMaxWidth().padding(16.dp)) { nav.push("Save to device") { SiteDeviceModelsPage(model, store, siteID, link) } }
         }
     }
+}
+
+/** How a camera is placed: its gateway alignment, a manual visualization or a manual placement. */
+internal fun alignmentLabel(camera: SiteCamera, geometry: SiteCameraGeometry?): String = when {
+    camera.manualAlignment != null -> "Manually aligned"
+    geometry != null -> if (geometry.lens?.measured == true) "Aligned · calibrated lens" else "Aligned · estimated"
+    camera.position == null -> "Not placed"
+    else -> "Placed manually"
 }
 
 /** Place a site's fixed cameras on a model, preview them live and align them (iOS MobileSiteCameras). */
@@ -532,11 +553,13 @@ private fun SiteCamerasPage(model: WendyModel, store: SitesStore, siteID: String
         }
     }
     val value = saved?.site
+    val records = rememberSiteCameraRecords(model, saved != null, site?.assets.orEmpty(), refresh = refresh)
+    val coverage = saved?.let { records.geometry(model, it) }.orEmpty()
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when {
                 geometry != null && value != null -> {
-                    SiteSceneView(geometry, value.cameras.mapNotNull { siteMarker(it, it.id == selected, it.id == placing) }, placing != null && !busy,
+                    SiteSceneView(geometry, value.cameras.mapNotNull { siteMarker(it, it.id == selected, it.id == placing, coverage[it.id]) }, placing != null && !busy,
                         onSelect = { selected = it }, onPlace = { point ->
                             val id = placing ?: return@SiteSceneView
                             val index = value.cameras.indexOfFirst { it.id == id }
@@ -573,7 +596,7 @@ private fun SiteCamerasPage(model: WendyModel, store: SitesStore, siteID: String
                                 Icon(if (camera.position == null) Icons.Outlined.PhotoCamera else Icons.Outlined.CheckCircle, null, tint = LensStyle.accent)
                                 Column(Modifier.weight(1f)) {
                                     Text(camera.name)
-                                    SecondaryText(if (placing == camera.id) "Tap the model to place" else if (camera.position == null) "Not placed" else if (camera.manualAlignment != null) "Manually aligned" else "Placed manually")
+                                    SecondaryText(if (placing == camera.id) "Tap the model to place" else alignmentLabel(camera, coverage[camera.id]))
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -675,6 +698,7 @@ private fun SiteCameraLivePage(model: WendyModel, store: SitesStore, site: SiteR
     var status by remember { mutableStateOf("Finding camera…") }
     var error by remember { mutableStateOf<String?>(null) }
     var session by remember { mutableLongStateOf(0L) }
+    var gateway by remember { mutableStateOf(SiteGatewayIdentity()) }
     var attempt by remember { mutableIntStateOf(0) }
     val assigned = site?.assets?.filter { !it.robot }.orEmpty()
     LaunchedEffect(attempt) {
@@ -694,7 +718,7 @@ private fun SiteCameraLivePage(model: WendyModel, store: SitesStore, site: SiteR
                     if (!identity.matches(camera.gatewayID)) continue
                     val matches = model.cameras.filter { it.text("stable_id") == camera.sourceID }
                     if (matches.size != 1) { error = "The camera’s device is ${device.title}, but it is not reporting this camera uniquely. Check its camera connection and try again."; return@LaunchedEffect }
-                    session = model.session; return@LaunchedEffect
+                    gateway = identity; session = model.session; return@LaunchedEffect
                 } catch (e: CancellationException) { throw e } catch (e: Exception) { failures += "${device.title}: ${e.message}" }
             }
             error = when {
@@ -707,25 +731,21 @@ private fun SiteCameraLivePage(model: WendyModel, store: SitesStore, site: SiteR
     val feed = if (session != 0L && session == model.session) model.cameras.filter { it.text("stable_id") == camera.sourceID }.singleOrNull() else null
     Column(Modifier.fillMaxSize().background(sitesBackground).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         when {
-            feed != null -> {
-                CameraTile(model, feed)
-                if (align) {
-                    Text("Align camera", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface) {
-                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(if (camera.manualAlignment != null) "Manually aligned" else if (camera.position != null) "Saved placement · needs alignment" else "Not placed", style = MaterialTheme.typography.titleSmall)
-                            SecondaryText(if (saved.visualMap == null) "This model has no scan reference photos, so it can’t be aligned automatically." else "Automatic alignment from scan references isn’t available on Android yet. Adjust the camera manually.")
-                        }
+            feed != null && align -> Box(Modifier.weight(1f)) {
+                SiteCameraAlignContent(model, store.models, SiteAlignmentRequest(saved, camera, gateway, session), feed, saveManual = { value ->
+                    store.saveCameraModel(value, site?.id ?: throw SiteException("Reopen the camera from its site to save alignment."), "${camera.name} manually aligned")
+                }, onSaved = { result ->
+                    // As on iOS, the model keeps the aligned position and drops a manual visualization.
+                    val siteID = site?.id ?: throw SiteException("Reopen the camera from its site to save alignment.")
+                    withContext(Dispatchers.IO) {
+                        val value = store.models.load(saved.id).site
+                        val index = value.cameras.indexOfFirst { it.id == camera.id }
+                        if (index >= 0) store.saveCameraModel(value.copy(cameras = value.cameras.toMutableList().also { it[index] = it[index].copy(position = result.pose.position, manualAlignment = null) }),
+                            siteID, "${camera.name} ${if (result.lens.measured) "aligned" else "aligned approximately"}")
                     }
-                    LensButton("Adjust manually", primary = true, modifier = Modifier.fillMaxWidth()) {
-                        nav.push("Manual alignment") {
-                            SiteManualAlignmentPage(model, store.models, camera, saved, session) { value ->
-                                store.saveCameraModel(value, site?.id ?: throw SiteException("Reopen the camera from its site to save alignment."), "${camera.name} manually aligned")
-                            }
-                        }
-                    }
-                }
+                }, padding = 0.dp)
             }
+            feed != null -> CameraTile(model, feed)
             else -> Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Icon(Icons.Outlined.Videocam, null, Modifier.size(40.dp), tint = LensStyle.accent)
                 Text(if (busy) status else "Camera unavailable", style = MaterialTheme.typography.titleMedium)
