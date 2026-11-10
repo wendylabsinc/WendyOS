@@ -19,6 +19,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audio"
 	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
+	"github.com/wendylabsinc/wendy/go/internal/agent/executil"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -577,6 +578,7 @@ func runCapture(cmd *exec.Cmd) (*capture, error) {
 		return nil, status.Errorf(codes.Internal, "failed to create audio pipe: %v", err)
 	}
 	c.stdout = stdout
+	executil.ResetOOMScore(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to start audio capture: %v", err)
 	}

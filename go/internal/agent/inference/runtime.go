@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/executil"
 )
 
 //go:embed worker.py accelerator.py pyproject.toml uv.lock
@@ -309,6 +310,7 @@ const (
 func startWorker(ctx context.Context, argv []string, dir string, env []string, config workerConfig, crashed func(reason string)) (Session, error) {
 	childCtx, cancel := context.WithCancel(ctx)
 	command := exec.CommandContext(childCtx, argv[0], argv[1:]...)
+	executil.ResetOOMScore(command)
 	command.Dir = dir
 	command.Env = env
 	configureProcess(command)

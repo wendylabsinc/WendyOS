@@ -47,6 +47,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
+	"github.com/wendylabsinc/wendy/go/internal/agent/executil"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
@@ -55,7 +56,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
-	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -1557,19 +1557,15 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// "@" is used as separator because it cannot appear in a valid appID
 	// ([a-zA-Z0-9._-]) or serviceName ([a-z][a-z0-9-]*), eliminating the
 	// collision risk that a hyphen separator would have introduced.
-	//   - Single-container: "system.slice:{systemdSvc}:{appID}"
-	//   - Multi-service:    "system.slice:{systemdSvc}:{appID}@{serviceName}"
+	// On cgroup v2, every app is a child of /wendy-apps, whose aggregate
+	// memory ceiling is prepared before starting a task. See appCgroupPath.
 	//
 	// INVARIANT: ApplyEntitlements and CDI helpers must not set CgroupsPath.
 	// The assertion below detects any future violation at runtime (SOC2-CC6).
 	if spec.Linux.CgroupsPath != "" {
 		return fmt.Errorf("security: CgroupsPath was unexpectedly set before assignment (%q); ApplyEntitlements or CDI must not set it", spec.Linux.CgroupsPath)
 	}
-	cgroupSuffix := appID
-	if serviceName != "" {
-		cgroupSuffix = appID + "@" + serviceName
-	}
-	spec.Linux.CgroupsPath = fmt.Sprintf("system.slice:%s:%s", sharedenv.SystemdServiceName(), cgroupSuffix)
+	spec.Linux.CgroupsPath = appCgroupPath(appID, serviceName, hasUnifiedAppCgroup())
 
 	// Apply CPU/memory/PID ceilings from wendy.json (per-service overrides
 	// the app-level default). Malformed values are rejected here rather than
@@ -2423,10 +2419,11 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// must be recreated here, before container.NewTask below processes the
 	// spec's mounts, or the runtime's bind mount fails and the container never
 	// starts again. The gates are the exact persisted resolv.conf mount sources,
-	// Bluetooth mount, and serial device mounts, so a Spec load failure just
-	// skips the recovery hooks (NewTask will report an invalid stored spec).
+	// Bluetooth mount, and serial device mounts. Spec failures stop startup
+	// before any task can bypass the resource policy.
 	storedSpec, storedSpecErr := container.Spec(ctx)
 	if storedSpecErr == nil {
+
 		// Managed virtual robot VMs may use legacy netfilter kernels. Prepare their
 		// fixed firewall modules on the host before the confined bootstrap;
 		// this path also runs after VM reboot and never holds c.mu.
@@ -2455,14 +2452,24 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		if serialErr != nil {
 			return nil, fmt.Errorf("refreshing serial devices for %q: %w", appName, serialErr)
 		}
-		if changed {
+		unified, budgetErr := ensureAppMemoryBudget()
+		if budgetErr != nil {
+			return nil, fmt.Errorf("preparing aggregate app memory budget: %w", budgetErr)
+		}
+		if !unified && runtime.GOOS == "linux" {
+			c.logger.Warn("cgroup v1: aggregate app memory protection requires cgroup v2", zap.String("app_name", appName))
+		}
+		policyChanged, policyErr := refreshAppResourcePolicy(storedSpec, appID, serviceName, unified)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		if changed || policyChanged {
 			if updateErr := container.Update(ctx, withUpdatedContainerSpec(storedSpec)); updateErr != nil {
-				return nil, fmt.Errorf("persisting refreshed serial devices for %q: %w", appName, updateErr)
+				return nil, fmt.Errorf("persisting refreshed app resources for %q: %w", appName, updateErr)
 			}
 		}
 	} else {
-		c.logger.Warn("could not load container spec to recreate managed start resources",
-			zap.String("app_name", appName), zap.Error(storedSpecErr))
+		return nil, fmt.Errorf("loading container spec before applying app resource policy: %w", storedSpecErr)
 	}
 
 	// Same class of problem as the resolv.conf hook above, for device numbers:
@@ -3068,7 +3075,7 @@ func (c *Client) ExecInContainer(ctx context.Context, appName string, command []
 	if err != nil {
 		return -1, fmt.Errorf("reading container spec for %q: %w", appName, err)
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	pspec.Terminal = tty
 	pspec.Args = command
 	// Defensive copy of Env before use (mirrors the ROS 2 exec path) so we never
@@ -3569,7 +3576,7 @@ func expandAgentHook(command, appName string) string {
 
 var startPostStartHookCommand = func(argv []string) (func() error, error) {
 	// SECURITY (WDY-1009): exec the hook directly via argv. The command must
-	// never be passed to a shell — doing so would let any app's wendy.json
+	// never be evaluated as shell code — doing so would let any app's wendy.json
 	// inject arbitrary commands that run as the agent (root) on the host,
 	// bypassing the container sandbox and entitlement boundary.
 	if len(argv) == 0 {
@@ -3578,6 +3585,7 @@ var startPostStartHookCommand = func(argv []string) (func() error, error) {
 		return nil, errors.New("postStart hook argv is empty")
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
+	executil.ResetOOMScore(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

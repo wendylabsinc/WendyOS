@@ -29,6 +29,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/executil"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
@@ -3275,6 +3276,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	if cmd == nil {
 		cmd = exec.CommandContext(ctx, plan.args[0], plan.args[1:]...)
 	}
+	executil.ResetOOMScore(cmd)
 	if input != nil {
 		cmd.Stdin = input
 		defer input.Close() // also close if Start fails

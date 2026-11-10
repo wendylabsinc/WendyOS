@@ -17,6 +17,8 @@ WorkingDirectory=/var/lib/wendy-agent
 ExecStart=/usr/bin/wendy-agent
 Restart=always
 RestartSec=2
+# Keep device management available when applications exhaust host memory.
+OOMScoreAdjust=-1000
 LimitNOFILE=65536
 
 [Install]

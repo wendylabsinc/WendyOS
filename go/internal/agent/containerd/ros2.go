@@ -563,7 +563,7 @@ func (c *Client) sidecarHasROS2CLI(ctx context.Context, container containerd.Con
 	if err != nil {
 		return false, err
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	pspec.Terminal = false
 	pspec.Args = ros2ShellArgs(distro,
 		fmt.Sprintf(". %s >/dev/null 2>&1; command -v ros2 >/dev/null 2>&1", ros2SetupScript(distro)),
@@ -1031,7 +1031,7 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 	if err != nil {
 		return -1, fmt.Errorf("reading ROS 2 sidecar spec: %w", err)
 	}
-	pspec := spec.Process
+	pspec := appExecProcess(spec.Process)
 	// The ROS environment lives in /opt/ros/<distro>/setup.sh; the "$@"
 	// indirection keeps user-supplied args out of shell interpretation
 	// (SOC2-CC6, ISO27001-A.8, NIST-SI-10). See ros2ShellArgs for why this is

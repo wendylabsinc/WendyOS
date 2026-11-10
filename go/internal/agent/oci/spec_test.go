@@ -3,7 +3,33 @@ package oci
 import (
 	"encoding/json"
 	"testing"
+
+	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
 )
+
+func TestAppOOMScoreIsExplicitZero(t *testing.T) {
+	for name, spec := range map[string]*Spec{
+		"default": DefaultSpec("/rootfs", []string{"/bin/sh"}),
+		"legacy":  {Process: &Process{Args: []string{"/bin/sh"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := json.Marshal(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var runtimeSpec runtimespec.Spec
+			if err := json.Unmarshal(data, &runtimeSpec); err != nil {
+				t.Fatal(err)
+			}
+			if runtimeSpec.Process.OOMScoreAdj == nil {
+				t.Fatal("oomScoreAdj omitted; runtime would inherit the shim's OOM protection")
+			}
+			if got := *runtimeSpec.Process.OOMScoreAdj; got != 0 {
+				t.Fatalf("oomScoreAdj = %d; want 0", got)
+			}
+		})
+	}
+}
 
 // TestDefaultSeccompBlocksKernelAttackSurface is the regression test for
 // WDY-1012: the baseline seccomp profile must deny the kernel-attack-surface

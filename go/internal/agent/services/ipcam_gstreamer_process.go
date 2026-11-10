@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/executil"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 )
 
@@ -38,6 +39,7 @@ func (s *VideoService) gstreamerFrames(ctx context.Context, args []string, onFra
 		return fmt.Errorf("locating GStreamer helper: %w", err)
 	}
 	cmd := newIPCameraGStreamerCommand(ctx, executable)
+	executil.ResetOOMScore(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("creating GStreamer input pipe: %w", err)

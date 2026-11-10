@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/creack/pty"
+	"github.com/wendylabsinc/wendy/go/internal/agent/executil"
 )
 
 // Spawner runs a host PTY session. It holds no state; New returns a ready value.
@@ -42,6 +43,7 @@ func (Spawner) Run(ctx context.Context, command []string, stdin io.Reader, stdou
 	}
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	executil.ResetOOMScore(cmd)
 	cmd.Env = append(os.Environ(), "HOME=/root", "TERM=xterm-256color")
 	// Start in root's home only when running as root with /root present — that is
 	// the on-device case (the agent runs as root and /root exists). Bare existence

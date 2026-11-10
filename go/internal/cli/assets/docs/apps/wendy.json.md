@@ -204,7 +204,7 @@ Python-specific settings.
 
 ### `resources`
 
-Optional CPU, memory, and process-count ceilings the agent enforces on the container via cgroups. Edge devices are resource-constrained and often run several apps side by side, so capping a service keeps one busy or leaky app from starving its neighbours. Every field is optional. Omitting `memory` or `cpus` leaves that resource **unbounded** (the historical behaviour), so adding `resources` is backward compatible. `pids` is the exception: when omitted, a conservative default ceiling (4096) is applied as a fork-bomb guard — set it explicitly to raise or lower that ceiling.
+Optional CPU, memory, and process-count ceilings the agent enforces on each container via cgroups. Omitting `memory` or `cpus` leaves that container without an individual limit for the resource. On cgroup v2, all Wendy apps also share the host memory budget described below, including apps without a declared memory limit. When `pids` is omitted, a default ceiling of 4096 guards against fork bombs; set it explicitly to raise or lower that ceiling.
 
 ```json
 {
@@ -236,6 +236,33 @@ For multi-service apps, set `resources` at the top level as the default and/or p
 ```
 
 Here `web` inherits the full app-level limits (`1Gi`, `pids: 512`). `worker` uses its own `256Mi` and `0.5` cores, and still **inherits** the app-level `pids: 512` it did not override.
+
+#### Host memory protection
+
+On Linux with cgroup v2, app tasks run beneath `/wendy-apps/`. The agent
+reserves `min(RAM / 2, max(2 GiB, RAM / 5))` for the host, using `MemTotal`
+from `/proc/meminfo`. The remaining RAM is the combined `memory.max` for all
+apps. `memory.high` starts reclaim at 90% of that ceiling, and
+`memory.swap.max=0` prevents apps from exhausting host swap. An 8 GiB host
+therefore gives apps a combined 6 GiB ceiling. Declared per-container limits
+apply in addition to this shared budget. A task start fails if the v2 memory
+controls cannot be configured. Cgroup-v1 devices keep their existing placement
+and log that aggregate memory protection is unavailable.
+
+The packaged Wendy Agent service uses `OOMScoreAdjust=-1000` to protect device
+management from the kernel OOM killer. Container starts and execs explicitly
+use `oom_score_adj=0`. Host workloads launched through the managed execution,
+inference, media, and post-start-hook paths drop inherited negative OOM scores
+before executing. This keeps those workloads eligible for termination under
+memory pressure.
+
+After upgrading the agent, restart existing apps to apply the new cgroup path
+and OOM score. Restarting only the agent leaves running app tasks in their old
+cgroups; the agent warns when it observes an uncovered task. Stopped apps
+migrate their persisted specs on their next start, without rebuilding images
+or deleting volumes. To verify coverage, inspect `/proc/<task-pid>/cgroup` for
+`0::/wendy-apps/…` and the parent's memory controls; the saved OCI spec alone
+does not prove that a running task has migrated.
 
 ### `env`
 

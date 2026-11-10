@@ -15,6 +15,7 @@ import (
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/typeurl/v2"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
@@ -159,6 +160,14 @@ func (c *Client) restoreRunningTaskResources(ctx context.Context, ctr containerd
 	}
 	if !runningTaskStillCurrent(ctx, ctr, pid) {
 		return nil
+	}
+	if hasUnifiedAppCgroup() {
+		membership, membershipErr := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+		if membershipErr != nil {
+			c.logger.Warn("could not verify running app memory budget membership", zap.String("app_name", ctr.ID()), zap.Error(membershipErr))
+		} else if !appTaskHasBudgetCgroup(string(membership)) {
+			c.logger.Warn("running app is outside the aggregate memory budget; restart the app to apply host protection", zap.String("app_name", ctr.ID()))
+		}
 	}
 	if _, err := c.ensureDBusProxyForStart(ctx, ctr.ID(), spec.Mounts); err != nil {
 		return err
