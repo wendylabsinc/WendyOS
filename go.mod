@@ -29,7 +29,7 @@ require (
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v29.9.1+incompatible
 	github.com/dustin/go-humanize v1.0.1
-	github.com/ebitengine/oto/v3 v3.4.0
+	github.com/ebitengine/oto/v3 v3.5.1
 	github.com/ebitengine/purego v0.11.3
 	github.com/foxglove/mcap/go/mcap v1.7.4
 	github.com/fsnotify/fsnotify v1.10.1
@@ -58,8 +58,8 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/pierrec/lz4/v4 v4.1.33
-	github.com/pion/rtcp v1.2.19
-	github.com/pion/rtp v1.10.5
+	github.com/pion/rtcp v1.2.20
+	github.com/pion/rtp v1.10.6
 	github.com/pion/webrtc/v4 v4.2.23
 	github.com/quic-go/quic-go v0.62.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
@@ -78,8 +78,8 @@ require (
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
-	golang.org/x/sync v0.24.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sync v0.25.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.47.0
 	golang.org/x/time v0.16.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc
@@ -131,6 +131,7 @@ require (
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/jfreymuth/pulse v0.1.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect

@@ -3,6 +3,17 @@
 Wendy is a CLI and agent platform for developing and deploying applications on
 WendyOS edge devices (Raspberry Pi, NVIDIA Jetson, x86 SBCs, and more).
 
+## Image files
+
+AI assistants and LLMs must not add or modify image files in Git commits. This
+applies to all images, including screenshots, GIFs, generated artwork, and SVGs,
+whether intended for review, documentation, or the product itself.
+
+Keep generated review assets outside the repository. Upload screenshots, GIFs,
+and videos as GitHub attachments and embed them in the PR description. If an
+attachment cannot be uploaded, report that limitation instead of committing the
+asset to satisfy the PR demonstration requirement.
+
 ## Pull request descriptions
 
 Every PR created from now on must use only the applicable sections below, in

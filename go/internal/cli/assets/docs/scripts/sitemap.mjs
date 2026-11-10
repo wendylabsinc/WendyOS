@@ -5,8 +5,10 @@ import path from 'node:path';
 import { pageUrl } from './publish-markdown.mjs';
 
 // Crawlers only read robots.txt at the site root. The deploy workflow copies
-// the latest/ robots.txt and sitemap.xml there on stable releases.
-export const robotsTxt = 'User-agent: *\nAllow: /\n\nSitemap: https://docs.wendy.dev/sitemap.xml\n';
+// the latest/ robots.txt and sitemap.xml there on stable releases. Branch
+// previews (/branch-<name>-<sha>/) are deleted after a while, so crawlers are
+// kept out of them.
+export const robotsTxt = 'User-agent: *\nAllow: /\nDisallow: /branch-\n\nSitemap: https://docs.wendy.dev/sitemap.xml\n';
 
 const xml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 

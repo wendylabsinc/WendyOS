@@ -277,7 +277,7 @@ func TestToolAnalyticsPanicPreservesStdioRecovery(t *testing.T) {
 var allErrorCodes = []errorCode{
 	errCodeNotConnected, errCodeInvalidArgument, errCodeDeviceUnreachable, errCodeEntitlementDenied,
 	errCodeAuthRequired, errCodeMultipleSessions, errCodeNotFound, errCodeTimeout, errCodeCancelled,
-	errCodeUnsupported, errCodeInternal,
+	errCodeUnsupported, errCodeInternal, errCodeConfirmationRequired,
 }
 
 func TestToolErrorClassReportsEveryBuiltInCode(t *testing.T) {

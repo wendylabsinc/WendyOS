@@ -248,7 +248,7 @@ func pickTourGuideWithOptions(ctx context.Context, out io.Writer, title string, 
 		return msg
 	}
 	options := append([]tea.ProgramOption{tea.WithContext(ctx), tea.WithOutput(out), tea.WithFilter(filter)}, opts...)
-	final, err := tea.NewProgram(model, options...).Run()
+	final, err := tui.RunProgram(tea.NewProgram(model, options...))
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
@@ -304,7 +304,7 @@ func (m tourContinueModel) View() string {
 	return guideActionStyle.Render(m.label) + "\n"
 }
 func waitTourGuide(ctx context.Context, out io.Writer, label string) error {
-	final, err := tea.NewProgram(tourContinueModel{label: label}, tea.WithContext(ctx), tea.WithOutput(out), tea.WithFilter(tui.InterruptFilter)).Run()
+	final, err := tui.RunProgram(tea.NewProgram(tourContinueModel{label: label}, tea.WithContext(ctx), tea.WithOutput(out), tea.WithFilter(tui.InterruptFilter)))
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

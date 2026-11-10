@@ -8,6 +8,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/shared/timefmt"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -66,13 +67,13 @@ func maybeFixClock(ctx context.Context, conn *grpcclient.AgentConnection) {
 		return
 	}
 	if syncResp.GetApplied() && !jsonOutput {
-		fmt.Fprintf(os.Stderr, "⏱  Device clock was %s behind — synchronized via Roughtime.\n", timefmt.Skew(skew))
+		fmt.Fprintf(terminaloutput.Stderr, "⏱  Device clock was %s behind — synchronized via Roughtime.\n", timefmt.Skew(skew))
 	}
 }
 
 // debugClock logs only when WENDY_TLS_DEBUG is set, matching autoSyncTimeAndRetry.
 func debugClock(format string, args ...any) {
 	if os.Getenv("WENDY_TLS_DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "[clock] "+format+"\n", args...)
+		fmt.Fprintf(terminaloutput.Stderr, "[clock] "+format+"\n", args...)
 	}
 }
