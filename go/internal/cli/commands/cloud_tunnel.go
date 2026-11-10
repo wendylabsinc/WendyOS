@@ -361,41 +361,6 @@ func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.C
 	return openAuthorizedTunnel(ctx, auth, d.key, service)
 }
 
-// tunnelDialer retains the authorization connection and grant-key cache for a
-// forwarding command. Each dial still obtains a fresh grant and caller key;
-// credentials are refreshed through cloudContext before each request.
-func (d cloudDiscoveryDevice) tunnelDialer(brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32) (func(context.Context) (net.Conn, error), func(), error) {
-	if d.legacy != nil {
-		return func(ctx context.Context) (net.Conn, error) {
-			return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
-		}, func() {}, nil
-	}
-	service, err := cloudrelay.PortService("tcp", remotePort)
-	if err != nil {
-		return nil, nil, err
-	}
-	signer, err := tunnelPrincipalSigner(auth)
-	if err != nil {
-		return nil, nil, err
-	}
-	issuer, err := cloudrelay.Issuer(auth.CloudGRPC, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
-	if err != nil {
-		return nil, nil, err
-	}
-	conn, err := dialCloudGRPC(auth)
-	if err != nil {
-		return nil, nil, err
-	}
-	verifier := &cloudrelay.Verifier{Issuer: issuer}
-	return func(ctx context.Context) (net.Conn, error) {
-		cloudCtx, err := cloudContext(ctx, auth)
-		if err != nil {
-			return nil, err
-		}
-		return cloudrelay.OpenTCP(ctx, cloudCtx, conn, verifier, d.key, service, signer)
-	}, func() { _ = conn.Close() }, nil
-}
-
 func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {
 	local, remote := net.Pipe()
 	// A non-EOF end of the broker stream is the broker's verdict on this

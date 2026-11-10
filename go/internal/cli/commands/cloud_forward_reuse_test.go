@@ -14,8 +14,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestCloudTunnelDialerReusesConnectionButAuthorizesEveryDial(t *testing.T) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+// Every connection accepted by `wendy cloud tunnel` asks Cloud for its own
+// grant, and they all ask over one authorization connection.
+func TestCloudTunnelForwardReusesAuthorizationConnection(t *testing.T) {
+	cloud, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,24 +29,32 @@ func TestCloudTunnelDialerReusesConnectionButAuthorizesEveryDial(t *testing.T) {
 		requests <- request{p.Addr.String(), method}
 		return status.Error(codes.PermissionDenied, "test refusal")
 	}))
-	go srv.Serve(lis)
+	go srv.Serve(cloud)
 	defer srv.Stop()
 	auth := oidcEnrollmentAuth(t)
-	auth.CloudGRPC = lis.Addr().String()
+	auth.CloudGRPC = cloud.Addr().String()
 	id := "00000000-0000-4000-8000-000000000042"
 	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
-	dial, closeDialer, err := d.tunnelDialer(nil, auth, 50052)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeDialer()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
+	failures := make(chan error, 2)
+	served := make(chan error, 1)
+	go func() {
+		served <- d.serveTunnelForward(ctx, ln, nil, auth, 50052, func(err error) { failures <- err })
+	}()
+
 	var address string
-	for i := 0; i < 2; i++ {
-		if _, err := dial(ctx); status.Code(err) != codes.PermissionDenied {
-			t.Fatalf("dial %d did not preserve authorization refusal: %v", i, err)
+	for i := range 2 {
+		local, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
 		}
+		defer local.Close()
 		select {
 		case req := <-requests:
 			if req.method != pb.TunnelAuthorizationService_RequestTunnel_FullMethodName {
@@ -55,7 +65,19 @@ func TestCloudTunnelDialerReusesConnectionButAuthorizesEveryDial(t *testing.T) {
 			}
 			address = req.address
 		case <-ctx.Done():
-			t.Fatal("dial did not request fresh authorization")
+			t.Fatalf("connection %d did not request fresh authorization", i)
 		}
+		select {
+		case err := <-failures:
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("connection %d did not preserve authorization refusal: %v", i, err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("connection %d did not report its refusal", i)
+		}
+	}
+	cancel()
+	if err := <-served; err != nil {
+		t.Fatalf("forwarding ended with %v", err)
 	}
 }
