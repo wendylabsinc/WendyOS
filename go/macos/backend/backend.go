@@ -40,6 +40,7 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	gallery                 galleryConnections
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
@@ -461,6 +462,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.galleryReset(true)
 	b.cancelOperation()
 	b.ReserveConnection()
 	b.NearbyClose(0)
