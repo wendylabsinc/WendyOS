@@ -371,7 +371,7 @@ private fun AddSiteModelPage(store: SitesStore, siteID: String) {
     }
 }
 
-private fun readBounded(input: java.io.InputStream, limit: Long): ByteArray {
+internal fun readBounded(input: java.io.InputStream, limit: Long): ByteArray {
     val out = java.io.ByteArrayOutputStream()
     val buffer = ByteArray(256 * 1024)
     while (true) { val n = input.read(buffer); if (n < 0) break; out.write(buffer, 0, n); if (out.size() > limit) throw SiteException("This model is too large. Export a USDZ model smaller than 128 MB.") }
@@ -464,13 +464,13 @@ private fun SiteDeviceModelsPage(model: WendyModel, store: SitesStore, siteID: S
 
 /** Loads one saved model's geometry for the viewer and placement pages. */
 @Composable
-private fun rememberSiteModel(store: SitesStore, modelID: String, refresh: Int = 0): Triple<StoredSite?, SiteGeometry?, String?> {
+internal fun rememberSiteModel(store: SiteModelStore, modelID: String, refresh: Int = 0): Triple<StoredSite?, SiteGeometry?, String?> {
     var saved by remember(modelID) { mutableStateOf<StoredSite?>(null) }
     var geometry by remember(modelID) { mutableStateOf<SiteGeometry?>(null) }
     var error by remember(modelID) { mutableStateOf<String?>(null) }
     LaunchedEffect(modelID, refresh) {
         try {
-            val value = withContext(Dispatchers.IO) { store.models.load(modelID) }
+            val value = withContext(Dispatchers.IO) { store.load(modelID) }
             if (geometry == null || saved?.site?.modelRevision != value.site.modelRevision) geometry = withContext(Dispatchers.Default) { scaled(UsdReader.read(value.model.readBytes()), value.site.metresPerModelUnit) }
             saved = value; error = null
         } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message ?: "Model unavailable" }
@@ -483,7 +483,7 @@ private fun rememberSiteModel(store: SitesStore, modelID: String, refresh: Int =
 private fun SiteModelViewer(model: WendyModel, store: SitesStore, siteID: String, link: SiteModelLink) {
     val nav = LocalNavigator.current
     val page = LocalNavPage.current
-    val (saved, geometry, error) = rememberSiteModel(store, link.id, store.revision)
+    val (saved, geometry, error) = rememberSiteModel(store.models, link.id, store.revision)
     LaunchedEffect(saved != null) { page?.actions = { IconButton(onClick = { nav.push("Place Cameras") { SiteCamerasPage(model, store, siteID, link.id) } }, enabled = saved != null) { Icon(Icons.Outlined.PhotoCamera, "Cameras") } } }
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
@@ -509,7 +509,7 @@ private fun SiteCamerasPage(model: WendyModel, store: SitesStore, siteID: String
     val site = store.sites.firstOrNull { it.id == siteID }
     var modelID by remember { mutableStateOf(initialModel) }
     var refresh by remember { mutableIntStateOf(0) }
-    val (saved, geometry, loadError) = rememberSiteModel(store, modelID, refresh + store.revision)
+    val (saved, geometry, loadError) = rememberSiteModel(store.models, modelID, refresh + store.revision)
     var placing by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -718,7 +718,11 @@ private fun SiteCameraLivePage(model: WendyModel, store: SitesStore, site: SiteR
                         }
                     }
                     LensButton("Adjust manually", primary = true, modifier = Modifier.fillMaxWidth()) {
-                        nav.push("Manual alignment") { SiteManualAlignmentPage(model, store, site, camera, saved, session) }
+                        nav.push("Manual alignment") {
+                            SiteManualAlignmentPage(model, store.models, camera, saved, session) { value ->
+                                store.saveCameraModel(value, site?.id ?: throw SiteException("Reopen the camera from its site to save alignment."), "${camera.name} manually aligned")
+                            }
+                        }
                     }
                 }
             }
@@ -741,11 +745,11 @@ private fun SiteCameraLivePage(model: WendyModel, store: SitesStore, site: SiteR
  * manual visualization with the model, not a measured calibration (iOS MobileManualCameraAlignment).
  */
 @Composable
-private fun SiteManualAlignmentPage(model: WendyModel, store: SitesStore, site: SiteRecord?, camera: SiteCamera, saved: StoredSite, session: Long) {
+internal fun SiteManualAlignmentPage(model: WendyModel, models: SiteModelStore, camera: SiteCamera, saved: StoredSite, session: Long, save: (Site) -> Unit) {
     val nav = LocalNavigator.current
     val page = LocalNavPage.current
     val scope = rememberCoroutineScope()
-    val (_, geometry, loadError) = rememberSiteModel(store, saved.id)
+    val (_, geometry, loadError) = rememberSiteModel(models, saved.id)
     var x by remember { mutableDoubleStateOf(camera.position?.x ?: 0.0) }
     var y by remember { mutableDoubleStateOf(camera.position?.y ?: 1.5) }
     var z by remember { mutableDoubleStateOf(camera.position?.z ?: 0.0) }
@@ -763,13 +767,12 @@ private fun SiteManualAlignmentPage(model: WendyModel, store: SitesStore, site: 
         scope.launch {
             try {
                 if (model.session != session) throw SiteException("The device connection changed. Reopen alignment before saving.")
-                val siteID = site?.id ?: throw SiteException("Reopen the camera from its site to save alignment.")
                 withContext(Dispatchers.IO) {
-                    val value = store.models.load(saved.id).site
+                    val value = models.load(saved.id).site
                     if (value.modelRevision != alignment.modelRevision) throw SiteException("The model changed. Reopen alignment.")
                     val index = value.cameras.indexOfFirst { it.id == camera.id }
                     if (index < 0) throw SiteException("The model changed. Reopen alignment.")
-                    store.saveCameraModel(value.copy(cameras = value.cameras.toMutableList().also { it[index] = it[index].copy(position = SitePoint(x, y, z), manualAlignment = alignment) }), siteID, "${camera.name} manually aligned")
+                    save(value.copy(cameras = value.cameras.toMutableList().also { it[index] = it[index].copy(position = SitePoint(x, y, z), manualAlignment = alignment) }))
                 }
                 nav.pop()
             } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { busy = false }

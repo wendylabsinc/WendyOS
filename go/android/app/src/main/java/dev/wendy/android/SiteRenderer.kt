@@ -54,39 +54,53 @@ private fun tan(radians: Double) = kotlin.math.tan(radians)
 fun SiteSceneView(geometry: SiteGeometry, markers: List<SiteMarker>, placing: Boolean, onSelect: (String) -> Unit, onPlace: (SitePoint) -> Unit, modifier: Modifier = Modifier) {
     val select by rememberUpdatedState(onSelect)
     val place by rememberUpdatedState(onPlace)
-    AndroidView(factory = { context -> SiteGLView(context).also { view -> view.callbacks = Pair({ id: String -> select(id) }, { point: SitePoint -> place(point) }) } }, modifier = modifier,
-        update = { view -> view.show(geometry, markers, placing) }, onRelease = { it.onPause() })
+    val orbit = remember(geometry) { SiteOrbit() }
+    // One GL surface at a time: a covered page releases its view and rebuilds it, at the same orbit, on return.
+    if (!LocalPageVisible.current) { androidx.compose.foundation.layout.Box(modifier); return }
+    AndroidView(factory = { context -> SiteGLView(context, orbit).also { view -> view.callbacks = Pair({ id: String -> select(id) }, { point: SitePoint -> place(point) }) } }, modifier = modifier,
+        onReset = { it.resume() }, update = { view -> view.resume(); view.show(geometry, markers, placing) }, onRelease = { it.pause() })
 }
 
+/** Where the person is looking from; it outlives the GL view so returning to a page keeps the view. */
+class SiteOrbit { var yaw = 35f; var pitch = 30f; var distance = 6f; val target = FloatArray(3); var framed = false }
+
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
-private class SiteGLView(context: Context) : GLSurfaceView(context) {
+private class SiteGLView(context: Context, private val orbit: SiteOrbit) : GLTextureView(context) {
     var callbacks: Pair<(String) -> Unit, (SitePoint) -> Unit>? = null
+    private var paused = false
+    fun pause() { paused = true }
+    fun resume() { if (paused) { paused = false; requestRender() } }
     private val renderer = SiteRendererGL()
     private var geometry: SiteGeometry? = null
     private var markers: List<SiteMarker> = emptyList()
     private var placing = false
-    private var yaw = 35f; private var pitch = 30f; private var distance = 6f
-    private val target = FloatArray(3)
+    private var yaw by orbit::yaw
+    private var pitch by orbit::pitch
+    private var distance by orbit::distance
+    private val target get() = orbit.target
     private var lastX = 0f; private var lastY = 0f; private var pointers = 0
 
     init {
-        setEGLContextClientVersion(2)
-        setEGLConfigChooser(8, 8, 8, 8, 16, 0)
         setRenderer(renderer)
-        renderMode = RENDERMODE_WHEN_DIRTY
         contentDescription = "3D site model"
     }
 
     fun show(next: SiteGeometry, nextMarkers: List<SiteMarker>, nextPlacing: Boolean) {
-        if (next !== geometry) { geometry = next; reset(); queueEvent { renderer.load(next) } }
+        if (next !== geometry) { geometry = next; if (!orbit.framed) reset(); queueEvent { renderer.load(next) } }
         markers = nextMarkers; placing = nextPlacing
         queueEvent { renderer.markers = nextMarkers }
         update()
     }
+    /** Frames the whole model in the narrower of the two fields of view, so portrait screens fit it too. */
     private fun reset() {
         val g = geometry ?: return
-        g.center.copyInto(target); distance = g.radius * 2.4f; yaw = 35f; pitch = 30f
+        val aspect = if (width > 0 && height > 0) width.toFloat() / height else 1f
+        val vertical = Math.toRadians(25.0)
+        val horizontal = kotlin.math.atan(kotlin.math.tan(vertical) * aspect)
+        g.center.copyInto(target); distance = (g.radius / kotlin.math.sin(minOf(vertical, horizontal)) * 1.05).toFloat(); yaw = 35f; pitch = 30f
+        orbit.framed = width > 0 && height > 0
     }
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { super.onSizeChanged(w, h, oldw, oldh); if ((oldw == 0 || oldh == 0) && !orbit.framed) reset(); update() }
     private fun eye(): FloatArray {
         val p = Math.toRadians(pitch.toDouble()); val y = Math.toRadians(yaw.toDouble())
         return floatArrayOf(target[0] + (distance * cos(p) * sin(y)).toFloat(), target[1] + (distance * sin(p)).toFloat(), target[2] + (distance * cos(p) * cos(y)).toFloat())
@@ -105,7 +119,7 @@ private class SiteGLView(context: Context) : GLSurfaceView(context) {
     })
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapUp(e: MotionEvent): Boolean { tap(e.x, e.y); return true }
-        override fun onDoubleTap(e: MotionEvent): Boolean { reset(); update(); return true }
+        override fun onDoubleTap(e: MotionEvent): Boolean { orbit.framed = false; reset(); update(); return true }
     })
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
