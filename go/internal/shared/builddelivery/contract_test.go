@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
@@ -32,8 +33,16 @@ type fixture struct {
 }
 
 func newFixture(t *testing.T) fixture {
+	return newFixtureAt(t, time.Now().Truncate(time.Second))
+}
+
+func newFixtureAt(t *testing.T, now time.Time) fixture {
 	t.Helper()
-	now := time.Now().Truncate(time.Second)
+	return newFixtureWithParameters(t, now, mldsa.MLDSA65())
+}
+
+func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Parameters) fixture {
+	t.Helper()
 	rootKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +61,7 @@ func newFixture(t *testing.T) fixture {
 	mint := func(principal string, rights []string) (string, string) {
 		t.Helper()
 		serial++
-		key, err := mldsa.GenerateKey(mldsa.MLDSA65())
+		key, err := mldsa.GenerateKey(parameters)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -255,5 +264,50 @@ func TestBase64URLRejectsIgnoredWhitespace(t *testing.T) {
 		if _, err := decode(invalid); err == nil {
 			t.Fatalf("accepted noncanonical encoding %q", invalid)
 		}
+	}
+}
+
+// A correctly signed artifact with a false algorithm label must still fail.
+// This tests the key/header binding rather than just detecting tampering.
+func TestDeliverySignatureAlgorithmPolicy(t *testing.T) {
+	for _, parameters := range []mldsa.Parameters{mldsa.MLDSA44(), mldsa.MLDSA65(), mldsa.MLDSA87()} {
+		t.Run(parameters.String(), func(t *testing.T) {
+			f := newFixtureWithParameters(t, time.Now().Truncate(time.Second), parameters)
+			allowed := parameters != mldsa.MLDSA44()
+			block, _ := pem.Decode([]byte(f.op))
+			leafDER := block.Bytes
+			compact, err := Sign(f.claims, f.op, f.chain, f.key)
+			if (err == nil) != allowed {
+				t.Fatalf("sign: %v; allowed=%v", err, allowed)
+			}
+			if allowed {
+				parts := strings.Split(compact, ".")
+				hb, _ := decode(parts[0])
+				var h header
+				if err := json.Unmarshal(hb, &h); err != nil || h.Algorithm != parameters.String() {
+					t.Fatalf("wrong signing algorithm: %s (%v)", hb, err)
+				}
+			}
+			block, _ = pem.Decode([]byte(f.key))
+			key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, _ := json.Marshal(f.claims)
+			for _, algorithm := range []string{"ML-DSA-44", algorithm65, algorithm87, "ES256", "none", "ML-DSA-99"} {
+				t.Run(algorithm, func(t *testing.T) {
+					hb, _ := json.Marshal(header{Algorithm: algorithm, Type: Type, Chain: []string{base64.StdEncoding.EncodeToString(leafDER), base64.StdEncoding.EncodeToString(f.roots[0].Raw)}})
+					input := encode(hb) + "." + encode(payload)
+					signature, err := key.(crypto.Signer).Sign(rand.Reader, []byte(input), crypto.Hash(0))
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, err = Admit(input+"."+encode(signature), f.roots, f.target, f.now)
+					if (err == nil) != (allowed && algorithm == parameters.String()) {
+						t.Fatalf("admit: %v; key=%s header=%s", err, parameters, algorithm)
+					}
+				})
+			}
+		})
 	}
 }

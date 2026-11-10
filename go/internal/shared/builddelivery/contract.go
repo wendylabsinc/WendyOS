@@ -31,6 +31,8 @@ const (
 	Version          = 1
 	MaxContractBytes = 192 * 1024
 	MaxLifetime      = 24 * time.Hour
+	algorithm65      = "ML-DSA-65"
+	algorithm87      = "ML-DSA-87"
 )
 
 // Claims is the signed payload authorizing one target-bound build delivery.
@@ -128,9 +130,9 @@ func Sign(c Claims, certificatePEM, chainPEM, keyPEM string) (string, error) {
 	if !ok {
 		return "", errors.New("operator key cannot sign")
 	}
-	public, ok := signer.Public().(*mldsa.PublicKey)
-	if !ok || public.Parameters() != mldsa.MLDSA65() {
-		return "", errors.New("build delivery requires an ML-DSA-65 operator key")
+	algorithm, err := signingAlgorithm(signer.Public())
+	if err != nil {
+		return "", err
 	}
 	leaf, err := x509.ParseCertificate(pair.Certificate[0])
 	if err != nil {
@@ -140,7 +142,7 @@ func Sign(c Claims, certificatePEM, chainPEM, keyPEM string) (string, error) {
 	if !ok || principal != c.Operator {
 		return "", errors.New("operator certificate does not match the grant issuer")
 	}
-	h := header{Algorithm: "ML-DSA-65", Type: Type}
+	h := header{Algorithm: algorithm, Type: Type}
 	for _, der := range pair.Certificate {
 		h.Chain = append(h.Chain, base64.StdEncoding.EncodeToString(der))
 	}
@@ -178,7 +180,7 @@ func Admit(compact string, roots []*x509.Certificate, target meshid.Device, now 
 	if err = strictJSON(hb, &h); err != nil {
 		return result, err
 	}
-	if h.Algorithm != "ML-DSA-65" || h.Type != Type || len(h.Chain) == 0 || len(h.Chain) > 16 {
+	if (h.Algorithm != algorithm65 && h.Algorithm != algorithm87) || h.Type != Type || len(h.Chain) == 0 || len(h.Chain) > 16 {
 		return result, errors.New("invalid delivery JWS header")
 	}
 	payload, err := decode(parts[1])
@@ -222,10 +224,14 @@ func Admit(compact string, roots []*x509.Certificate, target meshid.Device, now 
 	if err = authorizeEntitlements(leaf, target); err != nil {
 		return result, err
 	}
-	public, ok := leaf.PublicKey.(*mldsa.PublicKey)
-	if !ok || public.Parameters() != mldsa.MLDSA65() {
-		return result, errors.New("delivery signature requires ML-DSA-65")
+	algorithm, err := signingAlgorithm(leaf.PublicKey)
+	if err != nil {
+		return result, err
 	}
+	if h.Algorithm != algorithm {
+		return result, errors.New("delivery algorithm does not match the operator key")
+	}
+	public := leaf.PublicKey.(*mldsa.PublicKey)
 	signature, err := decode(parts[2])
 	if err != nil {
 		return result, err
@@ -234,6 +240,21 @@ func Admit(compact string, roots []*x509.Certificate, target meshid.Device, now 
 		return result, errors.New("invalid delivery signature")
 	}
 	return Verified{claims: c, compact: compact, admittedAt: now}, nil
+}
+
+// signingAlgorithm defines the delivery signature policy. Keep ML-DSA-65 as
+// the minimum strength, while allowing credentials to move to ML-DSA-87.
+// The protected JWS algorithm must match the operator leaf's key parameters.
+func signingAlgorithm(key crypto.PublicKey) (string, error) {
+	if public, ok := key.(*mldsa.PublicKey); ok {
+		switch public.Parameters() {
+		case mldsa.MLDSA65():
+			return algorithm65, nil
+		case mldsa.MLDSA87():
+			return algorithm87, nil
+		}
+	}
+	return "", errors.New("build delivery requires an ML-DSA-65 or ML-DSA-87 operator key")
 }
 
 func validate(c Claims) error {
