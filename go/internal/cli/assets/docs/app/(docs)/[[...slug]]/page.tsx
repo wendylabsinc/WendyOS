@@ -18,6 +18,7 @@ type PageProps = {
 // OpenGraph cards keyed by page slug.
 const pageOgImages: Record<string, string> = {
   'installation/wendyos-nvidia-jetson-agx-thor': '/images/opengraph-thor.png',
+  'installation/wendyos-qualcomm-dragonwing': '/images/opengraph-dragonwing.png',
   'integrations/ros2': '/images/opengraph-ros2.png',
   'guides/tutorials/mojo/hello-world': '/images/opengraph-mojo.png',
   'guides/tutorials/mojo/simple-web-server': '/images/opengraph-mojo.png',

@@ -4,6 +4,7 @@
     "index",
     "wendyos-nvidia-jetson-orin-nano",
     "wendyos-nvidia-jetson-agx-thor",
+    "wendyos-qualcomm-dragonwing",
     "wendyos-raspberry-pi-5",
     "linux",
     "wendy-agent-macos",
