@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,9 +27,26 @@ import (
 )
 
 func TestUplinkDNSAddresses(t *testing.T) {
-	got := parseUplinkDNS("127.0.0.53\n::1\n0.0.0.0\n224.0.0.1\n--\n192.0.2.1\n192.0.2.1\nfe80::1%old\n2001:db8::53", "wifi0")
-	if !slices.Equal(got, []string{"192.0.2.1", "fe80::1%wifi0", "2001:db8::53"}) {
+	got := parseUplinkDNS("127.0.0.53\n::1\n0.0.0.0\n224.0.0.1\n--\n192.0.2.1\n192.0.2.1\nfe80::1%old\nfe80::2\nfe80::3%wifi0\n2001:db8::53", "wifi0")
+	if !slices.Equal(got, []string{"192.0.2.1", "fe80::2%wifi0", "fe80::3%wifi0", "2001:db8::53"}) {
 		t.Fatalf("DNS servers: %v", got)
+	}
+}
+
+func TestUplinkDNSUsesResolvedForUnmanagedTunnel(t *testing.T) {
+	dir := t.TempDir()
+	for command, body := range map[string]string{
+		"nmcli":      "#!/bin/sh\nexit 10\n",
+		"resolvectl": "#!/bin/sh\ntest \"$1 $2\" = 'dns wlmitest' || exit 1\nprintf 'Link 99 (wlmitest): fd45:b891::53\\n'\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, command), []byte(body), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	servers := uplinkDNS(context.Background(), "wlmitest")
+	if !slices.Equal(servers, []string{"fd45:b891::53"}) {
+		t.Fatalf("lost tunnel's systemd-resolved DNS settings: %v", servers)
 	}
 }
 
@@ -120,11 +138,19 @@ func TestCloudUplinkAcrossNamespaces(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fixture, "nmcli"), []byte("#!/bin/sh\ncase \"$*\" in *wifi0) echo 198.18.222.1;; esac\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(fixture, "resolvectl"), []byte("#!/bin/sh\ncase \"$*\" in *wlmitest) echo 'Link 99 (wlmitest): 198.18.222.1';; esac\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	packet, err := net.ListenPacket("udp4", "198.18.222.1:53")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
+		// Like the real Internet gateway, do not serve private DNS through
+		// the inner Internet data path. The outer mesh route must carry it.
+		if strings.HasPrefix(w.RemoteAddr().String(), "198.18.223.2:") {
+			return
+		}
 		response := new(dns.Msg)
 		response.SetReply(request)
 		for _, q := range request.Question {
@@ -178,5 +204,29 @@ func TestCloudUplinkAcrossNamespaces(t *testing.T) {
 				t.Fatalf("namespace client: %v\n%s", err, out)
 			}
 		})
+	}
+	// The same authenticated fallback must work for a mesh interface whose DNS
+	// is installed in resolved rather than NetworkManager, with broken global DNS.
+	// Keep wifi0 as the outer DNS-only route. A second link represents the
+	// borrowed Internet tunnel; its public TCP/TLS traffic must stay bound to it.
+	run("-n", ns, "route", "del", "default", "via", "198.18.222.1")
+	innerHost := fmt.Sprintf("wcm%d", os.Getpid())
+	run("link", "add", innerHost, "type", "veth", "peer", "name", "wlmitest", "netns", ns)
+	t.Cleanup(func() { _ = exec.Command("ip", "link", "del", innerHost).Run() })
+	run("addr", "add", "198.18.223.1/30", "dev", innerHost)
+	run("link", "set", innerHost, "up")
+	run("-n", ns, "addr", "add", "198.18.223.2/30", "dev", "wlmitest")
+	run("-n", ns, "link", "set", "wlmitest", "up")
+	run("-n", ns, "route", "add", "default", "via", "198.18.223.1", "metric", "100")
+	if err := os.WriteFile(filepath.Join(resolvDir, "resolv.conf"), []byte("nameserver 192.0.2.1\noptions timeout:1 attempts:1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", ns, binary, "-test.run=^TestCloudUplinkNamespaceProcess$", "-test.v")
+	cmd.Env = append(os.Environ(), "PATH="+fixture+":"+os.Getenv("PATH"), "SSL_CERT_FILE="+root, "SSL_CERT_DIR="+fixture,
+		"WENDY_UPLINK_ENDPOINT=example.com:"+port, "WENDY_UPLINK_KEYS_URL=https://example.com:"+keysPort)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mesh namespace client: %v\n%s", err, out)
 	}
 }

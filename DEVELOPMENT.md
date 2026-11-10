@@ -531,3 +531,22 @@ Swift Testing, `make proto`). See [`swift/README.md`](swift/README.md) and
 - If you touched anything under `Proto/`, run `make proto` and commit the
   regenerated `go/proto/gen/`.
 - If you added or bumped a dependency, run `make licenses`.
+
+
+## Reviewing documentation journeys
+
+For a user-facing change, review the path a reader follows: entry page,
+prerequisites, task, observable result, and next step. Read the linked pages and
+sidebar together. The automated docs review checks the affected journey as well
+as the diff; existing obstacles are concerns, while demonstrated inaccuracies
+introduced by the change can block the PR.
+
+Give each tutorial one outcome. Extend the previous tutorial's project when
+teaching a new capability. Keep platform setup in the target's installation
+guide and field definitions in the configuration reference. Link to those
+instructions instead of copying them. Preserve old URLs when moving content.
+
+In the PR, name the journey reviewed and report which commands and outputs you
+verified. A docs build checks rendering, not successful deployment. If a device
+or simulator run was unavailable, state that limit. For navigation or onboarding
+changes, inspect the rendered pages and follow the path as a new reader would.

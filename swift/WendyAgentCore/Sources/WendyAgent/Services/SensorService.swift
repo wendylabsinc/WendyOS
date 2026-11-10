@@ -24,14 +24,14 @@ struct SensorService: Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol
     func getSensorManifest(
         request: ServerRequest<Wendy_Agent_Services_V2_GetSensorManifestRequest>,
         context: ServerContext
-    ) async throws -> ServerResponse<Wendy_Lite_Sensorlink_SensorManifest> {
-        var manifest = Wendy_Lite_Sensorlink_SensorManifest()
+    ) async throws -> ServerResponse<Wendylite_V1_SensorManifest> {
+        var manifest = Wendylite_V1_SensorManifest()
         if micAuthorized() {
-            var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
+            var descriptor = Wendylite_V1_SensorDescriptor()
             descriptor.channelID = Self.micChannel
             descriptor.name = "mic0"
             let format = Self.micFormat(audio)
-            var audioFormat = Wendy_Lite_Sensorlink_AudioFormat()
+            var audioFormat = Wendylite_V1_AudioFormat()
             audioFormat.codec = .pcmS16Le
             audioFormat.sampleRate = format.sampleRate
             audioFormat.channels = format.channels
@@ -47,7 +47,7 @@ struct SensorService: Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol
     func streamSensors(
         request: ServerRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
         context: ServerContext
-    ) async throws -> StreamingServerResponse<Wendy_Lite_Sensorlink_SensorData> {
+    ) async throws -> StreamingServerResponse<Wendylite_V1_SensorData> {
         let channels = Set(request.message.channelID)
         let audio = self.audio
         let camera = self.camera
@@ -80,7 +80,7 @@ struct SensorService: Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol
     ) async throws {
         var seq: UInt32 = 0
         for try await chunk in audio.audio(deviceID: 0, sampleRate: 48000, channels: 1) {
-            var frame = Wendy_Lite_Sensorlink_SensorData()
+            var frame = Wendylite_V1_SensorData()
             frame.channelID = micChannel
             frame.frameSeq = seq
             seq &+= 1
@@ -97,7 +97,7 @@ struct SensorService: Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol
     ) async throws {
         var seq: UInt32 = 0
         for try await cameraFrame in camera.frames() {
-            var frame = Wendy_Lite_Sensorlink_SensorData()
+            var frame = Wendylite_V1_SensorData()
             frame.channelID = channel
             frame.frameSeq = seq
             seq &+= 1
@@ -140,13 +140,13 @@ struct SensorService: Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol
 /// sensor producers. `RPCWriter` is not safe for concurrent writes; actor
 /// isolation gives us the required one-at-a-time ordering.
 private actor SerializedFrameWriter {
-    private let writer: RPCWriter<Wendy_Lite_Sensorlink_SensorData>
+    private let writer: RPCWriter<Wendylite_V1_SensorData>
 
-    init(_ writer: RPCWriter<Wendy_Lite_Sensorlink_SensorData>) {
+    init(_ writer: RPCWriter<Wendylite_V1_SensorData>) {
         self.writer = writer
     }
 
-    func write(_ frame: Wendy_Lite_Sensorlink_SensorData) async throws {
+    func write(_ frame: Wendylite_V1_SensorData) async throws {
         try await writer.write(frame)
     }
 }

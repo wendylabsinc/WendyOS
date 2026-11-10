@@ -1,6 +1,10 @@
 Many CLI operations run on the remote device. When a connection is to be
 established, the CLI goes down a list in order to connect to this device.
 
+For interactive examples, start with `wendy run` or `wendy device info` and choose a target when prompted. The picker is a fallback: `WENDY_DEVICE` may already select a device. Check the displayed target.
+
+Use `--device` when scripting, running without a terminal, or deliberately addressing several devices. The sections below document selection precedence, not required setup steps.
+
 ## 1. `--device`
 
 If the `--device` flag is specified, a connection is made against that target IP
@@ -16,7 +20,6 @@ Failing to connect to an explicit device results in a failure.
 
 A value made only of digits, such as `283`, is rejected: it is not a hostname or IP address, and the system resolver would turn it into an unrelated address. If it is a Wendy Cloud asset ID, use its cloud selector (`--device cloud://<cloud-grpc-host:port>/org/<org-id>/asset/283`) or `wendy cloud device <command> --device 283`. The error prints the exact selector when you are logged in.
 
-> **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 
 ## 2. `WENDY_DEVICE`
 
@@ -30,7 +33,7 @@ WENDY_DEVICE=my-pi.local wendy run
 
 ## 3. Show Picker
 
-The picker finds nearby [WendyOS](/docs/#2-set-up-a-device), Wendy Agent and
+The picker finds nearby [WendyOS](/docs/installation), Wendy Agent and
 [Wendy Lite](/docs/advanced/wendy-lite/) devices using local-network and Bluetooth discovery.
 Finding a device here is separate from enabling
 [Wendy Net Bluetooth connections](/docs/hardware/bluetooth#wendy-net-over-bluetooth)
@@ -59,7 +62,6 @@ In scripts, CI, SSH sessions without a TTY, or any other non-interactive
 context, no picker is shown. Pass `--device` or set `WENDY_DEVICE` before
 running commands that need a target.
 
-> **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 > If the terminal is interactive, a prompt will be made to update the device right now.
 
 ## Device identity

@@ -1,7 +1,7 @@
 Controls whether a device will run image builds submitted by other people with
 [`wendy run --build-host`](../run.md#remote-build-host).
 
-For a complete example that sends one build to several devices, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+For a complete example that sends one build to several devices, follow [Build once, deploy to several devices](/docs/guides/fleet-deployment).
 
 ```sh
 wendy device build-host enable  --device spark-office

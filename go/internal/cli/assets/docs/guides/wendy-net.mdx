@@ -9,22 +9,25 @@ ordinary Wi-Fi; Bluetooth is useful when a faster connection is unavailable.
 The numbered setup below is for WendyOS. For Wendy Lite firmware with Wendy Net
 support, use the [Lite configuration instructions](#configure-wendy-net-on-wendy-lite).
 
+Run these commands in an interactive terminal. Select the intended device when prompted, or check the target `WENDY_DEVICE` selects automatically.
+
 ## 1. Prepare your devices
 
 Use current WendyOS images with Wendy Net support and enroll each device in the
-same Wendy Cloud organization. Sign in with `wendy cloud login`. Keep a working
-management connection while changing network settings.
+same Wendy Cloud organization. Sign in with `wendy cloud login`;
+`wendy auth login` is an equivalent command. Keep a working management connection
+while changing network settings.
 
 ## 2. Enable the connections you want
 
 For devices on the same Ethernet or ordinary Wi-Fi network, run this for each one:
 
 ```sh
-wendy net configure --device <device> \
+wendy net configure \
   --participate=true --ethernet=true --infrastructure-wifi=true
 ```
 
-Replace `<device>` with its name or address. For Bluetooth, add `--ble=true`.
+For Bluetooth, add `--ble=true`.
 For supported Wi-Fi Aware hardware, add `--nan=true`.
 
 Start with the normal Bluetooth profile and firmware/controller-default power.
@@ -52,8 +55,8 @@ require participation, so disable them in the same command if they were enabled.
 ## 3. Check the result
 
 ```sh
-wendy net status --device <device>
-wendy net topology --device <device>
+wendy net status
+wendy net topology
 ```
 
 `status` shows saved settings and current runtime state. `topology` shows the
@@ -69,7 +72,7 @@ For slow or missing Bluetooth connections, see
 
 ## Configure Wendy Net on Wendy Lite
 
-`wendy device wendy-net configure` and `wendy device wendy-net status` also work
+`wendy net configure` and `wendy net status` also work
 with Wendy Lite devices. Select the board explicitly, for example with
 `--device wendy-lite:<device>`, and read its current status before changing it.
 
@@ -151,6 +154,20 @@ borrowing, set `--roam=false` on the travelling device. Changes are saved across
 agent restarts. Existing Internet sessions may be interrupted when a gateway or
 uplink changes.
 
+### Keep Cloud access working over the mesh
+
+A WendyOS device can use the shared Internet path for Cloud management too.
+Bluetooth paths can take longer to establish and renew than Ethernet or WiFi.
+Keep the gateway reachable while the agent connects or retries. A working local
+mesh route alone does not confirm Cloud access: run `wendy cloud discover` and
+try a device command through Cloud.
+
+If the device is reachable locally but not through Cloud, check its gateway and
+Internet-sharing state first. See [Cloud connectivity](/docs/advanced/cloud/connectivity)
+for network changes, DNS failures and recovery. Sharing and roaming remain
+separate settings; this does not enable Internet access for Lite profiles that
+do not support it.
+
 ### Give an app outbound Internet access
 
 Use this entitlement in the app's `wendy.json`, then redeploy with `wendy run`:
@@ -165,12 +182,19 @@ Wendy Net service mode is separate and does not grant an Internet default route.
 Host-networked apps share the host's network access and expose ports they bind;
 use host mode only when the app needs that access.
 
+### Recover after a clock or certificate error
+
+Keep an Internet-sharing mesh gateway reachable while the device synchronizes
+its clock. If certificate errors persist, follow
+[device troubleshooting](/docs/advanced/wendyos/networking/troubleshooting).
+Do not delete mesh identity files or re-enroll to work around a clock error.
+
 ## 5. Connect your applications
 
 Applications opt into Wendy Net in `wendy.json` and explicitly publish the ports
 that other devices may access. See the
 [service sharing guide](/docs/guides/wendy-net-services), then the
-[network configuration reference](/docs/advanced/apps/wendy.json#network).
+[network configuration reference](/docs/reference/app-configuration#network).
 Device connectivity alone does not publish every app port.
 
 Apps with their own mDNS library keep using it on their private interface.
@@ -205,5 +229,5 @@ WendyOS. Lite-specific limits and capability checks are described above.
 `status --json` returns saved choices separately from current runtime state.
 `topology --json` returns the selected device's observed links and routes.
 Changing settings requires an authenticated user in the device's organization.
-An app on the device that holds the [`admin` entitlement](/docs/advanced/apps/wendy.json#admin)
+An app on the device that holds the [`admin` entitlement](/docs/reference/app-configuration#admin)
 can read status and topology through the local agent socket, but cannot change settings.

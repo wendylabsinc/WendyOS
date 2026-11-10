@@ -60,6 +60,8 @@ func writePinTestConfig(t *testing.T, pins map[string]config.DevicePin) func() m
 		DevicePins: pins,
 	}
 	dir := filepath.Join(home, ".wendy")
+	// Match ConfigDir even when the surrounding test run supplies an override.
+	t.Setenv("WENDY_CONFIG_DIR", dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

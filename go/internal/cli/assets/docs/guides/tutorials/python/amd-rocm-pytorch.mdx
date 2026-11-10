@@ -10,7 +10,7 @@ The example targets an x86_64 Linux device with an AMD GPU. It installs PyTorch'
 
 ## Prerequisites
 
-- [Wendy CLI](/docs/#1-install-the-wendy-cli) and Git on your development machine.
+- [Wendy CLI](/docs/installation/cli) and Git on your development machine.
 - Docker running on your development machine, or another configured Wendy image builder.
 - An x86_64 device running a recent Wendy Agent with AMD GPU support, reachable from your development machine.
 - A ROCm-compatible AMD GPU and the host `amdgpu` kernel driver. The host must expose `/dev/kfd` and at least one `/dev/dri/renderD*` device.
@@ -35,6 +35,8 @@ Keep this terminal in `Examples/ROCM` for the remaining steps. The directory con
 | `build.stagefile.yaml` | Installs Python, PyTorch's ROCm build, and NumPy. |
 | `rocm-test.py` | Reports GPU access, runs a matrix multiplication, and checks the result. |
 
+This example uses a Stagefile. You can keep an existing Dockerfile with equivalent dependencies and the same GPU entitlement; conversion is not required.
+
 ## 2. Select the AMD device
 
 Discover the devices Wendy can reach:
@@ -43,11 +45,10 @@ Discover the devices Wendy can reach:
 wendy discover
 ```
 
-Replace `amd-device.local` below with the hostname or address of your AMD device. Keep the variable in the same terminal:
+Select the AMD device when prompted and use that same target throughout:
 
 ```bash
-AMD_DEVICE=amd-device.local
-wendy device info --device "$AMD_DEVICE"
+wendy device info
 ```
 
 Confirm that the device is the intended x86_64 Linux host. Wendy reports an AMD GPU when the host exposes `/dev/kfd`. If the GPU is missing, check the host's driver setup before building the app. The entitlement exposes existing GPU devices; it does not install a kernel driver.
@@ -94,7 +95,7 @@ On an AMD host, Wendy exposes `/dev/kfd` and the DRM render devices to the conta
 From `Examples/ROCM`, deploy the Stagefile to your selected device:
 
 ```bash
-wendy run --device "$AMD_DEVICE" --dockerfile build.stagefile.yaml --no-restart
+wendy run --dockerfile build.stagefile.yaml --no-restart
 ```
 
 The first build downloads the dependencies. Wendy then transfers the image, starts the app, and streams its output. The `--no-restart` flag lets this calculation finish once.
@@ -126,15 +127,17 @@ PyTorch uses the `torch.cuda` API for its ROCm build too. In this script, `torch
 After the script finishes, its app entry remains on the device. Remove the example and its image:
 
 ```bash
-wendy device apps remove sh.wendy.examples.rocm --device "$AMD_DEVICE" --cleanup
+wendy device apps remove sh.wendy.examples.rocm --cleanup
 ```
 
 Confirm the removal when prompted. To interrupt a run from another terminal, set `AMD_DEVICE` there and stop the app first:
 
 ```bash
-wendy device apps stop sh.wendy.examples.rocm --device "$AMD_DEVICE"
+wendy device apps stop sh.wendy.examples.rocm
 ```
 
 ## Next steps
+
+Continue with [Deploy a G1 MuJoCo simulation](/docs/guides/tutorials/python/g1-mujoco-simulation) to run a robot simulation with a live browser view.
 
 Use the same Stagefile and entitlement as a starting point for an AMD PyTorch app. Keep the GPU availability and correctness checks while changing the workload. See [GPU access](/docs/hardware/gpu) for the entitlement and [Stagefiles](/docs/guides/stagefile) for image configuration.

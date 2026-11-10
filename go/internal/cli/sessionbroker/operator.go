@@ -7,16 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"io"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
@@ -38,14 +37,10 @@ const operatorStateBytes = 4*operatorJSONPrincipalBytes + 4096
 // persistent profile. One context belongs to an exact operator principal and
 // that profile's persisted endpoint instance, independently of its first hop.
 type OperatorSpec struct {
-	Version       int    `json:"version"`
-	Automatic     bool   `json:"automatic,omitempty"`
-	Enabled       bool   `json:"enabled,omitempty"`
-	Principal     string `json:"principal"`
-	RouterAddress string `json:"routerAddress"`
-	Transport     string `json:"transport,omitempty"`
-	BLEPSM        uint16 `json:"blePsm,omitempty"`
-	RouterUUID    string `json:"routerUuid"`
+	Version      int    `json:"version"`
+	Disconnected bool   `json:"disconnected,omitempty"`
+	Enabled      bool   `json:"enabled,omitempty"`
+	Principal    string `json:"principal"`
 }
 
 // MeshSelector is the canonical full tenant/device selector. Parsing conveys
@@ -74,11 +69,11 @@ func ParseMeshSelector(text string) (meshid.Device, bool, error) {
 func operatorPrincipal(cert config.CertificateInfo) (meshoperator.Operator, error) {
 	chain, err := certs.ParseCertsFromPEM([]byte(cert.PemCertificate))
 	if err != nil || len(chain) == 0 {
-		return meshoperator.Operator{}, errors.New("selected primary operator certificate is missing")
+		return meshoperator.Operator{}, errors.New("the selected sign-in profile has no usable Wendy Net certificate; run 'wendy auth login' for your organization")
 	}
 	id, known, err := certs.IdentityFromCert(chain[0])
 	if err != nil || !known {
-		return meshoperator.Operator{}, errors.New("selected certificate has no operator principal")
+		return meshoperator.Operator{}, errors.New("the selected certificate cannot identify your Wendy account for mesh access; check the sign-in profile")
 	}
 	return meshoperator.ParsePrincipal(id.Principal)
 }
@@ -94,67 +89,27 @@ func (s Spec) paths(dir string) (string, string) {
 }
 func (s Spec) validateOperator() error {
 	recipe := s.Operator
-	if recipe.Version != 1 {
-		return errors.New("unsupported operator broker recipe version")
+	if recipe.Version != 2 {
+		return fmt.Errorf("saved Wendy Net settings use unsupported format version %d; update the CLI or select a compatible profile", recipe.Version)
 	}
 	operator, err := meshoperator.ParsePrincipal(recipe.Principal)
 	if err != nil {
 		return err
 	}
-	if recipe.Automatic && recipe.RouterUUID == "" && recipe.RouterAddress == "" {
-		if recipe.Transport != "" || recipe.BLEPSM != 0 || s.Key != operatorKey(recipe.Principal) || s.Expected != (certs.WendyIdentity{}) || s.Host != operator.Principal() || s.Addr != s.Host || s.CertFingerprint == "" {
-			return errors.New("automatic operator context identity differs")
-		}
-		return nil
-	}
-	device, err := meshid.ParseDevice(operator.Tenant(), recipe.RouterUUID)
-	if err != nil {
-		return err
-	}
-	switch recipe.Transport {
-	case "", "tcp":
-		host, port, err := net.SplitHostPort(recipe.RouterAddress)
-		p, portErr := strconv.Atoi(port)
-		if err != nil || host == "" || portErr != nil || p <= 0 || p > 65535 || len(recipe.RouterAddress) > 512 || recipe.BLEPSM != 0 {
-			return errors.New("operator first hop requires a TLS host:port")
-		}
-	case "ble":
-		// A macOS peripheral UUID or Linux LE address is merely a connection hint;
-		// TLS still proves the separate exact enrolled router UUID.
-		addressOK := false
-		if parsed, err := uuid.Parse(recipe.RouterAddress); err == nil && strings.EqualFold(parsed.String(), recipe.RouterAddress) {
-			addressOK = true
-		}
-		if parsed, err := net.ParseMAC(recipe.RouterAddress); err == nil && len(parsed) == 6 {
-			addressOK = true
-		}
-		if !addressOK || (recipe.BLEPSM != 0 && (recipe.BLEPSM < 0x80 || recipe.BLEPSM > 0xff)) {
-			return errors.New("BLE operator first hop requires a peripheral UUID or LE address and dynamic PSM")
-		}
-	default:
-		return errors.New("operator transport must be tcp or ble")
-	}
-	if s.Key != operatorKey(recipe.Principal) || s.Expected != operatorExpected(device) || s.Host != MeshSelector(device) || s.Addr != s.Host || s.CertFingerprint == "" {
-		return errors.New("operator broker context and selected router differ")
+	if s.Key != operatorKey(recipe.Principal) || s.Expected != (certs.WendyIdentity{}) || s.Host != operator.Principal() || s.Addr != s.Host || s.CertFingerprint == "" {
+		return errors.New("saved Wendy Net connection details do not match the selected account; check your sign-in profile and reconnect")
 	}
 	return nil
 }
 func operatorSpec(recipe OperatorSpec, cert config.CertificateInfo) (Spec, error) {
 	operator, err := operatorPrincipal(cert)
 	if err != nil || operator.Principal() != recipe.Principal {
-		return Spec{}, errors.New("operator recipe differs from the selected primary credential")
+		return Spec{}, errors.New("saved Wendy Net settings belong to a different sign-in identity; select the matching profile or reconnect")
 	}
-	if recipe.Automatic && recipe.RouterUUID == "" && recipe.RouterAddress == "" {
-		s := Spec{Operator: &recipe, Key: operatorKey(recipe.Principal), Host: operator.Principal(), Addr: operator.Principal(), CertFingerprint: certificateFingerprint(cert)}
-		return s, s.validate()
-	}
-	device, err := meshid.ParseDevice(operator.Tenant(), recipe.RouterUUID)
-	if err != nil {
-		return Spec{}, err
-	}
-	s := Spec{Operator: &recipe, Key: operatorKey(recipe.Principal), Host: MeshSelector(device), Addr: MeshSelector(device), Expected: operatorExpected(device), CertFingerprint: certificateFingerprint(cert), ParentPID: 0}
+	s := Spec{Operator: &recipe, Key: operatorKey(recipe.Principal), Host: operator.Principal(), Addr: operator.Principal(), CertFingerprint: certificateFingerprint(cert)}
 	return s, s.validate()
 }
+
 func operatorRecipePath(directory, principal string) string {
 	sum := sha256.Sum256([]byte(principal))
 	return filepath.Join(directory, "operator-contexts", hex.EncodeToString(sum[:])+".json")
@@ -169,40 +124,20 @@ func configuredOperator() (config.CertificateInfo, meshoperator.Operator, error)
 		return config.CertificateInfo{}, meshoperator.Operator{}, err
 	}
 	if len(auth.Certificates) == 0 {
-		return config.CertificateInfo{}, meshoperator.Operator{}, errors.New("current context has no primary operator credential")
+		return config.CertificateInfo{}, meshoperator.Operator{}, errors.New("the selected sign-in profile has no certificate for joining Wendy Net; run 'wendy auth login' for your organization")
 	}
 	certificate := auth.Certificates[0]
 	operator, err := operatorPrincipal(certificate)
 	return certificate, operator, err
 }
 
-// PrepareOperator stores the selected first hop and joins through the existing
-// detached session broker. Commands retain only their local IPC connection.
-func PrepareOperator(ctx context.Context, certificate config.CertificateInfo, address, router string) (*grpcclient.AgentConnection, error) {
-	return PrepareOperatorTransport(ctx, certificate, address, router, "", 0)
-}
-
-// PrepareOperatorTransport retains an explicit operator attachment over one
-// selected carrier. The broker's endpoint identity remains carrier-independent.
-func PrepareOperatorTransport(ctx context.Context, certificate config.CertificateInfo, address, router, transport string, psm uint16) (*grpcclient.AgentConnection, error) {
-	operator, err := operatorPrincipal(certificate)
-	if err != nil {
-		return nil, err
-	}
-	if transport == "tcp" {
-		transport = ""
-	}
-	recipe := OperatorSpec{Version: 1, Principal: operator.Principal(), RouterAddress: address, RouterUUID: router, Transport: transport, BLEPSM: psm}
-	return prepareOperatorRecipe(ctx, certificate, recipe)
-}
-
-func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateInfo, recipe OperatorSpec) (*grpcclient.AgentConnection, error) {
+func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateInfo, recipe OperatorSpec, explicit bool) (*grpcclient.AgentConnection, error) {
 	spec, err := operatorSpec(recipe, certificate)
 	if err != nil {
 		return nil, err
 	}
 	if !configDirOwnershipSafe() {
-		return nil, errors.New("operator profile is not owned by the current user")
+		return nil, errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	directory, err := configDir()
 	if err != nil {
@@ -212,13 +147,15 @@ func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateIn
 	if err = ensurePrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-	if err = writeOperatorRecipe(ctx, spec, path, recipe); err != nil {
+	if err = writeOperatorRecipe(ctx, spec, path, recipe, explicit); err != nil {
 		return nil, err
 	}
 	return connectOrStartOperator(ctx, spec, &certificate)
 }
-func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe OperatorSpec) error {
-	if existing, err := readOperatorRecipe(path); err == nil && existing == recipe {
+func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe OperatorSpec, explicit bool) error {
+	if existing, migrated, err := readOperatorRecipeRecord(path); err == nil && !migrated && existing == recipe {
+		// Reusing unchanged intent must not wait behind another command's
+		// potentially slow join. The connection path rechecks stop intent.
 		return nil
 	}
 	dir, err := brokerDir()
@@ -229,26 +166,21 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	socket, _ := spec.paths(dir)
-	wait, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var startup *os.File
-	for startup == nil {
-		file, locked, err := acquireIdentityLock(socket + ".startup")
-		if err != nil {
-			return err
-		}
-		if locked {
-			startup = file
-			break
-		}
-		select {
-		case <-wait.Done():
-			return wait.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
+	startup, err := lockOperatorStartup(ctx, socket)
+	if err != nil {
+		return err
 	}
 	defer func() { releaseLock(startup); startup.Close() }()
-	if existing, err := readOperatorRecipe(path); err == nil && sameOperatorRecipe(existing, recipe) {
+	intent, err := lockOperatorFile(ctx, socket+".intent")
+	if err != nil {
+		return err
+	}
+	defer func() { releaseLock(intent); _ = intent.Close() }()
+	existing, err := readOperatorRecipe(path)
+	if err == nil && existing.Disconnected && !explicit {
+		return errOperatorDisconnected
+	}
+	if err == nil && sameOperatorRecipe(existing, recipe) {
 		// Enabling retained routing intent changes no identity or carrier.
 		// Publish it atomically without draining existing transit streams.
 		data, e := json.Marshal(recipe)
@@ -264,7 +196,7 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	if !locked {
-		return errors.New("run 'wendy device wendy-net disconnect' before changing a live operator first hop")
+		return errors.New("the previous Wendy Net connection is still closing; wait a few seconds, then run 'wendy net connect' again")
 	}
 	defer func() { releaseLock(owner); owner.Close() }()
 	data, err := json.Marshal(recipe)
@@ -273,6 +205,35 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 	}
 	return writePrivateFile(path, data)
 }
+
+func lockOperatorStartup(ctx context.Context, socket string) (*os.File, error) {
+	return lockOperatorFile(ctx, socket+".startup")
+}
+
+func lockOperatorFile(ctx context.Context, path string) (*os.File, error) {
+	wait, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		if err := wait.Err(); err != nil {
+			return nil, err
+		}
+		file, locked, err := acquireIdentityLock(path)
+		if err != nil {
+			return nil, err
+		}
+		if locked {
+			return file, nil
+		}
+		select {
+		case <-wait.Done():
+			return nil, wait.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+var errOperatorDisconnected = errors.New("this computer is disconnected from Wendy Net; run 'wendy net connect' to rejoin")
+
 func operatorRecipeCurrent(spec Spec) error {
 	directory, err := configDir()
 	if err != nil {
@@ -282,31 +243,54 @@ func operatorRecipeCurrent(spec Spec) error {
 	if err != nil {
 		return err
 	}
+	if current.Disconnected {
+		return errOperatorDisconnected
+	}
 	if !sameOperatorRecipe(current, *spec.Operator) {
-		return errors.New("configured operator first hop changed; resolve the mesh selector again")
+		return errors.New("your Wendy Net connection settings changed while this command was running; retry the command")
 	}
 	return nil
 }
 
 func readOperatorRecipe(path string) (OperatorSpec, error) {
+	recipe, _, err := readOperatorRecipeRecord(path)
+	return recipe, err
+}
+
+// readOperatorRecipeRecord also reports whether the on-disk format needs rewriting.
+func readOperatorRecipeRecord(path string) (OperatorSpec, bool, error) {
 	var recipe OperatorSpec
 	if err := validatePrivateFile(path, false); err != nil {
-		return recipe, err
+		return recipe, false, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return recipe, err
+		return recipe, false, err
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, operatorRecipeBytes+1))
 	if err != nil {
-		return recipe, err
+		return recipe, false, err
 	}
 	if len(data) > operatorRecipeBytes {
-		return recipe, errors.New("oversized operator recipe")
+		return recipe, false, errors.New("saved Wendy Net settings exceed the supported size limit")
 	}
 	err = json.Unmarshal(data, &recipe)
-	return recipe, err
+	migrated := err == nil && recipe.Version == 1
+	if migrated {
+		// Pinned version-1 contexts stayed enabled independently of the
+		// Enabled bit. Preserve that participation intent while discarding
+		// their first-hop selection. Automatic contexts retain their idle policy.
+		var legacy struct {
+			Automatic bool `json:"automatic"`
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return recipe, false, err
+		}
+		recipe.Enabled = recipe.Enabled || !legacy.Automatic
+		recipe.Version = 2
+	}
+	return recipe, migrated, err
 }
 
 // ConnectOperator resolves an explicit target through the selected operator
@@ -325,7 +309,7 @@ func ConnectOperator(ctx context.Context, selector string) (*grpcclient.AgentCon
 		return nil, err
 	}
 	if device.Tenant() != operator.Tenant() {
-		return nil, errors.New("mesh target differs from the selected operator tenant")
+		return nil, errors.New("the selected mesh device belongs to a different organization; switch to its sign-in profile")
 	}
 	directory, err := configDir()
 	if err != nil {
@@ -341,7 +325,7 @@ func ConnectOperator(ctx context.Context, selector string) (*grpcclient.AgentCon
 			return nil, prepareErr
 		}
 		_ = adjacent.Close()
-		// Reload the saved exact peer after automatic preparation. The target
+		// Reload the operator context after automatic preparation. The target
 		// remains the caller's full tenant/device selector.
 		return ConnectOperator(ctx, selector)
 	}
@@ -350,7 +334,7 @@ func ConnectOperator(ctx context.Context, selector string) (*grpcclient.AgentCon
 		return nil, err
 	}
 	adjacent, err := connectOrStartOperator(ctx, spec, &certificate)
-	if err != nil || spec.Expected == operatorExpected(device) {
+	if err != nil {
 		return adjacent, err
 	}
 	_ = adjacent.Close()
@@ -364,7 +348,7 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 		return nil, ErrEmbeddedSuspended
 	}
 	if !configDirOwnershipSafe() {
-		return nil, errors.New("operator profile is not owned by the current user")
+		return nil, errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	wait, cancel := context.WithTimeout(ctx, operatormesh.JoinSetupTimeout)
 	defer cancel()
@@ -428,7 +412,25 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 			if locked {
 				releaseLock(file)
 				file.Close()
-				if err = launchOperatorBroker(spec); err != nil {
+				// Serialize the final recipe check and launch with explicit stop.
+				// Startup may have waited while disconnect published its tombstone.
+				err = func() error {
+					intent, err := lockOperatorFile(wait, socket+".intent")
+					if err != nil {
+						return err
+					}
+					defer func() { releaseLock(intent); _ = intent.Close() }()
+					if err := operatorRecipeCurrent(spec); err != nil {
+						return err
+					}
+					generation, err := uuid.NewRandom()
+					if err != nil {
+						return err
+					}
+					spec.DiagnosticGeneration = generation.String()
+					return launchOperatorBroker(spec)
+				}()
+				if err != nil {
 					return nil, err
 				}
 			}
@@ -436,18 +438,18 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 		}
 		select {
 		case <-wait.Done():
-			return nil, fmt.Errorf("operator broker did not become ready: %w", errors.Join(wait.Err(), last))
+			return nil, operatorStartupError(spec, errors.Join(wait.Err(), last))
 		case <-ticker.C:
 		}
 	}
 }
 
-var errOperatorCredentialsChanged = errors.New("selected operator credential changed")
-var errOperatorProtocolChanged = errors.New("operator broker IPC protocol changed")
+var errOperatorCredentialsChanged = errors.New("your Wendy sign-in credentials changed; retry the command")
+var errOperatorProtocolChanged = errors.New("the local Wendy Net background router uses an incompatible version and must be restarted")
 
-// DisconnectOperator withdraws only the current operator's retained context.
-// The exact-owned broker observes unpublication and cancels its attachment;
-// waiting for its lock joins shutdown before a replacement can be prepared.
+// DisconnectOperator withdraws the current operator's retained context and
+// records that only an explicit connect may start it again. The non-secret
+// recipe and installation identity remain available without implicit rejoin.
 func DisconnectOperator(ctx context.Context) error {
 	certificate, operator, err := configuredOperator()
 	if err != nil {
@@ -457,12 +459,46 @@ func DisconnectOperator(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	recipe, err := readOperatorRecipe(operatorRecipePath(directory, operator.Principal()))
+	if !configDirOwnershipSafe() {
+		return errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
+	}
+	brokerDirectory, err := brokerDir()
 	if err != nil {
+		return err
+	}
+	if err := ensurePrivateDir(brokerDirectory); err != nil {
+		return err
+	}
+	socket, _ := paths(brokerDirectory, operatorKey(operator.Principal()), certs.WendyIdentity{})
+	// Do not wait for startup: the connecting command holds that lock while a
+	// first handshake can take a minute. Publish stop intent now; the joining
+	// owner watches it and cancels its handshake. Hold this short intent lock
+	// through shutdown so a concurrent explicit connect linearizes afterward.
+	intent, err := lockOperatorFile(ctx, socket+".intent")
+	if err != nil {
+		return err
+	}
+	defer func() { releaseLock(intent); _ = intent.Close() }()
+	path := operatorRecipePath(directory, operator.Principal())
+	recipe, err := readOperatorRecipe(path)
+	if os.IsNotExist(err) {
+		recipe = OperatorSpec{Version: 2, Principal: operator.Principal()}
+	} else if err != nil {
 		return err
 	}
 	spec, err := operatorSpec(recipe, certificate)
 	if err != nil {
+		return err
+	}
+	recipe.Disconnected = true
+	if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	data, err := json.Marshal(recipe)
+	if err != nil {
+		return err
+	}
+	if err := writePrivateFile(path, data); err != nil {
 		return err
 	}
 	return disconnectOperatorSpec(ctx, spec)
@@ -473,7 +509,7 @@ func disconnectOperatorSpec(ctx context.Context, spec Spec) error {
 		return err
 	}
 	if !configDirOwnershipSafe() {
-		return errors.New("operator profile is not owned by current user")
+		return errors.New("the Wendy settings directory is owned by another user; use a profile owned by your account")
 	}
 	if err = ensurePrivateDir(dir); err != nil {
 		return err
@@ -532,14 +568,18 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 		return nil, readErr
 	}
 	if len(data) > operatorStateBytes {
-		return nil, errors.New("oversized operator broker state")
+		return nil, errors.New("the local Wendy Net background router returned connection details larger than the supported limit")
 	}
 	var state stateFile
+	if json.Unmarshal(data, &state) == nil && state.Spec.Operator != nil && state.Spec.Key == spec.Key && state.Spec.Operator.Principal == spec.Operator.Principal && state.IPCVersion != operatorIPCVersion {
+		// Drain an older broker before replacing its saved first-hop policy.
+		return nil, errOperatorProtocolChanged
+	}
 	if json.Unmarshal(data, &state) == nil && state.Spec.Operator != nil && sameOperatorRecipe(*state.Spec.Operator, *spec.Operator) && state.Spec.Key == spec.Key && state.Spec.CertFingerprint != spec.CertFingerprint {
 		return nil, errOperatorCredentialsChanged
 	}
 	if json.Unmarshal(data, &state) != nil || state.Spec.Operator == nil || !sameOperatorRecipe(*state.Spec.Operator, *spec.Operator) || state.Spec.Expected != spec.Expected || state.Spec.CertFingerprint != spec.CertFingerprint || state.Spec.Key != spec.Key {
-		return nil, errors.New("operator broker is owned by different selected credentials or first hop")
+		return nil, errors.New("the local Wendy Net background router is using a different sign-in identity; check the selected profile and reconnect")
 	}
 	if state.IPCVersion != operatorIPCVersion {
 		return nil, errOperatorProtocolChanged
@@ -561,7 +601,7 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 	cancel()
 	var observation operatorContextStatus
 	if err == nil && (json.Unmarshal(reply, &observation) != nil || observation.Version != operatorIPCVersion || observation.Principal != spec.Operator.Principal) {
-		err = errors.New("operator broker context status differs")
+		err = errors.New("the local Wendy Net background router returned connection details for a different account or version")
 	}
 	if err != nil {
 		client.Close()
@@ -593,14 +633,26 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	}
 	owner, cancel := context.WithCancel(ctx)
 	defer cancel()
+	joining, stopWatching := context.WithCancel(owner)
+	intentDone := watchOperatorRecipe(joining, spec, cancel)
+	defer func() { stopWatching(); <-intentDone }()
 	attachment := &operatorAttachment{directory: directory, spec: spec, certificate: selected}
-	initial, err := attachment.open(owner, *spec.Operator)
+	initial, err := attachment.open(owner)
+	stopWatching()
+	<-intentDone
 	if err != nil {
+		return err
+	}
+	if err := operatorRecipeCurrent(spec); err != nil {
+		initial.session.Close()
 		return err
 	}
 	attachment.replace(initial)
 	finished := make(chan struct{})
-	go func() { defer close(finished); defer cancel(); _ = attachment.run(owner) }()
+	go func() {
+		defer close(finished)
+		runOperatorAttachment(owner, cancel, func() error { return attachment.run(owner) })
+	}()
 	defer func() { cancel(); <-finished }()
 	remotes := newOperatorTargets(initial.session, nil, selected, directory, spec)
 	remotes.currentAdjacent = attachment.adjacent
@@ -619,15 +671,37 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 		if host := embeddedHost.Load(); host != nil && host.active.Load() {
 			return true // The foreground app owns the routing lease.
 		}
-		if !spec.Operator.Automatic {
-			return true
-		}
 		if latest, err := readOperatorRecipe(operatorRecipePath(directory, spec.Operator.Principal)); err == nil && sameOperatorRecipe(latest, *spec.Operator) && latest.Enabled {
 			return true
 		}
 		current, err := attachment.snapshot()
 		return err == nil && current.session.HasRecentTransit(DefaultIdleTTL)
 	}, remotes.Resolve, remotes.localManagement, true)
+}
+
+// The initial TLS/agent join happens before IPC publication. Observe explicit
+// stop intent during that phase. After joining, normal IPC unpublication owns
+// shutdown; the extra polling driver is stopped and joined before publication.
+func watchOperatorRecipe(ctx context.Context, spec Spec, cancel context.CancelFunc) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := operatorRecipeCurrent(spec); err != nil {
+					noteOperatorExit(ctx, "intent_changed", err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return done
 }
 
 // Routing intent stays on private local IPC and is removed before forwarding.

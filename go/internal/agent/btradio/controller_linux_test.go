@@ -247,9 +247,9 @@ func TestMeshLinkTuneReadsPolicyAfterControllerAdmission(t *testing.T) {
 			return [][]byte{{4, 15, 4, 0, 1, 0x32, 0x20}}
 		}
 		if op == 0x2030 {
-			phy := byte(1)
-			if selected == 4 {
-				phy = 3
+			phy := byte(3) // queued link is still Coded before normal reconciliation
+			if selected == 1 {
+				phy = 1
 			}
 			return [][]byte{complete(op, 7, 0, phy, phy)}
 		}

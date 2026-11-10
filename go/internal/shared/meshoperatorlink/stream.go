@@ -31,7 +31,45 @@ type ClientConfig struct {
 	Instance meshoperator.InstanceID
 	Router   meshid.Device
 	Roots    []*x509.Certificate
+	// IssuerCandidates supplies locally known, untrusted CA candidates when
+	// known-CA TLS omitted them. It must retain every wire certificate first;
+	// the original primary roots, peer pin, role and validity checks still apply.
+	IssuerCandidates IssuerCandidates
 }
+
+// IssuerCandidates completes only missing issuer material; it supplies path
+// candidates to the original verifier, never additional trust anchors.
+type IssuerCandidates func(wire [][]byte, now time.Time) [][]byte
+
+func completePeerCertificates(chain []*x509.Certificate, candidates IssuerCandidates, now time.Time) ([]*x509.Certificate, error) {
+	if candidates == nil {
+		return chain, nil
+	}
+	wire := make([][]byte, len(chain))
+	for i, certificate := range chain {
+		wire[i] = bytes.Clone(certificate.Raw)
+	}
+	complete := candidates(wire, now)
+	if len(complete) < len(wire) || len(complete) > 16 {
+		return nil, errors.New("the completed router certificate bundle is invalid")
+	}
+	result := append([]*x509.Certificate(nil), chain...)
+	for i, der := range complete {
+		if i < len(wire) {
+			if !bytes.Equal(der, chain[i].Raw) {
+				return nil, errors.New("the completed router certificate bundle does not preserve the certificates presented during TLS authentication")
+			}
+			continue
+		}
+		certificate, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, certificate)
+	}
+	return result, nil
+}
+
 type control struct {
 	Stream   uint32                  `cbor:"s,omitempty"`
 	Credit   uint32                  `cbor:"c,omitempty"`
@@ -40,7 +78,7 @@ type control struct {
 	Instance meshoperator.InstanceID `cbor:"n,omitempty"`
 }
 type Link struct {
-	writeMu sync.Mutex
+	writeMu frameWriteMutex
 
 	agentMu      sync.Mutex
 	agent        *agentStream
@@ -51,18 +89,22 @@ type Link struct {
 	agentHandler func(context.Context, net.Conn) error
 	agentContext context.Context
 
-	workers    sync.WaitGroup
-	outControl chan control
-	expiryMu   sync.Mutex
-	expires    time.Time
-	closed     bool
-	conn       *tls.Conn
-	address    netip.Addr
-	server     bool
-	once       sync.Once
-	done       chan struct{}
-	stop       func() bool
-	timer      *time.Timer
+	workers      sync.WaitGroup
+	outControl   chan control
+	expiryMu     sync.Mutex
+	expires      time.Time
+	certNow      func() time.Time
+	maxExpiry    time.Time // Earliest observed monotonic bound; never extended.
+	verifyExpiry func() (time.Time, error)
+	invalid      error
+	closed       bool
+	conn         *tls.Conn
+	address      netip.Addr
+	server       bool
+	once         sync.Once
+	done         chan struct{}
+	stop         func() bool
+	timer        *time.Timer
 }
 
 func (l *Link) Address() netip.Addr   { return l.address }
@@ -91,15 +133,35 @@ func (l *Link) Close() error {
 func (l *Link) Wait() { l.workers.Wait() }
 
 func ready(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time) (*Link, error) {
-	if err := c.SetDeadline(expires); err != nil {
+	return readyWithClock(ctx, c, address, server, expires, nil)
+}
+
+func readyWithClock(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time) (*Link, error) {
+	return readyWithValidity(ctx, c, address, server, expires, certNow, nil)
+}
+
+func readyWithValidity(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time, verifyExpiry func() (time.Time, error)) (*Link, error) {
+	started := time.Now()
+	l := &Link{conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, verifyExpiry: verifyExpiry, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
+	if certNow != nil {
+		remaining := expires.Sub(certNow())
+		if remaining <= 0 {
+			return nil, errors.New("operator credential expired")
+		}
+		l.maxExpiry = started.Add(remaining)
+	}
+	deadline := l.transportExpiryLocked()
+	if l.invalid != nil {
+		return nil, l.invalid
+	}
+	if err := c.SetDeadline(deadline); err != nil {
 		return nil, err
 	}
-	l := &Link{conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
 	// Install callbacks before returning; their functions cannot access partially
 	// assigned timer/stop fields because they wait for the publication barrier.
 	published := make(chan struct{})
 	l.stop = context.AfterFunc(ctx, func() { <-published; l.Close() })
-	l.timer = time.AfterFunc(max(time.Until(expires), 0), func() { <-published; l.expire() })
+	l.timer = time.AfterFunc(max(l.nextExpiryCheckLocked(), 0), func() { <-published; l.expire() })
 	close(published)
 	l.workers.Add(1)
 	go l.controlWriter()
@@ -110,6 +172,10 @@ func verifyRouterState(state tls.ConnectionState, cfg ClientConfig, now time.Tim
 	chain := state.PeerCertificates
 	if !cfg.Router.IsValid() || cfg.Router.Tenant() != cfg.Identity.Operator().Tenant() || len(chain) == 0 || len(chain) > 16 || len(cfg.Roots) == 0 {
 		return time.Time{}, errors.New("missing pinned router or primary trust")
+	}
+	chain, err := completePeerCertificates(chain, cfg.IssuerCandidates, now)
+	if err != nil {
+		return time.Time{}, err
 	}
 	peer, err := meshid.DeviceFromCert(chain[0])
 	if err != nil {

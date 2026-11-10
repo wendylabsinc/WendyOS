@@ -13,6 +13,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshview"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -88,7 +89,7 @@ func (r *operatorTargets) directorySnapshot(ctx context.Context) OperatorDirecto
 			info.InternetSharing = operatormesh.InternetGateway(r.localSnapshot(), target, now)
 		}
 		for _, route := range view.Routes {
-			if route.Prefix == hint.Prefix && route.OriginPrincipal == info.Principal && route.OriginAuthorized && !route.Unreachable && (!route.Local || target == adjacent) && route.OriginRouterId == hint.OriginRouterId && route.SequenceNumber == hint.SequenceNumber {
+			if deadline, live := meshview.AnnouncementRouteDeadline(route, hint, now); live && deadline == info.Expires && (!route.Local || target == adjacent) {
 				info.Metric = route.Metric
 				info.NextHop = route.NextHopPrincipal
 				break
@@ -127,10 +128,10 @@ func (p *directoryPublisher) watch() (chan OperatorDirectory, func(), error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return nil, nil, status.Error(codes.Unavailable, "operator attachment is closing")
+		return nil, nil, status.Error(codes.Unavailable, "the local Wendy Net connection is closing; retry after reconnecting")
 	}
 	if len(p.watchers) >= operatorDirectoryWatchers {
-		return nil, nil, status.Error(codes.ResourceExhausted, "operator directory watcher capacity is busy")
+		return nil, nil, status.Error(codes.ResourceExhausted, "too many clients are watching mesh discovery; close unused discovery views and retry")
 	}
 	if p.watchers == nil {
 		p.watchers = map[uint64]chan OperatorDirectory{}
@@ -242,7 +243,7 @@ func (r *operatorTargets) localDirectory(stream grpc.ServerStream, a *activity) 
 			return err
 		}
 		if len(bytes) > operatorDirectoryBytes {
-			return status.Error(codes.ResourceExhausted, "operator directory snapshot exceeds its bound")
+			return status.Error(codes.ResourceExhausted, "the mesh device list exceeds the supported size limit; use a direct device connection")
 		}
 		reply := rawMessage(bytes)
 		return stream.SendMsg(&reply)
@@ -314,7 +315,7 @@ func decodeOperatorDirectory(bytes rawMessage, err error) (OperatorDirectory, er
 	}
 	var snapshot OperatorDirectory
 	if len(bytes) > operatorDirectoryBytes || json.Unmarshal(bytes, &snapshot) != nil || snapshot.Version != 1 || len(snapshot.Devices) > operatorDirectoryRows {
-		return OperatorDirectory{Version: 1, State: "unsupported"}, errors.New("unsupported operator directory IPC")
+		return OperatorDirectory{Version: 1, State: "unsupported"}, errors.New("this CLI cannot read discovery from the running Wendy Net router; use matching CLI versions and reconnect")
 	}
 	return snapshot, nil
 }

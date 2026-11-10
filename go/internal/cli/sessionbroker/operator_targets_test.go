@@ -83,7 +83,8 @@ func TestOperatorRemoteNormalClientCacheBoundAndRelease(t *testing.T) {
 	credential := config.CertificateInfo{PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
 	base, stop := startUpstream(t)
 	defer stop()
-	r := newOperatorTargets(nil, base, credential, t.TempDir(), Spec{Host: MeshSelector(adjacent), Operator: &OperatorSpec{RouterUUID: adjacent.UUID().String()}})
+	r := newOperatorTargets(nil, base, credential, t.TempDir(), Spec{Host: MeshSelector(adjacent), Operator: &OperatorSpec{}})
+	r.currentAdjacent = func() (*grpc.ClientConn, meshid.Device, error) { return r.adjacent, adjacent, nil }
 	defer r.Close()
 	r.dial = func(ctx context.Context, _ string, _ *config.CertificateInfo, _ meshid.Device) (*grpcclient.AgentConnection, error) {
 		conn, err := grpc.NewClient(base.Target(), grpc.WithTransportCredentials(insecure.NewCredentials()))

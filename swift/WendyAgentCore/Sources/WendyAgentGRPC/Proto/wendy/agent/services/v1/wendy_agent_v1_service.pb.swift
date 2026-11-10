@@ -257,8 +257,8 @@ public nonisolated struct Wendy_Agent_Services_V1_ControlCommand: Sendable {
     public var debug: Bool = false
 
     /// Optional restart policy override for Docker runtime.
-    public var restartPolicy: RestartPolicy {
-      get {_restartPolicy ?? RestartPolicy()}
+    public var restartPolicy: Wendy_Agent_Services_V1_RestartPolicy {
+      get {_restartPolicy ?? Wendy_Agent_Services_V1_RestartPolicy()}
       set {_restartPolicy = newValue}
     }
     /// Returns true if `restartPolicy` has been explicitly set.
@@ -270,7 +270,7 @@ public nonisolated struct Wendy_Agent_Services_V1_ControlCommand: Sendable {
 
     public init() {}
 
-    fileprivate var _restartPolicy: RestartPolicy? = nil
+    fileprivate var _restartPolicy: Wendy_Agent_Services_V1_RestartPolicy? = nil
   }
 
   /// No fields needed; acts on the current container in this stream
@@ -604,7 +604,8 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   /// Clears the value of `cudaVersion`. Subsequent reads from it will return its default value.
   public mutating func clearCudaVersion() {_uniqueStorage()._cudaVersion = nil}
 
-  /// STORAGE value from /etc/wendyos/device-type (e.g. "sd", "nvme"). Only present on WendyOS.
+  /// Medium of the disk backing / ("nvme", "emmc", "sd", "ufs", "usb"); when not recognised, the
+  /// STORAGE value from /etc/wendyos/device-type (e.g. "disk"). Only present on WendyOS.
   public var storageMedium: String {
     get {_storage._storageMedium ?? String()}
     set {_uniqueStorage()._storageMedium = newValue}
@@ -705,8 +706,8 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   /// Aggregate system-battery state, from /sys/class/power_supply. Absent on
   /// mains-powered devices and on agents predating this field, so `wendy
   /// device info` shows no battery line for either.
-  public var battery: BatteryStats {
-    get {_storage._battery ?? BatteryStats()}
+  public var battery: Wendy_Agent_Services_V1_BatteryStats {
+    get {_storage._battery ?? Wendy_Agent_Services_V1_BatteryStats()}
     set {_uniqueStorage()._battery = newValue}
   }
   /// Returns true if `battery` has been explicitly set.
@@ -771,6 +772,15 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   public var hasPowerMode: Bool {_storage._powerMode != nil}
   /// Clears the value of `powerMode`. Subsequent reads from it will return its default value.
   public mutating func clearPowerMode() {_uniqueStorage()._powerMode = nil}
+
+  /// Entitlement types (wendy.json "entitlements[].type") this agent
+  /// understands. An agent ignores a type it does not know and starts the app
+  /// without that access, so a CLI can refuse such a project before building
+  /// it. Empty on agents predating this field, which are not checked.
+  public var entitlementTypes: [String] {
+    get {_storage._entitlementTypes}
+    set {_uniqueStorage()._entitlementTypes = newValue}
+  }
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -2844,7 +2854,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}power_mode\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}has_npu\0\u{3}npu_vendor\0\u{3}container_storage\0\u{3}gpu_capabilities\0\u{3}npu_backends\0\u{3}power_mode\0\u{3}entitlement_types\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -2868,13 +2878,14 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
     var _cpuCount: UInt32 = 0
     var _binarySha256: String = String()
     var _hostname: String = String()
-    var _battery: BatteryStats? = nil
+    var _battery: Wendy_Agent_Services_V1_BatteryStats? = nil
     var _hasNpu_p: Bool? = nil
     var _npuVendor: String? = nil
     var _containerStorage: Wendy_Agent_Services_V1_DiskPartition? = nil
     var _gpuCapabilities: [Wendy_Agent_Services_V1_GpuCapabilities] = []
     var _npuBackends: [String] = []
     var _powerMode: Wendy_Agent_Services_V1_PowerMode? = nil
+    var _entitlementTypes: [String] = []
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2913,6 +2924,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       _gpuCapabilities = source._gpuCapabilities
       _npuBackends = source._npuBackends
       _powerMode = source._powerMode
+      _entitlementTypes = source._entitlementTypes
     }
   }
 
@@ -2959,6 +2971,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         case 26: try { try decoder.decodeRepeatedMessageField(value: &_storage._gpuCapabilities) }()
         case 27: try { try decoder.decodeRepeatedStringField(value: &_storage._npuBackends) }()
         case 28: try { try decoder.decodeSingularMessageField(value: &_storage._powerMode) }()
+        case 29: try { try decoder.decodeRepeatedStringField(value: &_storage._entitlementTypes) }()
         default: break
         }
       }
@@ -3055,6 +3068,9 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       try { if let v = _storage._powerMode {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 28)
       } }()
+      if !_storage._entitlementTypes.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._entitlementTypes, fieldNumber: 29)
+      }
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -3092,6 +3108,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         if _storage._gpuCapabilities != rhs_storage._gpuCapabilities {return false}
         if _storage._npuBackends != rhs_storage._npuBackends {return false}
         if _storage._powerMode != rhs_storage._powerMode {return false}
+        if _storage._entitlementTypes != rhs_storage._entitlementTypes {return false}
         return true
       }
       if !storagesAreEqual {return false}

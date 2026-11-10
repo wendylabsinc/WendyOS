@@ -11,6 +11,8 @@ apps browse it through their own network interface.
 Start by [connecting the devices](/docs/guides/wendy-net) and checking their peers.
 Use current Linux WendyOS images with full Wendy Net support.
 
+Run these commands in an interactive terminal. Select the intended device when prompted, or check the target `WENDY_DEVICE` selects automatically.
+
 ## 1. Give the publishing app Wendy Net access
 
 Merge this into its `wendy.json`:
@@ -36,7 +38,11 @@ Merge this into its `wendy.json`:
 
 Keep the literal configuration value `"mesh"`; it selects Wendy Net service
 networking. Use `10.99.0.0/16`, the currently supported service address range.
-Do not replace this with the device's LAN subnet.
+`serviceCIDR` is the virtual address block for mesh services. `/16` fixes the
+first 16 bits, so this block spans `10.99.0.0` through `10.99.255.255`.
+It is not a single server address and does not change the LAN or container IP.
+Use the supported range on both apps; connect to the address returned by discovery,
+not an address invented within the range.
 
 Run your server on the container's address or `0.0.0.0:8080`, not loopback alone.
 The example publishes TCP port 18080 for other Wendy Net apps. Choose an unused
@@ -49,7 +55,7 @@ they use the same port number.
 Deploy after saving:
 
 ```sh
-wendy run --device <publishing-device>
+wendy run
 ```
 
 The port mapping permits incoming connections; it does not announce a service
@@ -129,6 +135,72 @@ devices; avoid matching an entire generated name as a permanent identifier.
 Service discovery can cross intermediate Wendy Net devices without a direct
 connection to the publishing device. Discovery is not an application health
 check: verify an actual request to the discovered server.
+
+## Try the complete Python example
+
+[Download the publisher and client](/media/mesh-mdns.zip), or use
+[`Examples/MeshMDNS`](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/MeshMDNS).
+Both directories include a Dockerfile, pinned `zeroconf` dependency, and app configuration.
+The publisher starts an HTTP server; the client discovers it and checks the response.
+
+The publisher registers these records through `python-zeroconf`:
+
+```python
+info = ServiceInfo(
+    "_http._tcp.local.",
+    f"{instance}._http._tcp.local.",
+    addresses=[socket.inet_aton(address)],
+    port=8080,
+    properties={"demo": "learn-mesh", "path": "/"},
+    server=f"{hostname}.local.",
+)
+zc.register_service(info, allow_name_change=True)
+```
+
+This is the core excerpt; the download includes imports, server startup, interface
+selection, and cleanup. `address` is the app's private `eth0` IPv4 address. The
+process stays alive to advertise, and unregisters the service on shutdown.
+
+The client uses `ServiceBrowser` for discovery. Its callback queues events; the main
+thread resolves them and makes bounded HTTP requests. Use the returned address and
+port, which can differ from those in the original announcement:
+
+```python
+info = zc.get_service_info(service_type, name, timeout=2000)
+if info and info.properties.get(b"demo") == b"learn-mesh":
+    addresses = info.parsed_addresses(IPVersion.V4Only)
+    if addresses:
+        url = f"http://{addresses[0]}:{info.port}/"
+```
+
+After unzipping, set the two device hostnames or IP addresses from `wendy discover`.
+Replace both example values with your connected devices, then run:
+
+```sh
+PUBLISHER_DEVICE='publisher-device.local'
+CLIENT_DEVICE='client-device.local'
+cd mesh-mdns/publisher
+wendy run --device "$PUBLISHER_DEVICE" --detach
+cd ../client
+wendy run --device "$CLIENT_DEVICE"
+```
+
+The explicit selectors keep both apps on their intended devices, even if
+`WENDY_DEVICE` is set. Expect a resolved `10.99.x.x:18080` endpoint and JSON with `instance` and
+`status: "ok"`. The client exits after success or a 60-second discovery timeout.
+Its manifest sets `restartPolicy: "no"` so it stays stopped after exiting.
+To check recovery, run `wendy run --device "$PUBLISHER_DEVICE" --detach` again
+from `publisher/`, then rerun the client from `client/`. When finished, stop the
+publisher:
+
+```sh
+wendy --device "$PUBLISHER_DEVICE" device apps stop com.example.learn-mdns-publisher
+```
+
+No Avahi entitlement or UDP 5353 mapping is needed for this app-owned socket.
+The TXT marker filters demo instances; it is not authentication. See the
+[python-zeroconf API](https://python-zeroconf.readthedocs.io/en/latest/api.html)
+for integration into an existing application.
 
 ## Alternative: use private Avahi through D-Bus
 
@@ -225,5 +297,5 @@ the service after the relevant discovery and lease updates. After a partition or
 restart, allow routes and service state to reconcile. An old cached record may
 remain briefly; applications should handle disappearance and failed connections.
 
-See the [network and Avahi reference](/docs/advanced/apps/wendy.json#network)
+See the [network and Avahi reference](/docs/reference/app-configuration#network)
 for detailed limits.

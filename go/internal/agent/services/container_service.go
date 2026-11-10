@@ -825,6 +825,15 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 	}
 
 	ctx := stream.Context()
+
+	// Multi-service groups: stdin and output can only attach to one container,
+	// so start the group the same way StartContainer does (detached, one
+	// Started response). Without this a bare app name for a group failed with
+	// "has multiple service containers" on every non-detached start.
+	if ids, idsErr := s.containerd.ContainerIDsForApp(ctx, appName); idsErr == nil && len(ids) > 1 {
+		return s.startGroup(ctx, appName, ids, nil, stream)
+	}
+
 	postStartAgentCommand := postStartAgentHookFromContext(ctx)
 	// See streamContainerOutput: detach the start (and its post-start
 	// bookkeeping) from the request's cancellation so a client disconnect

@@ -45,7 +45,17 @@ func (c *Credentials) knownIssuerCandidates(chain [][]byte, now time.Time) [][]b
 	if c.issuerMaterial == nil {
 		return chain
 	}
+	if c.timePolicy != nil {
+		now = c.timePolicy.BaseTime(certificateWallTime(c.timePolicy, now))
+	}
 	return c.issuerMaterial.Candidates(chain, now)
+}
+
+// TLSIssuerCandidates completes a shortened TLS presentation with bounded,
+// locally available CA material. These candidates never become trust anchors;
+// post-handshake admission must still verify identity, roles and expiry.
+func (c *Credentials) TLSIssuerCandidates(chain [][]byte, now time.Time) [][]byte {
+	return c.knownIssuerCandidates(chain, now)
 }
 
 // ApplicationProtocol returns the actual service carried by a known variant.
