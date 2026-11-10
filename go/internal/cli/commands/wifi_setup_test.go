@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -153,5 +154,128 @@ func TestWiFiFirstBootSetup(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// serveSetupProbe serves a plaintext agent reporting state and returns its address.
+func serveSetupProbe(t *testing.T, state string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &firstBootWiFiProbe{setupIdentityProbe: setupIdentityProbe{state: state}}
+	server := grpc.NewServer()
+	agentpb.RegisterWendyAgentServiceServer(server, service)
+	pb.RegisterWendyProvisioningServiceServer(server, service)
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	return listener.Addr().String()
+}
+
+// closedLoopbackAddr returns an address with nothing listening on it.
+func closedLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	listener.Close()
+	return addr
+}
+
+// The setup exception only adds a connection the ordinary resolver refuses.
+// Every other outcome keeps the ordinary resolver's typed errors and fallbacks.
+func TestWiFiSetupKeepsOrdinaryResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		loggedIn  bool
+		state     string // "" means nothing listens
+		isDefault bool
+		check     func(*testing.T, *SelectedDevice, error)
+	}{
+		{name: "logged in, unreachable", loggedIn: true, check: func(t *testing.T, _ *SelectedDevice, err error) {
+			if !errors.Is(err, certs.ErrExpectedDeviceIdentity) || !stopConnectionRecovery(err) {
+				t.Fatalf("unreachable device lost the typed identity refusal: %v", err)
+			}
+		}},
+		{name: "logged in, enrolled", loggedIn: true, state: "enrolled", check: func(t *testing.T, _ *SelectedDevice, err error) {
+			if !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+				t.Fatalf("enrolled device lost the typed identity refusal: %v", err)
+			}
+		}},
+		{name: "logged in, unknown state", loggedIn: true, state: "unknown", check: func(t *testing.T, _ *SelectedDevice, err error) {
+			if !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+				t.Fatalf("unknown state lost the typed identity refusal: %v", err)
+			}
+		}},
+		{name: "logged out, unprovisioned", state: "unprovisioned", check: func(t *testing.T, target *SelectedDevice, err error) {
+			if err != nil || target == nil || target.unverifiedSetup {
+				t.Fatalf("logged-out Wi-Fi left the ordinary plaintext path: target=%+v err=%v", target, err)
+			}
+		}},
+		{name: "logged out, offline default", isDefault: true, check: func(t *testing.T, _ *SelectedDevice, err error) {
+			if err == nil || !strings.Contains(err.Error(), "is set but could not be reached") {
+				t.Fatalf("offline default lost its default-device error: %v", err)
+			}
+		}},
+		{name: "logged in, unprovisioned", loggedIn: true, state: "unprovisioned", check: func(t *testing.T, target *SelectedDevice, err error) {
+			if err != nil || target == nil || !target.unverifiedSetup {
+				t.Fatalf("setup connection was not marked unverified: target=%+v err=%v", target, err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restoreDeviceGlobals(t)
+			deviceFlag, jsonOutput = "", false
+			addr := closedLoopbackAddr(t)
+			if tc.state != "" {
+				addr = serveSetupProbe(t, tc.state)
+			}
+			cfg := &config.Config{}
+			if tc.loggedIn {
+				cfg.Auth = []config.AuthConfig{{Certificates: []config.CertificateInfo{selfSignedCLICert(t, 2)}}}
+			}
+			if tc.isDefault {
+				cfg.DefaultDevice = addr
+			}
+			setTempConfig(t, cfg)
+			setPinCache(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			target, err := resolveWifiTarget(ctx, func(c *resolveConfig) {
+				if !tc.isDefault {
+					c.device = addr
+				}
+				c.disableSessionBroker, c.suppressUpdateCheck, c.nonInteractive = true, true, true
+			})
+			if target != nil {
+				defer target.Close()
+			}
+			tc.check(t, target, err)
+		})
+	}
+}
+
+// A picked row whose LAN address does not answer still falls back to
+// Bluetooth, as it did before the setup exception.
+func TestWiFiSetupPickerKeepsBluetoothFallback(t *testing.T) {
+	restoreDeviceGlobals(t)
+	deviceFlag, jsonOutput = "", false
+	setTempConfig(t, &config.Config{})
+	setPinCache(t)
+	_, portText, _ := net.SplitHostPort(closedLoopbackAddr(t))
+	portNumber, _ := net.LookupPort("tcp", portText)
+	bluetooth := &models.BluetoothDevice{ID: "ble-1", DisplayName: "new-robot", IsWendyDevice: true}
+	dev := &models.DiscoveredDevice{
+		LAN:       &models.LANDevice{Hostname: "new-robot.invalid", IPAddress: "127.0.0.1", Port: portNumber},
+		Bluetooth: bluetooth,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	target, err := connectLocalPickerChoice(withWiFiSetupSelection(ctx), &tui.PickerItem{Value: &pickerEntry{mergedDevice: dev}}, true)
+	if err != nil || target == nil || target.Bluetooth != bluetooth {
+		t.Fatalf("Wi-Fi setup picker lost its Bluetooth fallback: target=%+v err=%v", target, err)
 	}
 }

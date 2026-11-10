@@ -30,7 +30,7 @@ var (
 // command family and explicit enrollment may connect to an unbound device that
 // reports NotProvisioned; saved identities still require normal authentication.
 func resolveWifiTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
-	return resolveTarget(withUnboundSetupSelection(ctx), opts...)
+	return resolveTarget(withWiFiSetupSelection(ctx), opts...)
 }
 
 func newWifiCmd() *cobra.Command {
