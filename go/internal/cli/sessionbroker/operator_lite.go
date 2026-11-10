@@ -30,7 +30,7 @@ const (
 
 // OperatorTargetInfo describes the authenticated adjacent router's current
 // observation. Destination TLS still authenticates the exact selected device.
-const operatorIPCVersion = 6
+const operatorIPCVersion = 7
 
 // Both principal fields can contain a complete valid operator URI.
 const operatorContextBytes = 2*operatorJSONPrincipalBytes + 256
@@ -71,7 +71,7 @@ func (r *operatorTargets) managementInfo(ctx context.Context) (OperatorTargetInf
 	}
 	operator, err := operatorPrincipal(r.certificate)
 	if err != nil || target.Tenant() != operator.Tenant() {
-		return OperatorTargetInfo{}, status.Error(codes.InvalidArgument, "mesh target differs from the selected operator tenant")
+		return OperatorTargetInfo{}, status.Error(codes.InvalidArgument, "the selected mesh device belongs to a different organization; switch to its sign-in profile")
 	}
 	// Legacy fixtures can identify their WendyOS neighbour directly. A local
 	// routing participant always resolves capabilities from signed manifests.
@@ -84,7 +84,7 @@ func (r *operatorTargets) managementInfo(ctx context.Context) (OperatorTargetInf
 	}
 	view, err := r.lookupTopology(ctx, target)
 	if err != nil {
-		return OperatorTargetInfo{}, fmt.Errorf("read attached router topology: %w", err)
+		return OperatorTargetInfo{}, fmt.Errorf("reading the connected router's mesh topology: %w", err)
 	}
 	reporter, err := r.reporter()
 	if err != nil {
@@ -165,12 +165,12 @@ func (r *operatorTargets) localManagement(stream grpc.ServerStream, a *activity)
 			return true, err
 		}
 	} else if info.Platform != "Lite" || info.Transport != "mtls-v1" {
-		return true, status.Error(codes.Unimplemented, "target does not advertise native Lite WendyCom TLS")
+		return true, status.Error(codes.Unimplemented, "the device has not advertised the required Wendy Lite management protocol; check its firmware version")
 	}
 	r.mu.Lock()
 	if r.closed || r.liteStreams >= operatorLiteStreams {
 		r.mu.Unlock()
-		return true, status.Error(codes.ResourceExhausted, "mesh TCP stream capacity is busy")
+		return true, status.Error(codes.ResourceExhausted, "all local mesh streams are busy; close unused connections and retry")
 	}
 	r.liteStreams++
 	r.mu.Unlock()
@@ -279,7 +279,7 @@ func operatorControl(ctx context.Context, selector string) (*grpcclient.AgentCon
 		return nil, err
 	}
 	if target.Tenant() != operator.Tenant() {
-		return nil, errors.New("mesh target differs from the selected operator tenant")
+		return nil, errors.New("the selected mesh device belongs to a different organization; switch to its sign-in profile")
 	}
 	directory, err := configDir()
 	if err != nil {
@@ -312,7 +312,7 @@ func DescribeOperatorTarget(ctx context.Context, selector string) (OperatorTarge
 	}
 	var info OperatorTargetInfo
 	if len(reply) > operatorLiteChunk || json.Unmarshal(reply, &info) != nil || info.Selector != selector {
-		return info, errors.New("invalid operator target description")
+		return info, errors.New("the local Wendy Net router returned invalid device connection details; check CLI versions and reconnect")
 	}
 	return info, nil
 }

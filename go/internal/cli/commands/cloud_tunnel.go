@@ -2,7 +2,7 @@ package commands
 
 import (
 	"context"
-	"crypto/tls"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -24,12 +24,17 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
 
 const maxCloudAssets = 10_000
+
+// Cloud connection setup includes authorization, broker admission, end-to-end
+// device TLS, and HTTP/2 startup. A borrowed BLE uplink can legitimately take
+// longer than gRPC's default 20-second connection budget across these steps.
+const cloudAgentConnectTimeout = cloudrelay.ConnectionSetupTimeout
 
 // The tunneled agent conn's keepalive is a slow END-TO-END BACKSTOP, not the
 // liveness probe: its PINGs are payload bytes inside the broker stream, subject
@@ -180,21 +185,13 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	// plaintext port (50051) is shut down after provisioning. (On-device containers
 	// with the admin entitlement can reach the agent via the local unix socket.)
 	dialOpt := clouddefaults.TunnelDialer(func(tunnelCtx context.Context) (net.Conn, error) {
-		return asset.openTunnel(tunnelCtx, brokerConn, auth, defaultAgentPort+1)
+		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1)
 	})
 
 	cert := auth.Certificates[0]
 	expectedIdentity := cloudDiscoveryIdentity(auth, asset)
-	var verifiedIdentity grpcclient.VerifiedServerIdentity
-	tlsCfg, err := cloudAgentTLSConfig(cert, expectedIdentity, &verifiedIdentity)
-	if err != nil {
-		return nil, err
-	}
-
-	grpcConn, err := grpc.NewClient(
-		"passthrough:///cloud-tunnel",
+	agentConn, err := connectCloudAgentTransport(ctx, cert, expectedIdentity,
 		dialOpt,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 		grpc.WithInitialWindowSize(8*1024*1024),
 		grpc.WithInitialConnWindowSize(16*1024*1024),
 		grpc.WithReadBufferSize(256*1024),
@@ -209,22 +206,30 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		return nil, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
 	}
 
-	agentConn := grpcclient.NewFromConnWithVerifiedIdentity(grpcConn, &verifiedIdentity)
+	// The public connection address stays empty for Cloud routing; the
+	// synthetic TLS cache target is internal to this connection.
+	agentConn.Addr = ""
 	agentConn.Host = asset.GetName()
 	if asset.legacy != nil {
 		agentConn.MeshHost = meshname.Device(asset.legacy.GetId())
 	}
 	agentConn.IsMTLS = true
+	agentConn.IsCloudV2 = asset.v2 != nil
+	if agentConn.IsCloudV2 && strings.TrimSpace(agentConn.Host) == "" {
+		// Cloud names are optional; keep the pinned device identifiable in
+		// upload and start-failure messages even without a display name.
+		agentConn.Host = asset.key
+	}
 	agentConn.CertInfo = &cert
-	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
-		return asset.openTunnel(ctx, brokerConn, auth, uint32(port))
+	agentConn.RegistryDialer = func(registryCtx context.Context, port int) (net.Conn, error) {
+		return asset.openTunnel(carryTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port))
 	}
 	// Pin reconnect to this exact asset (by id) so a post-restart reconnect
 	// can't drift to a different cloud device — the asset name may be empty or
 	// ambiguous, and re-running device discovery while the agent is mid-restart
 	// can match whichever other device happens to be reachable.
 	agentConn.Reconnect = func(rctx context.Context) (*grpcclient.AgentConnection, error) {
-		return asset.reconnect(rctx, auth, brokerURL)
+		return asset.reconnect(carryTunnelSession(rctx, ctx), auth, brokerURL)
 	}
 	if brokerConn != nil {
 		agentConn.AddCloser(brokerConn)
@@ -244,6 +249,8 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 // than a LAN restart wait: the new agent process must first register its
 // presence with the Cloud relay again, and only then can a new tunnel reach it.
 const cloudAgentRestartTimeout = 60 * time.Second
+
+const cloudAgentRestartProbeTimeout = 15 * time.Second
 
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
 	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
@@ -266,11 +273,10 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 		// connect only creates a lazy client, so the tunnel itself (Cloud
 		// authorization, both sides joining the relay, the mTLS handshake) is
 		// built inside the probe RPC. That takes 6-10 s when the device is on a
-		// slow uplink, so the probe gets the whole attempt budget, the same one
-		// `cloud discover` gives a new tunnel to fetch the agent version. A
-		// short probe deadline cancels every attempt and reports a successful
+		// slow uplink, so the probe gets the whole attempt budget. A short
+		// probe deadline cancels every attempt and reports a successful
 		// restart as a timeout.
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudAgentRestartProbeTimeout)
 		conn, err := connect(attemptCtx)
 		if err != nil {
 			attemptCancel()
@@ -296,32 +302,16 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 	}
 }
 
-// cloudAgentTLSConfig retains the identity accepted by the end-to-end device
-// verifier; Cloud inventory names and routing asset IDs are not peer proofs.
-func cloudAgentTLSConfig(cert config.CertificateInfo, expectedIdentity certs.WendyIdentity, verifiedIdentity *grpcclient.VerifiedServerIdentity) (*tls.Config, error) {
-	keyPEM, err := cert.PrivateKeyPEM()
-	if err != nil {
-		return nil, fmt.Errorf("loading client key: %w", err)
-	}
-	x509Cert, err := certs.TLSKeyPair(cert.PemCertificate, cert.PemCertificateChain, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
-	}
-	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:                 cert.PemCertificateChain,
-		ExpectedOrgID:            int32(cert.OrganizationID),
-		ExpectedIdentity:         &expectedIdentity,
-		OnVerifiedServerIdentity: verifiedIdentity.Observe,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("building TLS verifier: %w", err)
-	}
-	return &tls.Config{
-		Certificates:       []tls.Certificate{x509Cert},
-		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
-		VerifyConnection:   verifyConn,
-		MinVersion:         tls.VersionTLS12,
-	}, nil
+// connectCloudAgentTransport uses the normal agent mTLS policy over the
+// authorized relay byte stream. The cache target names the complete expected
+// device identity rather than the shared tunnel label or a Cloud display name;
+// the normal cache also binds the selected operator leaf certificate.
+func connectCloudAgentTransport(ctx context.Context, cert config.CertificateInfo, expectedIdentity certs.WendyIdentity, options ...grpc.DialOption) (*grpcclient.AgentConnection, error) {
+	target := fmt.Sprintf("passthrough:///cloud-agent-%x", sha256.Sum256([]byte(expectedIdentity.IdentityKey())))
+	options = append(options, grpc.WithConnectParams(grpc.ConnectParams{
+		Backoff: backoff.DefaultConfig, MinConnectTimeout: cloudAgentConnectTimeout,
+	}))
+	return grpcclient.ConnectWithTLSExpecting(ctx, target, &cert, nil, &expectedIdentity, options...)
 }
 
 func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, assetID int32, remotePort uint32) (net.Conn, error) {
@@ -367,24 +357,7 @@ func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.C
 	if err != nil {
 		return nil, err
 	}
-	signer, err := tunnelPrincipalSigner(auth)
-	if err != nil {
-		return nil, err
-	}
-	cloudCtx, err := cloudContext(ctx, auth)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := dialCloudGRPC(auth)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	issuer, err := cloudrelay.Issuer(auth.CloudGRPC, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
-	if err != nil {
-		return nil, err
-	}
-	return cloudrelay.OpenTCP(ctx, cloudCtx, conn, &cloudrelay.Verifier{Issuer: issuer}, d.key, service, signer)
+	return openAuthorizedTunnel(ctx, auth, d.key, service)
 }
 
 func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {

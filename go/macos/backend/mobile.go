@@ -20,6 +20,9 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 	defer cancel()
 	if !active || changed {
 		b.recordings.setActive(false)
+		b.tunnelSession.SetActive(false)
+		b.resetNearbyDiscovery(true)
+		b.galleryReset(true)
 		b.cancelOperation()
 		b.ReserveConnection()
 		// Retire device streams while their packet carrier can still deliver
@@ -37,11 +40,20 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 		}
 	}
 	b.mobileScope = scope
-	if err := sessionbroker.SetEmbeddedActive(ctx, active && account != ""); err != nil {
-		return err
+	err := sessionbroker.SetEmbeddedActive(ctx, active && account != "")
+	if err == nil && active && account != "" {
+		b.tunnelSession.SetActive(true)
+		b.gallery.mu.Lock()
+		b.gallery.blocked = false
+		b.gallery.mu.Unlock()
 	}
-	b.recordings.setActive(active)
-	return nil
+	if err == nil && active {
+		b.allowNearbyDiscovery()
+	}
+	if err == nil {
+		b.recordings.setActive(active)
+	}
+	return err
 }
 
 func (b *Backend) MobileMeshSummary() (string, string) {

@@ -107,6 +107,8 @@ struct PresentedFailure {
             message = "This Cloud server needs an update before app ports can be reached through the VPN."
         } else if lower.contains("not sending video") {
             message = "This camera is not sending video. Check its source, or choose another camera."
+        } else if lower.contains("sends vp8 video") {
+            message = "This device sends VP8 video, which the Wendy app cannot play yet. Update the device’s Wendy agent, or install gstreamer1.0-plugins-bad on it."
         } else if lower.contains("identity changed") || lower.contains("different certificate key") || lower.contains("has no enrolled identity") || lower.contains("pin mismatch") || lower.contains("identity mismatch") {
             title = "Device identity changed"
             symbol = "exclamationmark.shield"

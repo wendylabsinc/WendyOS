@@ -1,10 +1,10 @@
 ---
-title: Audio Playback & Streaming
-description: Learn how to play sounds and stream microphone audio using Python and ALSA on WendyOS
+title: Audio playback and streaming
+description: play sounds and stream microphone audio using Python and ALSA
 language: python
 ---
 
-## Audio Playback & Streaming
+## Audio playback and streaming
 
 <Callout type="info">
   **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/python/audio](https://github.com/wendylabsinc/samples/tree/main/python/audio)
@@ -25,11 +25,11 @@ This demonstrates how to drive audio capture and playback with GStreamer and ALS
   **Recommended Hardware**: For the best experience, we recommend using a USB speakerphone like the Anker PowerConf plugged into your NVIDIA Jetson via USB. It provides high-quality audio capture and playback in a single device.
 </Callout>
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     ```bash
     wendy init audio --target wendyos --language python --template audio --var APP_ID=audio --var PORT=3004 --assistant skip --git-init no
@@ -54,9 +54,13 @@ This demonstrates how to drive audio capture and playback with GStreamer and ALS
   </Step>
 </Steps>
 
-## Code Breakdown
+## What you should see
 
-## Project Structure
+Your browser opens automatically once the app is ready. If it doesn't, navigate to `http://<device-hostname>.local:3004`.
+
+## Code breakdown
+
+## Project structure
 
 The template generates a single-file frontend (`index.html`) and a single-file backend (`app.py`), plus a few sample WAV files under `assets/`:
 
@@ -75,7 +79,7 @@ audio/
     └── wendy-logo.svg
 ```
 
-## Setting Up the Backend
+## Setting up the backend
 
 The backend uses [FastAPI](https://fastapi.tiangolo.com/) for the HTTP API and WebSockets. Audio capture and playback are driven by GStreamer pipelines using the ALSA plugins (`alsasrc` / `alsasink`). ALSA devices are enumerated by parsing `arecord -l` / `aplay -l`.
 
@@ -88,7 +92,7 @@ fastapi
 uvicorn[standard]
 ```
 
-### 2. Audio Playback
+### 2. Audio playback
 
 To play a sound, the backend builds a GStreamer pipeline that reads a WAV file from `assets/` and sends it to the selected ALSA speaker (falling back to the first detected speaker, then `autoaudiosink`):
 
@@ -115,7 +119,7 @@ async def play_sound(filename: str):
 
 The UI discovers playable sounds via `GET /sounds`, and available output devices via `GET /speakers`. Selecting a speaker posts to `/speaker/{device_id}`.
 
-### 3. Microphone Streaming
+### 3. Microphone streaming
 
 Microphone capture is an `alsasrc` pipeline resampled to S16LE mono 16 kHz, ending in an `appsink`. Each captured buffer is pushed to every connected client's queue:
 
@@ -177,7 +181,7 @@ async def websocket_stream(websocket: WebSocket):
 
 The backend also exposes `GET /microphones`, `GET /logs`, and `GET /debug`, and serves the UI at `GET /`.
 
-## Frontend Implementation
+## Frontend implementation
 
 The frontend is a single `index.html` (Tailwind via CDN). It draws a fullscreen waveform on a `<canvas>` and renders buttons for the bundled sounds plus microphone/speaker pickers. It connects to `/stream` and receives raw PCM frames as binary:
 
@@ -198,7 +202,7 @@ ws.onmessage = (e) => {
 
 Buttons are populated from `/sounds`; clicking one POSTs to `/play/{file}`. The microphone dropdown is filled from `/microphones` and triggers a `switch_microphone` command; the speaker dropdown is filled from `/speakers` and posts to `/speaker/{id}`.
 
-## Docker Configuration
+## Docker configuration
 
 The Dockerfile uses a slim Debian base with GStreamer (including the ALSA plugin), `alsa-utils`, and the GStreamer Python bindings. It creates a virtualenv with system site packages so `import gi` works:
 
@@ -279,16 +283,6 @@ To access the microphone and speaker, the application needs the `audio` entitlem
 ```
 
 The `readiness` probe waits for port `3004` to accept connections. The `postStart` hook automatically opens the web interface in your browser.
-## Run Again on WendyOS
-
-1.  Connect your WendyOS device.
-2.  Run the application:
-
-```bash
-wendy run
-```
-
-3.  Your browser will open automatically once the app is ready. If it doesn't, navigate to `http://<device-hostname>.local:3004`.
 
 ## Troubleshooting
 
@@ -298,7 +292,11 @@ wendy run
     - Pick a specific output from the speaker dropdown — the app uses `alsasink device="hw:<card>,<dev>"` for the selected device and falls back to `autoaudiosink` otherwise.
 3.  **Permissions**: If you see "Permission denied" errors accessing `/dev/snd`, ensure the `audio` entitlement is present in `wendy.json`.
 
-## Learn More
+## Learn more
 
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [ALSA Project](https://www.alsa-project.org/wiki/Main_Page)
+
+## Next steps
+
+Continue with [Bluetooth discovery](/docs/guides/tutorials/python/bluetooth-discovery) to build a Bluetooth Low Energy scanner.

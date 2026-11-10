@@ -10,7 +10,9 @@ wendy cloud discover [flags]
 
 ## Output
 
-In an interactive terminal the command shows a **live TUI** that auto-refreshes every 10 seconds. Each row displays the device name, type, IP address, and running agent version. In non-interactive environments (or when `--json` is passed) a JSON array is written to stdout.
+In an interactive terminal the command shows a **live TUI** that auto-refreshes every 10 seconds. Each row displays the device name and type from the Cloud roster. Browsing and refreshing the list do not open device tunnels or query devices for hardware or agent versions.
+
+The version column shows `—` unless a version was learned through an explicit update check. Wendy Lite firmware versions come directly from the Cloud roster. In non-interactive environments or when `--json` is passed, a JSON array is written to stdout. IP addresses remain available in JSON output.
 
 ### TUI keyboard shortcuts
 
@@ -40,7 +42,7 @@ cloud returned more than 10000 devices
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--all` | `false` | Include offline (not currently connected) devices. By default only online devices are shown. |
-| `--broker-url` | `$WENDY_BROKER_URL` (or derived from cloud endpoint) | Tunnel broker `host:port` used for version fetching and in-place updates. |
+| `--broker-url` | `$WENDY_BROKER_URL` (or derived from cloud endpoint) | Tunnel broker `host:port` used for explicit in-place updates. |
 | `--cloud-grpc` | `""` | Cloud gRPC endpoint. Overrides session selection. When multiple sessions are stored and no default is set, an interactive terminal shows a session picker; a non-interactive environment errors. |
 
 ## Related

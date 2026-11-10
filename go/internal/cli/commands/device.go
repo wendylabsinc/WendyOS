@@ -442,10 +442,22 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if len(netInterfaces) > 0 {
 					ifaces := make([]map[string]any, len(netInterfaces))
 					for i, iface := range netInterfaces {
-						ifaces[i] = map[string]any{
+						entry := map[string]any{
 							"name":        iface.GetName(),
 							"ipAddresses": iface.GetIpAddresses(),
 						}
+						// Absent rather than false/unknown: older agents
+						// report none of these.
+						if iface.GetIsDefaultRoute() {
+							entry["isDefaultRoute"] = true
+						}
+						if iface.RouteMetric != nil {
+							entry["routeMetric"] = iface.GetRouteMetric()
+						}
+						if c := connectivityLabel(iface.GetConnectivity()); c != "" {
+							entry["connectivity"] = c
+						}
+						ifaces[i] = entry
 					}
 					out["networkInterfaces"] = ifaces
 				}
@@ -1033,7 +1045,14 @@ func enrollmentName(host, name string) (string, error) {
 }
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
-	_, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	if err != nil {
+		return err
+	}
+	next, err := verifyAndSaveEnrollment(ctx, conn, auth, identity, name)
+	if next != nil && next != conn {
+		next.Close()
+	}
 	return err
 }
 
@@ -1121,14 +1140,18 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Renew while the certificate is still valid. This shared picker has no
-	// caller context; renewal applies its own request timeout. Enrollment uses
-	// prepareEnrollmentAuth instead so expiry can trigger login before work.
+	// Keep pre-expiry renewal first; OIDC operators can then re-issue through
+	// their current sign-in session. This picker has no caller context, so
+	// both network paths impose their own timeout.
 	var before string
 	if len(auth.Certificates) > 0 {
 		before = auth.Certificates[0].PemCertificate
 	}
-	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
+	if auth.OAuthIssuer != "" && auth.ServiceAccount == "" {
+		if err := prepareDefaultCloudCertificate(context.Background(), auth); err != nil {
+			return nil, err
+		}
+	} else if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
 		reportStaleCertificate(rerr)
 	}
 	// A renewal is a certificate refresh: retry an unbound registry key, as
@@ -2337,7 +2360,7 @@ func reconnectAgentAfterRestart(ctx context.Context, conn *grpcclient.AgentConne
 	if addr == "" {
 		addr = hostPort(conn.Host, defaultAgentPort)
 	}
-	return waitForAgentRestart(ctx, addr)
+	return waitForAgentRestartKeyed(ctx, addr, conn.DevicePinKey)
 }
 
 // osUpdateOutcome reports what `device update`'s OS-update step did, so the

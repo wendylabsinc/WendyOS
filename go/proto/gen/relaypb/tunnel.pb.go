@@ -295,6 +295,13 @@ type IssuePresenceLeaseRequest struct {
 	// Opaque Cloud audit correlation value, 1..128 bytes. It MUST NOT embed a
 	// principal or target identifier because it is copied into the lease.
 	CorrelationId string `protobuf:"bytes,3,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	// Optional hardware self-report, refreshed on every lease issue and renewal
+	// (WDY-3544). Cosmetic: Cloud writes it to the asset row and authorizes
+	// nothing from it. Exception to the reject-over-limit rule above: Cloud
+	// drops an invalid report and still issues the lease, so a bad string never
+	// takes a device offline. An agent that sends none keeps the stored values.
+	// Field 16: 4..15 stay reserved (buf breaking forbids un-reserving them).
+	Hardware      *DeviceHardware `protobuf:"bytes,16,opt,name=hardware,proto3" json:"hardware,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -350,6 +357,159 @@ func (x *IssuePresenceLeaseRequest) GetCorrelationId() string {
 	return ""
 }
 
+func (x *IssuePresenceLeaseRequest) GetHardware() *DeviceHardware {
+	if x != nil {
+		return x.Hardware
+	}
+	return nil
+}
+
+// The device's own hardware report, mirroring wendyos GetDeviceInfo; same
+// shape as Cloud's enrollment-time wendycloud.v2.DeviceHardware. Every field
+// is optional and absent means the device could not read it, never zero or
+// "unknown". Strings: board_model, os and os_version max 100 characters,
+// architecture max 50, the rest max 255.
+type DeviceHardware struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// /proc/device-tree/model, e.g. "NVIDIA Jetson AGX Thor Developer Kit".
+	BoardModel *string `protobuf:"bytes,1,opt,name=board_model,json=boardModel,proto3,oneof" json:"board_model,omitempty"`
+	// The first /proc/device-tree/compatible entry naming the SoC, e.g. "nvidia,tegra264".
+	SocCompatible *string `protobuf:"bytes,2,opt,name=soc_compatible,json=socCompatible,proto3,oneof" json:"soc_compatible,omitempty"`
+	SerialNumber  *string `protobuf:"bytes,3,opt,name=serial_number,json=serialNumber,proto3,oneof" json:"serial_number,omitempty"`
+	// uname -r.
+	KernelVersion *string `protobuf:"bytes,4,opt,name=kernel_version,json=kernelVersion,proto3,oneof" json:"kernel_version,omitempty"`
+	// NVIDIA L4T release, e.g. "38.2.0". Absent on non-NVIDIA boards.
+	L4TVersion *string `protobuf:"bytes,5,opt,name=l4t_version,json=l4tVersion,proto3,oneof" json:"l4t_version,omitempty"`
+	// Online logical CPUs.
+	CpuCount      *uint32 `protobuf:"varint,6,opt,name=cpu_count,json=cpuCount,proto3,oneof" json:"cpu_count,omitempty"`
+	MemTotalBytes *int64  `protobuf:"varint,7,opt,name=mem_total_bytes,json=memTotalBytes,proto3,oneof" json:"mem_total_bytes,omitempty"`
+	// Root filesystem size.
+	DiskTotalBytes *int64 `protobuf:"varint,8,opt,name=disk_total_bytes,json=diskTotalBytes,proto3,oneof" json:"disk_total_bytes,omitempty"`
+	// e.g. "linux".
+	Os        *string `protobuf:"bytes,9,opt,name=os,proto3,oneof" json:"os,omitempty"`
+	OsVersion *string `protobuf:"bytes,10,opt,name=os_version,json=osVersion,proto3,oneof" json:"os_version,omitempty"`
+	// e.g. "arm64".
+	Architecture *string `protobuf:"bytes,11,opt,name=architecture,proto3,oneof" json:"architecture,omitempty"`
+	// Vendor-specific GPU architecture, e.g. "sm_110".
+	GpuArch       *string `protobuf:"bytes,12,opt,name=gpu_arch,json=gpuArch,proto3,oneof" json:"gpu_arch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceHardware) Reset() {
+	*x = DeviceHardware{}
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceHardware) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceHardware) ProtoMessage() {}
+
+func (x *DeviceHardware) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceHardware.ProtoReflect.Descriptor instead.
+func (*DeviceHardware) Descriptor() ([]byte, []int) {
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *DeviceHardware) GetBoardModel() string {
+	if x != nil && x.BoardModel != nil {
+		return *x.BoardModel
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetSocCompatible() string {
+	if x != nil && x.SocCompatible != nil {
+		return *x.SocCompatible
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetSerialNumber() string {
+	if x != nil && x.SerialNumber != nil {
+		return *x.SerialNumber
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetKernelVersion() string {
+	if x != nil && x.KernelVersion != nil {
+		return *x.KernelVersion
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetL4TVersion() string {
+	if x != nil && x.L4TVersion != nil {
+		return *x.L4TVersion
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetCpuCount() uint32 {
+	if x != nil && x.CpuCount != nil {
+		return *x.CpuCount
+	}
+	return 0
+}
+
+func (x *DeviceHardware) GetMemTotalBytes() int64 {
+	if x != nil && x.MemTotalBytes != nil {
+		return *x.MemTotalBytes
+	}
+	return 0
+}
+
+func (x *DeviceHardware) GetDiskTotalBytes() int64 {
+	if x != nil && x.DiskTotalBytes != nil {
+		return *x.DiskTotalBytes
+	}
+	return 0
+}
+
+func (x *DeviceHardware) GetOs() string {
+	if x != nil && x.Os != nil {
+		return *x.Os
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetOsVersion() string {
+	if x != nil && x.OsVersion != nil {
+		return *x.OsVersion
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetArchitecture() string {
+	if x != nil && x.Architecture != nil {
+		return *x.Architecture
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetGpuArch() string {
+	if x != nil && x.GpuArch != nil {
+		return *x.GpuArch
+	}
+	return ""
+}
+
 type IssuePresenceLeaseResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Compact JWS with protected typ "tunnel-presence-lease+jwt". Its claims are
@@ -366,7 +526,7 @@ type IssuePresenceLeaseResponse struct {
 
 func (x *IssuePresenceLeaseResponse) Reset() {
 	*x = IssuePresenceLeaseResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[2]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -378,7 +538,7 @@ func (x *IssuePresenceLeaseResponse) String() string {
 func (*IssuePresenceLeaseResponse) ProtoMessage() {}
 
 func (x *IssuePresenceLeaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[2]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -391,7 +551,7 @@ func (x *IssuePresenceLeaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssuePresenceLeaseResponse.ProtoReflect.Descriptor instead.
 func (*IssuePresenceLeaseResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{2}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *IssuePresenceLeaseResponse) GetPresenceLeaseJws() string {
@@ -418,7 +578,18 @@ func (x *IssuePresenceLeaseResponse) GetRenewAfter() *timestamppb.Timestamp {
 // Exact body covered by the §4.1 request signature's body_sha256. It is sent to
 // Cloud and pki-core, never to the broker. The reqsig descriptor MUST use
 // operation "create_tunnel", aud "pki-core/tunnel-attestation", and a target
-// object that binds the same target asset and symbolic service as this body.
+// object with exactly two members, {asset_id, service}: asset_id is this
+// body's target_asset_id (v1 int64, v2 the lowercase-uuid string) and service
+// is this body's service, byte-for-byte. The descriptor target carries no
+// tenant member; tenant is bound by the leaf SPIFFE SAN and the audited
+// Envelope, never restated here.
+// The descriptor's body_sha256 is unpadded base64url(SHA-256(...)) over the
+// canonical strict proto3 encoding of THIS TunnelPrincipalRequestBody: fields
+// ascending by number, minimal-length varints, proto3 defaults omitted, and no
+// unknown, duplicate, or non-ascending fields. Every ingress strictly decodes
+// then re-encodes and requires byte-for-byte equality before hashing, exactly
+// as the caller SPKI field below is canonicalized; a non-canonical body is
+// rejected, not normalized.
 // Descriptor nonce is pki-core's sole single-use replay key: first use is
 // consumed and every duplicate is rejected even when the request is identical.
 // Pki-core retains that replay record through descriptor expiry plus verifier
@@ -449,7 +620,7 @@ type TunnelPrincipalRequestBody struct {
 
 func (x *TunnelPrincipalRequestBody) Reset() {
 	*x = TunnelPrincipalRequestBody{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[3]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -461,7 +632,7 @@ func (x *TunnelPrincipalRequestBody) String() string {
 func (*TunnelPrincipalRequestBody) ProtoMessage() {}
 
 func (x *TunnelPrincipalRequestBody) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[3]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -474,7 +645,7 @@ func (x *TunnelPrincipalRequestBody) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelPrincipalRequestBody.ProtoReflect.Descriptor instead.
 func (*TunnelPrincipalRequestBody) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{3}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *TunnelPrincipalRequestBody) GetTargetAssetId() string {
@@ -517,7 +688,7 @@ type RequestTunnelRequest struct {
 
 func (x *RequestTunnelRequest) Reset() {
 	*x = RequestTunnelRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[4]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -529,7 +700,7 @@ func (x *RequestTunnelRequest) String() string {
 func (*RequestTunnelRequest) ProtoMessage() {}
 
 func (x *RequestTunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[4]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -542,7 +713,7 @@ func (x *RequestTunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestTunnelRequest.ProtoReflect.Descriptor instead.
 func (*RequestTunnelRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{4}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RequestTunnelRequest) GetRequestBody() *TunnelPrincipalRequestBody {
@@ -575,7 +746,7 @@ type AttestTunnelPrincipalRequest struct {
 
 func (x *AttestTunnelPrincipalRequest) Reset() {
 	*x = AttestTunnelPrincipalRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[5]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -587,7 +758,7 @@ func (x *AttestTunnelPrincipalRequest) String() string {
 func (*AttestTunnelPrincipalRequest) ProtoMessage() {}
 
 func (x *AttestTunnelPrincipalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[5]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -600,7 +771,7 @@ func (x *AttestTunnelPrincipalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestTunnelPrincipalRequest.ProtoReflect.Descriptor instead.
 func (*AttestTunnelPrincipalRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{5}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AttestTunnelPrincipalRequest) GetRequestBody() *TunnelPrincipalRequestBody {
@@ -619,8 +790,9 @@ func (x *AttestTunnelPrincipalRequest) GetBrokerAudience() string {
 
 type AttestTunnelPrincipalResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Compact ES256 JWS signed by a dedicated pki-core key, published through a
-	// purpose-separated pki-core JWKS. Protected typ is exactly
+	// Compact RFC 9964 pure/empty-context ML-DSA-65 JWS signed by a dedicated
+	// pki-core key, published through a purpose-separated pki-core JWKS.
+	// Protected typ is exactly
 	// "tunnel-principal-attestation+jwt". Claims are exactly iss, aud, iat, exp,
 	// jti, request_hash, and caller_key_binding; no identity or policy fields.
 	// Pki-core constrains iat/exp to the intersection of its issuance window and
@@ -628,13 +800,25 @@ type AttestTunnelPrincipalResponse struct {
 	// exp and 0 < exp - iat <= 60 seconds. Cloud grants MUST satisfy attestation
 	// iat <= grant iat and grant exp <= attestation exp.
 	PrincipalAttestationJws string `protobuf:"bytes,1,opt,name=principal_attestation_jws,json=principalAttestationJws,proto3" json:"principal_attestation_jws,omitempty"` // 1..16384 ASCII bytes.
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// The operator or service-account leaf pki-core validated for this request
+	// (x5c[0], chain, revocation, principal), outside the JWS. Set only when the
+	// request principal is an operator or a service account (the URI's kind
+	// segment says which); empty for a device principal. Cloud's Lite lane takes
+	// the principal from these fields, never from a separate
+	// ValidateOperatorCertificate call (lite-relay-v1 § Operator dual-key).
+	// They are for Cloud only, trusted only on this authenticated fabric
+	// response; Cloud never forwards them, or this message, to TunnelBroker:
+	// only principal_attestation_jws crosses that boundary.
+	OperatorPrincipalUri   string `protobuf:"bytes,16,opt,name=operator_principal_uri,json=operatorPrincipalUri,proto3" json:"operator_principal_uri,omitempty"`         // exact operator or service SPIFFE URI
+	OperatorLeafSerial     []byte `protobuf:"bytes,17,opt,name=operator_leaf_serial,json=operatorLeafSerial,proto3" json:"operator_leaf_serial,omitempty"`               // leaf serial, big-endian magnitude
+	OperatorLeafSpkiSha256 []byte `protobuf:"bytes,18,opt,name=operator_leaf_spki_sha256,json=operatorLeafSpkiSha256,proto3" json:"operator_leaf_spki_sha256,omitempty"` // SHA-256 of leaf SubjectPublicKeyInfo DER
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *AttestTunnelPrincipalResponse) Reset() {
 	*x = AttestTunnelPrincipalResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[6]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -646,7 +830,7 @@ func (x *AttestTunnelPrincipalResponse) String() string {
 func (*AttestTunnelPrincipalResponse) ProtoMessage() {}
 
 func (x *AttestTunnelPrincipalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[6]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -659,7 +843,7 @@ func (x *AttestTunnelPrincipalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttestTunnelPrincipalResponse.ProtoReflect.Descriptor instead.
 func (*AttestTunnelPrincipalResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{6}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AttestTunnelPrincipalResponse) GetPrincipalAttestationJws() string {
@@ -667,6 +851,27 @@ func (x *AttestTunnelPrincipalResponse) GetPrincipalAttestationJws() string {
 		return x.PrincipalAttestationJws
 	}
 	return ""
+}
+
+func (x *AttestTunnelPrincipalResponse) GetOperatorPrincipalUri() string {
+	if x != nil {
+		return x.OperatorPrincipalUri
+	}
+	return ""
+}
+
+func (x *AttestTunnelPrincipalResponse) GetOperatorLeafSerial() []byte {
+	if x != nil {
+		return x.OperatorLeafSerial
+	}
+	return nil
+}
+
+func (x *AttestTunnelPrincipalResponse) GetOperatorLeafSpkiSha256() []byte {
+	if x != nil {
+		return x.OperatorLeafSpkiSha256
+	}
+	return nil
 }
 
 type RequestTunnelResponse struct {
@@ -690,7 +895,7 @@ type RequestTunnelResponse struct {
 
 func (x *RequestTunnelResponse) Reset() {
 	*x = RequestTunnelResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[7]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -702,7 +907,7 @@ func (x *RequestTunnelResponse) String() string {
 func (*RequestTunnelResponse) ProtoMessage() {}
 
 func (x *RequestTunnelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[7]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -715,7 +920,7 @@ func (x *RequestTunnelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestTunnelResponse.ProtoReflect.Descriptor instead.
 func (*RequestTunnelResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{7}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RequestTunnelResponse) GetSessionGrantJws() string {
@@ -750,7 +955,7 @@ type CallerDatagramDestination struct {
 
 func (x *CallerDatagramDestination) Reset() {
 	*x = CallerDatagramDestination{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[8]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -762,7 +967,7 @@ func (x *CallerDatagramDestination) String() string {
 func (*CallerDatagramDestination) ProtoMessage() {}
 
 func (x *CallerDatagramDestination) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[8]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -775,7 +980,7 @@ func (x *CallerDatagramDestination) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallerDatagramDestination.ProtoReflect.Descriptor instead.
 func (*CallerDatagramDestination) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{8}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CallerDatagramDestination) GetDestinationId() uint32 {
@@ -825,7 +1030,7 @@ type DialInstruction struct {
 
 func (x *DialInstruction) Reset() {
 	*x = DialInstruction{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[9]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -837,7 +1042,7 @@ func (x *DialInstruction) String() string {
 func (*DialInstruction) ProtoMessage() {}
 
 func (x *DialInstruction) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[9]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -850,7 +1055,7 @@ func (x *DialInstruction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DialInstruction.ProtoReflect.Descriptor instead.
 func (*DialInstruction) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{9}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DialInstruction) GetSessionId() string {
@@ -919,7 +1124,7 @@ type AuthorizedDatagramDestination struct {
 
 func (x *AuthorizedDatagramDestination) Reset() {
 	*x = AuthorizedDatagramDestination{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[10]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -931,7 +1136,7 @@ func (x *AuthorizedDatagramDestination) String() string {
 func (*AuthorizedDatagramDestination) ProtoMessage() {}
 
 func (x *AuthorizedDatagramDestination) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[10]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -944,7 +1149,7 @@ func (x *AuthorizedDatagramDestination) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorizedDatagramDestination.ProtoReflect.Descriptor instead.
 func (*AuthorizedDatagramDestination) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{10}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *AuthorizedDatagramDestination) GetDestinationId() uint32 {
@@ -973,18 +1178,14 @@ type EncryptedDialInstructionEnvelope struct {
 	EncapsulatedKey []byte `protobuf:"bytes,2,opt,name=encapsulated_key,json=encapsulatedKey,proto3" json:"encapsulated_key,omitempty"`
 	// Exact HPKE info bytes. CanonicalEncode is defined below:
 	// CanonicalEncode("wendycloud.tunnel.v1/hpke-info/1", session_id,
-	//
-	//	routing_handle,
-	//	SHA-256(agent_key_agreement_spki_der)).
-	//
+	//                 routing_handle,
+	//                 SHA-256(agent_key_agreement_spki_der)).
 	// This is exactly TunnelHPKEContext.info. The final component is 32 raw
 	// digest bytes, not base64url text.
 	Info []byte `protobuf:"bytes,3,opt,name=info,proto3" json:"info,omitempty"`
 	// Exact AEAD associated data bytes:
 	// CanonicalEncode("wendycloud.tunnel.v1/hpke-aad/1", session_id,
-	//
-	//	SHA-256(exact decoded §4.1 request-descriptor payload)).
-	//
+	//                 SHA-256(exact decoded §4.1 request-descriptor payload)).
 	// This is exactly TunnelHPKEContext.aad. The request digest is 32 raw bytes.
 	Aad []byte `protobuf:"bytes,4,opt,name=aad,proto3" json:"aad,omitempty"`
 	// HPKE Seal output over exactly 4096 plaintext bytes: ciphertext followed by
@@ -996,7 +1197,7 @@ type EncryptedDialInstructionEnvelope struct {
 
 func (x *EncryptedDialInstructionEnvelope) Reset() {
 	*x = EncryptedDialInstructionEnvelope{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[11]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1008,7 +1209,7 @@ func (x *EncryptedDialInstructionEnvelope) String() string {
 func (*EncryptedDialInstructionEnvelope) ProtoMessage() {}
 
 func (x *EncryptedDialInstructionEnvelope) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[11]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1021,7 +1222,7 @@ func (x *EncryptedDialInstructionEnvelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EncryptedDialInstructionEnvelope.ProtoReflect.Descriptor instead.
 func (*EncryptedDialInstructionEnvelope) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{11}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *EncryptedDialInstructionEnvelope) GetSuite() HpkeSuite {
@@ -1083,7 +1284,7 @@ type CreateSessionRequest struct {
 
 func (x *CreateSessionRequest) Reset() {
 	*x = CreateSessionRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[12]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1095,7 +1296,7 @@ func (x *CreateSessionRequest) String() string {
 func (*CreateSessionRequest) ProtoMessage() {}
 
 func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[12]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1108,7 +1309,7 @@ func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
 func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{12}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CreateSessionRequest) GetSessionGrantJws() string {
@@ -1150,7 +1351,7 @@ type CreateSessionResponse struct {
 
 func (x *CreateSessionResponse) Reset() {
 	*x = CreateSessionResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[13]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1162,7 +1363,7 @@ func (x *CreateSessionResponse) String() string {
 func (*CreateSessionResponse) ProtoMessage() {}
 
 func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[13]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1175,7 +1376,7 @@ func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
 func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{13}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CreateSessionResponse) GetSessionId() string {
@@ -1214,7 +1415,7 @@ type PresenceOpen struct {
 
 func (x *PresenceOpen) Reset() {
 	*x = PresenceOpen{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[14]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1226,7 +1427,7 @@ func (x *PresenceOpen) String() string {
 func (*PresenceOpen) ProtoMessage() {}
 
 func (x *PresenceOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[14]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1239,7 +1440,7 @@ func (x *PresenceOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceOpen.ProtoReflect.Descriptor instead.
 func (*PresenceOpen) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{14}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PresenceOpen) GetPresenceLeaseJws() string {
@@ -1269,7 +1470,7 @@ type PresenceRenewal struct {
 
 func (x *PresenceRenewal) Reset() {
 	*x = PresenceRenewal{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[15]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1281,7 +1482,7 @@ func (x *PresenceRenewal) String() string {
 func (*PresenceRenewal) ProtoMessage() {}
 
 func (x *PresenceRenewal) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[15]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1294,7 +1495,7 @@ func (x *PresenceRenewal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceRenewal.ProtoReflect.Descriptor instead.
 func (*PresenceRenewal) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{15}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PresenceRenewal) GetPresenceLeaseJws() string {
@@ -1316,7 +1517,7 @@ type PresenceProof struct {
 
 func (x *PresenceProof) Reset() {
 	*x = PresenceProof{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[16]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1529,7 @@ func (x *PresenceProof) String() string {
 func (*PresenceProof) ProtoMessage() {}
 
 func (x *PresenceProof) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[16]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1542,7 @@ func (x *PresenceProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceProof.ProtoReflect.Descriptor instead.
 func (*PresenceProof) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{16}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *PresenceProof) GetChallengeId() []byte {
@@ -1368,7 +1569,7 @@ type PresenceOfferAcknowledgement struct {
 
 func (x *PresenceOfferAcknowledgement) Reset() {
 	*x = PresenceOfferAcknowledgement{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[17]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1380,7 +1581,7 @@ func (x *PresenceOfferAcknowledgement) String() string {
 func (*PresenceOfferAcknowledgement) ProtoMessage() {}
 
 func (x *PresenceOfferAcknowledgement) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[17]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1393,7 +1594,7 @@ func (x *PresenceOfferAcknowledgement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceOfferAcknowledgement.ProtoReflect.Descriptor instead.
 func (*PresenceOfferAcknowledgement) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{17}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *PresenceOfferAcknowledgement) GetOfferId() string {
@@ -1429,7 +1630,7 @@ type RegisterPresenceRequest struct {
 
 func (x *RegisterPresenceRequest) Reset() {
 	*x = RegisterPresenceRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[18]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1441,7 +1642,7 @@ func (x *RegisterPresenceRequest) String() string {
 func (*RegisterPresenceRequest) ProtoMessage() {}
 
 func (x *RegisterPresenceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[18]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1454,7 +1655,7 @@ func (x *RegisterPresenceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPresenceRequest.ProtoReflect.Descriptor instead.
 func (*RegisterPresenceRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{18}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RegisterPresenceRequest) GetMessage() isRegisterPresenceRequest_Message {
@@ -1539,7 +1740,7 @@ type BrokerChallenge struct {
 
 func (x *BrokerChallenge) Reset() {
 	*x = BrokerChallenge{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1551,7 +1752,7 @@ func (x *BrokerChallenge) String() string {
 func (*BrokerChallenge) ProtoMessage() {}
 
 func (x *BrokerChallenge) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1564,7 +1765,7 @@ func (x *BrokerChallenge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrokerChallenge.ProtoReflect.Descriptor instead.
 func (*BrokerChallenge) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{19}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *BrokerChallenge) GetChallengeId() []byte {
@@ -1598,7 +1799,7 @@ type PresenceAccepted struct {
 
 func (x *PresenceAccepted) Reset() {
 	*x = PresenceAccepted{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1610,7 +1811,7 @@ func (x *PresenceAccepted) String() string {
 func (*PresenceAccepted) ProtoMessage() {}
 
 func (x *PresenceAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[20]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1623,7 +1824,7 @@ func (x *PresenceAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceAccepted.ProtoReflect.Descriptor instead.
 func (*PresenceAccepted) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{20}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PresenceAccepted) GetLeaseExpiresAt() *timestamppb.Timestamp {
@@ -1650,7 +1851,7 @@ type PresenceRenewed struct {
 
 func (x *PresenceRenewed) Reset() {
 	*x = PresenceRenewed{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1662,7 +1863,7 @@ func (x *PresenceRenewed) String() string {
 func (*PresenceRenewed) ProtoMessage() {}
 
 func (x *PresenceRenewed) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[21]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1675,7 +1876,7 @@ func (x *PresenceRenewed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceRenewed.ProtoReflect.Descriptor instead.
 func (*PresenceRenewed) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{21}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PresenceRenewed) GetLeaseExpiresAt() *timestamppb.Timestamp {
@@ -1709,7 +1910,7 @@ type SessionOffer struct {
 
 func (x *SessionOffer) Reset() {
 	*x = SessionOffer{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1721,7 +1922,7 @@ func (x *SessionOffer) String() string {
 func (*SessionOffer) ProtoMessage() {}
 
 func (x *SessionOffer) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[22]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1734,7 +1935,7 @@ func (x *SessionOffer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionOffer.ProtoReflect.Descriptor instead.
 func (*SessionOffer) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{22}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SessionOffer) GetSessionGrantJws() string {
@@ -1775,7 +1976,7 @@ type PresenceOfferAcknowledged struct {
 
 func (x *PresenceOfferAcknowledged) Reset() {
 	*x = PresenceOfferAcknowledged{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1787,7 +1988,7 @@ func (x *PresenceOfferAcknowledged) String() string {
 func (*PresenceOfferAcknowledged) ProtoMessage() {}
 
 func (x *PresenceOfferAcknowledged) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[23]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1800,7 +2001,7 @@ func (x *PresenceOfferAcknowledged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceOfferAcknowledged.ProtoReflect.Descriptor instead.
 func (*PresenceOfferAcknowledged) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{23}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *PresenceOfferAcknowledged) GetOfferId() string {
@@ -1836,7 +2037,7 @@ type RegisterPresenceResponse struct {
 
 func (x *RegisterPresenceResponse) Reset() {
 	*x = RegisterPresenceResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1848,7 +2049,7 @@ func (x *RegisterPresenceResponse) String() string {
 func (*RegisterPresenceResponse) ProtoMessage() {}
 
 func (x *RegisterPresenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1861,7 +2062,7 @@ func (x *RegisterPresenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterPresenceResponse.ProtoReflect.Descriptor instead.
 func (*RegisterPresenceResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{24}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RegisterPresenceResponse) GetMessage() isRegisterPresenceResponse_Message {
@@ -1960,7 +2161,7 @@ type JoinOpen struct {
 
 func (x *JoinOpen) Reset() {
 	*x = JoinOpen{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1972,7 +2173,7 @@ func (x *JoinOpen) String() string {
 func (*JoinOpen) ProtoMessage() {}
 
 func (x *JoinOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1985,7 +2186,7 @@ func (x *JoinOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinOpen.ProtoReflect.Descriptor instead.
 func (*JoinOpen) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{25}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *JoinOpen) GetSessionGrantJws() string {
@@ -2012,7 +2213,7 @@ type JoinProof struct {
 
 func (x *JoinProof) Reset() {
 	*x = JoinProof{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2024,7 +2225,7 @@ func (x *JoinProof) String() string {
 func (*JoinProof) ProtoMessage() {}
 
 func (x *JoinProof) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[26]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2037,7 +2238,7 @@ func (x *JoinProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinProof.ProtoReflect.Descriptor instead.
 func (*JoinProof) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{26}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *JoinProof) GetChallengeId() []byte {
@@ -2070,7 +2271,7 @@ type TunnelFrame struct {
 
 func (x *TunnelFrame) Reset() {
 	*x = TunnelFrame{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2082,7 +2283,7 @@ func (x *TunnelFrame) String() string {
 func (*TunnelFrame) ProtoMessage() {}
 
 func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2095,7 +2296,7 @@ func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelFrame.ProtoReflect.Descriptor instead.
 func (*TunnelFrame) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{27}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TunnelFrame) GetFrame() isTunnelFrame_Frame {
@@ -2209,7 +2410,7 @@ type TunnelDatagram struct {
 
 func (x *TunnelDatagram) Reset() {
 	*x = TunnelDatagram{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2221,7 +2422,7 @@ func (x *TunnelDatagram) String() string {
 func (*TunnelDatagram) ProtoMessage() {}
 
 func (x *TunnelDatagram) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2234,7 +2435,7 @@ func (x *TunnelDatagram) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelDatagram.ProtoReflect.Descriptor instead.
 func (*TunnelDatagram) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{28}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *TunnelDatagram) GetFlowId() uint32 {
@@ -2270,7 +2471,7 @@ type IcmpEchoRequest struct {
 
 func (x *IcmpEchoRequest) Reset() {
 	*x = IcmpEchoRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2282,7 +2483,7 @@ func (x *IcmpEchoRequest) String() string {
 func (*IcmpEchoRequest) ProtoMessage() {}
 
 func (x *IcmpEchoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[29]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2295,7 +2496,7 @@ func (x *IcmpEchoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IcmpEchoRequest.ProtoReflect.Descriptor instead.
 func (*IcmpEchoRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{29}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *IcmpEchoRequest) GetIdentifier() uint32 {
@@ -2339,7 +2540,7 @@ type IcmpEchoReply struct {
 
 func (x *IcmpEchoReply) Reset() {
 	*x = IcmpEchoReply{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2351,7 +2552,7 @@ func (x *IcmpEchoReply) String() string {
 func (*IcmpEchoReply) ProtoMessage() {}
 
 func (x *IcmpEchoReply) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[30]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2364,7 +2565,7 @@ func (x *IcmpEchoReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IcmpEchoReply.ProtoReflect.Descriptor instead.
 func (*IcmpEchoReply) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{30}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *IcmpEchoReply) GetIdentifier() uint32 {
@@ -2419,7 +2620,7 @@ type JoinSessionRequest struct {
 
 func (x *JoinSessionRequest) Reset() {
 	*x = JoinSessionRequest{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2431,7 +2632,7 @@ func (x *JoinSessionRequest) String() string {
 func (*JoinSessionRequest) ProtoMessage() {}
 
 func (x *JoinSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2444,7 +2645,7 @@ func (x *JoinSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinSessionRequest.ProtoReflect.Descriptor instead.
 func (*JoinSessionRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{31}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *JoinSessionRequest) GetMessage() isJoinSessionRequest_Message {
@@ -2513,7 +2714,7 @@ type JoinAccepted struct {
 
 func (x *JoinAccepted) Reset() {
 	*x = JoinAccepted{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2525,7 +2726,7 @@ func (x *JoinAccepted) String() string {
 func (*JoinAccepted) ProtoMessage() {}
 
 func (x *JoinAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2538,7 +2739,7 @@ func (x *JoinAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinAccepted.ProtoReflect.Descriptor instead.
 func (*JoinAccepted) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{32}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *JoinAccepted) GetRole() JoinRole {
@@ -2569,7 +2770,7 @@ type JoinSessionResponse struct {
 
 func (x *JoinSessionResponse) Reset() {
 	*x = JoinSessionResponse{}
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2581,7 +2782,7 @@ func (x *JoinSessionResponse) String() string {
 func (*JoinSessionResponse) ProtoMessage() {}
 
 func (x *JoinSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33]
+	mi := &file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2594,7 +2795,7 @@ func (x *JoinSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinSessionResponse.ProtoReflect.Descriptor instead.
 func (*JoinSessionResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{33}
+	return file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *JoinSessionResponse) GetMessage() isJoinSessionResponse_Message {
@@ -2660,11 +2861,43 @@ const file_wendycloud_tunnel_v2_tunnel_proto_rawDesc = "" +
 	"!wendycloud/tunnel/v2/tunnel.proto\x12\x14wendycloud.tunnel.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bwendyauth/v1/envelope.proto\"N\n" +
 	"\x0eBrokerInstance\x12\x1a\n" +
 	"\baudience\x18\x01 \x01(\tR\baudience\x12\x1a\n" +
-	"\bendpoint\x18\x02 \x01(\tR\bendpointJ\x04\b\x03\x10\x10\"\xe5\x01\n" +
+	"\bendpoint\x18\x02 \x01(\tR\bendpointJ\x04\b\x03\x10\x10\"\xa7\x02\n" +
 	"\x19IssuePresenceLeaseRequest\x12G\n" +
 	"!agent_signing_public_key_spki_der\x18\x01 \x01(\fR\x1cagentSigningPublicKeySpkiDer\x12R\n" +
 	"'agent_key_agreement_public_key_spki_der\x18\x02 \x01(\fR!agentKeyAgreementPublicKeySpkiDer\x12%\n" +
-	"\x0ecorrelation_id\x18\x03 \x01(\tR\rcorrelationIdJ\x04\b\x04\x10\x10\"\xcb\x01\n" +
+	"\x0ecorrelation_id\x18\x03 \x01(\tR\rcorrelationId\x12@\n" +
+	"\bhardware\x18\x10 \x01(\v2$.wendycloud.tunnel.v2.DeviceHardwareR\bhardwareJ\x04\b\x04\x10\x10\"\xa1\x05\n" +
+	"\x0eDeviceHardware\x12$\n" +
+	"\vboard_model\x18\x01 \x01(\tH\x00R\n" +
+	"boardModel\x88\x01\x01\x12*\n" +
+	"\x0esoc_compatible\x18\x02 \x01(\tH\x01R\rsocCompatible\x88\x01\x01\x12(\n" +
+	"\rserial_number\x18\x03 \x01(\tH\x02R\fserialNumber\x88\x01\x01\x12*\n" +
+	"\x0ekernel_version\x18\x04 \x01(\tH\x03R\rkernelVersion\x88\x01\x01\x12$\n" +
+	"\vl4t_version\x18\x05 \x01(\tH\x04R\n" +
+	"l4tVersion\x88\x01\x01\x12 \n" +
+	"\tcpu_count\x18\x06 \x01(\rH\x05R\bcpuCount\x88\x01\x01\x12+\n" +
+	"\x0fmem_total_bytes\x18\a \x01(\x03H\x06R\rmemTotalBytes\x88\x01\x01\x12-\n" +
+	"\x10disk_total_bytes\x18\b \x01(\x03H\aR\x0ediskTotalBytes\x88\x01\x01\x12\x13\n" +
+	"\x02os\x18\t \x01(\tH\bR\x02os\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"os_version\x18\n" +
+	" \x01(\tH\tR\tosVersion\x88\x01\x01\x12'\n" +
+	"\farchitecture\x18\v \x01(\tH\n" +
+	"R\farchitecture\x88\x01\x01\x12\x1e\n" +
+	"\bgpu_arch\x18\f \x01(\tH\vR\agpuArch\x88\x01\x01B\x0e\n" +
+	"\f_board_modelB\x11\n" +
+	"\x0f_soc_compatibleB\x10\n" +
+	"\x0e_serial_numberB\x11\n" +
+	"\x0f_kernel_versionB\x0e\n" +
+	"\f_l4t_versionB\f\n" +
+	"\n" +
+	"_cpu_countB\x12\n" +
+	"\x10_mem_total_bytesB\x13\n" +
+	"\x11_disk_total_bytesB\x05\n" +
+	"\x03_osB\r\n" +
+	"\v_os_versionB\x0f\n" +
+	"\r_architectureB\v\n" +
+	"\t_gpu_arch\"\xcb\x01\n" +
 	"\x1aIssuePresenceLeaseResponse\x12,\n" +
 	"\x12presence_lease_jws\x18\x01 \x01(\tR\x10presenceLeaseJws\x12<\n" +
 	"\x06broker\x18\x02 \x01(\v2$.wendycloud.tunnel.v2.BrokerInstanceR\x06broker\x12;\n" +
@@ -2681,9 +2914,12 @@ const file_wendycloud_tunnel_v2_tunnel_proto_rawDesc = "" +
 	"\x11principal_request\x18\x02 \x01(\v2\x1c.wendyauth.v1.SignedArtifactR\x10principalRequestJ\x04\b\x03\x10\x10\"\xa8\x01\n" +
 	"\x1cAttestTunnelPrincipalRequest\x12S\n" +
 	"\frequest_body\x18\x01 \x01(\v20.wendycloud.tunnel.v2.TunnelPrincipalRequestBodyR\vrequestBody\x12'\n" +
-	"\x0fbroker_audience\x18\x03 \x01(\tR\x0ebrokerAudienceJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x10\"a\n" +
+	"\x0fbroker_audience\x18\x03 \x01(\tR\x0ebrokerAudienceJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x10\"\x84\x02\n" +
 	"\x1dAttestTunnelPrincipalResponse\x12:\n" +
-	"\x19principal_attestation_jws\x18\x01 \x01(\tR\x17principalAttestationJwsJ\x04\b\x02\x10\x10\"\x82\x02\n" +
+	"\x19principal_attestation_jws\x18\x01 \x01(\tR\x17principalAttestationJws\x124\n" +
+	"\x16operator_principal_uri\x18\x10 \x01(\tR\x14operatorPrincipalUri\x120\n" +
+	"\x14operator_leaf_serial\x18\x11 \x01(\fR\x12operatorLeafSerial\x129\n" +
+	"\x19operator_leaf_spki_sha256\x18\x12 \x01(\fR\x16operatorLeafSpkiSha256J\x04\b\x02\x10\x10\"\x82\x02\n" +
 	"\x15RequestTunnelResponse\x12*\n" +
 	"\x11session_grant_jws\x18\x01 \x01(\tR\x0fsessionGrantJws\x12<\n" +
 	"\x06broker\x18\x02 \x01(\v2$.wendycloud.tunnel.v2.BrokerInstanceR\x06broker\x12y\n" +
@@ -2855,7 +3091,7 @@ func file_wendycloud_tunnel_v2_tunnel_proto_rawDescGZIP() []byte {
 }
 
 var file_wendycloud_tunnel_v2_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_wendycloud_tunnel_v2_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_wendycloud_tunnel_v2_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_wendycloud_tunnel_v2_tunnel_proto_goTypes = []any{
 	(HpkeSuite)(0),                           // 0: wendycloud.tunnel.v2.HpkeSuite
 	(DialTransport)(0),                       // 1: wendycloud.tunnel.v2.DialTransport
@@ -2863,99 +3099,101 @@ var file_wendycloud_tunnel_v2_tunnel_proto_goTypes = []any{
 	(JoinRole)(0),                            // 3: wendycloud.tunnel.v2.JoinRole
 	(*BrokerInstance)(nil),                   // 4: wendycloud.tunnel.v2.BrokerInstance
 	(*IssuePresenceLeaseRequest)(nil),        // 5: wendycloud.tunnel.v2.IssuePresenceLeaseRequest
-	(*IssuePresenceLeaseResponse)(nil),       // 6: wendycloud.tunnel.v2.IssuePresenceLeaseResponse
-	(*TunnelPrincipalRequestBody)(nil),       // 7: wendycloud.tunnel.v2.TunnelPrincipalRequestBody
-	(*RequestTunnelRequest)(nil),             // 8: wendycloud.tunnel.v2.RequestTunnelRequest
-	(*AttestTunnelPrincipalRequest)(nil),     // 9: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest
-	(*AttestTunnelPrincipalResponse)(nil),    // 10: wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
-	(*RequestTunnelResponse)(nil),            // 11: wendycloud.tunnel.v2.RequestTunnelResponse
-	(*CallerDatagramDestination)(nil),        // 12: wendycloud.tunnel.v2.CallerDatagramDestination
-	(*DialInstruction)(nil),                  // 13: wendycloud.tunnel.v2.DialInstruction
-	(*AuthorizedDatagramDestination)(nil),    // 14: wendycloud.tunnel.v2.AuthorizedDatagramDestination
-	(*EncryptedDialInstructionEnvelope)(nil), // 15: wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
-	(*CreateSessionRequest)(nil),             // 16: wendycloud.tunnel.v2.CreateSessionRequest
-	(*CreateSessionResponse)(nil),            // 17: wendycloud.tunnel.v2.CreateSessionResponse
-	(*PresenceOpen)(nil),                     // 18: wendycloud.tunnel.v2.PresenceOpen
-	(*PresenceRenewal)(nil),                  // 19: wendycloud.tunnel.v2.PresenceRenewal
-	(*PresenceProof)(nil),                    // 20: wendycloud.tunnel.v2.PresenceProof
-	(*PresenceOfferAcknowledgement)(nil),     // 21: wendycloud.tunnel.v2.PresenceOfferAcknowledgement
-	(*RegisterPresenceRequest)(nil),          // 22: wendycloud.tunnel.v2.RegisterPresenceRequest
-	(*BrokerChallenge)(nil),                  // 23: wendycloud.tunnel.v2.BrokerChallenge
-	(*PresenceAccepted)(nil),                 // 24: wendycloud.tunnel.v2.PresenceAccepted
-	(*PresenceRenewed)(nil),                  // 25: wendycloud.tunnel.v2.PresenceRenewed
-	(*SessionOffer)(nil),                     // 26: wendycloud.tunnel.v2.SessionOffer
-	(*PresenceOfferAcknowledged)(nil),        // 27: wendycloud.tunnel.v2.PresenceOfferAcknowledged
-	(*RegisterPresenceResponse)(nil),         // 28: wendycloud.tunnel.v2.RegisterPresenceResponse
-	(*JoinOpen)(nil),                         // 29: wendycloud.tunnel.v2.JoinOpen
-	(*JoinProof)(nil),                        // 30: wendycloud.tunnel.v2.JoinProof
-	(*TunnelFrame)(nil),                      // 31: wendycloud.tunnel.v2.TunnelFrame
-	(*TunnelDatagram)(nil),                   // 32: wendycloud.tunnel.v2.TunnelDatagram
-	(*IcmpEchoRequest)(nil),                  // 33: wendycloud.tunnel.v2.IcmpEchoRequest
-	(*IcmpEchoReply)(nil),                    // 34: wendycloud.tunnel.v2.IcmpEchoReply
-	(*JoinSessionRequest)(nil),               // 35: wendycloud.tunnel.v2.JoinSessionRequest
-	(*JoinAccepted)(nil),                     // 36: wendycloud.tunnel.v2.JoinAccepted
-	(*JoinSessionResponse)(nil),              // 37: wendycloud.tunnel.v2.JoinSessionResponse
-	(*timestamppb.Timestamp)(nil),            // 38: google.protobuf.Timestamp
-	(*wendyauthpb.SignedArtifact)(nil),       // 39: wendyauth.v1.SignedArtifact
-	(*wendyauthpb.Envelope)(nil),             // 40: wendyauth.v1.Envelope
+	(*DeviceHardware)(nil),                   // 6: wendycloud.tunnel.v2.DeviceHardware
+	(*IssuePresenceLeaseResponse)(nil),       // 7: wendycloud.tunnel.v2.IssuePresenceLeaseResponse
+	(*TunnelPrincipalRequestBody)(nil),       // 8: wendycloud.tunnel.v2.TunnelPrincipalRequestBody
+	(*RequestTunnelRequest)(nil),             // 9: wendycloud.tunnel.v2.RequestTunnelRequest
+	(*AttestTunnelPrincipalRequest)(nil),     // 10: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest
+	(*AttestTunnelPrincipalResponse)(nil),    // 11: wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
+	(*RequestTunnelResponse)(nil),            // 12: wendycloud.tunnel.v2.RequestTunnelResponse
+	(*CallerDatagramDestination)(nil),        // 13: wendycloud.tunnel.v2.CallerDatagramDestination
+	(*DialInstruction)(nil),                  // 14: wendycloud.tunnel.v2.DialInstruction
+	(*AuthorizedDatagramDestination)(nil),    // 15: wendycloud.tunnel.v2.AuthorizedDatagramDestination
+	(*EncryptedDialInstructionEnvelope)(nil), // 16: wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
+	(*CreateSessionRequest)(nil),             // 17: wendycloud.tunnel.v2.CreateSessionRequest
+	(*CreateSessionResponse)(nil),            // 18: wendycloud.tunnel.v2.CreateSessionResponse
+	(*PresenceOpen)(nil),                     // 19: wendycloud.tunnel.v2.PresenceOpen
+	(*PresenceRenewal)(nil),                  // 20: wendycloud.tunnel.v2.PresenceRenewal
+	(*PresenceProof)(nil),                    // 21: wendycloud.tunnel.v2.PresenceProof
+	(*PresenceOfferAcknowledgement)(nil),     // 22: wendycloud.tunnel.v2.PresenceOfferAcknowledgement
+	(*RegisterPresenceRequest)(nil),          // 23: wendycloud.tunnel.v2.RegisterPresenceRequest
+	(*BrokerChallenge)(nil),                  // 24: wendycloud.tunnel.v2.BrokerChallenge
+	(*PresenceAccepted)(nil),                 // 25: wendycloud.tunnel.v2.PresenceAccepted
+	(*PresenceRenewed)(nil),                  // 26: wendycloud.tunnel.v2.PresenceRenewed
+	(*SessionOffer)(nil),                     // 27: wendycloud.tunnel.v2.SessionOffer
+	(*PresenceOfferAcknowledged)(nil),        // 28: wendycloud.tunnel.v2.PresenceOfferAcknowledged
+	(*RegisterPresenceResponse)(nil),         // 29: wendycloud.tunnel.v2.RegisterPresenceResponse
+	(*JoinOpen)(nil),                         // 30: wendycloud.tunnel.v2.JoinOpen
+	(*JoinProof)(nil),                        // 31: wendycloud.tunnel.v2.JoinProof
+	(*TunnelFrame)(nil),                      // 32: wendycloud.tunnel.v2.TunnelFrame
+	(*TunnelDatagram)(nil),                   // 33: wendycloud.tunnel.v2.TunnelDatagram
+	(*IcmpEchoRequest)(nil),                  // 34: wendycloud.tunnel.v2.IcmpEchoRequest
+	(*IcmpEchoReply)(nil),                    // 35: wendycloud.tunnel.v2.IcmpEchoReply
+	(*JoinSessionRequest)(nil),               // 36: wendycloud.tunnel.v2.JoinSessionRequest
+	(*JoinAccepted)(nil),                     // 37: wendycloud.tunnel.v2.JoinAccepted
+	(*JoinSessionResponse)(nil),              // 38: wendycloud.tunnel.v2.JoinSessionResponse
+	(*timestamppb.Timestamp)(nil),            // 39: google.protobuf.Timestamp
+	(*wendyauthpb.SignedArtifact)(nil),       // 40: wendyauth.v1.SignedArtifact
+	(*wendyauthpb.Envelope)(nil),             // 41: wendyauth.v1.Envelope
 }
 var file_wendycloud_tunnel_v2_tunnel_proto_depIdxs = []int32{
-	4,  // 0: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
-	38, // 1: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.renew_after:type_name -> google.protobuf.Timestamp
-	7,  // 2: wendycloud.tunnel.v2.RequestTunnelRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
-	39, // 3: wendycloud.tunnel.v2.RequestTunnelRequest.principal_request:type_name -> wendyauth.v1.SignedArtifact
-	7,  // 4: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
-	4,  // 5: wendycloud.tunnel.v2.RequestTunnelResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
-	12, // 6: wendycloud.tunnel.v2.RequestTunnelResponse.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.CallerDatagramDestination
-	1,  // 7: wendycloud.tunnel.v2.DialInstruction.transport:type_name -> wendycloud.tunnel.v2.DialTransport
-	14, // 8: wendycloud.tunnel.v2.DialInstruction.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.AuthorizedDatagramDestination
-	0,  // 9: wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope.suite:type_name -> wendycloud.tunnel.v2.HpkeSuite
-	15, // 10: wendycloud.tunnel.v2.CreateSessionRequest.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
-	2,  // 11: wendycloud.tunnel.v2.CreateSessionResponse.state:type_name -> wendycloud.tunnel.v2.SessionState
-	18, // 12: wendycloud.tunnel.v2.RegisterPresenceRequest.open:type_name -> wendycloud.tunnel.v2.PresenceOpen
-	20, // 13: wendycloud.tunnel.v2.RegisterPresenceRequest.proof:type_name -> wendycloud.tunnel.v2.PresenceProof
-	19, // 14: wendycloud.tunnel.v2.RegisterPresenceRequest.renewal:type_name -> wendycloud.tunnel.v2.PresenceRenewal
-	21, // 15: wendycloud.tunnel.v2.RegisterPresenceRequest.offer_acknowledgement:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledgement
-	38, // 16: wendycloud.tunnel.v2.BrokerChallenge.expires_at:type_name -> google.protobuf.Timestamp
-	38, // 17: wendycloud.tunnel.v2.PresenceAccepted.lease_expires_at:type_name -> google.protobuf.Timestamp
-	38, // 18: wendycloud.tunnel.v2.PresenceAccepted.renew_by:type_name -> google.protobuf.Timestamp
-	38, // 19: wendycloud.tunnel.v2.PresenceRenewed.lease_expires_at:type_name -> google.protobuf.Timestamp
-	38, // 20: wendycloud.tunnel.v2.PresenceRenewed.renew_by:type_name -> google.protobuf.Timestamp
-	15, // 21: wendycloud.tunnel.v2.SessionOffer.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
-	23, // 22: wendycloud.tunnel.v2.RegisterPresenceResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
-	24, // 23: wendycloud.tunnel.v2.RegisterPresenceResponse.accepted:type_name -> wendycloud.tunnel.v2.PresenceAccepted
-	25, // 24: wendycloud.tunnel.v2.RegisterPresenceResponse.renewed:type_name -> wendycloud.tunnel.v2.PresenceRenewed
-	26, // 25: wendycloud.tunnel.v2.RegisterPresenceResponse.session_offer:type_name -> wendycloud.tunnel.v2.SessionOffer
-	27, // 26: wendycloud.tunnel.v2.RegisterPresenceResponse.offer_acknowledged:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledged
-	3,  // 27: wendycloud.tunnel.v2.JoinOpen.role:type_name -> wendycloud.tunnel.v2.JoinRole
-	32, // 28: wendycloud.tunnel.v2.TunnelFrame.datagram:type_name -> wendycloud.tunnel.v2.TunnelDatagram
-	33, // 29: wendycloud.tunnel.v2.TunnelFrame.icmp_request:type_name -> wendycloud.tunnel.v2.IcmpEchoRequest
-	34, // 30: wendycloud.tunnel.v2.TunnelFrame.icmp_reply:type_name -> wendycloud.tunnel.v2.IcmpEchoReply
-	29, // 31: wendycloud.tunnel.v2.JoinSessionRequest.open:type_name -> wendycloud.tunnel.v2.JoinOpen
-	30, // 32: wendycloud.tunnel.v2.JoinSessionRequest.proof:type_name -> wendycloud.tunnel.v2.JoinProof
-	31, // 33: wendycloud.tunnel.v2.JoinSessionRequest.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
-	3,  // 34: wendycloud.tunnel.v2.JoinAccepted.role:type_name -> wendycloud.tunnel.v2.JoinRole
-	38, // 35: wendycloud.tunnel.v2.JoinAccepted.relay_expires_at:type_name -> google.protobuf.Timestamp
-	23, // 36: wendycloud.tunnel.v2.JoinSessionResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
-	36, // 37: wendycloud.tunnel.v2.JoinSessionResponse.accepted:type_name -> wendycloud.tunnel.v2.JoinAccepted
-	31, // 38: wendycloud.tunnel.v2.JoinSessionResponse.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
-	5,  // 39: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:input_type -> wendycloud.tunnel.v2.IssuePresenceLeaseRequest
-	8,  // 40: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:input_type -> wendycloud.tunnel.v2.RequestTunnelRequest
-	40, // 41: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:input_type -> wendyauth.v1.Envelope
-	16, // 42: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:input_type -> wendycloud.tunnel.v2.CreateSessionRequest
-	22, // 43: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:input_type -> wendycloud.tunnel.v2.RegisterPresenceRequest
-	35, // 44: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:input_type -> wendycloud.tunnel.v2.JoinSessionRequest
-	6,  // 45: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:output_type -> wendycloud.tunnel.v2.IssuePresenceLeaseResponse
-	11, // 46: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:output_type -> wendycloud.tunnel.v2.RequestTunnelResponse
-	10, // 47: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:output_type -> wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
-	17, // 48: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:output_type -> wendycloud.tunnel.v2.CreateSessionResponse
-	28, // 49: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:output_type -> wendycloud.tunnel.v2.RegisterPresenceResponse
-	37, // 50: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:output_type -> wendycloud.tunnel.v2.JoinSessionResponse
-	45, // [45:51] is the sub-list for method output_type
-	39, // [39:45] is the sub-list for method input_type
-	39, // [39:39] is the sub-list for extension type_name
-	39, // [39:39] is the sub-list for extension extendee
-	0,  // [0:39] is the sub-list for field type_name
+	6,  // 0: wendycloud.tunnel.v2.IssuePresenceLeaseRequest.hardware:type_name -> wendycloud.tunnel.v2.DeviceHardware
+	4,  // 1: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
+	39, // 2: wendycloud.tunnel.v2.IssuePresenceLeaseResponse.renew_after:type_name -> google.protobuf.Timestamp
+	8,  // 3: wendycloud.tunnel.v2.RequestTunnelRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
+	40, // 4: wendycloud.tunnel.v2.RequestTunnelRequest.principal_request:type_name -> wendyauth.v1.SignedArtifact
+	8,  // 5: wendycloud.tunnel.v2.AttestTunnelPrincipalRequest.request_body:type_name -> wendycloud.tunnel.v2.TunnelPrincipalRequestBody
+	4,  // 6: wendycloud.tunnel.v2.RequestTunnelResponse.broker:type_name -> wendycloud.tunnel.v2.BrokerInstance
+	13, // 7: wendycloud.tunnel.v2.RequestTunnelResponse.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.CallerDatagramDestination
+	1,  // 8: wendycloud.tunnel.v2.DialInstruction.transport:type_name -> wendycloud.tunnel.v2.DialTransport
+	15, // 9: wendycloud.tunnel.v2.DialInstruction.authorized_datagram_destinations:type_name -> wendycloud.tunnel.v2.AuthorizedDatagramDestination
+	0,  // 10: wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope.suite:type_name -> wendycloud.tunnel.v2.HpkeSuite
+	16, // 11: wendycloud.tunnel.v2.CreateSessionRequest.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
+	2,  // 12: wendycloud.tunnel.v2.CreateSessionResponse.state:type_name -> wendycloud.tunnel.v2.SessionState
+	19, // 13: wendycloud.tunnel.v2.RegisterPresenceRequest.open:type_name -> wendycloud.tunnel.v2.PresenceOpen
+	21, // 14: wendycloud.tunnel.v2.RegisterPresenceRequest.proof:type_name -> wendycloud.tunnel.v2.PresenceProof
+	20, // 15: wendycloud.tunnel.v2.RegisterPresenceRequest.renewal:type_name -> wendycloud.tunnel.v2.PresenceRenewal
+	22, // 16: wendycloud.tunnel.v2.RegisterPresenceRequest.offer_acknowledgement:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledgement
+	39, // 17: wendycloud.tunnel.v2.BrokerChallenge.expires_at:type_name -> google.protobuf.Timestamp
+	39, // 18: wendycloud.tunnel.v2.PresenceAccepted.lease_expires_at:type_name -> google.protobuf.Timestamp
+	39, // 19: wendycloud.tunnel.v2.PresenceAccepted.renew_by:type_name -> google.protobuf.Timestamp
+	39, // 20: wendycloud.tunnel.v2.PresenceRenewed.lease_expires_at:type_name -> google.protobuf.Timestamp
+	39, // 21: wendycloud.tunnel.v2.PresenceRenewed.renew_by:type_name -> google.protobuf.Timestamp
+	16, // 22: wendycloud.tunnel.v2.SessionOffer.encrypted_dial_instruction:type_name -> wendycloud.tunnel.v2.EncryptedDialInstructionEnvelope
+	24, // 23: wendycloud.tunnel.v2.RegisterPresenceResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
+	25, // 24: wendycloud.tunnel.v2.RegisterPresenceResponse.accepted:type_name -> wendycloud.tunnel.v2.PresenceAccepted
+	26, // 25: wendycloud.tunnel.v2.RegisterPresenceResponse.renewed:type_name -> wendycloud.tunnel.v2.PresenceRenewed
+	27, // 26: wendycloud.tunnel.v2.RegisterPresenceResponse.session_offer:type_name -> wendycloud.tunnel.v2.SessionOffer
+	28, // 27: wendycloud.tunnel.v2.RegisterPresenceResponse.offer_acknowledged:type_name -> wendycloud.tunnel.v2.PresenceOfferAcknowledged
+	3,  // 28: wendycloud.tunnel.v2.JoinOpen.role:type_name -> wendycloud.tunnel.v2.JoinRole
+	33, // 29: wendycloud.tunnel.v2.TunnelFrame.datagram:type_name -> wendycloud.tunnel.v2.TunnelDatagram
+	34, // 30: wendycloud.tunnel.v2.TunnelFrame.icmp_request:type_name -> wendycloud.tunnel.v2.IcmpEchoRequest
+	35, // 31: wendycloud.tunnel.v2.TunnelFrame.icmp_reply:type_name -> wendycloud.tunnel.v2.IcmpEchoReply
+	30, // 32: wendycloud.tunnel.v2.JoinSessionRequest.open:type_name -> wendycloud.tunnel.v2.JoinOpen
+	31, // 33: wendycloud.tunnel.v2.JoinSessionRequest.proof:type_name -> wendycloud.tunnel.v2.JoinProof
+	32, // 34: wendycloud.tunnel.v2.JoinSessionRequest.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
+	3,  // 35: wendycloud.tunnel.v2.JoinAccepted.role:type_name -> wendycloud.tunnel.v2.JoinRole
+	39, // 36: wendycloud.tunnel.v2.JoinAccepted.relay_expires_at:type_name -> google.protobuf.Timestamp
+	24, // 37: wendycloud.tunnel.v2.JoinSessionResponse.challenge:type_name -> wendycloud.tunnel.v2.BrokerChallenge
+	37, // 38: wendycloud.tunnel.v2.JoinSessionResponse.accepted:type_name -> wendycloud.tunnel.v2.JoinAccepted
+	32, // 39: wendycloud.tunnel.v2.JoinSessionResponse.frame:type_name -> wendycloud.tunnel.v2.TunnelFrame
+	5,  // 40: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:input_type -> wendycloud.tunnel.v2.IssuePresenceLeaseRequest
+	9,  // 41: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:input_type -> wendycloud.tunnel.v2.RequestTunnelRequest
+	41, // 42: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:input_type -> wendyauth.v1.Envelope
+	17, // 43: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:input_type -> wendycloud.tunnel.v2.CreateSessionRequest
+	23, // 44: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:input_type -> wendycloud.tunnel.v2.RegisterPresenceRequest
+	36, // 45: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:input_type -> wendycloud.tunnel.v2.JoinSessionRequest
+	7,  // 46: wendycloud.tunnel.v2.TunnelAuthorizationService.IssuePresenceLease:output_type -> wendycloud.tunnel.v2.IssuePresenceLeaseResponse
+	12, // 47: wendycloud.tunnel.v2.TunnelAuthorizationService.RequestTunnel:output_type -> wendycloud.tunnel.v2.RequestTunnelResponse
+	11, // 48: wendycloud.tunnel.v2.TunnelPrincipalAttestationService.AttestTunnelPrincipal:output_type -> wendycloud.tunnel.v2.AttestTunnelPrincipalResponse
+	18, // 49: wendycloud.tunnel.v2.TunnelBrokerControlService.CreateSession:output_type -> wendycloud.tunnel.v2.CreateSessionResponse
+	29, // 50: wendycloud.tunnel.v2.TunnelBrokerV2Service.RegisterPresence:output_type -> wendycloud.tunnel.v2.RegisterPresenceResponse
+	38, // 51: wendycloud.tunnel.v2.TunnelBrokerV2Service.JoinSession:output_type -> wendycloud.tunnel.v2.JoinSessionResponse
+	46, // [46:52] is the sub-list for method output_type
+	40, // [40:46] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_tunnel_v2_tunnel_proto_init() }
@@ -2963,32 +3201,33 @@ func file_wendycloud_tunnel_v2_tunnel_proto_init() {
 	if File_wendycloud_tunnel_v2_tunnel_proto != nil {
 		return
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[18].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[2].OneofWrappers = []any{}
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[19].OneofWrappers = []any{
 		(*RegisterPresenceRequest_Open)(nil),
 		(*RegisterPresenceRequest_Proof)(nil),
 		(*RegisterPresenceRequest_Renewal)(nil),
 		(*RegisterPresenceRequest_OfferAcknowledgement)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[24].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[25].OneofWrappers = []any{
 		(*RegisterPresenceResponse_Challenge)(nil),
 		(*RegisterPresenceResponse_Accepted)(nil),
 		(*RegisterPresenceResponse_Renewed)(nil),
 		(*RegisterPresenceResponse_SessionOffer)(nil),
 		(*RegisterPresenceResponse_OfferAcknowledged)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[27].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[28].OneofWrappers = []any{
 		(*TunnelFrame_Data)(nil),
 		(*TunnelFrame_HalfClose)(nil),
 		(*TunnelFrame_Datagram)(nil),
 		(*TunnelFrame_IcmpRequest)(nil),
 		(*TunnelFrame_IcmpReply)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[31].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[32].OneofWrappers = []any{
 		(*JoinSessionRequest_Open)(nil),
 		(*JoinSessionRequest_Proof)(nil),
 		(*JoinSessionRequest_Frame)(nil),
 	}
-	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[33].OneofWrappers = []any{
+	file_wendycloud_tunnel_v2_tunnel_proto_msgTypes[34].OneofWrappers = []any{
 		(*JoinSessionResponse_Challenge)(nil),
 		(*JoinSessionResponse_Accepted)(nil),
 		(*JoinSessionResponse_Frame)(nil),
@@ -2999,7 +3238,7 @@ func file_wendycloud_tunnel_v2_tunnel_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_tunnel_v2_tunnel_proto_rawDesc), len(file_wendycloud_tunnel_v2_tunnel_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   34,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

@@ -242,7 +242,10 @@ struct CameraPlayer: View {
 
     private var status: String {
         if let error = feed.error {
-            return error.localizedCaseInsensitiveContains("not sending video") ? "No video received" : "Camera unavailable"
+            if error.localizedCaseInsensitiveContains("not sending video") { return "No video received" }
+            // Its details equal its message, so the info button is hidden: show the reason here.
+            if error.localizedCaseInsensitiveContains("sends vp8 video") { return PresentedFailure(error).message }
+            return "Camera unavailable"
         }
         return feed.running ? (feed.receivedVideo ? "Live" : "Connecting…") : "Paused"
     }

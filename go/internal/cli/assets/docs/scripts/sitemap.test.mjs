@@ -29,7 +29,7 @@ test('writes sitemap.xml and a robots.txt that points to the root sitemap', asyn
   try {
     await writeSitemap(root, '/latest', [{ slug: 'faq' }]);
     assert.equal(await readFile(path.join(root, 'robots.txt'), 'utf8'),
-      'User-agent: *\nAllow: /\n\nSitemap: https://docs.wendy.dev/sitemap.xml\n');
+      'User-agent: *\nAllow: /\nDisallow: /branch-\n\nSitemap: https://docs.wendy.dev/sitemap.xml\n');
     assert.match(await readFile(path.join(root, 'sitemap.xml'), 'utf8'), /<loc>https:\/\/docs.wendy.dev\/latest\/faq\/<\/loc>/);
   } finally {
     await rm(root, { recursive: true, force: true });

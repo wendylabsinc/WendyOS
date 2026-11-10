@@ -323,7 +323,9 @@ type pickerDevice struct {
 // installedFromFlashBundle reports whether a device's manifest image is a flash
 // bundle rather than a writable disk image. Such a device must not reach the
 // generic download or tour flows, which would treat the bundle as an image and
-// could write it to a disk. (Thor's generic path is a real .img.zip.)
+// could write it to a disk. Thor and the recovery-mode Orins stay listed: both
+// flows route them to their flashpack (installsFromFlashpack, the tour's native
+// installer).
 //
 // The device-type prefix is a floor, not a fallback, so the manifest can only
 // widen the set: a new EDL board is excluded without a code change here.

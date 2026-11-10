@@ -1,5 +1,5 @@
 ---
-title: Webcam Streaming
+title: Webcam streaming
 description: Stream a live webcam feed from your WendyOS device to the browser using GStreamer, WebSockets, and hardware-accelerated JPEG encoding
 language: python
 ---
@@ -10,13 +10,13 @@ import { Accordions, Accordion } from 'fumadocs-ui/components/accordion';
 
 ![Webcam Setup](/images/webcam-setup.png)
 
-## Low-Latency Webcam Streaming with GStreamer
+## Low-latency webcam streaming with GStreamer
 
 This guide walks you through building a real-time webcam streaming application that runs on a WendyOS device. The app uses GStreamer for hardware-accelerated video capture and JPEG encoding, WebSockets for low-latency frame delivery, and a simple HTML5 frontend that renders frames on a canvas.
 
 The complete sample is available in the [samples repository](https://github.com/wendylabsinc/samples/tree/main/python/webcam).
 
-### What You'll Build
+### What you'll build
 
 - A FastAPI backend using GStreamer to capture MJPEG frames from a USB webcam
 - WebSocket-based binary JPEG streaming with automatic client management and lazy start/stop
@@ -35,7 +35,7 @@ The complete sample is available in the [samples repository](https://github.com/
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy camera-feed template:
 
@@ -62,9 +62,39 @@ The complete sample is available in the [samples repository](https://github.com/
   </Step>
 </Steps>
 
-## Code Breakdown
+## What happens when it runs
 
-### Understanding the Architecture
+The webcam must be connected to the Jetson before the app starts.
+
+`wendy run` does three things:
+1. Build the Docker image (cross-compiling for ARM64)
+2. Push the image to your device's local registry
+3. Start the container with the configured entitlements
+
+```
+wendy run
+✔︎ Searching for WendyOS devices [5.0s]
+✔︎ Which device?: wendyos-zestful-stork.local [USB, LAN]
+✔︎ Builder ready [0.2s]
+✔︎ Container built and uploaded successfully! [22.1s]
+✔ Success
+  Started app
+INFO:     Uvicorn running on http://0.0.0.0:3003
+INFO:     Discovered 1 camera(s) via V4L2: /dev/video0 (HD Pro Webcam C920)
+INFO:     Pipeline ready: v4l2src device=/dev/video0 ! image/jpeg ! appsink name=sink emit-signals=true max-buffers=2 drop=true sync=false
+```
+
+Your browser will open automatically once the stream is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
+
+```
+http://wendyos-zestful-stork.local:3003
+```
+
+Replace the hostname with your device's actual hostname.
+
+## Code breakdown
+
+### Understanding the architecture
 
 This sample uses a **slim Debian base image** (`debian:bookworm-slim`) with GStreamer and its Python bindings installed. Most USB webcams output **MJPEG natively**, so the app streams those JPEG frames straight through to the browser without re-encoding.
 
@@ -80,7 +110,7 @@ The camera pipeline starts lazily when the first client connects and stops when 
 
 <Steps>
   <Step>
-    ### Understanding the Backend
+    ### Understanding the backend
 
     The FastAPI backend (`app.py`) initializes GStreamer, runs a GLib main loop in a background thread, and serves both the UI and the WebSocket stream:
 
@@ -248,7 +278,7 @@ The camera pipeline starts lazily when the first client connects and stops when 
   </Step>
 
   <Step>
-    ### Understanding the Frontend
+    ### Understanding the frontend
 
     The frontend (`index.html`) is a single HTML file (Tailwind via CDN) that connects to the WebSocket stream and renders each JPEG frame into a fullscreen `<img>` element:
 
@@ -386,7 +416,7 @@ The camera pipeline starts lazily when the first client connects and stops when 
   </Step>
 
   <Step>
-    ### Configure Entitlements
+    ### Configure entitlements
 
     The generated `wendy.json` specifies the required device permissions:
 
@@ -427,40 +457,6 @@ The camera pipeline starts lazily when the first client connects and stops when 
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Connect your USB webcam to the Jetson, then run:
-
-```bash
-wendy run
-```
-
-The CLI will:
-1. Build the Docker image (cross-compiling for ARM64)
-2. Push the image to your device's local registry
-3. Start the container with the configured entitlements
-
-```
-wendy run
-✔︎ Searching for WendyOS devices [5.0s]
-✔︎ Which device?: wendyos-zestful-stork.local [USB, LAN]
-✔︎ Builder ready [0.2s]
-✔︎ Container built and uploaded successfully! [22.1s]
-✔ Success
-  Started app
-INFO:     Uvicorn running on http://0.0.0.0:3003
-INFO:     Discovered 1 camera(s) via V4L2: /dev/video0 (HD Pro Webcam C920)
-INFO:     Pipeline ready: v4l2src device=/dev/video0 ! image/jpeg ! appsink name=sink emit-signals=true max-buffers=2 drop=true sync=false
-```
-
-Your browser will open automatically once the stream is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
-
-```
-http://wendyos-zestful-stork.local:3003
-```
-
-Replace the hostname with your device's actual hostname.
-
 ## Troubleshooting
 
 <Accordions>
@@ -492,9 +488,9 @@ Replace the hostname with your device's actual hostname.
   </Accordion>
 </Accordions>
 
-## Next Steps
+## Next steps
 
-- Add the [YOLOv8 Webcam Detection](/docs/guides/tutorials/python/yolov8-webcam-detection) guide to layer object detection on top of this stream
+- Add the [YOLOv8 webcam detection](/docs/guides/tutorials/python/yolov8-webcam-detection) guide to layer object detection on top of this stream
 - Add recording to save video clips to disk
 - Implement snapshot endpoints to capture still images on demand
 - Add multiple camera support by parameterizing the device path

@@ -133,10 +133,11 @@ extension GoClient {
             }
         }
     }
-    func visualEpisode(session: UInt64, episode: String) async throws -> DataVisualSnapshot {
+    func visualEpisode(session: UInt64 = 0, episode: String, selector: String? = nil) async throws -> DataVisualSnapshot {
         try await Self.visualPerform {
             try Self.withCString(episode) { episode in
-                try Self.decodeVisualSnapshot(WDVisualEpisodeLoad(session, episode))
+                let result = selector.map { target in Self.withCString(target) { WDVisualEpisodeLoadAt($0, episode) } } ?? WDVisualEpisodeLoad(session, episode)
+                return try Self.decodeVisualSnapshot(result)
             }
         }
     }

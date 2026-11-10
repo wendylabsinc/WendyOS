@@ -1211,9 +1211,28 @@ jobs:
             find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.msi" -o -name "*.deb" -o -name "*.rpm" -o -name "*.spdx.json" | sort
             echo 'EOF'
           } >> $GITHUB_ENV
+      # Tag the commit this run built before creating the release. Left to
+      # itself, the release action creates the tag on the default branch's
+      # newest commit, which is later than the built one whenever something
+      # merges while the release is building. The action's documentation warns
+      # that the workflow token may not be allowed to tag an older commit, so
+      # if that happens, warn and fall back to the action's default.
+      - name: Tag the built commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.determine-version.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --silent 2>/dev/null; then
+            echo "Tag ${TAG} already exists; leaving it as it is."
+          elif gh api "repos/${GITHUB_REPOSITORY}/git/refs" --silent -f "ref=refs/tags/${TAG}" -f "sha=${GITHUB_SHA}"; then
+            echo "Tagged ${GITHUB_SHA} as ${TAG}."
+          else
+            echo "::warning::Could not tag ${GITHUB_SHA} as ${TAG}. The release will be tagged on the default branch's newest commit instead."
+          fi
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           name: ${{ needs.determine-version.outputs.version }}
           tag_name: ${{ needs.determine-version.outputs.tag_name }}

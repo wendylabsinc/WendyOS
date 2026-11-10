@@ -463,7 +463,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_telemetry_service_proto_rawDes
 	"\n" +
 	"StreamLogs\x12*.wendy.agent.services.v1.StreamLogsRequest\x1a+.wendy.agent.services.v1.StreamLogsResponse0\x01\x12p\n" +
 	"\rStreamMetrics\x12-.wendy.agent.services.v1.StreamMetricsRequest\x1a..wendy.agent.services.v1.StreamMetricsResponse0\x01\x12m\n" +
-	"\fStreamTraces\x12,.wendy.agent.services.v1.StreamTracesRequest\x1a-.wendy.agent.services.v1.StreamTracesResponse0\x01b\x06proto3"
+	"\fStreamTraces\x12,.wendy.agent.services.v1.StreamTracesRequest\x1a-.wendy.agent.services.v1.StreamTracesResponse0\x01B7Z5github.com/wendylabsinc/cloud/services/internal/protob\x06proto3"
 
 var (
 	file_wendy_agent_services_v1_wendy_agent_v1_telemetry_service_proto_rawDescOnce sync.Once

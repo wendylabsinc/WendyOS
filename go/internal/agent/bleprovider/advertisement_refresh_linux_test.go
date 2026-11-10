@@ -307,7 +307,7 @@ func TestAdvertisementRefreshAfterAuthenticatedInbound(t *testing.T) {
 			_ = secure.HandshakeContext(ctx)
 			clientDone := make(chan struct{})
 			go func() { _, _ = io.Copy(io.Discard, secure); close(clientDone) }()
-			if kind == "admitted" {
+			if kind == "admitted" || kind == "cheaper" {
 				select {
 				case <-node.attached:
 				case <-ctx.Done():
@@ -327,7 +327,7 @@ func TestAdvertisementRefreshAfterAuthenticatedInbound(t *testing.T) {
 				t.Fatal("inbound worker leaked")
 			}
 			if kind == "cheaper" && ctx.Err() != nil {
-				t.Fatal("cheaper-path rejection depended on context cancellation")
+				t.Fatal("spare-capacity standby admission/close depended on context cancellation")
 			}
 			_ = b.Close()
 			<-clientDone

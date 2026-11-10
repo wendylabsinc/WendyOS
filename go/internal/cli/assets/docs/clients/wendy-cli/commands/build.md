@@ -23,9 +23,9 @@ The build command is mainly used to verify your app can build/compile.
 - **Compose projects** — applies to services built from a Stagefile.
 - **Swift packages without a build file** — the host cross-compile runs `swift build -c debug`.
 
-Hand-written Dockerfiles are not rewritten, and `wendy build` passes no build-args, so `--debug` has no effect on them here. To gate a hand-written Dockerfile on it, branch on the `WENDY_DEBUG` build-arg that [`wendy run`](run.md) passes (see the build-arg table below).
+Hand-written Dockerfiles are not rewritten, and `wendy build` passes no build-args, so `--debug` has no effect on them here. To gate a hand-written Dockerfile on it, branch on the `WENDY_DEBUG` build-arg that [`wendy run`](./run.md) passes (see the build-arg table below).
 
-The same flag on [`wendy run`](run.md) and `wendy fleet run` additionally enables debug logging, and on `fleet run` host networking. On `wendy build` it only selects the build configuration.
+The same flag on [`wendy run`](./run.md) and `wendy fleet run` additionally enables debug logging, and on `fleet run` host networking. On `wendy build` it only selects the build configuration.
 
 ## Manifest detection
 
@@ -55,7 +55,7 @@ also remain Dockerfile-only.
 
 ## Multi-service manifests
 
-A `wendy.json` with a non-empty `services` map builds one **local** image per service instead of a single image — the same manifest [`wendy run`](run.md) detects and orchestrates, but building only. Nothing is pushed to a registry and nothing is created or started; no device is required.
+A `wendy.json` with a non-empty `services` map builds one **local** image per service instead of a single image — the same manifest [`wendy run`](./run.md) detects and orchestrates, but building only. Nothing is pushed to a registry and nothing is created or started; no device is required.
 
 Each image is tagged `<lowercase-appId>-<lowercase-service>:latest`. For example, an app with `appId: "sh.wendy.examples.isolatedservices"` and services `api` and `worker` produces:
 
@@ -123,7 +123,7 @@ Everything in the `Dockerfile.generated*` namespace is a build artifact: it is e
 
 ### Dockerfile and Containerfile projects
 
-`wendy build` invokes an image builder targeting the device's CPU architecture. [`wendy run`](run.md) passes the following build-args so the Dockerfile or Containerfile can adapt to the target hardware — declare them with `ARG` to use them. `wendy build` compiles the same image but passes no build-args, so a Dockerfile that branches on them takes its `ARG` defaults here:
+`wendy build` invokes an image builder targeting the device's CPU architecture. [`wendy run`](./run.md) passes the following build-args so the Dockerfile or Containerfile can adapt to the target hardware — declare them with `ARG` to use them. `wendy build` compiles the same image but passes no build-args, so a Dockerfile that branches on them takes its `ARG` defaults here:
 
 On Apple silicon Macs with [Apple `container`](https://github.com/apple/container)
 installed, Wendy tries Apple Container first for Dockerfile and
@@ -165,7 +165,7 @@ Docker for local provider runs.
 | Build-arg | Values | Notes |
 |---|---|---|
 | `WENDY_PLATFORM` | `nvidia-jetson` \| `generic` | Platform tier derived from the device type |
-| `WENDY_DEBUG` | `true` \| `false` | Set when `--debug` is passed. [`wendy project optimize`](project/optimize.md) flags it when it's declared (`ARG`/`ENV`) but no `RUN` step branches on it — gate your optimization level on it so debug builds aren't shipped to release. |
+| `WENDY_DEBUG` | `true` \| `false` | Set when `--debug` is passed. [`wendy project optimize`](./project/optimize.md) flags it when it's declared (`ARG`/`ENV`) but no `RUN` step branches on it — gate your optimization level on it so debug builds aren't shipped to release. |
 | `WENDY_DEVICE_TYPE` | e.g. `jetson-agx-orin` | Raw device type; absent when unknown |
 | `WENDY_HAS_GPU` | `true` \| `false` (hardware presence) | Absent on older agents |
 | `WENDY_HAS_CUDA` | `true` \| `false` (host CUDA support) | Falls back only to an explicit NVIDIA vendor on older agents |
@@ -175,7 +175,7 @@ Docker for local provider runs.
 | `WENDY_CUDA_VERSION` | e.g. `12.6` | Jetson only |
 | `WENDY_GPU_ARCH` | e.g. `sm_87` | GPU architecture identifier; absent when no GPU is reported |
 
-Explicit `wendy run --build-arg KEY=VALUE` flags override the matching defaults above and Compose `build.args`; repeated keys use the last value. See [Image build-args](run.md#image-build-args) for usage and restrictions. `wendy build` does not accept `--build-arg`.
+Explicit `wendy run --build-arg KEY=VALUE` flags override the matching defaults above and Compose `build.args`; repeated keys use the last value. See [Image build-args](./run.md#image-build-args) for usage and restrictions. `wendy build` does not accept `--build-arg`.
 
 Example — selecting a base image by platform:
 
@@ -209,7 +209,7 @@ Progress detail for Docker builds comes from `docker buildx --progress=rawjson`,
 
 ## Post-build optimization hint
 
-After a **slow incremental build** — one that reused cached layers but still took longer than ~50 seconds — `wendy build` runs a quick static [`wendy project optimize`](project/optimize.md) scan and, if it finds fixable build-config issues, prints them and offers to apply the safe fixes:
+After a **slow incremental build** — one that reused cached layers but still took longer than ~50 seconds — `wendy build` runs a quick static [`wendy project optimize`](./project/optimize.md) scan and, if it finds fixable build-config issues, prints them and offers to apply the safe fixes:
 
 ```
 This incremental build took 1m4s. A quick scan found 2 build-config issue(s):
@@ -225,11 +225,11 @@ The fixes take effect on your **next** build; the build that just completed is u
 
 ## Remote build host
 
-Delegating a build to another device is a [`wendy run`](run.md#remote-build-host) feature, not a `wendy build` one, and `wendy build --build-host` returns an error saying so.
+Delegating a build to another device is a [`wendy run`](./run.md#remote-build-host) feature, not a `wendy build` one, and `wendy build --build-host` returns an error saying so.
 
 The reason is that the two commands mean different things by "build". `wendy run --build-host` has a target device: the build host builds the image and pushes it straight into *that* device's registry over the mesh. `wendy build` has no target — it leaves an image behind on the machine that built it — so a remote build would deposit the image on the build host and nowhere useful, which is worse than not offering the flag.
 
-Use `wendy run --build-host <device>` instead. To make a device willing to accept builds in the first place, see [`wendy device build-host`](device/build-host.md).
+Use `wendy run --build-host <device>` instead. To make a device willing to accept builds in the first place, see [`wendy device build-host`](./device/build-host.md).
 
 CUDA-selecting Dockerfiles must use `WENDY_HAS_CUDA`. `WENDY_HAS_GPU`
 reports hardware presence, including Broadcom and other GPUs without CUDA.

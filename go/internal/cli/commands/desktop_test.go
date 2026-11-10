@@ -62,7 +62,10 @@ func TestDesktopSecureLANRequiresAuthenticationWithoutTryingPlaintext(t *testing
 func TestDesktopSecureLANAuthenticatesSelectedAccountAtAdvertisedPort(t *testing.T) {
 	good, tlsConfig := legacyLiteTestPKI(t, 7, certs.AssetURN(7, 42))
 	other, _ := legacyLiteTestPKI(t, 8, certs.AssetURN(8, 42))
-	setTempConfig(t, &config.Config{CurrentContext: good.Name, Auth: []config.AuthConfig{*other, *good}})
+	cfg := &config.Config{CurrentContext: good.Name, Auth: []config.AuthConfig{*other, *good}}
+	cfg.SetDevicePin("127.0.0.1", 7, good.CloudGRPC, "42", certs.AssetURN(7, 42))
+	setTempConfig(t, cfg)
+	setPinCache(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +84,7 @@ func TestDesktopSecureLANAuthenticatesSelectedAccountAtAdvertisedPort(t *testing
 	if !conn.IsMTLS {
 		t.Fatal("agent answered without mutual TLS")
 	}
-	cfg, err := config.Load()
+	cfg, err = config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +140,7 @@ func TestDesktopUnpinClearsOnlySelectedDevice(t *testing.T) {
 func TestDesktopSecureLANRenewsExpiredSelectedAccount(t *testing.T) {
 	for _, offline := range []bool{false, true} {
 		t.Run(fmt.Sprintf("offline=%v", offline), func(t *testing.T) {
+			resetAutomaticCertReissue(t)
 			good, tlsConfig := legacyLiteTestPKI(t, 7, certs.AssetURN(7, 42))
 			good.Name = "chosen"
 			good.OAuthIssuer = "https://auth.example"
@@ -145,7 +149,10 @@ func TestDesktopSecureLANRenewsExpiredSelectedAccount(t *testing.T) {
 			good.Certificates[0].PemCertificate = "expired"
 			other, _ := legacyLiteTestPKI(t, 8, certs.AssetURN(8, 42))
 			other.Name = "other"
-			setTempConfig(t, &config.Config{CurrentContext: good.Name, Auth: []config.AuthConfig{*other, *good}})
+			cfg := &config.Config{CurrentContext: good.Name, Auth: []config.AuthConfig{*other, *good}}
+			cfg.SetDevicePin("127.0.0.1", 7, good.CloudGRPC, "42", certs.AssetURN(7, 42))
+			setTempConfig(t, cfg)
+			setPinCache(t)
 			oldExpiry, oldRefresh := leafNotAfterFn, refreshDefaultCloudCertificateFn
 			t.Cleanup(func() { leafNotAfterFn, refreshDefaultCloudCertificateFn = oldExpiry, oldRefresh })
 			leafNotAfterFn = func(cert string) (time.Time, error) {
@@ -198,7 +205,7 @@ func TestDesktopSecureLANRenewsExpiredSelectedAccount(t *testing.T) {
 			if !conn.IsMTLS {
 				t.Fatal("connection is not authenticated")
 			}
-			cfg, err := config.Load()
+			cfg, err = config.Load()
 			if err != nil {
 				t.Fatal(err)
 			}

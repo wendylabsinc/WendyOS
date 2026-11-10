@@ -56,11 +56,22 @@ final class AppModel: ObservableObject {
     private var connectionAttempt: UInt64 = 0
     private let connectDevice: (Device, UInt64, Bool) async throws -> DeviceConnection
 
-    init(connectDevice: @escaping (Device, UInt64, Bool) async throws -> DeviceConnection = { device, request, forgetIdentity in
-        try await GoClient.shared.connect(selector: device.selector, request: request, forgetIdentity: forgetIdentity,
-                                          requiresMTLS: device.requiresMTLS)
+    private let loadDeviceApps: () async throws -> [DeviceApp]
+    private let loadDeviceCameras: () async throws -> [Camera]
+
+    convenience init(connectDevice: @escaping (Device, UInt64, Bool) async throws -> DeviceConnection = { device, request, forgetIdentity in
+        try await GoClient.shared.connect(selector: device.selector, request: request, forgetIdentity: forgetIdentity, requiresMTLS: device.requiresMTLS)
     }) {
+        self.init(loadDeviceApps: { try await GoClient.shared.apps() },
+                  loadDeviceCameras: { try await GoClient.shared.cameras() }, connectDevice: connectDevice)
+    }
+
+    init(loadDeviceApps: @escaping () async throws -> [DeviceApp],
+         loadDeviceCameras: @escaping () async throws -> [Camera],
+         connectDevice: @escaping (Device, UInt64, Bool) async throws -> DeviceConnection) {
         self.connectDevice = connectDevice
+        self.loadDeviceApps = loadDeviceApps
+        self.loadDeviceCameras = loadDeviceCameras
     }
 
     var selectedDeviceReady: Bool {
@@ -307,7 +318,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func connect(_ device: Device, forgetIdentity: Bool = false, force: Bool = false) async {
+    func connect(_ device: Device, forgetIdentity: Bool = false, force: Bool = false, loadApps: Bool = true) async {
         let attempt = client.beginConnection()
         connectionAttempt = attempt
         selection = device
@@ -358,7 +369,7 @@ final class AppModel: ObservableObject {
             recordExperience("Connected", symbol: "checkmark.circle", device: resolvedDevice)
             detailError = nil; appsError = nil; camerasError = nil; logError = nil
             connectingDevice = nil
-            await refreshDetails()
+            await refreshDetails(loadApps: loadApps)
         } catch {
             guard connectionAttempt == attempt else { return }
             connectingDevice = nil
@@ -547,27 +558,30 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refreshDetails() async {
+    func refreshDetails(loadApps: Bool = true) async {
         guard selectedDeviceReady else { return }
         let capturedSession = session
-        do {
-            let result = connectedLite ? [] : try await client.apps()
-            guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
-            let previous = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0.runningState) })
-            if let connected {
-                for app in result where previous[app.id] != nil && previous[app.id] != app.runningState {
-                    recordExperience("\(app.appName) · \(app.state)", symbol: "square.stack.3d.up", device: connected)
+        if loadApps {
+            do {
+                let result = connectedLite ? [] : try await loadDeviceApps()
+                guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
+                let previous = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0.runningState) })
+                if let connected {
+                    for app in result where previous[app.id] != nil && previous[app.id] != app.runningState {
+                        recordExperience("\(app.appName) · \(app.state)", symbol: "square.stack.3d.up", device: connected)
+                    }
                 }
+                apps = result; appsError = nil
+                appsReadSession = capturedSession
+            } catch {
+                guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
+                appsErrorFailure = WendyError(error)
+                appsReadSession = capturedSession
             }
-            apps = result; appsError = nil
-            appsReadSession = capturedSession
-        } catch {
-            guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
-            appsErrorFailure = WendyError(error)
-            appsReadSession = capturedSession
         }
+        guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
         do {
-            let result = try await client.cameras()
+            let result = try await loadDeviceCameras()
             guard session == capturedSession, selectedDeviceReady, !Task.isCancelled else { return }
             cameras = result
             let previous = Dictionary(uniqueKeysWithValues: cameraFeeds.map { ($0.camera.id, $0) })

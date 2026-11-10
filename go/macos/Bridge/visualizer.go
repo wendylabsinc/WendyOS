@@ -26,6 +26,47 @@ func WDVisualEpisodes(session C.uint64_t) *C.WDVisualEpisodesResult {
 	return p
 }
 
+//export WDVisualEpisodesAt
+func WDVisualEpisodesAt(selector *C.char) *C.WDVisualEpisodesResult {
+	p := alloc[C.WDVisualEpisodesResult](1)
+	rows, err := desktop.VisualEpisodesAt(C.GoString(selector))
+	p.status = status(err)
+	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
+	for i, r := range rows {
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(r.GetId()), name: C.CString(r.GetName()), state: C.CString(r.GetState()), started_ns: C.int64_t(r.GetStartedUnixNanos()), size_bytes: C.int64_t(r.GetSizeBytes())}
+	}
+	return p
+}
+
+//export WDVisualPreviewAt
+func WDVisualPreviewAt(selector, episode *C.char) *C.WDVisualPreviewResult {
+	p := alloc[C.WDVisualPreviewResult](1)
+	preview, err := desktop.VisualPreviewAt(C.GoString(selector), C.GoString(episode))
+	p.status = status(err)
+	p.local_path = C.CString(preview.Path)
+	p.reason = C.CString(preview.Reason)
+	p.duration = C.double(preview.Duration)
+	if preview.MaximumCelsius != nil {
+		p.has_maximum = 1
+		p.maximum_celsius = C.double(*preview.MaximumCelsius)
+	}
+	return p
+}
+
+//export WDVisualPreviewFree
+func WDVisualPreviewFree(p *C.WDVisualPreviewResult) {
+	if p == nil {
+		return
+	}
+	if p.local_path != nil {
+		_ = os.Remove(C.GoString(p.local_path))
+	}
+	free(p.local_path)
+	free(p.reason)
+	free(p.status.message)
+	free(p)
+}
+
 //export WDVisualEpisodesFree
 func WDVisualEpisodesFree(p *C.WDVisualEpisodesResult) {
 	if p == nil {
@@ -43,7 +84,14 @@ func WDVisualEpisodesFree(p *C.WDVisualEpisodesResult) {
 
 //export WDVisualEpisodeLoad
 func WDVisualEpisodeLoad(session C.uint64_t, episode *C.char) *C.WDVisualSnapshotResult {
-	return visualSnapshotResult(desktop.VisualEpisode(uint64(session), C.GoString(episode)))
+	snapshot, err := desktop.VisualEpisode(uint64(session), C.GoString(episode))
+	return visualSnapshotResult(snapshot, err)
+}
+
+//export WDVisualEpisodeLoadAt
+func WDVisualEpisodeLoadAt(selector, episode *C.char) *C.WDVisualSnapshotResult {
+	snapshot, err := desktop.VisualEpisodeAt(C.GoString(selector), C.GoString(episode))
+	return visualSnapshotResult(snapshot, err)
 }
 
 func visualSnapshotResult(snapshot *backend.VisualSnapshot, err error) *C.WDVisualSnapshotResult {

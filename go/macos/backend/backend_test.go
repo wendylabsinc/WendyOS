@@ -410,6 +410,60 @@ func TestCameraWallIndependentStreams(t *testing.T) {
 	}
 }
 
+// codecAgent sends one frame in the codec its camera id names.
+type codecAgent struct {
+	pb.UnimplementedWendyVideoServiceServer
+}
+
+func (codecAgent) StreamVideo(req *pb.StreamVideoRequest, stream grpc.ServerStreamingServer[pb.VideoFrame]) error {
+	if err := stream.Send(&pb.VideoFrame{Data: []byte{1}, Codec: pb.VideoCodec(req.DeviceId)}); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
+func TestCameraRejectsNonH264WithCodecSpecificMessage(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	pb.RegisterWendyVideoServiceServer(server, codecAgent{})
+	go server.Serve(listener)
+	defer server.Stop()
+	defer listener.Close()
+	conn, err := grpc.NewClient("passthrough:///codec", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := New()
+	b.conn = grpcclient.NewFromConn(conn)
+	b.life, b.stop = context.WithCancel(context.Background())
+	b.session = 4
+	defer b.Shutdown()
+	for i, tc := range []struct {
+		codec pb.VideoCodec
+		want  string
+	}{
+		{pb.VideoCodec_VIDEO_CODEC_VP8, vp8CameraMessage},
+		{pb.VideoCodec_VIDEO_CODEC_RAW, "This camera did not provide H.264 video."},
+	} {
+		stream := uint64(30 + i)
+		if err := b.StartCamera(uint32(tc.codec), stream, 4); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case event := <-b.events:
+			if event.Kind != EventCameraError || event.Stream != stream || event.Text != tc.want {
+				t.Fatalf("%v: got %+v, want camera error %q", tc.codec, event, tc.want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%v: no camera error", tc.codec)
+		}
+	}
+	if !strings.Contains(vp8CameraMessage, "sends VP8 video") {
+		t.Fatal("PresentedFailure.swift matches \"sends VP8 video\"; keep the phrase")
+	}
+}
+
 func TestStructuredLogPreservesMetadataAndMultilineBody(t *testing.T) {
 	record := &logsdata.LogRecord{
 		TimeUnixNano: 1234567890123456789, SeverityNumber: logsdata.SeverityNumber_SEVERITY_NUMBER_ERROR2,

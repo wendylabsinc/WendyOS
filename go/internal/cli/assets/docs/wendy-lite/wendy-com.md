@@ -291,7 +291,7 @@ carrier support and profile limits before saving the policy. The response's
 
 A direct protocol client must read the current desired policy with `NetGet` and
 preserve options it is not changing. `NetSet` is a complete configuration, not a
-partial update. The CLI's `wendy device wendy-net configure` command performs
+partial update. The CLI's `wendy net configure` command performs
 this read-modify-write step so omitted flags retain their saved values.
 
 `OK` means the request completed. `APPLIED_RESTARTING` also means the settings

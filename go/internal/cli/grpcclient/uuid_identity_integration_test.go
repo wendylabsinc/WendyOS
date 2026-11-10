@@ -79,7 +79,7 @@ func TestVerifiedUUIDServerHandshakeAndRenewal(t *testing.T) {
 		expected        *certs.WendyIdentity
 		want            bool
 	}{
-		{"first verified UUID observation", principal, nil, true},
+		{"first contact with inventory binding", principal, &expected, true},
 		{"renewed leaf and key same principal", principal, &expected, true},
 		{"wrong device", certs.DeviceSPIFFEURI(tenant, "11111111-1111-4111-8111-111111111111"), &expected, false},
 		{"same device UUID different tenant", certs.DeviceSPIFFEURI("11111111-1111-4111-8111-111111111111", expected.EntityID), &expected, false},

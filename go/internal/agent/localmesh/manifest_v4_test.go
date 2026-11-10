@@ -138,14 +138,14 @@ func TestManifestV4OptionalDefaultsAndStableCapabilityOrder(t *testing.T) {
 	}
 }
 
-func TestManifestV4RetainsStoredReplayFloor(t *testing.T) {
+func TestManifestV4DoesNotRestoreLegacyForeignWatermark(t *testing.T) {
 	directory, chain, key, device, now := directoryFixture(t)
 	floor := DirectoryReceipt{Device: device.Principal(), Revision: 42, Hash: strings.Repeat("a", 64), Until: now.Add(MaxLease)}
 	var saved []DirectoryReceipt
 	if err := directory.SetPersistence([]DirectoryReceipt{floor}, func(next []DirectoryReceipt) error { saved = append([]DirectoryReceipt(nil), next...); return nil }, now); err != nil {
 		t.Fatal(err)
 	}
-	if directory.history[device.Principal()] != floor || len(directory.Snapshot(now)) != 0 {
+	if len(directory.history) != 0 || len(directory.Snapshot(now)) != 0 {
 		t.Fatal("restart changed replay floor or restored an old body")
 	}
 	manifest := routeManifest(device, now)
@@ -157,7 +157,7 @@ func TestManifestV4RetainsStoredReplayFloor(t *testing.T) {
 	if _, err := directory.Accept(wire, now); err != nil {
 		t.Fatal(err)
 	}
-	if len(saved) != 1 || saved[0].Revision != 43 || !saved[0].Until.After(now.Add(time.Minute)) {
-		t.Fatalf("new v4 revision not persisted over existing floor: %+v", saved)
+	if len(saved) != 0 || directory.history[device.Key()].Revision != 43 || !directory.history[device.Key()].Until.Equal(now.Add(10*time.Minute)) {
+		t.Fatalf("new v4 revision did not establish RAM watermark: %+v", saved)
 	}
 }

@@ -3,11 +3,7 @@ title: Linux computer
 description: Install wendy-agent on any Linux machine to turn it into a managed Wendy device
 ---
 
-<img
-  src={`${(process.env.NEXT_PUBLIC_BASE_PATH || '').replace(/\/$/, '')}/images/boards/ubuntu.png`}
-  alt="Ubuntu desktop"
-  className="not-prose aspect-video w-full bg-fd-muted object-cover object-center"
-/>
+<Figure src="/images/get-started/linux-agent-status.webp" alt="An Ubuntu terminal where systemctl status wendy-agent reports the service as active and running" caption="Wendy Agent running as a service on an Ubuntu computer." />
 
 ## Overview
 
@@ -77,7 +73,7 @@ because the network is not yet up), enrollment is skipped and the token file is
 deleted. In that case, run `wendy device enroll` from the CLI once the device
 is reachable over mDNS, or re-run `wendy install` to obtain a fresh token.
 
-### Verify the Installation
+### Verify the installation
 
 Check that the agent is running:
 
@@ -87,15 +83,28 @@ sudo systemctl status wendy-agent
 
 You should see the service active and running.
 
-For an unenrolled local-only agent, verify from the same computer:
+For **Only this computer**, install the CLI on this Linux computer too. The
+agent installer does not install it. Skip installation if `wendy --version`
+already works:
+
+```bash
+curl -fsSL https://install.wendy.dev/cli.sh | bash
+wendy --version
+```
+
+Open a new terminal if `wendy` is not found. For an unenrolled local-only agent,
+verify from this same computer:
 
 ```bash
 wendy --device 127.0.0.1:50051 device info --json
 ```
 
+Expect device information in JSON. Local-only agents do not appear in
+`wendy discover`; a missing discovery entry is expected for this setup.
+
 After enrollment, the agent uses its authenticated mTLS port (normally 50052).
 
-## Discovering Your Device
+## Discovering your device
 
 If you chose **Other devices**, go back to your developer machine (where you installed the Wendy CLI) and run:
 
@@ -107,7 +116,7 @@ wendy discover
 
 This uses mDNS to scan your local area network and list all devices running `wendy-agent`. You should see your newly configured machine appear in the list.
 
-## Deploying to Remote Devices
+## Deploying to remote devices
 
 If your device is not on the same local network (e.g., a remote server, cloud instance, or a machine connected via a VPN like Tailscale or Headscale), mDNS discovery will not find it automatically. Instead, you can target the device directly by hostname:
 
@@ -119,4 +128,8 @@ Replace `{hostname}` with the hostname or IP address of your remote machine. Thi
 
 ## Next steps
 
-Your Linux computer is ready. Continue with [step 3 of the quickstart](/docs/#3-create-an-app) to create and run your first app.
+Continue with [the app tutorial](/docs/getting-started/app), including its
+Docker with Buildx prerequisite. For **Only this computer**, keep the project,
+CLI, and builder on this Linux computer and pass `--device 127.0.0.1:50051`
+wherever the tutorial selects a device. For **Other devices**, develop on your
+computer and select the Linux target.

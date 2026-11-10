@@ -58,7 +58,7 @@ var dragonwingBoards = []dragonwingBoard{
 			"  USB0 (USB-C) remains the EDL/recovery port.",
 		},
 		extractedFactor: dragonwingExtractedFactor},
-	{deviceType: "dragonwing-iq-9075", msmID: 0x002eb0e1, storage: qdl.StorageUFS, guide: dipSwitch3Guide,
+	{deviceType: "dragonwing-iq-9075", msmID: 0x002eb0e1, storage: qdl.StorageUFS, guide: iq9075SwitchGuide,
 		extractedFactor: dragonwingExtractedFactor},
 }
 
@@ -672,7 +672,7 @@ func flashDragonwing(ctx context.Context, flash *qdl.FlashPlan, dev qdl.DeviceIn
 		label := e.Label
 		err := session.Program(ctx, flash.Dir, e, throttledDetail(detail,
 			func(done, total int64) string {
-				return fmt.Sprintf("%q · %d%%", label, percent(done, total))
+				return fmt.Sprintf("%q · %d%% of partition", label, percent(done, total))
 			}))
 		if err != nil {
 			return err

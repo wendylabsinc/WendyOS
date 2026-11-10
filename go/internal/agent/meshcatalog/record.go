@@ -45,6 +45,23 @@ type Record struct {
 	Issued     int64    `json:"issued" cbor:"i"`
 	Expires    int64    `json:"expires" cbor:"e"`
 	Withdraw   bool     `json:"withdraw,omitempty" cbor:"w,omitempty"`
+
+	// AdmittedUntil is copied from the verified directory; it is not wire data.
+	AdmittedUntil time.Time `json:"-" cbor:"-"`
+}
+
+// LeaseDeadline returns the receiver-local admitted deadline. Records built by
+// local publishers and legacy callers have no admission metadata and retain
+// their signed expiry until the directory admits their enclosing manifest.
+func (r Record) LeaseDeadline() time.Time {
+	if !r.AdmittedUntil.IsZero() {
+		return r.AdmittedUntil
+	}
+	return time.UnixMilli(r.Expires)
+}
+
+func (r Record) LeaseRemaining(now time.Time) time.Duration {
+	return r.LeaseDeadline().Sub(now)
 }
 
 func IsGatewayOffer(r Record) bool {
@@ -62,14 +79,14 @@ func (r Record) Validate(now time.Time) error {
 		return errors.New("invalid wendy net service owner principal")
 	}
 	issued, expires := time.UnixMilli(r.Issued), time.UnixMilli(r.Expires)
-	if !expires.After(now) {
+	if r.LeaseRemaining(now) <= 0 {
 		return ErrExpired
 	}
 	leaseLimit := MaxLease
 	if r.Key.AppID == GatewayAppID && r.Key.ServiceID == GatewayServiceID {
 		leaseLimit = GatewayOfferLease
 	}
-	if issued.After(now.Add(5*time.Second)) || !expires.After(issued) || expires.Sub(issued) > leaseLimit {
+	if (r.AdmittedUntil.IsZero() && issued.After(now.Add(5*time.Second))) || !expires.After(issued) || expires.Sub(issued) > leaseLimit {
 		return errors.New("invalid wendy net service lease")
 	}
 	if r.Key.AppID == GatewayAppID || r.Key.ServiceID == GatewayServiceID {

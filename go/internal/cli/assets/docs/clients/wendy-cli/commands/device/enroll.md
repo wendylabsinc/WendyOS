@@ -1,7 +1,7 @@
 # `wendy device enroll`
 
 Add a device to your Wendy Cloud organization so you can manage it remotely.
-For a new board, first follow its [installation guide](/docs/#2-set-up-a-device).
+For a new board, first follow its [installation guide](/docs/installation).
 For Wendy Lite, use the [USB enrollment guide](/docs/advanced/cli/lite-enrollment).
 
 ## Enroll a device

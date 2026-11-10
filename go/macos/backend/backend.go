@@ -43,10 +43,14 @@ type Event struct {
 type Backend struct {
 	osUpdate                mobileOSRun
 	recordings              recordingReads
+	gallery                 galleryConnections
+	discovery               nearbyDiscovery
+	discoverNearby          func(context.Context) ([]commands.DesktopDevice, error)
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
 	mobileScope             string
+	tunnelSession           commands.TunnelSession
 	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
@@ -86,8 +90,12 @@ type Backend struct {
 }
 
 func New() *Backend {
-	return &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second,
-		connectTarget: connectDesktopTarget, unpinDevice: commands.DesktopUnpin}
+	b := &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second, unpinDevice: commands.DesktopUnpin}
+	b.tunnelSession.SetActive(true)
+	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
+		return connectDesktopTarget(b.tunnelSession.Context(ctx), selector)
+	}
+	return b
 }
 
 // IdentityRecoveryError exposes a recovery action without exposing a caller-
@@ -221,11 +229,6 @@ func (b *Backend) Initialize(cli string) error {
 	_, done := b.begin()
 	defer done()
 	return commands.InitializeDesktop(cli)
-}
-func (b *Backend) Nearby() ([]commands.DesktopDevice, error) {
-	ctx, done := b.begin()
-	defer done()
-	return commands.DesktopNearby(ctx)
 }
 func (b *Backend) Cloud() ([]commands.DesktopDevice, error) {
 	ctx, done := b.begin()
@@ -479,6 +482,9 @@ func (b *Backend) stopVPN() {
 }
 func (b *Backend) Shutdown() error {
 	b.recordings.setActive(false)
+	b.tunnelSession.SetActive(false)
+	b.resetNearbyDiscovery(true)
+	b.galleryReset(true)
 	b.cancelOperation()
 	b.ReserveConnection()
 	b.NearbyClose(0)
@@ -641,6 +647,13 @@ func (b *Backend) StartLogs(app string, streamID, sessionID uint64) error {
 	}()
 	return nil
 }
+
+// vp8CameraMessage explains a camera whose agent chose VP8, which the app
+// cannot play. Older agents fall back to VP8 whenever the device lacks
+// h264parse (gstreamer1.0-plugins-bad); newer ones only when it also lacks
+// x264enc. PresentedFailure matches "sends VP8 video", so keep that phrase.
+const vp8CameraMessage = "This device sends VP8 video, which the Wendy app cannot play yet. Update the device’s Wendy agent, or install gstreamer1.0-plugins-bad on it."
+
 func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expectedStableID ...string) error {
 	_, done := b.begin()
 	defer done()
@@ -714,7 +727,11 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 			}
 			firstFrame.Stop()
 			if v.GetCodec() != pb.VideoCodec_VIDEO_CODEC_H264 {
-				b.emitText(streamCtx, EventCameraError, session, streamID, "This camera did not provide H.264 video.")
+				message := "This camera did not provide H.264 video."
+				if v.GetCodec() == pb.VideoCodec_VIDEO_CODEC_VP8 {
+					message = vp8CameraMessage
+				}
+				b.emitText(streamCtx, EventCameraError, session, streamID, message)
 				return
 			}
 			if len(v.Data) > 16<<20 {

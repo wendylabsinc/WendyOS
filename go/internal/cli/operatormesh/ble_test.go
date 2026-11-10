@@ -40,7 +40,7 @@ func (idleBLEPacketEndpoint) Inject([]byte) error { return nil }
 // The native radio is substituted by a stream. TLS, primary identity, signed
 // operator proof, userspace endpoint and same-TLS management are production.
 func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
-	for _, algorithm := range []string{"P256", "MLDSA65", "P256-auto", "MLDSA65-auto", "P256-auto-known-issuer", "P256-cleanup"} {
+	for _, algorithm := range []string{"P256", "MLDSA65", "P256-known-issuer", "P256-cleanup"} {
 		t.Run(algorithm, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -169,25 +169,18 @@ func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
 					serverDone <- nil
 				}
 			}()
-			options := Options{CarrierSources: []carriers.Source{}, Certificate: certificateInfo, StateDirectory: t.TempDir(), RouterAddress: "peripheral.fixture", RouterUUID: router.UUID().String(), Transport: "ble"}
-			if strings.Contains(algorithm, "-auto") {
-				id := router.UUID()
-				options.Automatic = true
-				options.RouterAddress = ""
-				options.RouterUUID = ""
-				options.Transport = ""
-				options.CarrierSources = []carriers.Source{func(ctx context.Context, emit func([]carriers.Candidate)) error {
-					emit([]carriers.Candidate{{Transport: carriers.BLE, Address: "peripheral.fixture", PSM: 0x81, Hint: [4]byte(id[:4]), Cost: bleprovider.LinkCost}})
-					<-ctx.Done()
-					return ctx.Err()
-				}}
-			}
+			id := router.UUID()
+			options := Options{Certificate: certificateInfo, StateDirectory: t.TempDir(), CarrierSources: []carriers.Source{func(ctx context.Context, emit func([]carriers.Candidate)) error {
+				emit([]carriers.Candidate{{Transport: carriers.BLE, Address: "peripheral.fixture", PSM: 0x81, Hint: [4]byte(id[:4]), Cost: bleprovider.LinkCost}})
+				<-ctx.Done()
+				return ctx.Err()
+			}}}
 			session, err := Open(ctx, options)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer session.Close()
-			if options.Automatic && (session.initialRouter != nil || !session.Node.Credentials.Device.IsOperator()) {
+			if !session.Node.Credentials.Device.IsOperator() {
 				t.Fatal("cold automatic join required an offered identity or seed")
 			}
 			if _, err = session.Start(ctx); err != nil {

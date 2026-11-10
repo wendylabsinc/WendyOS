@@ -4,7 +4,10 @@
   "pages": [
     "index",
     "../installation/unitree-simulators",
+    "../installation/live-simulation-projects",
     "sim-to-real",
+    "sensor-fidelity",
+    "vision-language-action",
     "../installation/wendy-agent-unitree-g1",
     "../installation/unitree-g1-reflash",
     "ros2",
