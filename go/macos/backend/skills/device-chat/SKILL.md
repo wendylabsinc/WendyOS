@@ -106,3 +106,9 @@ as well, then inspect its trigger and timeline with `device_data_recording`.
 Do not invent a causal event-to-episode link from time proximity. Set `show:true`
 when the user wants to open a recording; this displays a native playback card.
 It does not give the model video perception. Cite episode IDs in the answer.
+
+For trends, use `device_data_compare` with two explicit windows. It counts event
+occurrences, not people or boxes, from one retained journal snapshot. State both
+windows and their durations. Say "among retained events"; do not claim an actual
+increase or decrease when historical coverage is unknown. Source groups may
+overlap. An event from two sources counts once in each source group.
