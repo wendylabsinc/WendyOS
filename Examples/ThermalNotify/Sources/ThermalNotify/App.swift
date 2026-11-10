@@ -28,7 +28,8 @@ struct ThermalNotify {
         guard recipients.allSatisfy({ UUID(uuidString: $0) != nil }) else { throw MonitorError("THERMAL_NOTIFY_USER_IDS must contain user UUIDs") }
         let sender: NotificationSender? = delivery == "cloud"
             ? NotificationSender(socketPath: try requiredSocket("WENDY_SYSTEM_SOCKET", entitlement: "notifications")) : nil
-        let alerts = AlertCoordinator(sender: sender, recipients: recipients)
+        let threshold = try thermalThreshold(ProcessInfo.processInfo.environment["THERMAL_NOTIFY_THRESHOLD_CELSIUS"])
+        let alerts = AlertCoordinator(sender: sender, recipients: recipients, threshold: threshold)
         if sender == nil { log("Monitor-only mode: no Cloud notifications will be sent.") }
         if let address = ProcessInfo.processInfo.environment["THERMAL_VIEWER_URL"] {
             guard let url = URL(string: address), url.scheme == "http", url.host == "127.0.0.1", url.port == 18842,
@@ -39,16 +40,12 @@ struct ThermalNotify {
                 guard let sender else { throw MonitorError("Cloud notification delivery is disabled") }
                 guard !recipients.isEmpty else { throw MonitorError("A test must be addressed to explicit THERMAL_NOTIFY_USER_IDS") }
                 let (_, reading) = try await ViewerSource.read(url)
-                var request = notification(camera: ViewerSource.camera, reading: reading, recipients: recipients)
-                request.title = "Thermal notification test"
-                request.body = "Test only — this device's MLX90642 currently reads \(String(format: "%.2f", reading.celsius))°C at its hottest pixel. No high-temperature alarm."
-                request.severity = .info
-                request.metadata.fields["test"] = .with { $0.boolValue = true }
+                let request = testNotificationRequest(camera: ViewerSource.camera, reading: reading, recipients: recipients, threshold: threshold)
                 try await sender.send(request)
                 log("TEST notification accepted: \(request.notificationID)")
                 return
             }
-            log("Monitoring MLX90642 on this device; alerts above 80°C; recipients: \(recipients.isEmpty ? "organization roles" : "configured users").")
+            log("Monitoring MLX90642 on this device; alerts above \(threshold)°C; recipients: \(recipients.isEmpty ? "organization roles" : "configured users").")
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask { try await alerts.run() }
                 group.addTask { try await ViewerSource.monitor(url, alerts: alerts) }
@@ -59,7 +56,14 @@ struct ThermalNotify {
         }
         let agentSocket = try requiredSocket("WENDY_AGENT_SOCKET", entitlement: "admin")
         let stableID = ProcessInfo.processInfo.environment["THERMAL_CAMERA_STABLE_ID"]
-        log("Monitoring \(stableID ?? "all thermal cameras"); threshold above 80°C; delivery: \(delivery).")
+        if CommandLine.arguments.contains("--test-notification") {
+            guard let sender, let stableID, !recipients.isEmpty else {
+                throw MonitorError("A test requires Cloud delivery, an exact camera and explicit recipients")
+            }
+            try await testNotification(socket: agentSocket, stableID: stableID, sender: sender, recipients: recipients, threshold: threshold)
+            return
+        }
+        log("Monitoring \(stableID ?? "all thermal cameras"); threshold above \(threshold)°C; delivery: \(delivery).")
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await alerts.run() }
             defer { group.cancelAll() }
@@ -72,6 +76,33 @@ struct ThermalNotify {
                     try await Task.sleep(for: .seconds(5))
                 }
             }
+        }
+    }
+
+    static func testNotification(socket: String, stableID: String, sender: NotificationSender, recipients: [String], threshold: Double) async throws {
+        let transport = try HTTP2ClientTransport.Posix(target: .unixDomainSocket(path: socket), transportSecurity: .plaintext)
+        try await withGRPCClient(transport: transport) { client in
+            let video = Wendy_Agent_Services_V1_WendyVideoService.Client(wrapping: client)
+            var options = CallOptions.defaults
+            options.timeout = .seconds(30)
+            let cameras = try await video.listVideoDevices(.init(), options: options)
+            guard let camera = cameras.devices.first(where: { $0.stableID == stableID && isThermalCamera($0) }) else {
+                throw MonitorError("Configured thermal camera is unavailable")
+            }
+            var request = Wendy_Agent_Services_V1_StreamVideoRequest()
+            request.deviceID = camera.id
+            request.stableID = stableID
+            request.codec = .raw
+            let reading: ThermalReading = try await video.streamVideo(request, options: options) { stream in
+                var decoder = ThermalFrameDecoder()
+                for try await frame in stream.messages {
+                    if let reading = try? decoder.decode(frame) { return reading }
+                }
+                throw MonitorError("No fresh temperature received")
+            }
+            let notificationRequest = testNotificationRequest(camera: camera, reading: reading, recipients: recipients, threshold: threshold)
+            try await sender.send(notificationRequest)
+            log("TEST notification accepted: \(notificationRequest.notificationID); maximum \(reading.celsius)°C")
         }
     }
 
