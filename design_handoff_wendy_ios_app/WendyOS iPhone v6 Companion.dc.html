@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><template id="__bundler_thumbnail" data-bg-color="#F1EEE7"><svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg"><rect x="470" y="160" width="260" height="480" rx="44" fill="#fff" stroke="#171C23" stroke-width="10"></rect><rect x="545" y="330" width="110" height="110" rx="30" fill="#34C759"></rect></svg></template><style>body{margin:0;background:#E6E2D8;font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased}a{color:#2A7050;text-decoration:none}a:hover{color:#171C23}*{box-sizing:border-box}</style></helmet>
+<div style="min-height:100vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:40px;padding:40px 20px">
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+<div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23;font-family:-apple-system,'SF Pro Text',system-ui,sans-serif">
+  <div style="height:54px;flex:none"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 16px;height:56px;flex:none;position:relative">
+    <div style="position:absolute;left:76px;right:76px;text-align:center;font-size:17px;font-weight:600;letter-spacing:-0.43px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none">{{ navTitle }}</div>
+    <sc-if value="{{ hasBack }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ back }}" style="width:44px;height:44px;border-radius:999px;background:rgba(241,238,231,0.72);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 3px 10px rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:center;cursor:pointer"><svg width="12" height="20" viewBox="0 0 12 20" fill="none"><path d="M10 2L2 10l8 8" stroke="#171C23" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+    </sc-if>
+    <sc-if value="{{ hasOrg }}" hint-placeholder-val="{{ true }}">
+      <div onClick="{{ openOrg }}" style="height:44px;padding:0 14px 0 6px;border-radius:999px;background:rgba(241,238,231,0.72);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 3px 10px rgba(0,0,0,0.06);display:flex;align-items:center;gap:8px;cursor:pointer">
+        <div style="width:32px;height:32px;border-radius:{{ pillRadius }};background:{{ pillBg }};color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center"><sc-if value="{{ pillLogo }}" hint-placeholder-val="{{ true }}"><img src="assets/AppIcon.svg" alt="" style="width:32px;height:32px;border-radius:999px;display:block"></sc-if>{{ orgInitial }}<sc-if value="{{ pillHasIcon }}" hint-placeholder-val="{{ false }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="{{ pillIcon }}"></path></svg></sc-if></div>
+        <div style="font-size:15px;font-weight:600;white-space:nowrap">{{ orgName }}</div>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#171C23" stroke-width="1.8" stroke-linecap="round"><path d="M2 3.5l3 3 3-3"></path></svg>
+      </div>
+    </sc-if>
+    <div onClick="{{ openNotifs }}" style="width:44px;height:44px;border-radius:999px;background:rgba(241,238,231,0.72);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 3px 10px rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#171C23" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16v-5a6 6 0 0112 0v5l2 2H4zM10 20a2 2 0 004 0"></path></svg>
+      <sc-if value="{{ hasUnread }}" hint-placeholder-val="{{ true }}">
+        <div style="position:absolute;top:4px;right:4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#FF3B30;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center">{{ unread }}</div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div onScroll="{{ onMainScroll }}" style="flex:1;overflow:auto;padding:4px 16px {{ mainPadB }};display:grid;align-content:start;grid-template-columns:minmax(0,1fr);grid-auto-rows:max-content;gap:18px">
+    <sc-if value="{{ isRoot }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;flex-direction:column;gap:2px;padding:0 4px">
+        <div style="font-size:34px;font-weight:700;letter-spacing:0.4px">{{ largeTitle }}</div>
+        <div style="font-size:15px;color:#5B5A56">{{ largeSub }}</div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isLauncher }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div onClick="{{ main.onTap }}" style="position:relative;height:380px;background:linear-gradient(180deg,#E6E2D8 30%,{{ main.tint }} 100%);border-radius:30px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 10px 30px {{ main.shadow }};overflow:hidden;cursor:pointer;transition:transform .15s" style-active="transform:scale(0.985)">
+          <div style="position:absolute;inset:0;pointer-events:none;-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 45%);mask-image:linear-gradient(180deg,transparent 0%,#000 45%)">
+            <sc-if value="{{ main.isDev }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;right:-10px;bottom:-6px;opacity:0.4"><svg width="300" height="260" viewBox="0 0 300 260" fill="none" stroke="#2A7050" stroke-width="2.2" stroke-linecap="round"><path d="M40 150L120 90M120 90L210 130M210 130L270 60M120 90L180 30M180 30L270 60M210 130L160 210M160 210L60 220M60 220L40 150M210 130L280 200M160 210L280 200" ></path><path d="M270 60L280 200" stroke-dasharray="6 7"></path><g fill="#fff" stroke-width="3"><circle cx="40" cy="150" r="13"></circle><circle cx="120" cy="90" r="17"></circle><circle cx="210" cy="130" r="15"></circle><circle cx="270" cy="60" r="12"></circle><circle cx="180" cy="30" r="11"></circle><circle cx="160" cy="210" r="13"></circle><circle cx="60" cy="220" r="10"></circle><circle cx="280" cy="200" r="11"></circle></g></svg></div></sc-if>
+            <sc-if value="{{ main.isRob }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;right:18px;bottom:-14px;opacity:0.45"><svg width="190" height="300" viewBox="0 0 120 200" fill="none" stroke="#FF9500" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="60" cy="18" r="12"></circle><path d="M60 30v8M38 44h44M44 44l-4 46h40l-4-46M40 90l-2 0M60 90v0"></path><path d="M38 44L26 74L22 104"></path><path d="M82 44L94 74L98 104"></path><path d="M48 92L44 140L42 186"></path><path d="M72 92L76 140L78 186"></path><path d="M36 188h12M72 188h12"></path><g fill="#fff" stroke-width="2.6"><circle cx="38" cy="44" r="4.5"></circle><circle cx="82" cy="44" r="4.5"></circle><circle cx="26" cy="74" r="4"></circle><circle cx="94" cy="74" r="4"></circle><circle cx="48" cy="92" r="4.5"></circle><circle cx="72" cy="92" r="4.5"></circle><circle cx="44" cy="140" r="4.5"></circle><circle cx="42" cy="186" r="3.5"></circle><circle cx="78" cy="186" r="3.5"></circle></g><circle cx="76" cy="140" r="6" fill="#FF3B30" stroke="#FF3B30"></circle></svg></div></sc-if>
+            <sc-if value="{{ main.isSite }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:50%;bottom:30px;transform:translateX(-50%) perspective(700px) rotateX(48deg) scale(1.1);opacity:0.5;filter:saturate(0.6)"><div style="background:#171C23;border-radius:18px;padding:20px"><svg width="333" height="161" viewBox="0 0 333 161" style="overflow:visible"><polygon points="333.7,155.6 331.2,-0.5 0.0,4.9 2.6,161.0" fill="rgba(255,255,255,0.05)"></polygon><polygon points="125.2,124.4 99.7,139.0 80.9,106.1 106.4,91.5" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="260.7,15.8 261.1,42.9 230.3,43.4 229.8,16.3" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="45.2,71.6 41.6,44.0 70.5,40.2 74.0,67.9" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="41.6,75.2 18.6,77.6 16.0,52.6 39.0,50.2" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="219.9,62.0 192.8,62.4 192.3,31.6 219.4,31.2" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="255.7,8.3 286.3,7.8 286.9,43.1 256.3,43.6" fill="rgba(200,220,235,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="155.6,151.0 130.1,151.4 129.8,134.6 155.4,134.2" fill="rgba(172,142,104,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="297.9,148.6 213.2,150.0 212.7,122.6 297.5,121.2" fill="rgba(172,142,104,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="161.2,9.9 249.7,8.4 250.4,50.7 161.8,52.1" fill="rgba(174,174,178,0.42)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="8.7,74.3 8.4,56.7 58.0,55.9 58.3,73.5" fill="rgba(174,174,178,0.42)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="7.7,12.4 127.2,10.4 127.9,52.3 8.4,54.3" fill="rgba(174,174,178,0.42)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="61.7,23.2 108.9,22.4 109.0,27.1 61.8,27.9" fill="rgba(10,10,12,0.9)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><text x="271.3" y="28.7" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Fridge</text><text x="142.7" y="145.8" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Shelf</text><text x="255.3" y="138.6" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Storage</text><text x="205.8" y="33.3" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Table</text><text x="67.8" y="35.3" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Table</text><polygon points="298.0,156.2 2.6,161.0 2.4,153.5 297.9,148.6" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="7.5,4.8 302.8,-0.0 302.9,7.5 7.7,12.4" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="2.4,153.5 0.0,4.9 7.5,4.8 10.0,153.3" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="331.7,31.3 333.2,125.5 325.7,125.6 324.2,31.4" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="325.7,125.6 297.5,126.1 297.4,118.5 325.6,118.1" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="305.0,118.4 305.6,156.0 298.0,156.2 297.4,118.5" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="295.7,24.3 331.6,23.7 331.7,31.3 295.8,31.9" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="302.9,7.5 303.3,31.7 295.8,31.9 295.4,7.7" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="204.8,153.9 171.4,154.5 171.3,150.7 204.7,150.1" fill="#171C23" stroke="#9FE2BF" stroke-width="1.2" stroke-linejoin="round"></polygon><polygon points="328.0,32.9 329.3,115.6 325.5,115.7 324.2,32.9" fill="#64D2FF" stroke="#64D2FF" stroke-width="1" stroke-linejoin="round"></polygon></svg></div></div></sc-if>
+          </div>
+          <div style="position:relative;height:100%;display:flex;flex-direction:column;gap:14px;padding:20px">
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="width:52px;height:52px;border-radius:16px;background:{{ main.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ main.icon }}"></path></svg></div>
+              <div style="flex:1;min-width:0;font-size:28px;font-weight:700;letter-spacing:-0.4px">{{ main.name }}</div>
+              <sc-if value="{{ main.hasAttn }}" hint-placeholder-val="{{ false }}"><div style="height:26px;padding:0 10px;border-radius:999px;background:rgba(255,59,48,0.12);color:#FF3B30;font-size:12px;font-weight:700;display:flex;align-items:center;white-space:nowrap">{{ main.attn }}</div></sc-if>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+              <sc-for list="{{ main.stats }}" as="t" hint-placeholder-count="3">
+                <div style="background:rgba(241,238,231,0.9);backdrop-filter:blur(8px);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:2px"><div style="font-size:22px;font-weight:700;color:{{ t.color }}">{{ t.v }}</div><div style="font-size:12px;color:#5B5A56;white-space:nowrap">{{ t.l }}</div></div>
+              </sc-for>
+            </div>
+            <div style="flex:1"></div>
+            <div style="align-self:flex-start;height:40px;padding:0 18px;border-radius:999px;background:{{ main.color }};color:#fff;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px">Open {{ main.name }}<svg width="7" height="12" viewBox="0 0 8 13" fill="none"><path d="M1.5 1.5l5 5-5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+          <sc-for list="{{ minor }}" as="c" hint-placeholder-count="2">
+            <div onClick="{{ c.onTap }}" style="position:relative;overflow:hidden;background:linear-gradient(160deg,#E6E2D8 40%,{{ c.tint }} 100%);border-radius:22px;padding:14px;display:flex;flex-direction:column;gap:10px;cursor:pointer;transition:transform .15s" style-active="transform:scale(0.97)"><svg width="96" height="96" viewBox="0 0 24 24" fill="none" stroke="{{ c.color }}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;right:-14px;bottom:-18px;opacity:0.12;pointer-events:none"><path d="{{ c.icon }}"></path></svg>
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <div style="width:36px;height:36px;border-radius:11px;background:{{ c.color }};display:flex;align-items:center;justify-content:center;position:relative"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ c.icon }}"></path></svg>
+                  <sc-if value="{{ c.hasAttn }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;right:-5px;top:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#FF3B30;border:2px solid #fff;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;box-sizing:content-box">{{ c.attnN }}</div></sc-if>
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px"><div style="font-size:17px;font-weight:700">{{ c.name }}</div><div style="font-size:12px;color:#5B5A56">{{ c.line }}</div></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasEpList }}" hint-placeholder-val="{{ false }}">
+      <sc-for list="{{ epDevs }}" as="g" hint-placeholder-count="4">
+        <div onClick="{{ g.open }}" style="flex:none;background:#fff;border-radius:22px;padding:12px;display:flex;flex-direction:column;gap:10px;cursor:pointer;outline:{{ g.ring }};transition:transform .15s" style-active="transform:scale(0.98)">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div style="width:60px;height:60px;border-radius:14px;overflow:hidden;flex:none"><dc-import name="Clip Thumb" clip="{{ g.latest }}" compact="{{ true }}" hint-size="60px,60px" style="width:60px;height:60px"></dc-import></div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px"><div style="font-size:16px;font-weight:600">{{ g.name }}</div><div style="font-size:12px;color:#5B5A56">{{ g.model }} · latest {{ g.latestL }} · {{ g.size }}</div></div>
+            <div style="flex:none;display:flex;flex-direction:column;align-items:flex-end"><div style="font-size:26px;font-weight:700;letter-spacing:-0.4px;line-height:28px">{{ g.count }}</div><div style="font-size:11px;color:#5B5A56">episodes</div></div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;padding-left:72px">
+            <sc-for list="{{ g.labels }}" as="l" hint-placeholder-count="2">
+              <div onClick="{{ l.onTap }}" style="height:24px;padding:0 9px;border-radius:999px;background:#F1EEE7;font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer"><div style="width:6px;height:6px;border-radius:50%;background:{{ l.c }}"></div>{{ l.l }}<div style="color:#9A978F">{{ l.n }}</div></div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+      <div style="flex:none;display:flex;align-items:center;gap:8px;padding:2px 8px;font-size:13px;color:#9A978F">{{ epEmpty }}</div>
+    </sc-if>
+
+    <sc-if value="{{ hasDevHero }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#E6E2D8;border-radius:26px;padding:18px;display:flex;flex-direction:column;gap:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:10px">
+          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-size:44px;font-weight:700;letter-spacing:-1px;line-height:46px">{{ dh.total }}</div><div style="font-size:14px;color:#5B5A56">devices in Wendy Labs</div></div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:13px;font-weight:600">
+            <sc-for list="{{ dh.legend }}" as="g" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:6px;color:#171C23"><div style="width:8px;height:8px;border-radius:50%;background:{{ g.c }}"></div>{{ g.t }}</div></sc-for>
+          </div>
+        </div>
+        <div style="display:flex;gap:3px;height:8px">
+          <sc-for list="{{ dh.bar }}" as="g" hint-placeholder-count="3"><div style="flex:{{ g.n }};border-radius:4px;background:{{ g.c }}"></div></sc-for>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+          <sc-for list="{{ dh.split }}" as="t" hint-placeholder-count="2">
+            <div onClick="{{ t.onTap }}" style="background:#F1EEE7;border-radius:16px;padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" style-active="background:#DCD8CD">
+              <div style="width:34px;height:34px;border-radius:10px;background:{{ t.c }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg></div>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:0"><div style="font-size:20px;font-weight:700">{{ t.v }}</div><div style="font-size:12px;color:#5B5A56">{{ t.l }}</div></div>
+              <svg width="7" height="12" viewBox="0 0 8 13" fill="none" style="opacity:0.35"><path d="M1.5 1.5l5 5-5 5" stroke="#171C23" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div onClick="{{ openSetup }}" style="border:1.5px dashed rgba(42,112,80,0.4);background:rgba(42,112,80,0.05);border-radius:22px;padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" style-active="background:rgba(42,112,80,0.08)">
+        <div style="width:36px;height:36px;border-radius:50%;background:#2A7050;display:flex;align-items:center;justify-content:center;flex:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:2px"><div style="font-size:16px;font-weight:600;color:#2A7050">Set up a new device</div><div style="font-size:12px;color:#5B5A56">Nearby over Bluetooth · takes about a minute</div></div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasStats }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:10px">
+        <sc-for list="{{ stats }}" as="t" hint-placeholder-count="3">
+          <div onClick="{{ t.onTap }}" style="background:#E6E2D8;border-radius:20px;padding:14px;display:flex;flex-direction:column;gap:2px;position:relative;cursor:{{ t.cursor }}" style-active="background:#DCD8CD"><div style="font-size:26px;font-weight:700;letter-spacing:-0.4px;color:{{ t.color }}">{{ t.v }}</div><div style="font-size:12px;color:#5B5A56;white-space:nowrap">{{ t.l }}</div><sc-if value="{{ t.tap }}" hint-placeholder-val="{{ false }}"><svg width="8" height="13" viewBox="0 0 8 13" fill="none" style="position:absolute;right:14px;top:18px;opacity:0.35"><path d="M1.5 1.5l5 5-5 5" stroke="#171C23" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasTwin }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#171C23;border-radius:26px;overflow:hidden;display:flex;flex-direction:column">
+        <div style="position:relative;height:200px;flex:none;display:flex;align-items:center;justify-content:center">
+          <div style="position:relative;width:333px;height:161px;transform:perspective(700px) rotateX(28deg);transform-origin:50% 60%">
+            <svg width="333" height="161" viewBox="0 0 333 161" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none"><polygon points="333.7,155.6 331.2,-0.5 0.0,4.9 2.6,161.0" fill="rgba(255,255,255,0.05)"></polygon><polygon points="125.2,124.4 99.7,139.0 80.9,106.1 106.4,91.5" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="260.7,15.8 261.1,42.9 230.3,43.4 229.8,16.3" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="45.2,71.6 41.6,44.0 70.5,40.2 74.0,67.9" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="41.6,75.2 18.6,77.6 16.0,52.6 39.0,50.2" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="219.9,62.0 192.8,62.4 192.3,31.6 219.4,31.2" fill="rgba(142,142,147,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="255.7,8.3 286.3,7.8 286.9,43.1 256.3,43.6" fill="rgba(200,220,235,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="155.6,151.0 130.1,151.4 129.8,134.6 155.4,134.2" fill="rgba(172,142,104,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="297.9,148.6 213.2,150.0 212.7,122.6 297.5,121.2" fill="rgba(172,142,104,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="161.2,9.9 249.7,8.4 250.4,50.7 161.8,52.1" fill="rgba(174,174,178,0.42)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="8.7,74.3 8.4,56.7 58.0,55.9 58.3,73.5" fill="rgba(174,174,178,0.42)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="7.7,12.4 127.2,10.4 127.9,52.3 8.4,54.3" fill="rgba(174,174,178,0.42)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><polygon points="61.7,23.2 108.9,22.4 109.0,27.1 61.8,27.9" fill="rgba(10,10,12,0.9)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8" stroke-linejoin="round"></polygon><text x="271.3" y="28.7" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Fridge</text><text x="142.7" y="145.8" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Shelf</text><text x="255.3" y="138.6" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Storage</text><text x="205.8" y="33.3" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Table</text><text x="67.8" y="35.3" text-anchor="middle" font-family="-apple-system,system-ui" font-size="8" font-weight="600" fill="rgba(255,255,255,0.7)">Table</text><polygon points="298.0,156.2 2.6,161.0 2.4,153.5 297.9,148.6" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="7.5,4.8 302.8,-0.0 302.9,7.5 7.7,12.4" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="2.4,153.5 0.0,4.9 7.5,4.8 10.0,153.3" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="331.7,31.3 333.2,125.5 325.7,125.6 324.2,31.4" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="325.7,125.6 297.5,126.1 297.4,118.5 325.6,118.1" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="305.0,118.4 305.6,156.0 298.0,156.2 297.4,118.5" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="295.7,24.3 331.6,23.7 331.7,31.3 295.8,31.9" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="302.9,7.5 303.3,31.7 295.8,31.9 295.4,7.7" fill="rgba(235,235,245,0.9)" stroke="rgba(235,235,245,0.9)" stroke-width="0.6" stroke-linejoin="round"></polygon><polygon points="204.8,153.9 171.4,154.5 171.3,150.7 204.7,150.1" fill="#171C23" stroke="#9FE2BF" stroke-width="1.2" stroke-linejoin="round"></polygon><polygon points="328.0,32.9 329.3,115.6 325.5,115.7 324.2,32.9" fill="#64D2FF" stroke="#64D2FF" stroke-width="1" stroke-linejoin="round"></polygon></svg>
+            <sc-for list="{{ twinDots }}" as="d" hint-placeholder-count="3">
+              <div onClick="{{ d.onTap }}" style="position:absolute;left:{{ d.x }};top:{{ d.y }};transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:{{ d.color }};border:2.5px solid #fff;box-shadow:0 0 0 4px rgba(255,255,255,0.15);cursor:pointer"></div>
+            </sc-for>
+          </div>
+          <div style="position:absolute;left:14px;top:12px;font-size:11px;font-weight:600;color:rgba(235,235,245,0.6);letter-spacing:0.3px">3D TWIN · ROOM.WENDYSITE</div>
+          <div onClick="{{ open3d }}" style="position:absolute;right:12px;top:10px;height:28px;padding:0 12px;border-radius:999px;background:rgba(120,120,128,0.4);color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;cursor:pointer">Open 3D</div>
+        </div>
+        <div style="flex:none;display:flex;gap:12px;flex-wrap:wrap;padding:10px 14px 12px;border-top:0.5px solid rgba(255,255,255,0.1)">
+          <sc-for list="{{ twinDots }}" as="d" hint-placeholder-count="3">
+            <div onClick="{{ d.onTap }}" style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#fff;cursor:pointer"><div style="width:9px;height:9px;border-radius:50%;background:{{ d.color }}"></div>{{ d.label }}</div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasHero }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#E6E2D8;border-radius:26px;padding:18px;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;gap:14px;align-items:center">
+          <div style="width:54px;height:54px;border-radius:16px;background:{{ hero.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ hero.icon }}"></path></svg></div>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.4px;color:{{ hero.color }}">{{ hero.kicker }}</div>
+            <div style="font-size:22px;font-weight:700;letter-spacing:-0.3px">{{ hero.title }}</div>
+            <div style="font-size:13px;color:#5B5A56;text-wrap:pretty">{{ hero.sub }}</div>
+          </div>
+        </div>
+        <sc-if value="{{ hero.hasProg }}" hint-placeholder-val="{{ false }}">
+          <div style="height:6px;border-radius:3px;background:rgba(23,28,35,0.08);overflow:hidden"><div style="height:100%;width:{{ hero.progW }};background:{{ hero.color }};border-radius:3px;transition:width .6s"></div></div>
+        </sc-if>
+        <sc-if value="{{ hero.hasChips }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <sc-for list="{{ hero.chips }}" as="c" hint-placeholder-count="2">
+              <div style="height:26px;padding:0 10px;border-radius:999px;background:rgba(23,28,35,0.07);font-size:12px;font-weight:600;color:#171C23;display:flex;align-items:center">{{ c }}</div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ hero.hasActions }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;gap:8px">
+            <sc-for list="{{ hero.actions }}" as="a" hint-placeholder-count="2">
+              <div onClick="{{ a.onTap }}" style="flex:1;height:40px;border-radius:999px;background:{{ a.bg }};color:{{ a.color }};font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ a.label }}</div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+
+
+    <sc-if value="{{ hasSeg }}" hint-placeholder-val="{{ false }}">
+      <div style="height:32px;border-radius:999px;background:rgba(23,28,35,0.07);display:flex;padding:2px;flex:none">
+        <sc-for list="{{ segs }}" as="g" hint-placeholder-count="3">
+          <div onClick="{{ g.onTap }}" style="flex:1;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:{{ g.weight }};background:{{ g.bg }};color:{{ g.fg }};box-shadow:{{ g.shadow }};cursor:pointer">{{ g.label }}</div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasAlertCards }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 6px"><div style="font-size:13px;font-weight:600;color:#5B5A56;letter-spacing:0.2px">{{ alertHead }}</div><div onClick="{{ markAllRead }}" style="font-size:14px;font-weight:600;color:#2A7050;cursor:pointer">Mark all read</div></div>
+      <sc-if value="{{ noAlerts }}" hint-placeholder-val="{{ false }}"><div style="flex:none;background:#fff;border-radius:22px;padding:28px 20px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center"><div style="font-size:17px;font-weight:600">No alerts</div><div style="font-size:13px;color:#5B5A56">Archived alerts are kept in Archived.</div></div></sc-if>
+      <sc-for list="{{ alertCards }}" as="a" hint-placeholder-count="3">
+        <div style="flex:none;position:relative;border-radius:22px;overflow:hidden;background:#5B5A56">
+          <div onClick="{{ a.archive }}" style="position:absolute;right:0;top:0;bottom:0;width:{{ a.actW }};min-width:88px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff;font-size:13px;font-weight:600;cursor:pointer"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18v4H3zM5 9v10h14V9M10 13h4"></path></svg>Archive</div>
+          <div onPointerDown="{{ a.down }}" onPointerMove="{{ a.move }}" onPointerUp="{{ a.up }}" onPointerCancel="{{ a.up }}" style="position:relative;background:#fff;border-radius:22px;overflow:hidden;display:flex;flex-direction:column;transform:translateX({{ a.dx }});transition:{{ a.tr }};touch-action:pan-y;user-select:none">
+          <div onClick="{{ a.onTap }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer">
+            <div style="width:36px;height:36px;border-radius:10px;background:{{ a.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="{{ a.icon }}"></path></svg></div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div style="font-size:16px;font-weight:{{ a.weight }};letter-spacing:-0.3px">{{ a.title }}</div><div style="font-size:12px;color:#5B5A56">{{ a.sub }}</div></div>
+            <div style="flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:6px"><div style="font-size:12px;color:#9A978F">{{ a.time }}</div><sc-if value="{{ a.unread }}" hint-placeholder-val="{{ true }}"><div style="width:9px;height:9px;border-radius:50%;background:#2A7050"></div></sc-if></div>
+          </div>
+          <sc-if value="{{ a.hasClip }}" hint-placeholder-val="{{ false }}">
+            <div onClick="{{ a.play }}" style="position:relative;height:{{ a.clipH }};margin:0 14px 14px;border-radius:16px;overflow:hidden;cursor:pointer">
+              <dc-import name="Clip Thumb" clip="{{ a.clip }}" show-trig="{{ true }}" hint-size="100%,180px" style="width:100%;height:100%"></dc-import>
+              <div style="position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;background:rgba(255,255,255,0.9);display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(0,0,0,0.2)"><svg width="20" height="20" viewBox="0 0 24 24" fill="#171C23"><path d="M8 5l11 7-11 7z"></path></svg></div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ a.hasAct }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;gap:8px;padding:0 14px 14px">
+              <div onClick="{{ a.second }}" style="flex:1;height:40px;border-radius:999px;background:rgba(23,28,35,0.06);font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ a.secondL }}</div>
+              <div onClick="{{ a.act }}" style="flex:1;height:40px;border-radius:999px;background:#2A7050;color:#fff;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ a.actL }}</div>
+            </div>
+          </sc-if>
+        </div>
+        </div>
+      </sc-for>
+      <div style="flex:none;font-size:12px;color:#9A978F;text-align:center;padding:2px 0 4px">Swipe left on an alert to archive it</div>
+    </sc-if>
+
+    
+
+    <sc-if value="{{ hasMesh }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#171C23;border-radius:26px;overflow:hidden;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px 0;flex:none">
+          <div style="display:flex;flex-direction:column;gap:2px"><div style="font-size:11px;font-weight:600;color:rgba(235,235,245,0.6);letter-spacing:0.3px">MESH · WENDY HQ</div><div style="font-size:15px;font-weight:600;color:#fff">{{ meshSummary }}</div></div>
+          <div onClick="{{ meshManage }}" style="height:28px;padding:0 12px;border-radius:999px;background:rgba(120,120,128,0.4);color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;cursor:pointer">Manage</div>
+        </div>
+        <div style="position:relative;height:190px;flex:none">
+          <svg width="370" height="190" style="position:absolute;left:0;top:0">
+            <sc-for list="{{ meshEdges }}" as="e" hint-placeholder-count="5">
+              <line x1="{{ e.x1 }}" y1="{{ e.y1 }}" x2="{{ e.x2 }}" y2="{{ e.y2 }}" stroke="{{ e.c }}" stroke-width="2.5" stroke-dasharray="{{ e.dash }}" stroke-linecap="round"></line>
+            </sc-for>
+          </svg>
+          <sc-for list="{{ meshNodes }}" as="n" hint-placeholder-count="5">
+            <div onClick="{{ n.onTap }}" style="position:absolute;left:{{ n.x }};top:{{ n.y }};transform:translate(-50%,-50%);cursor:pointer">
+              <div style="width:38px;height:38px;border-radius:50%;background:#242B35;border:2.5px solid {{ n.c }};display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ n.icon }}"></path></svg></div>
+              <div style="position:absolute;top:calc(100% + 3px);left:50%;transform:translateX(-50%);white-space:nowrap;font-size:10px;font-weight:600;color:#fff;background:#171C23;padding:1px 5px;border-radius:5px">{{ n.label }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:flex;gap:14px;padding:8px 14px 12px;border-top:0.5px solid rgba(255,255,255,0.1);font-size:12px;font-weight:600;color:rgba(235,235,245,0.8);flex:none">
+          <div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:3px;border-radius:2px;background:#9FE2BF"></div>Good</div>
+          <div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:3px;border-radius:2px;background:#FFD60A"></div>Weak</div>
+          <div style="flex:1;text-align:right;color:rgba(235,235,245,0.6);font-weight:500">Tap a node to open it</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasFeeds }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px">
+        <sc-for list="{{ feeds }}" as="f" hint-placeholder-count="2">
+          <div onClick="{{ f.onTap }}" style="position:relative;aspect-ratio:16/9;border-radius:22px;overflow:hidden;background:radial-gradient(120% 90% at 30% 20%,#2A323D,#171C23);cursor:pointer">
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:0.18"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h4l2-3h6l2 3h4v11H3zM9 13a3 3 0 106 0a3 3 0 10-6 0"></path></svg></div>
+            <div style="position:absolute;left:12px;top:12px;height:22px;padding:0 8px;border-radius:6px;background:rgba(255,59,48,0.9);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;gap:5px"><div style="width:6px;height:6px;border-radius:50%;background:#fff"></div>LIVE</div>
+            <div style="position:absolute;right:12px;top:12px;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:rgba(241,238,231,0.78)">{{ f.time }}</div>
+            <div style="position:absolute;left:14px;bottom:12px;display:flex;flex-direction:column;gap:1px"><div style="font-size:15px;font-weight:600;color:#fff">{{ f.name }}</div><div style="font-size:12px;color:rgba(235,235,245,0.7)">{{ f.res }}</div></div>
+            <div style="position:absolute;right:12px;bottom:12px;width:30px;height:30px;border-radius:50%;background:rgba(120,120,128,0.45);display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></svg></div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ hasFilters }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <sc-for list="{{ filters }}" as="f" hint-placeholder-count="3">
+          <div onClick="{{ f.onTap }}" style="height:34px;padding:0 12px;border-radius:999px;background:{{ f.bg }};color:{{ f.color }};font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer">{{ f.label }}<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 3.5l3 3 3-3"></path></svg></div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-for list="{{ sections }}" as="sec" hint-placeholder-count="2">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:13px;font-weight:600;color:#5B5A56;padding:0 16px;letter-spacing:0.2px">{{ sec.title }}</div>
+        <div style="background:#E6E2D8;border-radius:22px;overflow:hidden">
+          <sc-for list="{{ sec.rows }}" as="r" hint-placeholder-count="2">
+            <div onClick="{{ r.onTap }}" style="display:flex;align-items:center;gap:12px;padding:11px 16px;position:relative;cursor:pointer" style-active="background:rgba(0,0,0,0.04)">
+              <div style="width:36px;height:36px;border-radius:10px;background:{{ r.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ r.icon }}"></path></svg></div>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                <div style="font-size:16px;font-weight:600;letter-spacing:-0.3px">{{ r.title }}</div>
+                <div style="font-size:12px;color:#5B5A56;text-wrap:pretty">{{ r.sub }}</div>
+                <sc-if value="{{ r.hasProg }}" hint-placeholder-val="{{ false }}">
+                  <div style="height:4px;border-radius:2px;background:rgba(23,28,35,0.08);overflow:hidden;margin-top:3px"><div style="height:100%;width:{{ r.progW }};background:{{ r.color }};transition:width .6s"></div></div>
+                </sc-if>
+              </div>
+              <sc-if value="{{ r.hasBadge }}" hint-placeholder-val="{{ false }}">
+                <div style="height:22px;padding:0 8px;border-radius:999px;background:{{ r.badgeBg }};color:{{ r.badgeC }};font-size:11px;font-weight:700;display:flex;align-items:center;flex:none">{{ r.badge }}</div>
+              </sc-if>
+              <div style="font-size:13px;color:#5B5A56;flex:none">{{ r.trail }}</div>
+              <sc-if value="{{ r.hasAct }}" hint-placeholder-val="{{ false }}"><div onClick="{{ r.act }}" style="height:30px;padding:0 12px;border-radius:999px;background:{{ r.color }};color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;flex:none;cursor:pointer">{{ r.actLabel }}</div></sc-if>
+              <svg width="8" height="13" viewBox="0 0 8 13" fill="none" style="flex:none;opacity:0.35"><path d="M1.5 1.5l5 5-5 5" stroke="#171C23" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <sc-if value="{{ r.sep }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:64px;right:0;bottom:0;height:0.5px;background:#D7D6D2"></div></sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ sec.hasNote }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:12px;color:#5B5A56;padding:0 16px;text-wrap:pretty">{{ sec.note }}</div>
+        </sc-if>
+      </div>
+    </sc-for>
+  </div>
+
+  <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:50%;top:120px;transform:translateX(-50%);max-width:320px;padding:10px 16px;border-radius:999px;background:rgba(28,28,30,0.88);color:#fff;font-size:14px;font-weight:500;text-align:center;z-index:40">{{ toast }}</div>
+  </sc-if>
+
+  <sc-if value="{{ showTabs }}" hint-placeholder-val="{{ false }}">
+  <div style="position:absolute;left:16px;right:88px;bottom:25px;height:62px;border-radius:999px;background:rgba(241,238,231,0.72);backdrop-filter:blur(14px) saturate(180%);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat({{ tabCount }},1fr);padding:4px;z-index:21;font-size:10px;font-weight:600">
+    <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="5">
+      <div onClick="{{ t.onTap }}" style="border-radius:999px;background:{{ t.bg }};color:{{ t.color }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.label }}</div>
+    </sc-for>
+  </div>
+  </sc-if>
+
+  <div onClick="{{ epClose }}" style="position:absolute;inset:0;background:rgba(23,28,35,0.28);z-index:58;opacity:{{ epShadeO }};pointer-events:{{ epPE }};transition:opacity .25s"></div>
+  <div style="position:absolute;left:8px;right:8px;bottom:8px;height:640px;background:#F1EEE7;border-radius:38px;z-index:59;display:flex;flex-direction:column;transform:translateY({{ epY }});transition:transform .35s cubic-bezier(.3,.8,.3,1);box-shadow:0 -6px 30px rgba(0,0,0,0.12)">
+    <div style="flex:none;padding:8px 18px 0;display:flex;flex-direction:column;gap:12px">
+      <div style="width:36px;height:5px;border-radius:3px;background:rgba(23,28,35,0.2);align-self:center"></div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-size:20px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ ep.name }}</div><div style="font-size:13px;color:#5B5A56">{{ ep.sub }}</div></div>
+        <div onClick="{{ epClose }}" style="width:36px;height:36px;border-radius:50%;background:rgba(23,28,35,0.07);display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#171C23" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></div>
+      </div>
+      <div style="display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px">
+        <sc-for list="{{ ep.chips }}" as="t" hint-placeholder-count="3">
+          <div onClick="{{ t.onTap }}" style="height:32px;padding:0 12px;border-radius:999px;background:{{ t.bg }};color:{{ t.c }};font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;flex:none;cursor:pointer"><div style="width:7px;height:7px;border-radius:50%;background:{{ t.dot }}"></div>{{ t.l }}<div style="opacity:0.6">{{ t.n }}</div></div>
+        </sc-for>
+      </div>
+    </div>
+    <div style="flex:1;overflow:auto;padding:12px 16px 24px;display:flex;flex-direction:column;gap:14px">
+      <sc-for list="{{ ep.days }}" as="d" hint-placeholder-count="2">
+        <div style="flex:none;display:flex;flex-direction:column;gap:6px">
+          <div style="font-size:13px;font-weight:600;color:#5B5A56;padding:0 6px;letter-spacing:0.2px">{{ d.day }}</div>
+          <div style="background:#fff;border-radius:20px;overflow:hidden">
+            <sc-for list="{{ d.items }}" as="c" hint-placeholder-count="2">
+              <div onClick="{{ c.pickEp }}" style="display:flex;align-items:center;gap:12px;padding:10px 12px;position:relative;cursor:pointer;background:{{ c.rowBg }}">
+                <div style="width:84px;height:54px;border-radius:10px;overflow:hidden;flex:none"><dc-import name="Clip Thumb" clip="{{ c }}" compact="{{ true }}" hint-size="84px,54px" style="width:84px;height:54px"></dc-import></div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                  <div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div>
+                  <div style="font-size:12px;color:#5B5A56">{{ c.time }} · {{ c.dur }} · {{ c.typeL }}</div>
+                  <div style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600"><div style="width:6px;height:6px;border-radius:50%;background:{{ c.trigC }}"></div>{{ c.trig }}</div>
+                </div>
+                <sc-if value="{{ c.isSel }}" hint-placeholder-val="{{ false }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2A7050" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg></sc-if>
+                <sc-if value="{{ c.sep }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:108px;right:0;bottom:0;height:0.5px;background:#D7D6D2"></div></sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="flex:none;padding:10px 16px 18px;display:flex;gap:8px;border-top:0.5px solid #D7D6D2">
+      <div onClick="{{ epExport }}" style="flex:1;height:48px;border-radius:999px;background:rgba(42,112,80,0.1);color:#2A7050;font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Export</div>
+      <div onClick="{{ epPlay }}" style="flex:1.4;height:48px;border-radius:999px;background:{{ epPlayBg }};color:{{ epPlayC }};font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ epPlayL }}</div>
+    </div>
+  </div>
+
+  <sc-if value="{{ orgOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOrg }}" style="position:absolute;inset:0;background:rgba(0,0,0,0.25);z-index:30"></div>
+    <div style="position:absolute;left:8px;right:8px;bottom:8px;background:#F1EEE7;border-radius:38px;padding:10px 16px 28px;z-index:31;display:flex;flex-direction:column;gap:14px">
+      <div style="width:36px;height:5px;border-radius:3px;background:#CBCBCB;align-self:center"></div>
+      <div style="font-size:20px;font-weight:700;padding:0 4px">Settings</div>
+      <div style="font-size:13px;font-weight:600;color:#5B5A56;padding:0 8px">ORGANIZATION</div>
+      <div style="background:#E6E2D8;border-radius:22px;overflow:hidden">
+        <sc-for list="{{ orgRows }}" as="o" hint-placeholder-count="2">
+          <div onClick="{{ o.onTap }}" style="display:flex;align-items:center;gap:12px;padding:12px 16px;position:relative;cursor:pointer">
+            <div style="width:36px;height:36px;border-radius:999px;background:#171C23;color:#fff;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center">{{ o.initial }}</div>
+            <div style="flex:1;display:flex;flex-direction:column;gap:2px"><div style="font-size:16px;font-weight:600">{{ o.name }}</div><div style="font-size:12px;color:#5B5A56">{{ o.sub }}</div></div>
+            <sc-if value="{{ o.on }}" hint-placeholder-val="{{ false }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2A7050" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg></sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <div style="font-size:13px;font-weight:600;color:#5B5A56;padding:4px 8px 0">HOME · MAIN LENS</div>
+      <div style="height:36px;border-radius:999px;background:rgba(23,28,35,0.07);display:flex;padding:2px">
+        <sc-for list="{{ focusSegs }}" as="g" hint-placeholder-count="3">
+          <div onClick="{{ g.onTap }}" style="flex:1;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:{{ g.weight }};background:{{ g.bg }};color:{{ g.fg }};box-shadow:{{ g.shadow }};cursor:pointer">{{ g.label }}</div>
+        </sc-for>
+      </div>
+      <div style="font-size:13px;color:#5B5A56;padding:0 8px;text-wrap:pretty">The main lens gets the big card on Home; the other two stay small.</div>
+    </div>
+  </sc-if>
+  <sc-if value="{{ accOn }}" hint-placeholder-val="{{ true }}">
+    <div onClick="{{ openChat }}" style="position:absolute;right:16px;width:62px;bottom:25px;height:62px;overflow:visible;border-radius:999px;background:rgba(241,238,231,0.78);backdrop-filter:blur(14px) saturate(180%);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:flex;align-items:center;justify-content:center;gap:0;padding:0;z-index:22;cursor:pointer">
+      <div style="width:46px;height:46px;border-radius:50%;background:#2A7050;display:flex;align-items:center;justify-content:center;flex:none"><svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"></path></svg></div>
+      <sc-if value="{{ accFull }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+        <div style="font-size:15px;color:{{ accColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ accText }}</div>
+        <sc-if value="{{ accHasSub }}" hint-placeholder-val="{{ false }}"><div style="font-size:11px;font-weight:600;color:#2A7050;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ accSub }}</div></sc-if>
+      </div>
+      <div style="width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#171C23" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5a3 3 0 016 0v6a3 3 0 01-6 0zM5 11a7 7 0 0014 0M12 18v3"></path></svg></div>
+      </sc-if>
+      <sc-if value="{{ accHasUnread }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;right:2px;top:2px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#FF3B30;border:2px solid #fff;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;box-sizing:content-box">{{ accUnread }}</div></sc-if>
+      <sc-if value="{{ accMiniBusy }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;right:6px;top:6px;width:10px;height:10px;border-radius:50%;background:#2A7050;border:2px solid #fff"></div></sc-if>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ onboardOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;background:#F1EEE7;z-index:45;display:flex;flex-direction:column;padding:110px 20px 40px;gap:24px">
+      <div style="display:flex;flex-direction:column;gap:8px;padding:0 4px">
+        <img src="assets/AppIcon.svg" alt="Wendy" style="width:64px;height:64px;border-radius:15px;display:block">
+        <div style="font-size:32px;font-weight:700;letter-spacing:-0.4px;padding-top:8px">Welcome to Wendy</div>
+        <div style="font-size:17px;color:#5B5A56;text-wrap:pretty">What do you work with most? We’ll set up Home around it.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ onboardOpts }}" as="o" hint-placeholder-count="3">
+          <div onClick="{{ o.onTap }}" style="background:#E6E2D8;border-radius:22px;padding:16px;display:flex;align-items:center;gap:14px;border:2px solid {{ o.border }};cursor:pointer">
+            <div style="width:46px;height:46px;border-radius:14px;background:{{ o.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ o.icon }}"></path></svg></div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div style="font-size:18px;font-weight:700">{{ o.name }}</div><div style="font-size:13px;color:#5B5A56;text-wrap:pretty">{{ o.desc }}</div></div>
+            <div style="width:24px;height:24px;border-radius:50%;border:2px solid {{ o.ring }};background:{{ o.dot }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg></div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="flex:1"></div>
+      <div style="font-size:13px;color:#5B5A56;text-align:center">You can change this anytime in Settings.</div>
+      <div onClick="{{ onboardDone }}" style="height:52px;border-radius:999px;background:#2A7050;color:#fff;font-size:17px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Continue</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ chatOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:0;right:0;top:54px;bottom:0;background:#E6E2D8;border-radius:38px 38px 0 0;z-index:33;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -4px 30px rgba(0,0,0,0.14)">
+      <div onClick="{{ closeChat }}" style="padding:8px 0 6px;display:flex;justify-content:center;cursor:pointer;flex:none"><div style="width:36px;height:5px;border-radius:3px;background:#CBCBCB"></div></div>
+      <div style="display:flex;align-items:center;gap:10px;padding:0 16px 10px;flex:none">
+        <div style="font-size:20px;font-weight:700">Wendy</div>
+        <div style="height:26px;padding:0 10px;border-radius:999px;background:rgba(42,112,80,0.1);color:#2A7050;font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px;min-width:0;overflow:hidden;white-space:nowrap"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0114 0C19 14.8 12 21 12 21z"></path></svg>{{ chatCtx }}</div>
+        <div style="flex:1"></div>
+        <div onClick="{{ closeChat }}" style="width:30px;height:30px;border-radius:50%;background:rgba(23,28,35,0.07);display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="#171C23" stroke-width="2" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8"></path></svg></div>
+      </div>
+      <div ref="{{ chatRef }}" style="flex:1;overflow:auto;padding:4px 16px 10px;display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ chatMsgs }}" as="m" hint-placeholder-count="1">
+          <div style="align-self:{{ m.align }};max-width:86%;display:flex;flex-direction:column;gap:4px;align-items:{{ m.align }}">
+            <sc-if value="{{ m.hasTag }}" hint-placeholder-val="{{ false }}"><div style="font-size:11px;font-weight:600;color:#7A7873;padding:0 6px">{{ m.tag }}</div></sc-if>
+            <div style="padding:10px 14px;border-radius:20px;background:{{ m.bg }};color:{{ m.color }};font-size:16px;line-height:21px;letter-spacing:-0.2px;text-wrap:pretty;white-space:pre-wrap">{{ m.text }}</div>
+            <sc-if value="{{ m.hasCard }}" hint-placeholder-val="{{ false }}">
+              <div style="width:290px;border:1px solid #D7D6D2;border-radius:18px;overflow:hidden;background:#fff">
+                <div style="display:flex;align-items:center;gap:10px;padding:12px 14px">
+                  <div style="width:32px;height:32px;border-radius:9px;background:{{ m.card.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="{{ m.card.icon }}"></path></svg></div>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div style="font-size:15px;font-weight:600">{{ m.card.title }}</div><div style="font-size:12px;color:#5B5A56">{{ m.card.sub }}</div></div>
+                </div>
+                <sc-if value="{{ m.card.pending }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:8px;padding:0 14px 12px">
+                    <sc-for list="{{ m.card.actions }}" as="a" hint-placeholder-count="2">
+                      <div onClick="{{ a.onTap }}" style="flex:1;height:36px;border-radius:999px;background:{{ a.bg }};color:{{ a.color }};font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ a.label }}</div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ m.card.done }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;gap:6px;padding:0 14px 12px;font-size:13px;font-weight:600;color:{{ m.card.doneColor }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg>{{ m.card.doneText }}</div>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+        <sc-if value="{{ chatTyping }}" hint-placeholder-val="{{ false }}">
+          <div style="align-self:flex-start;padding:12px 16px;border-radius:20px;background:#F1EEE7;display:flex;gap:5px"><div style="width:7px;height:7px;border-radius:50%;background:#9A978F"></div><div style="width:7px;height:7px;border-radius:50%;background:#CBCBCB"></div><div style="width:7px;height:7px;border-radius:50%;background:#D7D6D2"></div></div>
+        </sc-if>
+      </div>
+      <div style="display:flex;gap:6px;overflow:auto;padding:4px 16px 8px;flex:none">
+        <sc-for list="{{ chatSuggest }}" as="c" hint-placeholder-count="3">
+          <div onClick="{{ c.onTap }}" style="flex:none;height:32px;padding:0 12px;border-radius:999px;background:rgba(42,112,80,0.1);color:#2A7050;font-size:13px;font-weight:600;display:flex;align-items:center;white-space:nowrap;cursor:pointer">{{ c.text }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 12px 34px;flex:none">
+        <input value="{{ chatText }}" onChange="{{ onChatText }}" onKeyDown="{{ onChatKey }}" placeholder="{{ chatPlaceholder }}" style="flex:1;height:42px;border-radius:21px;border:0.5px solid #CBCBCB;background:#E6E2D8;padding:0 16px;font:400 16px -apple-system,system-ui;outline:none"></input>
+        <div onClick="{{ chatSend }}" style="width:42px;height:42px;border-radius:50%;background:{{ sendBg }};display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ sendFg }}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ browserOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;background:rgba(0,0,0,0.3);z-index:30"></div>
+    <div style="position:absolute;left:0;right:0;top:60px;bottom:0;background:#E6E2D8;border-radius:38px 38px 0 0;z-index:31;display:flex;flex-direction:column;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 16px 10px;background:#F9F9F9;border-bottom:0.5px solid #D7D6D2;flex:none">
+        <div onClick="{{ closeBrowser }}" style="font-size:17px;font-weight:600;color:#2A7050;cursor:pointer">Done</div>
+        <div style="flex:1;min-width:0;height:36px;border-radius:12px;background:rgba(23,28,35,0.07);display:flex;align-items:center;justify-content:center;gap:6px;padding:0 10px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#171C23" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 017 0v3"></path></svg><div style="font-size:14px;color:#171C23;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ browserUrl }}</div></div>
+        <div onClick="{{ openSafari }}" style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2A7050" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1018 0a9 9 0 10-18 0M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"></path></svg></div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:14px;padding:20px 18px;background:#fff">
+        <div style="display:flex;flex-direction:column;gap:4px"><div style="font-size:24px;font-weight:700">{{ browserTitle }}</div><div style="font-size:13px;color:#5B5A56">{{ browserApp }}</div></div>
+        <div style="flex:1;border-radius:18px;border:1.5px dashed #CBCBCB;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;font-size:14px;color:#5B5A56;text-wrap:pretty">The app’s web page loads here, in an in-app browser.</div>
+        <div style="font-size:12px;color:#5B5A56;text-align:center">{{ browserVia }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ setupOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;background:rgba(0,0,0,0.25);z-index:30"></div>
+    <div style="position:absolute;left:8px;right:8px;bottom:8px;min-height:520px;background:#F1EEE7;border-radius:38px;padding:10px 16px 24px;z-index:31;display:flex;flex-direction:column;gap:14px">
+      <div style="width:36px;height:5px;border-radius:3px;background:#CBCBCB;align-self:center"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px">
+        <div style="font-size:13px;font-weight:600;color:#5B5A56">{{ setupStep }}</div>
+        <div onClick="{{ setupClose }}" style="font-size:16px;color:#2A7050;cursor:pointer">Cancel</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;padding:0 4px">
+        <div style="font-size:26px;font-weight:700;letter-spacing:-0.3px">{{ setupTitle }}</div>
+        <div style="font-size:15px;color:#5B5A56;text-wrap:pretty">{{ setupSub }}</div>
+      </div>
+      <sc-if value="{{ setupScanning }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:30px 0">
+          <div style="width:120px;height:120px;border-radius:50%;background:rgba(42,112,80,0.08);display:flex;align-items:center;justify-content:center"><div style="width:76px;height:76px;border-radius:50%;background:rgba(42,112,80,0.14);display:flex;align-items:center;justify-content:center"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#2A7050" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"></path></svg></div></div>
+          <div style="font-size:14px;color:#5B5A56">Scanning over Bluetooth…</div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ setupHasRows }}" hint-placeholder-val="{{ false }}">
+        <div style="background:#E6E2D8;border-radius:22px;overflow:hidden">
+          <sc-for list="{{ setupRows }}" as="r" hint-placeholder-count="2">
+            <div onClick="{{ r.onTap }}" style="display:flex;align-items:center;gap:12px;padding:12px 16px;position:relative;cursor:pointer">
+              <div style="width:36px;height:36px;border-radius:10px;background:{{ r.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ r.icon }}"></path></svg></div>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div style="font-size:16px;font-weight:600">{{ r.title }}</div><div style="font-size:12px;color:#5B5A56">{{ r.sub }}</div></div>
+              <sc-if value="{{ r.on }}" hint-placeholder-val="{{ false }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2A7050" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg></sc-if>
+              <sc-if value="{{ r.sep }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:64px;right:0;bottom:0;height:0.5px;background:#D7D6D2"></div></sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{ setupHasProg }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:10px;padding:20px 4px">
+          <div style="height:8px;border-radius:4px;background:rgba(23,28,35,0.08);overflow:hidden"><div style="height:100%;width:{{ setupProgW }};background:#2A7050;border-radius:4px;transition:width .3s"></div></div>
+          <div style="font-size:14px;color:#5B5A56">{{ setupProgText }}</div>
+        </div>
+      </sc-if>
+      <div style="flex:1"></div>
+      <sc-if value="{{ setupHasBtn }}" hint-placeholder-val="{{ true }}">
+        <div onClick="{{ setupBtn }}" style="height:50px;border-radius:999px;background:{{ setupBtnBg }};color:{{ setupBtnC }};font-size:17px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ setupBtnLabel }}</div>
+      </sc-if>
+    </div>
+  </sc-if>
+</div>
+</x-import>
+
+<div style="width:340px;display:flex;flex-direction:column;gap:10px">
+  <div style="display:flex;flex-direction:column;gap:4px;padding-bottom:6px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.5px;color:#5B5A56">WENDYOS · V6 COMPANION THEME</div>
+    <div style="font-size:22px;font-weight:700;letter-spacing:-0.3px">Pick what you manage. Each lens has its own home and tab bar.</div>
+  </div>
+  <div onClick="{{ goLauncher }}" style="padding:12px 14px;border-radius:16px;background:{{ lnBg }};border:1.5px solid {{ lnBorder }};cursor:pointer;display:flex;flex-direction:column;gap:2px">
+    <div style="font-size:15px;font-weight:700">Launcher</div>
+    <div style="font-size:13px;line-height:18px;color:#5B5A56;text-wrap:pretty">Devices, Robots or Sites, each with what needs attention. The pill top-left brings you back.</div>
+  </div>
+  <div style="width:2px;height:12px;background:#D7D6D2;margin-left:28px"></div>
+  <sc-for list="{{ lensMap }}" as="l" hint-placeholder-count="3">
+    <div onClick="{{ l.onTap }}" style="padding:12px 14px;border-radius:16px;background:{{ l.bg }};border:1.5px solid {{ l.border }};cursor:pointer;display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:30px;height:30px;border-radius:9px;background:{{ l.color }};display:flex;align-items:center;justify-content:center;flex:none"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ l.icon }}"></path></svg></div>
+        <div style="display:flex;flex-direction:column;gap:1px"><div style="font-size:15px;font-weight:700">{{ l.name }}</div><div style="font-size:12px;color:#5B5A56">{{ l.who }}</div></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <sc-for list="{{ l.tabs }}" as="t" hint-placeholder-count="4">
+          <div onClick="{{ t.onTap }}" style="height:26px;padding:0 10px;border-radius:999px;background:{{ t.bg }};color:{{ t.color }};font-size:12px;font-weight:600;display:flex;align-items:center;cursor:pointer">{{ t.label }}</div>
+        </sc-for>
+      </div>
+      <div style="font-size:12px;line-height:17px;color:#5B5A56;text-wrap:pretty">{{ l.home }}</div>
+    </div>
+  </sc-for>
+  <div style="font-size:12px;color:#5B5A56;text-wrap:pretty;padding-top:4px">Links cross lenses: in Sites, open Go2 and tap “Open in Robots view”. Built on <a href="WendyOS iPhone v3.dc.html">v3</a> · <a href="WendyOS Entity Diagram.dc.html">entity diagram</a>.</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { onboard: true, focus: 'devices', home: { order: ['attn', 'live', 'devices', 'robots', 'site', 'quick'], hidden: [] }, editHome: false, chatUnread: 0, accMini: false, chatOpen: false, chatSize: 'mid', chat: [], chatText: '', chatTyping: false, browser: null, setup: null, lens: null, tab: 'home', stacks: {}, devTab: {}, appRun: {}, upd: {}, assetSeg: 'all', missionSeg: 'missions', dataF: { place: null, asset: null, mission: null }, read: {}, orgOpen: false, org: 'wendy', toast: '', running: { night: 0.62, demos: 0.35 } };
+  IC = {
+    robot: 'M5 8h14v7H5zM7 15v4M17 15v4M19 10h2M9 11.5h.01M12 11.5h.01',
+    device: 'M6 6h12v12H6zM9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3',
+    site: 'M3 21V8l6-3v16M9 21V3l12 4v14M2 21h20',
+    room: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12L4 7.5M12 12v9',
+    fleet: 'M4 8a3 3 0 106 0a3 3 0 10-6 0M14 8a3 3 0 106 0a3 3 0 10-6 0M9 17a3 3 0 106 0a3 3 0 10-6 0',
+    mission: 'M5 21V4h11l-2 4 2 4H5',
+    data: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+    alert: 'M6 16v-5a6 6 0 0112 0v5l2 2H4zM10 20a2 2 0 004 0',
+    route: 'M8 18h6a3 3 0 000-6h-4a3 3 0 010-6h6M4 18a2 2 0 104 0a2 2 0 10-4 0M16 6a2 2 0 104 0a2 2 0 10-4 0',
+    detect: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM9 12a3 3 0 106 0a3 3 0 10-6 0',
+    goal: 'M3 12a9 9 0 1018 0a9 9 0 10-18 0M8 12a4 4 0 108 0a4 4 0 10-8 0',
+    run: 'M8 5l11 7-11 7z',
+    org: 'M3 21h18M5 21V7l7-4 7 4v14M9 10h.01M15 10h.01M9 14h.01M15 14h.01',
+    home: 'M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1z',
+    health: 'M3 12h4l2-5 4 10 2-5h6',
+    app: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+    upd: 'M12 4v10M8 10l4 4 4-4M5 20h14',
+    wifi: 'M2 9a15 15 0 0120 0M5 12.5a10 10 0 0114 0M8.5 16a5 5 0 017 0M12 19.5h.01',
+    bt: 'M7 7l10 10-5 5V2l5 5L7 17',
+    edit: 'M4 20h4l10-10-4-4L4 16zM13 7l4 4',
+    minus: 'M3 12a9 9 0 1018 0a9 9 0 10-18 0M8 12h8',
+    cam: 'M3 8h4l2-3h6l2 3h4v11H3zM9 13a3 3 0 106 0a3 3 0 10-6 0',
+    add: 'M12 5v14M5 12h14',
+    globe: 'M3 12a9 9 0 1018 0a9 9 0 10-18 0M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18',
+    qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2',
+    rec: 'M3 12a9 9 0 1018 0a9 9 0 10-18 0M9 12a3 3 0 106 0a3 3 0 10-6 0',
+    stop: 'M6 6h12v12H6z',
+    clock: 'M3 12a9 9 0 1018 0a9 9 0 10-18 0M12 7v5l3 2',
+    sim: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12L4 7.5M12 12v9',
+    pin: 'M12 21s-7-6.2-7-11.5a7 7 0 0114 0C19 14.8 12 21 12 21zM9.5 9.5a2.5 2.5 0 105 0a2.5 2.5 0 10-5 0',
+  };
+  COL = { robot: '#FF9500', device: '#2A7050', site: '#34C759', room: '#30B0C7', place: '#34C759', asset: '#FF9500', fleet: '#AF52DE', mission: '#2A7050', data: '#8E8E93', alert: '#FF3B30', org: '#171C23', sim: '#FF2D55' };
+  P = {
+    hq: { name: 'Wendy HQ', kind: 'Site', parent: null, where: 'San Francisco' },
+    f1: { name: 'Floor 1', kind: 'Floor', parent: 'hq' },
+    room: { name: 'Room', kind: 'Room', parent: 'f1', twin: true },
+    lab: { name: 'Robot lab', kind: 'Room', parent: 'f1' },
+    aus: { name: 'Austin Warehouse', kind: 'Site', parent: null, where: 'Austin, TX' },
+    dock: { name: 'Loading dock', kind: 'Zone', parent: 'aus' },
+    aisles: { name: 'Aisles A–D', kind: 'Zone', parent: 'aus' },
+  };
+  A = {
+    go2: { name: 'Go2 Rover', kind: 'robot', model: 'Unitree Go2 EDU', home: 'room', now: 'room', status: 'On Night patrol', st: 'run', battery: 76, compute: 'Jetson Orin NX inside · agent 0.9.5', health: 'Hottest joint FR calf 66 °C', tx: 135, ty: 97 },
+    g1: { name: 'G1 Humanoid', kind: 'robot', model: 'Unitree G1', home: 'lab', now: 'room', status: 'Idle · visiting Room', st: 'ok', battery: 54, compute: 'Jetson Orin inside · agent 0.9.5', health: 'All joints under 45 °C', tx: 60, ty: 118 },
+    so101: { name: 'SO-101 Arm', kind: 'robot', model: 'LeRobot SO-101', home: 'lab', now: 'lab', status: 'Recording episodes', st: 'rec', compute: 'Driven by Jetson Thor T1', health: '6 servos · nominal' },
+    x500: { name: 'X500 Drone', kind: 'robot', model: 'Holybro X500 · PX4', home: 'aus', now: 'aus', status: 'Offline 2 h', st: 'off', battery: 12, compute: 'Raspberry Pi CM4 inside', health: 'Last report: low battery' },
+    jetson: { name: 'Jetson Orin 4F2A', kind: 'device', model: 'Jetson Orin Nano', home: 'room', now: 'room', status: 'Online · 3 apps', st: 'ok', update: true, tx: 206, ty: 30 },
+    pi: { name: 'Raspberry Pi B3C1', kind: 'device', model: 'Raspberry Pi 5', home: 'lab', now: 'lab', status: 'Online · 1 app', st: 'ok' },
+    thor: { name: 'Jetson Thor T1', kind: 'device', model: 'Jetson AGX Thor', home: 'lab', now: 'lab', status: 'Online · training policy', st: 'ok' },
+    gate: { name: 'Warehouse Gate', kind: 'device', model: 'Jetson Orin NX', home: 'dock', now: 'dock', status: 'Online · 2 apps', st: 'ok' },
+    xiao: { name: 'Xiao Sense', kind: 'device', model: 'Seeed XIAO · Wendy Lite', home: 'lab', now: 'lab', status: 'Weak mesh link', st: 'warn' },
+    dockcam: { name: 'Dock Camera 2', kind: 'device', model: 'Raspberry Pi 5', home: 'dock', now: 'dock', status: 'Online · 1 app', st: 'ok' },
+  };
+  F = {
+    patrol: { name: 'Patrol robots', rule: 'Rule · every Go2 in the org', members: ['go2'] },
+    lab: { name: 'Lab rig', rule: 'Picked by hand', members: ['thor', 'pi', 'so101'] },
+    cams: { name: 'Camera nodes', rule: 'Rule · has a camera attached', members: ['jetson', 'gate', 'dockcam'] },
+  };
+  M = {
+    night: { name: 'Night patrol', place: 'room', who: ['asset', 'go2'], sched: 'Every day · 22:00', steps: [['route', 'Route', 'Charger → Door → Fridge → Charger'], ['detect', 'Detect', 'People, open door'], ['goal', 'Goal', 'Alert if a person is seen after 22:00']] },
+    audit: { name: 'Shelf audit', place: 'aisles', who: ['fleet', 'patrol'], sched: 'Mondays · 06:00', steps: [['route', 'Route', 'Aisle A → B → C → D'], ['detect', 'Detect', 'Empty shelf slots, misplaced boxes'], ['goal', 'Goal', 'Report gaps to inventory']] },
+    demos: { name: 'Pick & place demos', place: 'lab', who: ['asset', 'so101'], sched: 'Manual', steps: [['detect', 'Detect', 'Cube, bin'], ['goal', 'Goal', 'Record 20 teleop episodes for training']] },
+  };
+  RUNS = [
+    { id: 'r1', m: 'night', when: 'Now', res: 'Running' }, { id: 'r3', m: 'demos', when: 'Now', res: 'Running' },
+    { id: 'r2', m: 'night', when: 'Yesterday 22:00', res: 'Done · 1 alert' }, { id: 'r4', m: 'audit', when: 'Mon 06:00', res: 'Done · 14 gaps' }, { id: 'r5', m: 'night', when: 'Tue 22:00', res: 'Aborted · low battery' },
+  ];
+  D = [
+    { id: 'd1', name: 'night-patrol-1104', type: 'Rosbag', meta: '2.1 GB · 18 min', asset: 'go2', place: 'room', run: 'r2', when: 'Yesterday' },
+    { id: 'd2', name: 'so101-pickplace', type: 'LeRobot dataset', meta: '840 MB · 7 episodes', asset: 'so101', place: 'lab', run: 'r3', when: 'Today' },
+    { id: 'd3', name: 'door-cam-clip', type: 'Video', meta: '120 MB · 2 min', asset: 'jetson', place: 'room', run: null, when: 'Today' },
+    { id: 'd4', name: 'shelf-audit-1103', type: 'Images', meta: '3.4 GB · 412 frames', asset: 'go2', place: 'aisles', run: 'r4', when: 'Mon' },
+    { id: 'd6', name: 'pi-sensor-log', type: 'CSV', meta: '14 MB · 24 h', asset: 'pi', place: 'lab', run: null, when: 'Today' },
+    { id: 'd7', name: 'dock-cam-timelapse', type: 'Video', meta: '640 MB · 8 h', asset: 'dockcam', place: 'dock', run: null, when: 'Yesterday' },
+    { id: 'd5', name: 'g1-walk-test', type: 'Rosbag', meta: '1.2 GB · 6 min', asset: 'g1', place: 'lab', run: null, when: 'Mon' },
+  ];
+  N = [
+    { id: 'n1', title: 'Person seen after 22:00', sub: 'Night patrol · Room', time: '1 h', color: '#FF3B30', go: ['mission', 'night'], today: true },
+    { id: 'n2', title: 'FR calf joint at 66 °C', sub: 'Go2 Rover', time: '2 h', color: '#FF9500', go: ['asset', 'go2'], today: true },
+    { id: 'n3', title: 'X500 Drone went offline', sub: 'Austin Warehouse', time: '2 h', color: '#8E8E93', go: ['asset', 'x500'], today: true },
+    { id: 'n4', title: 'Agent 0.9.5 available', sub: 'Jetson Orin 4F2A', time: '5 h', color: '#2A7050', go: ['asset', 'jetson'], today: true },
+    { id: 'n6', title: 'Weak mesh link', sub: 'Xiao Sense · −79 dBm', time: '3 h', color: '#FF9500', go: ['asset', 'xiao'], today: true },
+    { id: 'n5', title: 'Shelf audit finished', sub: '14 gaps found · Aisles A–D', time: 'Mon', color: '#34C759', go: ['mission', 'audit'], today: false },
+  ];
+  NL = { n1: ['site', 'robots'], n2: ['robots'], n3: ['robots', 'site'], n4: ['devices'], n5: ['site', 'robots'], n6: ['devices', 'site'] };
+  S = [
+    { id: 's1', name: 'Night patrol · dry run', robot: 'go2', scene: 'room', engine: 'MuJoCo', mission: 'night', status: 'Passed · 0 collisions · 18 min', badge: 'PASSED', bb: 'rgba(52,199,89,0.14)', bc: '#248A3D' },
+    { id: 's2', name: 'G1 walk test', robot: 'g1', scene: 'lab', engine: 'Isaac Sim', mission: null, status: 'Running · 41%', badge: 'RUNNING', bb: 'rgba(42,112,80,0.12)', bc: '#2A7050' },
+    { id: 's3', name: 'SO-101 pick & place policy', robot: 'so101', scene: 'lab', engine: 'MuJoCo', mission: 'demos', status: 'Failed · grip slipped in 3 of 20', badge: 'FAILED', bb: 'rgba(255,59,48,0.12)', bc: '#FF3B30' },
+  ];
+  CONN = { jetson: 'local', pi: 'local', thor: 'local', xiao: 'local', gate: 'cloud', dockcam: 'cloud' };
+  APPS = { jetson: [['people-counter', 'run', 'Up 2 days · 12% CPU', [[8080, 'http', 'Dashboard']]], ['foxglove-bridge', 'run', 'Up 2 days', [[8765, 'ws', 'Foxglove WebSocket']]], ['ros2-recorder', 'stop', '', []]], pi: [['sensor-logger', 'run', 'Up 5 h', [[3000, 'http', 'Live charts']]]], thor: [['policy-trainer', 'run', 'Epoch 41 · 78% GPU', [[6006, 'http', 'TensorBoard']]], ['isaac-sim', 'run', 'Up 3 h', [[8211, 'http', 'WebRTC stream']]]], xiao: [['audio-levels', 'run', 'Up 1 day', []]], gate: [['gate-detector', 'run', 'Up 9 days', [[8000, 'http', 'Detections UI']]], ['plate-reader', 'run', 'Up 9 days', []]], dockcam: [['timelapse', 'run', 'Up 1 day', [[8081, 'http', 'Gallery']]]] };
+  CAMS = { jetson: [['Door cam', 'USB · 1080p · 30 fps'], ['Desk cam', 'CSI · 720p · 15 fps']], thor: [['Lab overhead', 'GMSL · 4K · 30 fps']], xiao: [['Onboard OV2640', 'QVGA · 10 fps']], gate: [['Gate cam', 'RTSP · 1080p · 25 fps']], dockcam: [['Dock cam', 'CSI · 1080p · 30 fps']] };
+  WIFI = { jetson: 'Wendy-Office', pi: 'Wendy-Office', thor: 'Ethernet', xiao: 'Wendy-Office', gate: 'Warehouse-IoT', dockcam: 'Warehouse-IoT' };
+  startUpdate = (id) => () => {
+    if (typeof this.state.upd[id] === 'number') return;
+    if (!this.A[id].update || this.state.upd[id] === 'done') return this.toastMsg('Already up to date')();
+    this.setState(s => ({ upd: { ...s.upd, [id]: 0 } }));
+    const t = setInterval(() => this.setState(s => { const v = s.upd[id]; if (typeof v !== 'number') { clearInterval(t); return null; } const nv = v + 0.07; if (nv >= 1) { clearInterval(t); setTimeout(this.toastMsg(this.A[id].name + ' updated to 0.9.5'), 0); return { upd: { ...s.upd, [id]: 'done' } }; } return { upd: { ...s.upd, [id]: nv } }; }), 250);
+    this.ivs = (this.ivs || []).concat(t);
+  };
+  appRunning(id, n) { const k = id + ':' + n; const st0 = ((this.APPS[id] || []).find(x => x[0] === n) || [])[1]; return this.state.appRun[k] != null ? this.state.appRun[k] : st0 === 'run'; }
+  hostOf(id) { return this.A[id].name.toLowerCase().replace(/[^a-z0-9]+/g, '-'); }
+  urlFor(id, n, p) { const local = this.CONN[id] === 'local'; return local ? (p[1] === 'ws' ? 'ws://' : 'http://') + this.hostOf(id) + '.local:' + p[0] : 'https://' + n + '-' + this.hostOf(id) + '.tunnel.wendy.cloud'; }
+  openBrowser = (id, n, p) => () => { if (!this.appRunning(id, n)) return this.toastMsg('Start ' + n + ' first')(); if (p[1] !== 'http') return this.toastMsg('Copied ' + this.urlFor(id, n, p) + ' · open it in Foxglove')(); this.setState({ browser: { url: this.urlFor(id, n, p), app: n, label: p[2], dev: this.A[id].name, local: this.CONN[id] === 'local', port: p[0] } }); };
+  appScreen(key) {
+    const [id, n] = key.split('|'); const a = this.A[id]; const ap = (this.APPS[id] || []).find(x => x[0] === n); const ports = ap[3] || []; const run = this.appRunning(id, n);
+    const web = ports.find(p => p[1] === 'http'); const local = this.CONN[id] === 'local';
+    const toggle = () => { this.setState(st => ({ appRun: { ...st.appRun, [id + ':' + n]: !run } })); this.toastMsg((run ? 'Stopped ' : 'Started ') + n)(); };
+    const secs = [];
+    if (ports.length) secs.push({ title: 'PORTS', rows: ports.map(p => this.R('globe', p[2], this.urlFor(id, n, p), { color: p[1] === 'http' ? '#2A7050' : '#2A7050', trail: ':' + p[0], onTap: this.openBrowser(id, n, p) })), note: local ? 'Nearby: opens directly on this network.' : 'Remote: opens through a secure Wendy Cloud tunnel.' });
+    secs.push({ title: 'APP', rows: [this.R('clock', 'Logs', 'Follow live output', { color: '#8E8E93', onTap: this.toastMsg('Opens live logs for ' + n) }), this.R('app', 'Version', 'v1.3.0 · from wendy registry', { color: '#8E8E93', onTap: this.toastMsg('Shows releases and rollback') }), this.R('upd', 'Restart', 'Stops and starts the container', { color: '#FF9500', onTap: this.toastMsg('Restarting ' + n) })] });
+    return { title: n, hero: this.hero('app', 'APP · ' + a.name.toUpperCase(), n, run ? (ap[2] || 'Running') : 'Stopped', { color: run ? '#34C759' : '#8E8E93', chips: ports.map(p => ':' + p[0] + ' · ' + p[1]), actions: [this.btn(run ? 'Stop' : 'Start', toggle), web ? this.btn('Open', this.openBrowser(id, n, web), true) : this.btn('Logs', this.toastMsg('Opens live logs'), true)] }), sections: secs };
+  }
+  deviceScreen(id) {
+    const s = this.state, a = this.A[id], tab = s.devTab[id] || 'apps', sec = (title, rows, note) => ({ title, rows, note });
+    const up = s.upd[id], updating = typeof up === 'number', hasUp = a.update && up !== 'done';
+    const cams = this.CAMS[id] || [], apps = this.APPS[id] || [];
+    const segs = [['apps', 'Apps'], ['cams', 'Cameras'], ['data', 'Data'], ['loc', 'Location'], ['set', 'Settings']].map(([k, l]) => ({ l, on: tab === k, onTap: () => this.setState(st => ({ devTab: { ...st.devTab, [id]: k } })) }));
+    const chips = [a.st === 'warn' ? 'Weak link' : 'Online', this.CONN[id] === 'local' ? 'Local' : 'Cloud', hasUp ? 'Update available' : 'Agent 0.9.5', cams.length + (cams.length === 1 ? ' camera' : ' cameras')];
+    const actions = [this.btn('Logs', this.toastMsg('Opens live logs')), hasUp ? this.btn(updating ? 'Updating ' + Math.round(up * 100) + '%' : 'Update', this.startUpdate(id), true) : this.btn('Restart', this.toastMsg('Restarting ' + a.name), true)];
+    const out = { title: a.name, segs, hero: this.hero('device', 'DEVICE · ' + a.model.toUpperCase(), a.name, a.status + ' · ' + this.P[a.now].name, { chips, actions }), sections: [] };
+    if (tab === 'apps') {
+      out.sections = [sec('APPS', apps.map(([n, st0, det, ports]) => { const run = this.appRunning(id, n); const web = (ports || []).find(p => p[1] === 'http'); return this.R('app', n, run ? (det || 'Running') : 'Stopped', { color: run ? '#34C759' : '#8E8E93', trail: web ? ':' + web[0] : '', badge: run ? (web ? 'WEB' : 'RUNNING') : 'STOPPED', badgeBg: run ? (web ? 'rgba(42,112,80,0.12)' : 'rgba(52,199,89,0.14)') : 'rgba(23,28,35,0.07)', badgeC: run ? (web ? '#2A7050' : '#248A3D') : '#8E8E93', onTap: this.go('app', id + '|' + n) }); }), 'WEB means the app serves a page you can open.'),
+        sec('ADD', [this.R('app', 'Deploy an app', 'From a repo or the Wendy registry', { color: '#2A7050', onTap: this.toastMsg('Pick an app to deploy') })])];
+    } else if (tab === 'cams') {
+      const d = new Date(); const tm = d.toTimeString().slice(0, 8);
+      out.feeds = cams.map(([n, r]) => ({ name: n, res: r, time: tm, onTap: this.toastMsg('Opens ' + n + ' full screen') }));
+      out.sections = cams.length ? [sec('CAMERAS', cams.map(([n, r]) => this.R('cam', n, r, { color: '#30B0C7', onTap: this.toastMsg('Exposure, focus and resolution for ' + n) })), 'Tap a camera for exposure, focus and resolution.')] : [sec('CAMERAS', [], 'No cameras attached to this device.')];
+    } else if (tab === 'data') {
+      const ds = this.D.filter(x => x.asset === id);
+      out.sections = [sec('RECENT', [...ds.map(x => this.dataRow(x)), this.R('data', 'All recordings', 'Opens Data filtered to ' + a.name, { onTap: this.openData({ asset: id }) })])];
+    } else if (tab === 'loc') {
+      out.sections = [sec('LOCATION', [this.R(this.pKind(a.home), 'Home · ' + this.P[a.home].name, this.path(a.home) || 'Site', { onTap: this.go('place', a.home) }), this.R('pin', 'Now · ' + this.P[a.now].name, a.now === a.home ? 'At home' : 'Visiting', { color: '#FF2D55', onTap: this.go('place', a.now) })], this.CONN[id] === 'local' ? 'Nearby: this iPhone can reach it directly.' : 'Remote: reached through Wendy Cloud.')];
+    } else {
+      out.sections = [
+        sec('SOFTWARE', [this.R('upd', 'Agent & OS update', updating ? 'Installing… ' + Math.round(up * 100) + '%' : hasUp ? 'Agent 0.9.4 → 0.9.5 · WendyOS 1.4.2' : 'Up to date · agent 0.9.5', { color: '#2A7050', prog: updating ? up : null, badge: hasUp && !updating ? 'UPDATE' : '', badgeBg: 'rgba(42,112,80,0.12)', badgeC: '#2A7050', onTap: this.startUpdate(id) })]),
+        sec('CONNECTIVITY', [this.R('wifi', 'Wi-Fi', this.WIFI[id] || 'Not connected', { color: '#2A7050', onTap: this.toastMsg('Change Wi-Fi over Bluetooth') }), this.R('fleet', 'Mesh', this.CONN[id] === 'local' ? 'Joined · Wendy HQ' : 'Not on a mesh', { color: '#9FE2BF', onTap: () => this.setState(st => ({ tab: 'devices', devSeg: 'mesh', stacks: { ...st.stacks, ['devices:devices']: [] } })) }), this.R('bt', 'Bluetooth', this.CONN[id] === 'local' ? 'On · in range' : 'Out of range', { color: '#2A7050', onTap: this.toastMsg('Bluetooth setup') })]),
+        sec('DEVICE', [this.R('edit', 'Name', a.name, { color: '#8E8E93', onTap: this.toastMsg('Rename device') }), this.R('minus', 'Unenroll device', 'Removes it from Wendy Labs', { color: '#FF3B30', onTap: this.toastMsg('Asks to confirm, then unenrolls') })]),
+      ];
+    }
+    return out;
+  }
+  FOUND = [['p7c21', 'Raspberry Pi 5', 'wendy-7c21 · strong signal', 'Raspberry Pi 7C21'], ['ja113', 'Jetson Orin Nano', 'wendy-a113 · good signal', 'Jetson Orin A113']];
+  openSetup = () => { clearTimeout(this.sT); this.setState({ setup: { step: 'scan' } }); this.sT = setTimeout(() => this.setState(s => s.setup && s.setup.step === 'scan' ? { setup: { ...s.setup, step: 'pick' } } : null), 1400); };
+  setupNext = () => {
+    const su = this.state.setup; if (!su) return;
+    const set = p => this.setState(s => ({ setup: { ...s.setup, ...p } }));
+    if (su.step === 'pick' && su.pick) return set({ step: 'wifi' });
+    if (su.step === 'wifi' && su.wifi) return set({ step: 'place' });
+    if (su.step === 'place' && su.place) {
+      set({ step: 'enroll', prog: 0 });
+      const t = setInterval(() => this.setState(s => { if (!s.setup || s.setup.step !== 'enroll') { clearInterval(t); return null; } const p = s.setup.prog + 0.06; if (p >= 1) { clearInterval(t); return { setup: { ...s.setup, step: 'done', prog: 1 } }; } return { setup: { ...s.setup, prog: p } }; }), 180);
+      this.ivs = (this.ivs || []).concat(t); return;
+    }
+    if (su.step === 'done') {
+      const f = this.FOUND.find(x => x[0] === su.pick); const id = 'new_' + f[0];
+      this.A[id] = { name: f[3], kind: 'device', model: f[1], home: su.place, now: su.place, status: 'Online · no apps yet', st: 'ok' };
+      this.CONN[id] = 'local'; this.APPS[id] = []; this.WIFI[id] = su.wifi;
+      this.setState(s => { const k = this.key(s); return { setup: null, stacks: { ...s.stacks, [k]: [...(s.stacks[k] || []), { t: 'asset', id }] } }; });
+    }
+  };
+  setupView() {
+    const su = this.state.setup; if (!su) return { setupOpen: false };
+    const pick = (field, v) => () => this.setState(s => ({ setup: { ...s.setup, [field]: v } }));
+    const rows = (list, field) => list.map(([v, t, sub, ic, col], i) => ({ title: t, sub, icon: this.IC[ic], color: col, on: su[field] === v, sep: i < list.length - 1, onTap: pick(field, v) }));
+    const steps = ['pick', 'wifi', 'place', 'enroll'];
+    const base = { setupOpen: true, setupClose: () => { clearTimeout(this.sT); this.setState({ setup: null }); }, setupScanning: false, setupHasRows: false, setupRows: [], setupHasProg: false, setupProgW: '0%', setupProgText: '', setupHasBtn: true, setupStep: 'Step ' + Math.max(1, steps.indexOf(su.step) + 1) + ' of 4' };
+    const btn = (label, ok) => ({ setupBtnLabel: label, setupBtn: ok ? this.setupNext : () => {}, setupBtnBg: ok ? '#2A7050' : 'rgba(23,28,35,0.08)', setupBtnC: ok ? '#fff' : '#9A978F' });
+    if (su.step === 'scan') return { ...base, setupStep: 'New device', setupTitle: 'Looking for devices', setupSub: 'Power it on and keep it within a few metres of this iPhone.', setupScanning: true, setupHasBtn: false };
+    if (su.step === 'pick') return { ...base, setupTitle: 'Choose a device', setupSub: 'Found nearby over Bluetooth.', setupHasRows: true, setupRows: rows(this.FOUND.map(f => [f[0], f[1], f[2], 'device', '#2A7050']), 'pick'), ...btn('Continue', !!su.pick) };
+    if (su.step === 'wifi') return { ...base, setupTitle: 'Connect to Wi-Fi', setupSub: 'Credentials are sent over Bluetooth. You can change this later.', setupHasRows: true, setupRows: rows([['Wendy-Office', 'Wendy-Office', 'Strong · WPA3', 'wifi', '#2A7050'], ['Warehouse-IoT', 'Warehouse-IoT', 'Fair · WPA2', 'wifi', '#2A7050'], ['Ethernet', 'Ethernet', 'Use the cable instead', 'device', '#8E8E93']], 'wifi'), ...btn('Continue', !!su.wifi) };
+    if (su.step === 'place') return { ...base, setupTitle: 'Where does it live?', setupSub: 'Its home place. It can still move later.', setupHasRows: true, setupRows: rows([['room', 'Room', 'Wendy HQ › Floor 1', 'room', '#30B0C7'], ['lab', 'Robot lab', 'Wendy HQ › Floor 1', 'room', '#30B0C7'], ['dock', 'Loading dock', 'Austin Warehouse', 'site', '#34C759']], 'place'), ...btn('Enroll device', !!su.place) };
+    if (su.step === 'enroll') { const p = su.prog || 0; return { ...base, setupTitle: 'Enrolling', setupSub: 'This takes about a minute.', setupHasProg: true, setupProgW: Math.round(p * 100) + '%', setupProgText: p < 0.3 ? 'Joining ' + su.wifi + '…' : p < 0.65 ? 'Registering with Wendy Labs…' : 'Installing agent 0.9.5…', setupHasBtn: false }; }
+    const f = this.FOUND.find(x => x[0] === su.pick);
+    return { ...base, setupStep: 'Done', setupTitle: f[3] + ' is ready', setupSub: 'Online on ' + su.wifi + ' in ' + this.P[su.place].name + '. Next: deploy an app.', ...btn('Open device', true) };
+  }
+  chatRef = React.createRef();
+  onMainScroll = (e) => { const y = e.target.scrollTop, d = y - (this.lastY || 0); this.lastY = y; const m = this.state.accMini; if (d > 4 && !m) { clearTimeout(this.aT); this.setState({ accMini: true }); } else if (d < -8 && m) this.peekAcc(); };
+  peekAcc() { clearTimeout(this.aT); if (this.state.accMini) this.setState({ accMini: false }); this.aT = setTimeout(() => this.setState({ accMini: true }), 2600); }
+  navSig(s) { if (!s) return ''; const st = s.stacks[s.lens + ':' + s.tab] || []; const t = st[st.length - 1]; return s.lens + ':' + s.tab + ':' + st.length + ':' + (t ? t.t + t.id : ''); }
+  componentDidUpdate() {
+    const s = this.state; const sig = this.navSig(s);
+    if (this._sig !== undefined && sig !== this._sig && !s.chatOpen) this.peekAcc();
+    const scrollNeeded = s.chat !== this._chat || s.chatTyping !== this._typing || (s.chatOpen && !this._open);
+    this._sig = sig; this._open = s.chatOpen; this._chat = s.chat; this._typing = s.chatTyping;
+    if (scrollNeeded) { const el = this.chatRef.current; if (el) el.scrollTop = el.scrollHeight; }
+  }
+  ctx() {
+    const s = this.state, st = this.stack(), top = st[st.length - 1];
+    if (top && top.t === 'asset') return { k: this.A[top.id].kind, id: top.id, name: this.A[top.id].name };
+    if (top && top.t === 'app') { const [d, n] = top.id.split('|'); return { k: 'app', id: d, app: n, name: n + ' on ' + this.A[d].name }; }
+    if (top && top.t === 'place') return { k: 'place', id: top.id, name: this.P[top.id].name };
+    if (top && top.t === 'mission') return { k: 'mission', id: top.id, name: this.M[top.id].name };
+    const LD = this.lensDef(); return { k: 'lens', lens: s.lens, name: s.lens ? LD[s.lens].name : 'Wendy Labs' };
+  }
+  suggest(c) {
+    if (c.k === 'device') { const ap = (this.APPS[c.id] || [])[0]; return ['Update the agent', ap ? 'Restart ' + ap[0] : 'Deploy an app', 'Open the dashboard', 'Switch Wi-Fi to Warehouse-IoT', 'Why is it slow?']; }
+    if (c.k === 'app') return ['Open the web page', 'Restart it', 'Show recent logs'];
+    if (c.k === 'robot') return ['Which joint is hottest?', 'Send it to the charger', 'Run it in sim first'];
+    if (c.k === 'place') return ['Who is here right now?', 'Anything offline here?'];
+    if (c.k === 'mission') return ['Run it now', 'Summarise the last run'];
+    if (c.lens === 'devices') return ['Which devices need an update?', 'Set up a new device', 'Show weak mesh links'];
+    if (c.lens === 'robots') return ['Which joint is hottest?', 'Run Night patrol in sim', 'What needs attention?'];
+    return ['What needs attention?', 'Set up a new device', 'Which devices need an update?'];
+  }
+  reply(t, c) {
+    const l = t.toLowerCase(); const dev = (c.k === 'device' || c.k === 'app') ? c.id : null;
+    const appsOf = id => (this.APPS[id] || []);
+    if (/set ?up|new device|enrol/.test(l)) return { text: 'I’ll walk you through it: Bluetooth scan, Wi-Fi, then where it lives.', card: { kind: 'setup' } };
+    if (/update/.test(l)) {
+      const targets = dev ? [dev] : Object.keys(this.A).filter(i => this.A[i].update && this.state.upd[i] !== 'done');
+      if (!targets.length || (dev && (!this.A[dev].update || this.state.upd[dev] === 'done'))) return { text: dev ? this.A[dev].name + ' is already on agent 0.9.5.' : 'Everything is up to date.' };
+      return { text: (dev ? '' : targets.length + ' device needs an update. ') + 'Agent 0.9.4 → 0.9.5 and WendyOS 1.4.2. It restarts apps once, about 40 s of downtime.', card: { kind: 'update', id: targets[0] } };
+    }
+    if (/wi-?fi|network/.test(l) && dev) { const to = /warehouse/.test(l) ? 'Warehouse-IoT' : 'Wendy-Office'; return { text: 'I’ll send the new Wi-Fi over Bluetooth, then confirm it reconnects. If it fails, it falls back to ' + (this.WIFI[dev] || 'the current network') + '.', card: { kind: 'wifi', id: dev, to } }; }
+    const appMatch = dev && (appsOf(dev).find(a => l.includes(a[0])) || (c.app && appsOf(dev).find(a => a[0] === c.app)));
+    if (/restart|stop|start/.test(l) && dev) { const a = appMatch || appsOf(dev)[0]; if (!a) return { text: 'There are no apps on ' + this.A[dev].name + ' yet. Want to deploy one?' }; const op = /stop/.test(l) ? 'stop' : /start/.test(l) && !/restart/.test(l) ? 'start' : 'restart'; return { text: op[0].toUpperCase() + op.slice(1) + ' ' + a[0] + ' on ' + this.A[dev].name + '?', card: { kind: 'app', id: dev, n: a[0], op } }; }
+    if (/open|dashboard|web|page|browser/.test(l)) {
+      let id = dev, a = appMatch && (appMatch[3] || []).some(p => p[1] === 'http') ? appMatch : null;
+      if (!a) { const ids = id ? [id] : Object.keys(this.APPS); for (const i of ids) { const f = appsOf(i).find(x => (x[3] || []).some(p => p[1] === 'http')); if (f) { id = i; a = f; break; } } }
+      if (!a) return { text: 'No app here serves a web page.' };
+      const p = a[3].find(x => x[1] === 'http'); return { text: a[0] + ' serves ' + p[2] + ' on port ' + p[0] + '.', card: { kind: 'browser', id, n: a[0], p } };
+    }
+    if (/slow|cpu|memory|log/.test(l) && dev) return { text: this.A[dev].name + ': CPU 38%, memory 2.1 / 8 GB, 51 °C. ' + (appsOf(dev)[0] ? appsOf(dev)[0][0] + ' is the busiest app. ' : '') + 'No errors in the last hour of logs.' };
+    if (/hot|joint|temp/.test(l)) return { text: 'Go2 Rover’s front-right calf is at 66 °C, others under 57 °C. I’d let it rest 10 min before the next patrol.', card: { kind: 'nav', t: 'asset', id: 'go2', label: 'Open Go2 Rover', lens: 'robots' } };
+    if (/charger|send/.test(l)) return { text: 'Send Go2 Rover to Charger in Room? It will stop its current route.', card: { kind: 'move' } };
+    if (/sim/.test(l)) return { text: 'Last dry run of Night patrol passed with 0 collisions. I can run it again on Jetson Thor T1.', card: { kind: 'nav', t: 'sim', id: 's1', label: 'Open the sim', lens: 'robots' } };
+    if (/who|here|offline/.test(l) && c.k === 'place') { const ids = this.sub(c.id); const here = Object.keys(this.A).filter(i => ids.includes(this.A[i].now)); return { text: here.length ? 'In ' + c.name + ' now: ' + here.map(i => this.A[i].name + (this.A[i].st === 'off' ? ' (offline)' : '')).join(', ') + '.' : 'Nothing is in ' + c.name + ' right now.' }; }
+    if (/attention|weak|mesh|alert/.test(l)) { const un = this.N.filter(n => !this.state.read[n.id]); return { text: un.length ? un.slice(0, 4).map(n => '• ' + n.title + ' · ' + n.sub).join('\n') : 'Nothing needs attention.' }; }
+    return { text: 'I can update devices, start and stop apps, open their web pages, change Wi-Fi, set up new devices and answer questions about robots and places. Try one of the suggestions.' };
+  }
+  sendChat = (txt) => {
+    const t = (txt != null ? txt : this.state.chatText).trim(); if (!t || this.state.chatTyping) return;
+    const c = this.ctx(); const id = Date.now();
+    this.setState(s => ({ chat: [...s.chat, { id, who: 'me', text: t, ctx: c.name }], chatText: '', chatTyping: true }));
+    clearTimeout(this.cT);
+    this.cT = setTimeout(() => { const r = this.reply(t, c); this.setState(s => ({ chatTyping: false, chatUnread: s.chatOpen ? 0 : (s.chatUnread || 0) + 1, chat: [...s.chat, { id: id + 1, who: 'ai', text: r.text, card: r.card ? { ...r.card, status: 'pending' } : null }] })); }, 700);
+  };
+  cardDone(mid, status) { this.setState(s => ({ chat: s.chat.map(m => m.id === mid ? { ...m, card: { ...m.card, status } } : m) })); }
+  cardView(m) {
+    const c = m.card; if (!c) return null;
+    const btn = (label, fn, primary) => ({ label, onTap: fn, bg: primary ? '#2A7050' : 'rgba(42,112,80,0.1)', color: primary ? '#fff' : '#2A7050' });
+    const cancel = btn('Cancel', () => this.cardDone(m.id, 'Cancelled'));
+    let v;
+    if (c.kind === 'update') { const a = this.A[c.id]; v = { color: '#2A7050', icon: this.IC.upd, title: 'Update ' + a.name, sub: 'Agent 0.9.5 · WendyOS 1.4.2', actions: [cancel, btn('Update', () => { this.startUpdate(c.id)(); this.cardDone(m.id, 'Updating now'); }, true)] }; }
+    else if (c.kind === 'app') { v = { color: '#34C759', icon: this.IC.app, title: c.op[0].toUpperCase() + c.op.slice(1) + ' ' + c.n, sub: this.A[c.id].name, actions: [cancel, btn('Confirm', () => { if (c.op !== 'restart') this.setState(s => ({ appRun: { ...s.appRun, [c.id + ':' + c.n]: c.op === 'start' } })); this.cardDone(m.id, c.op === 'stop' ? 'Stopped' : c.op === 'start' ? 'Started' : 'Restarted'); }, true)] }; }
+    else if (c.kind === 'wifi') { v = { color: '#2A7050', icon: this.IC.wifi, title: 'Switch Wi-Fi to ' + c.to, sub: this.A[c.id].name + ' · over Bluetooth', actions: [cancel, btn('Switch', () => { this.WIFI[c.id] = c.to; this.cardDone(m.id, 'Connected to ' + c.to); }, true)] }; }
+    else if (c.kind === 'browser') { v = { color: '#2A7050', icon: this.IC.globe, title: 'Open ' + c.p[2], sub: c.n + ' · :' + c.p[0], actions: [btn('Open', () => { this.cardDone(m.id, 'Opened'); this.setState({ chatOpen: false }); this.openBrowser(c.id, c.n, c.p)(); }, true)] }; }
+    else if (c.kind === 'setup') { v = { color: '#34C759', icon: this.IC.add, title: 'Set up a new device', sub: 'Bluetooth · Wi-Fi · enroll', actions: [btn('Start', () => { this.cardDone(m.id, 'Started setup'); this.setState({ chatOpen: false }); this.openSetup(); }, true)] }; }
+    else if (c.kind === 'move') { v = { color: '#FF9500', icon: this.IC.robot, title: 'Send Go2 Rover to Charger', sub: 'Room · 4.2 m away', actions: [cancel, btn('Send', () => this.cardDone(m.id, 'On its way'), true)] }; }
+    else if (c.kind === 'nav') { v = { color: '#2A7050', icon: this.IC[c.t === 'sim' ? 'sim' : 'robot'], title: c.label, sub: 'Opens in the ' + this.lensDef()[c.lens].name + ' lens', actions: [btn('Open', () => { this.cardDone(m.id, 'Opened'); const L = this.lensDef()[c.lens]; const tab = c.t === 'sim' ? 'sim' : L.primary; this.setState(s => ({ chatOpen: false, lens: c.lens, tab, stacks: { ...s.stacks, [c.lens + ':' + tab]: [{ t: c.t, id: c.id }] } })); }, true)] }; }
+    const done = c.status !== 'pending';
+    return { ...v, pending: !done, done, doneText: c.status, doneColor: c.status === 'Cancelled' ? '#5B5A56' : '#34C759' };
+  }
+  kinds() { const p = this.props.orgProfile || 'Everything'; return p === 'Devices only' ? ['devices'] : p === 'Devices + robots' ? ['devices', 'robots'] : ['devices', 'robots', 'site']; }
+  jump(lens, t, id) { const L = this.lensDef()[lens]; const tab = t === 'mission' ? 'missions' : L.primary; this.setState(s => ({ lens, tab, stacks: { ...s.stacks, [lens + ':' + tab]: [{ t, id }] } })); }
+  homeView() {
+    const s = this.state, LD = this.lensDef(), K = this.kinds(), hm = s.home, ed = s.editHome;
+    const BL = { attn: 'Needs you', live: 'Happening now', quick: 'Quick actions', devices: 'Devices', robots: 'Robots', site: 'Sites' };
+    const avail = k => !LD[k] || K.includes(k);
+    const visible = hm.order.filter(k => avail(k) && !hm.hidden.includes(k));
+    const move = (k, d) => () => this.setState(st => { const o = st.home.order.slice(); const i = o.indexOf(k); const vis = o.filter(x => avail(x) && !st.home.hidden.includes(x)); const vi = vis.indexOf(k) + d; if (vi < 0 || vi >= vis.length) return null; const j = o.indexOf(vis[vi]); [o[i], o[j]] = [o[j], o[i]]; return { home: { ...st.home, order: o } }; });
+    const hide = k => () => this.setState(st => ({ home: { ...st.home, hidden: [...st.home.hidden, k] } }));
+    const show = k => () => this.setState(st => ({ home: { ...st.home, hidden: st.home.hidden.filter(x => x !== k) } }));
+    const sep = rows => rows.map((r, i) => ({ ...r, sep: i < rows.length - 1 }));
+    const blocks = visible.map(k => {
+      const b = { key: k, label: BL[k], editing: ed, outline: ed ? '1.5px dashed #CBCBCB' : 'none', up: move(k, -1), down: move(k, 1), remove: hide(k), isLens: false, isList: false, isQuick: false, showTitle: false, title: '', rows: [], quick: [], stats: [] };
+      if (LD[k]) { const d = LD[k]; const u = this.lensNotifs(k).filter(n => !s.read[n.id]).length; return { ...b, isLens: true, name: d.name, color: d.color, icon: d.icon, hasAttn: u > 0, attn: u + ' need attention', stats: this.cardStats(k).map(([v, l, c]) => ({ v: String(v), l, color: c || '#171C23' })), onTap: () => this.setState({ lens: k, tab: 'home', editHome: false }) }; }
+      if (k === 'attn') {
+        const un = this.N.filter(n => !s.read[n.id] && this.NL[n.id].some(x => K.includes(x))).slice(0, 3);
+        const rows = un.length ? un.map(n => { const lens = this.NL[n.id].find(x => K.includes(x)); return this.R('alert', n.title, n.sub + ' · ' + LD[lens].name, { color: n.color, trail: n.time, onTap: () => { this.setState(st => ({ read: { ...st.read, [n.id]: true } })); this.jump(lens, n.go[0], n.go[1]); } }); }) : [this.R('alert', 'All clear', 'Nothing needs you right now', { color: '#34C759' })];
+        return { ...b, isList: true, showTitle: !ed, title: 'NEEDS YOU', rows: sep(rows) };
+      }
+      if (k === 'live') {
+        const rows = [];
+        if (K.includes('robots')) Object.keys(s.running).forEach(m => { const r = this.missionRow(m); rows.push({ ...r, onTap: () => this.jump('robots', 'mission', m) }); });
+        Object.keys(s.upd).filter(i => typeof s.upd[i] === 'number').forEach(i => rows.push(this.R('upd', 'Updating ' + this.A[i].name, 'Agent 0.9.5 · ' + Math.round(s.upd[i] * 100) + '%', { color: '#2A7050', prog: s.upd[i], onTap: () => this.jump('devices', 'asset', i) })));
+        if (!rows.length) rows.push(this.R('clock', 'Nothing running', 'Missions, updates and recordings show up here', { color: '#8E8E93' }));
+        return { ...b, isList: true, showTitle: !ed, title: 'HAPPENING NOW', rows: sep(rows) };
+      }
+      const q = [['Set up', this.IC.add, 'rgba(52,199,89,0.14)', '#248A3D', this.openSetup], ['Scan QR', this.IC.qr, 'rgba(42,112,80,0.12)', '#2A7050', this.toastMsg('Opens the camera to scan a device QR')], ['Record', this.IC.rec, 'rgba(255,149,0,0.14)', '#C93400', this.toastMsg('Start a recording on…')]];
+      if (K.includes('robots')) q.push(['Stop all', this.IC.stop, '#FF3B30', '#fff', this.toastMsg('Hold to stop every robot')]);
+      return { ...b, isQuick: true, showTitle: !ed, title: 'QUICK ACTIONS', quick: q.map(([label, icon, bg, fg, onTap]) => ({ label, icon, bg, fg, onTap, label_c: label === 'Stop all' ? '#FF3B30' : '#171C23' })) };
+    });
+    const addRows = sep([
+      ...hm.order.filter(k => avail(k) && hm.hidden.includes(k)).map(k => this.R(LD[k] ? (k === 'site' ? 'site' : k === 'robots' ? 'robot' : 'device') : k === 'attn' ? 'alert' : k === 'live' ? 'clock' : 'app', BL[k], 'Tap to add back', { color: '#34C759', trail: '+', onTap: show(k) })),
+      ...['devices', 'robots', 'site'].filter(k => !K.includes(k)).map(k => this.R(k === 'site' ? 'site' : k === 'robots' ? 'robot' : 'device', k === 'site' ? 'Add your first site' : k === 'robots' ? 'Add your first robot' : 'Add your first device', k === 'site' ? 'Scan a room to get a 3D twin' : 'Set it up over Bluetooth', { color: '#8E8E93', onTap: this.toastMsg('Starts setup for a new ' + (k === 'site' ? 'site' : k === 'robots' ? 'robot' : 'device')) })),
+    ]);
+    if (!addRows.length) addRows.push({ ...this.R('app', 'Everything is on Home', 'Remove a block to hide it', { color: '#C7C7CC' }), sep: false });
+    return { homeBlocks: blocks, addRows, editHome: ed, toggleEdit: () => this.setState(st => ({ editHome: !st.editHome })), editLabel: ed ? 'Done' : 'Edit Home', editBg: ed ? '#2A7050' : 'rgba(23,28,35,0.07)', editC: ed ? '#fff' : '#171C23' };
+  }
+  EV = [['people-counter started', 'Jetson Orin 4F2A', '3 h', 'jetson'], ['Agent updated to 0.9.5', 'Dock Camera 2', 'Yesterday', 'dockcam'], ['Disconnected', 'Raspberry Pi B3C1', 'Yesterday', 'pi']];
+  TRIG = { person: ['Person', '#FF3B30'], door: ['Door opened', '#FF9500'], motion: ['Motion', '#FFD60A'], sched: ['Schedule', '#64D2FF'], manual: ['Manual', '#9FE2BF'], sound: ['Loud sound', '#AF52DE'] };
+  EPS = [
+    ['e1', 'Front door · person', 'video', 'jetson', 'Today', '14:32', 134, 'person', 'cam0 · 1080p'], ['e2', 'people-counter bag', 'bag', 'jetson', 'Today', '14:30', 600, 'person'], ['e3', 'Back door opened', 'video', 'jetson', 'Today', '11:05', 58, 'door', 'cam1 · 1080p'], ['e4', 'Cube picks', 'dataset', 'jetson', 'Yesterday', '16:02', 1260, 'manual'],
+    ['e5', 'Sensor log', 'bag', 'pi', 'Today', '09:00', 7200, 'sched'], ['e6', 'Hallway mic', 'audio', 'pi', 'Today', '14:31', 95, 'motion'], ['e7', 'Lab ambient', 'audio', 'pi', 'Yesterday', '18:20', 300, 'manual'],
+    ['e8', 'Policy rollout · epoch 41', 'video', 'thor', 'Today', '12:10', 420, 'manual', 'isaac · 720p'], ['e9', 'Sim episodes', 'dataset', 'thor', 'Yesterday', '20:44', 3600, 'sched'],
+    ['e10', 'Clap detected', 'audio', 'xiao', 'Today', '10:12', 12, 'sound'],
+    ['e11', 'Gate · plate read', 'video', 'gate', 'Today', '14:33', 42, 'motion', 'gate-cam · 720p'], ['e12', 'Gate · person at night', 'video', 'gate', 'Yesterday', '22:14', 76, 'person', 'gate-cam · 720p'],
+    ['e13', 'Dock timelapse', 'images', 'dockcam', 'Today', '08:00', 21600, 'sched'], ['e14', 'Dock motion', 'video', 'dockcam', 'Yesterday', '07:41', 31, 'motion', 'dock-cam · 1080p'],
+  ];
+  EPSIZE = { jetson: '4.3 GB', pi: '1.1 GB', thor: '6.8 GB', xiao: '2 MB', gate: '310 MB', dockcam: '3.5 GB' };
+  rnd(seed, i) { const x = Math.sin(seed * 97 + i * 13.7) * 10000; return x - Math.floor(x); }
+  epClip(r) {
+    const [id, name, type, dev, day, time, dur, trig, cam] = r, n = parseInt(id.slice(1));
+    const f = s => s >= 3600 ? Math.floor(s / 3600) + ' h' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    return { id, name, type, dev, day, time, dur: f(dur), cam: cam || '', bg: { video: '#242B35', audio: '#E8F6EE', bag: '#171C23', images: '#E6E2D8', dataset: '#F9F9F9' }[type], isVideo: type === 'video', isWave: type === 'audio', isBag: type === 'bag', isImg: type === 'images', isSet: type === 'dataset', ink: '#2A7050',
+      bars: Array.from({ length: 26 }, (_, i) => Math.round(18 + this.rnd(n, i) * 70) + '%'),
+      topics: ['/cam', '/imu', '/det'].map((t, k) => ({ n: t, segs: Array.from({ length: 4 }, (_, i) => ({ f: 1 + Math.round(this.rnd(n + k, i) * 4), c: i % 2 ? 'transparent' : ['#2A7050', '#9FE2BF', '#FF9500'][k] })) })),
+      cells: Array.from({ length: 18 }, (_, i) => i < 14 ? (this.rnd(n, i) > 0.3 ? '#2A7050' : '#9FE2BF') : '#E6E2D8'),
+      trigKey: trig, trig: this.TRIG[trig][0], trigC: this.TRIG[trig][1], syncIcon: 'M7 18h10a4 4 0 000-8 6 6 0 00-11.5 1.5A3.5 3.5 0 007 18z',
+      typeL: { video: 'Video', audio: 'Audio', bag: 'Rosbag', images: 'Images', dataset: 'Dataset' }[type] };
+  }
+  EV2 = [
+    ['Recording started · Person', 'Jetson Orin 4F2A · cam0', '14:32', 'jetson', 'rec', 'Today'], ['people-counter started', 'Jetson Orin 4F2A', '11:40', 'jetson', 'app', 'Today'], ['Wi-Fi changed to Wendy-Office', 'Raspberry Pi B3C1 · via Bluetooth', '10:18', 'pi', 'wifi', 'Today'], ['Mesh link dropped to −79 dBm', 'Xiao Sense', '09:52', 'xiao', 'alert', 'Today'], ['policy-trainer restarted', 'Jetson Thor T1', '08:15', 'thor', 'app', 'Today'],
+    ['Agent updated to 0.9.5', 'Dock Camera 2', '21:04', 'dockcam', 'upd', 'Yesterday'], ['Disconnected', 'Raspberry Pi B3C1', '19:30', 'pi', 'alert', 'Yesterday'], ['Enrolled over Bluetooth', 'Xiao Sense', '15:12', 'xiao', 'bt', 'Yesterday'],
+  ];
+  ALERTS = [
+    ['a1', 'Person at the front door', 'jetson', 'cam0', '14:32', 'Today', 'e1'], ['a3', 'Plate read at the gate', 'gate', 'gate-cam', '14:33', 'Today', 'e11'], ['n6', 'Weak mesh link', 'xiao', '−79 dBm · may drop data', '3 h', 'Today', null, 'fix'], ['a2', 'Back door opened', 'jetson', 'cam1', '11:05', 'Today', 'e3'], ['a6', 'Loud sound', 'xiao', 'mic · 92 dB', '10:12', 'Today', 'e10'], ['n4', 'Agent 0.9.5 available', 'jetson', 'Restarts apps once · ~40 s', '5 h', 'Today', null, 'update'], ['a7', 'Person at the gate at night', 'gate', 'gate-cam', '22:14', 'Yesterday', 'e12'],
+  ];
+  alertView(sc) {
+    const s = this.state, clips = Object.fromEntries(this.EPS.map(r => [r[0], this.epClip(r)]));
+    const done = s.upd.jetson != null;
+    const arc = s.archived || {}, sw = s.swipe || {};
+    const cards = this.ALERTS.filter(a => !(a[7] === 'update' && done) && !arc[a[0]]).map(([id, title, dev, sub, time, day, clip, act]) => {
+      const dx = sw.id === id ? sw.dx : 0, dragging = sw.id === id && sw.drag;
+      const doArchive = () => { this.setState(st => ({ swipe: { id, dx: -420, drag: false } })); setTimeout(() => this.setState(st => ({ archived: { ...(st.archived || {}), [id]: true }, read: { ...st.read, [id]: true }, swipe: {} })), 220); this.toastMsg('Archived · find it in Activity › Archived')(); };
+      const swipeProps = { dx: dx + 'px', tr: dragging ? 'none' : 'transform .25s cubic-bezier(.3,.8,.3,1)', actW: Math.max(88, -dx) + 'px', archive: (ev) => { ev.stopPropagation(); doArchive(); },
+        down: (e) => { this._sx = e.clientX; this._base = dx; this._moved = false; this._pid = e.pointerId; this._el = e.currentTarget; this.setState({ swipe: { id, dx, drag: true } }); },
+        move: (e) => { if (this._sx == null || (this.state.swipe || {}).id !== id) return; const d = e.clientX - this._sx; if (Math.abs(d) > 6 && !this._moved) { this._moved = true; try { this._el.setPointerCapture(this._pid); } catch (x) {} } if (this._moved) this.setState({ swipe: { id, dx: Math.min(0, Math.max(-360, this._base + d)), drag: true } }); },
+        up: () => { if (this._sx == null) return; this._sx = null; const cur = (this.state.swipe || {}).dx || 0; if (cur < -200) doArchive(); else this.setState({ swipe: cur < -44 ? { id, dx: -96, drag: false } : {} }); } };
+      const guard = fn => () => { if (this._moved) { this._moved = false; return; } if ((this.state.swipe || {}).id === id && (this.state.swipe || {}).dx) { this.setState({ swipe: {} }); return; } fn(); };
+      const c = clip ? clips[clip] : null, unread = !s.read[id];
+      const read = () => this.setState(st => ({ read: { ...st.read, [id]: true } }));
+      const color = c ? c.trigC : act === 'update' ? '#2A7050' : '#FF9500';
+      const icon = c ? (c.isWave ? this.IC.rec : this.IC.cam) : act === 'update' ? this.IC.upd : this.IC.wifi;
+      return { ...swipeProps, title, sub: this.A[dev].name + ' · ' + sub, time: day === 'Today' ? time : 'Yesterday ' + time, unread, weight: unread ? 700 : 600, color, icon,
+        onTap: guard(() => { read(); this.push('asset', dev); }),
+        hasClip: !!c, clip: c || {}, clipH: c && c.isWave ? '96px' : '180px', play: guard(() => { read(); this.setState({ epDev: dev, epLabel: 'all', epPick: clip }); }),
+        hasAct: !!act, actL: act === 'update' ? 'Update' : 'Fix', act: () => { read(); if (act === 'update') this.startUpdate('jetson')(); else this.toastMsg('Suggests moving Xiao closer or adding a relay')(); },
+        secondL: 'Open device', second: () => { read(); this.push('asset', dev); } };
+    });
+    const n = cards.filter(c => c.unread).length;
+    return { hasAlertCards: !!sc.alertCards, alertCards: cards, noAlerts: !cards.length, alertHead: n ? n + ' UNREAD' : 'ALL CAUGHT UP', markAllRead: () => this.setState(st => ({ read: { ...st.read, ...Object.fromEntries(this.ALERTS.map(a => [a[0], true])) } })) };
+  }
+  epView(sc) {
+    const s = this.state, all = this.EPS.map(r => this.epClip(r)), of = k => all.filter(c => c.dev === k);
+    const devs = Object.keys(this.A).filter(k => this.A[k].kind === 'device');
+    const labelsOf = cl => { const m = {}; cl.forEach(c => { m[c.trigKey] = (m[c.trigKey] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ k, l: this.TRIG[k][0], c: this.TRIG[k][1], n })); };
+    const openEp = (k, lab) => (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.setState({ epDev: k, epLabel: lab || 'all', epPick: null }); };
+    const withData = devs.filter(k => of(k).length), none = devs.length - withData.length;
+    const epDevs = withData.map(k => { const cl = of(k); return { name: this.A[k].name, model: this.A[k].model, latest: cl[0], latestL: cl[0].day === 'Today' ? cl[0].time : cl[0].day.toLowerCase(), size: this.EPSIZE[k] || '', count: cl.length, labels: labelsOf(cl).slice(0, 3).map(l => ({ ...l, onTap: openEp(k, l.k) })), open: openEp(k), ring: s.epDev === k ? '2px solid #2A7050' : 'none' }; });
+    const eK = s.epDev && this.A[s.epDev] ? s.epDev : null, eAll = eK ? of(eK) : [], eLab = s.epLabel || 'all';
+    const eList = eAll.filter(c => eLab === 'all' || c.trigKey === eLab), eSel = eList.find(c => c.id === s.epPick) || null;
+    const ep = eK ? { name: this.A[eK].name, sub: eAll.length + ' episodes · ' + (this.EPSIZE[eK] || ''), chips: [{ k: 'all', l: 'All', c: '#171C23', n: eAll.length }].concat(labelsOf(eAll)).map(t => ({ l: t.l, n: t.n, dot: t.c, bg: eLab === t.k ? '#171C23' : '#fff', c: eLab === t.k ? '#fff' : '#171C23', onTap: () => this.setState({ epLabel: t.k }) })), days: ['Today', 'Yesterday'].map(d => { const it = eList.filter(c => c.day === d); return { day: d.toUpperCase(), items: it.map((c, i) => ({ ...c, isSel: s.epPick === c.id, rowBg: s.epPick === c.id ? 'rgba(42,112,80,0.07)' : '#fff', sep: i < it.length - 1, pickEp: () => this.setState({ epPick: c.id }) })) }; }).filter(d => d.items.length) } : { name: '', sub: '', chips: [], days: [] };
+    return { hasEpList: !!sc.epList, epDevs, epEmpty: none ? none + (none === 1 ? ' device has' : ' devices have') + ' no saved data' : '', ep,
+      epY: eK ? '0px' : '110%', epShadeO: eK ? 1 : 0, epPE: eK ? 'auto' : 'none', epClose: () => this.setState({ epDev: null, epPick: null }),
+      epPlayL: eSel ? 'Play episode' : 'Pick an episode', epPlayBg: eSel ? '#2A7050' : 'rgba(23,28,35,0.08)', epPlayC: eSel ? '#fff' : '#9A978F',
+      epPlay: eSel ? this.toastMsg('Opens player · ' + eSel.name) : () => {}, epExport: this.toastMsg(eSel ? 'Exporting ' + eSel.name : 'Exporting ' + eList.length + ' episodes') };
+  }
+  lensDef() { const I = this.IC; return {
+    devices: { name: 'Devices', who: 'IoT developer', color: '#2A7050', icon: I.device, primary: 'devices', tabs: [['home', 'Home', I.home], ['devices', 'Devices', I.device], ['data', 'Data', I.data], ['activity', 'Activity', I.clock]], home: 'Home: local and cloud devices, needs attention, recent data. Mesh graph lives in Devices › Mesh.' },
+    robots: { name: 'Robots', who: 'Robotics engineer', color: '#FF9500', icon: I.robot, primary: 'robots', tabs: [['home', 'Home', I.home], ['robots', 'Robots', I.robot], ['missions', 'Missions', I.mission], ['sim', 'Sim', I.sim], ['data', 'Data', I.data]], home: 'Home: robot health alerts, live missions, latest sims.' },
+    site: { name: 'Sites', who: 'Site operator', color: '#4B5C7A', icon: I.site, primary: 'places', tabs: [['home', 'Home', I.home], ['places', 'Places', I.site], ['missions', 'Missions', I.mission], ['alerts', 'Alerts', I.alert]], home: 'Home: the 3D twin, what’s happening now, alerts. Plain language, no logs.' },
+  }; }
+  key(s) { return s.lens + ':' + s.tab; }
+  stack() { return this.state.stacks[this.key(this.state)] || []; }
+  lensNotifs(l) { return this.N.filter(n => this.NL[n.id].includes(l)); }
+  openIn(lens, id) { const L = this.lensDef()[lens]; this.setState(s => ({ lens, tab: L.primary, stacks: { ...s.stacks, [lens + ':' + L.primary]: [{ t: 'asset', id }] } })); }
+  simRow(x) { return this.R('sim', x.name, x.engine + ' · ' + this.A[x.robot].name + ' · ' + this.P[x.scene].name, { badge: x.badge, badgeBg: x.bb, badgeC: x.bc, onTap: this.go('sim', x.id) }); }
+  cardStats(k) {
+    const s = this.state, ids = kind => Object.keys(this.A).filter(i => this.A[i].kind === kind), run = Object.keys(s.running).length;
+    if (k === 'devices') { const d = ids('device'); return [[d.filter(i => this.CONN[i] === 'local').length, 'Local', '#2A7050'], [d.filter(i => this.CONN[i] === 'cloud').length, 'Cloud', '#2A7050'], [d.filter(i => this.A[i].update).length, 'Update ready', '#34C759']]; }
+    if (k === 'robots') return [[ids('robot').length, 'Robots'], [run, 'On mission', '#2A7050'], [this.S.length, 'Sims', '#FF2D55']];
+    return [[2, 'Sites'], [Object.values(this.P).filter(p => p.parent).length, 'Rooms & zones'], [run, 'Live missions', '#2A7050']];
+  }
+  lensRoot() {
+    const s = this.state, L = s.lens, sec = (title, rows, note) => ({ title, rows, note });
+    const unread = this.lensNotifs(L).filter(n => !s.read[n.id]);
+    const nrow = n => this.R('alert', n.title, n.sub, { color: s.read[n.id] ? '#C7C7CC' : n.color, trail: n.time, onTap: () => this.openNotif(n) });
+    const attn = unread.length ? unread.map(nrow) : [this.R('alert', 'All clear', 'Nothing needs you right now', { color: '#34C759' })];
+    const ids = k => Object.keys(this.A).filter(i => this.A[i].kind === k);
+    const stats = this.cardStats(L).map(([v, l, c]) => ({ v, l, c }));
+    const live = Object.keys(s.running).map(k => this.missionRow(k));
+    if (s.tab === 'data' && L === 'devices') return { large: 'Data', largeSub: 'Devices with saved episodes', epList: true, sections: [] };
+    if (s.tab === 'home') {
+      if (L === 'devices') { const d = ids('device'); const act = { n4: ['Update', () => this.startUpdate('jetson')()], n6: ['Fix', this.toastMsg('Suggests moving Xiao closer or adding a relay')] }; const attnA = attn.map((r, i) => { const n = unread[i]; const a = n && act[n.id]; return a && !(n.id === 'n4' && this.state.upd.jetson != null) ? { ...r, hasAct: true, actLabel: a[0], act: (ev) => { ev.stopPropagation(); a[1](); } } : r; }); return { large: 'Devices', largeSub: 'Your hardware at a glance', devHero: { total: d.length, ok: d.filter(i => this.A[i].st === 'ok').length, warn: d.filter(i => this.A[i].st === 'warn').length, off: d.filter(i => this.A[i].st === 'off').length, local: d.filter(i => this.CONN[i] === 'local').length, cloud: d.filter(i => this.CONN[i] === 'cloud').length }, sections: [sec('NEEDS ATTENTION', attnA), sec('RECENT DATA', this.D.filter(x => this.A[x.asset].kind === 'device').slice(0, 3).map(x => this.dataRow(x)))] }; }
+      if (L === 'robots') return { large: 'Robots', largeSub: 'Health, missions and sims', stats, sections: [sec('NEEDS ATTENTION', attn), sec('LIVE NOW', live), sec('LATEST SIMS', this.S.slice(0, 2).map(x => this.simRow(x)))] };
+      return { large: 'Sites', largeSub: 'Wendy HQ and Austin Warehouse', twin: true, stats: [{ v: 2, l: 'Sites' }, { v: live.length, l: 'Missions live', c: '#2A7050' }, { v: unread.length, l: 'Alerts', c: '#FF3B30' }], sections: [sec('NEEDS ATTENTION', attn.slice(0, 3)), sec('HAPPENING NOW', live), sec('YOUR PLACES', ['hq', 'aus'].map(k => this.placeRow(k)))] };
+    }
+    if (s.tab === 'devices') { const d = ids('device'); const segs = [['list', 'List'], ['mesh', 'Mesh']].map(([k, l]) => ({ l, on: (s.devSeg || 'list') === k, onTap: () => this.setState({ devSeg: k }) })); if (s.devSeg === 'mesh') return { large: 'Devices', largeSub: 'Mesh network · Wendy HQ', segs, mesh: true, sections: [sec('NODES', ['jetson', 'pi', 'thor', 'xiao'].map(i => this.assetRow(i, this.A[i].model + (i === 'xiao' ? ' · weak link −79 dBm' : ' · good link'))), 'Austin Warehouse devices are cloud-only and not on this mesh.')] }; return { large: 'Devices', largeSub: d.length + ' devices', segs, sections: [sec('NEW DEVICE', [this.R('add', 'Set up a new device', 'Nearby over Bluetooth', { color: '#34C759', onTap: this.openSetup })]), sec('LOCAL · NEARBY NOW', d.filter(i => this.CONN[i] === 'local').map(i => this.assetRow(i))), sec('CLOUD', d.filter(i => this.CONN[i] === 'cloud').map(i => this.assetRow(i)))] }; }
+    if (s.tab === 'robots') return { large: 'Robots', largeSub: ids('robot').length + ' robots', sections: [sec('FLEETS', ['patrol'].map(k => this.fleetRow(k))), sec('ALL ROBOTS', ids('robot').map(i => this.assetRow(i)))] };
+    if (s.tab === 'sim') return { large: 'Sim', largeSub: 'Same body models and 3D twins as the real thing', sections: [sec('SIMULATIONS', this.S.map(x => this.simRow(x)))] };
+    if (s.tab === 'activity') {
+      const seg = s.actSeg || 'alerts';
+      const nArc = this.ALERTS.filter(x => (s.archived || {})[x[0]]).length;
+      const segs = [['alerts', 'Alerts'], ['events', 'Events'], ['archived', nArc ? 'Archived ' + nArc : 'Archived']].map(([k, l]) => ({ l, on: seg === k, onTap: () => this.setState({ actSeg: k }) }));
+      if (seg === 'archived') { const arc = this.ALERTS.filter(x => (s.archived || {})[x[0]]); return { large: 'Activity', largeSub: 'Alerts and events from your devices', segs, sections: [sec('ARCHIVED', arc.map(([id, title, dev, sub, time, day]) => ({ ...this.R('alert', title, this.A[dev].name + ' · ' + (day === 'Today' ? time : 'Yesterday ' + time), { color: '#9A978F', onTap: this.go('asset', dev) }), hasAct: true, actLabel: 'Restore', act: (ev) => { ev.stopPropagation(); this.setState(st => { const r = { ...(st.archived || {}) }; delete r[id]; return { archived: r }; }); } })), arc.length ? 'Archived alerts are kept for 30 days on this iPhone and in Wendy Cloud, then deleted. Their clips stay in Data.' : 'Nothing archived. Swipe left on an alert to archive it.')] }; }
+      if (seg === 'alerts') return { large: 'Activity', largeSub: 'Alerts and events from your devices', segs, alertCards: true, sections: [] };
+      const evRow = ([t, d, w, id, k]) => this.R(k, t, d + ' · ' + w, { color: { app: '#2A7050', upd: '#007AFF', wifi: '#30B0C7', rec: '#FF3B30', alert: '#8E8E93', bt: '#5856D6' }[k], onTap: this.go('asset', id) });
+      return { large: 'Activity', largeSub: 'Alerts and events from your devices', segs, sections: [sec('TODAY', this.EV2.filter(e => e[5] === 'Today').map(evRow)), sec('YESTERDAY', this.EV2.filter(e => e[5] === 'Yesterday').map(evRow))] };
+    }
+    if (s.tab === 'alerts') return { large: 'Alerts', largeSub: unread.length + ' unread', sections: [sec('TODAY', this.lensNotifs('site').filter(n => n.today).map(nrow)), sec('EARLIER', this.lensNotifs('site').filter(n => !n.today).map(nrow))] };
+    return null;
+  }
+  simScreen(id) {
+    const x = this.S.find(y => y.id === id); const rows = [this.assetRow(x.robot), this.placeRow(x.scene)]; if (x.mission) rows.push(this.missionRow(x.mission));
+    return { title: x.name, hero: this.hero('sim', 'SIMULATION · ' + x.engine.toUpperCase(), x.name, x.status, { actions: [this.btn('Watch', this.toastMsg('Opens the sim viewer')), this.btn('Run again', this.toastMsg('Queued on Jetson Thor T1'), true)] }), sections: [{ title: 'SETUP', rows, note: 'Uses the robot’s body model and the place’s 3D twin, so results carry over to the real run.' }] };
+  }
+  simpleAsset(id) {
+    const a = this.A[id], isR = a.kind === 'robot', ms = this.missionsFor(id);
+    const plain = { run: 'Working', rec: 'Working', ok: 'Ready', off: 'Offline', warn: 'Connection weak' }[a.st];
+    const secs = [{ title: 'WHERE', rows: [this.R('pin', this.P[a.now].name, a.now === a.home ? 'Its usual place' : 'Usually in ' + this.P[a.home].name, { color: '#FF2D55', onTap: this.go('place', a.now) })] }];
+    if (ms.length) secs.push({ title: 'MISSIONS', rows: ms.map(k => this.missionRow(k)) });
+    secs.push({ title: 'MORE DETAIL', rows: [this.R(a.kind, 'Open in ' + (isR ? 'Robots' : 'Devices') + ' view', isR ? 'Joints, compute, sims, data' : 'Apps, logs, peripherals, network', { onTap: () => this.openIn(isR ? 'robots' : 'devices', id) })], note: 'The operator sees the simple page; engineers jump to the full one in their lens.' });
+    return { title: a.name, hero: this.hero(a.kind, isR ? 'ROBOT' : 'DEVICE', a.name, plain + (a.battery != null ? ' · battery ' + a.battery + '%' : ''), { actions: isR ? [this.btn('Send to…', this.toastMsg('Pick a place on the map')), this.btn('Stop', this.toastMsg('Stopping ' + a.name), true, true)] : [this.btn('View camera', this.toastMsg('Opens live view'), true)] }), sections: secs };
+  }
+  componentDidMount() { this.peekAcc(); this.iv = setInterval(() => this.setState(s => ({ running: Object.fromEntries(Object.entries(s.running).map(([k, v]) => [k, Math.min(1, v + 0.01)])) })), 1500); }
+  componentWillUnmount() { clearTimeout(this.aT); clearTimeout(this.cT); clearTimeout(this.sT); (this.ivs || []).forEach(clearInterval); clearInterval(this.iv); clearTimeout(this.tt); }
+  push = (t, id) => this.setState(s => { const k = this.key(s); return { stacks: { ...s.stacks, [k]: [...(s.stacks[k] || []), { t, id }] } }; });
+  go = (t, id) => () => this.push(t, id);
+  pop = () => this.setState(s => { const k = this.key(s); return { stacks: { ...s.stacks, [k]: (s.stacks[k] || []).slice(0, -1) } }; });
+  goTab = (tab) => this.setState(s => ({ tab, orgOpen: false, stacks: s.tab === tab ? { ...s.stacks, [s.lens + ':' + tab]: [] } : s.stacks }));
+  openData = (f) => () => this.setState(s => ({ tab: 'data', dataF: { place: null, asset: null, mission: null, ...f }, stacks: { ...s.stacks, [s.lens + ':data']: [] } }));
+  toastMsg = (t) => () => { clearTimeout(this.tt); this.setState({ toast: t }); this.tt = setTimeout(() => this.setState({ toast: '' }), 2200); };
+  sub(id) { const out = [id]; Object.keys(this.P).forEach(k => { if (this.P[k].parent === id) out.push(...this.sub(k)); }); return out; }
+  path(id) { const p = []; let c = this.P[id].parent; while (c) { p.unshift(this.P[c].name); c = this.P[c].parent; } return p.join(' › '); }
+  pKind(id) { return this.P[id].kind === 'Site' ? 'site' : 'room'; }
+  R(kind, title, sub, o = {}) { return { icon: this.IC[kind], color: o.color || this.COL[kind], title, sub, trail: o.trail || '', onTap: o.onTap || (() => {}), hasProg: o.prog != null, progW: Math.round((o.prog || 0) * 100) + '%', hasBadge: !!o.badge, badge: o.badge || '', badgeBg: o.badgeBg || 'rgba(23,28,35,0.07)', badgeC: o.badgeC || '#171C23' }; }
+  stBadge(a) { return ({ run: { badge: 'MISSION', badgeBg: 'rgba(42,112,80,0.12)', badgeC: '#2A7050' }, rec: { badge: 'REC', badgeBg: 'rgba(255,59,48,0.12)', badgeC: '#FF3B30' }, off: { badge: 'OFFLINE', badgeBg: 'rgba(23,28,35,0.07)', badgeC: '#8E8E93' }, warn: { badge: 'WEAK', badgeBg: 'rgba(255,149,0,0.14)', badgeC: '#C93400' } })[a.st] || {}; }
+  assetRow(id, sub) { const a = this.A[id]; return this.R(a.kind, a.name, sub || (a.model + ' · ' + this.P[a.now].name), { ...this.stBadge(a), onTap: this.go('asset', id) }); }
+  placeRow(id) { const p = this.P[id]; const n = Object.values(this.A).filter(a => this.sub(id).includes(a.home)).length; const kids = Object.values(this.P).filter(x => x.parent === id).length; return this.R(this.pKind(id), p.name, [p.kind, p.where, kids ? kids + ' inside' : null, n + ' assets', p.twin ? '3D twin' : null].filter(Boolean).join(' · '), { onTap: this.go('place', id) }); }
+  missionRow(id) { const m = this.M[id]; const pr = this.state.running[id]; const who = m.who[0] === 'asset' ? this.A[m.who[1]].name : this.F[m.who[1]].name; return this.R('mission', m.name, this.P[m.place].name + ' · ' + who + ' · ' + (pr != null ? (pr >= 1 ? 'finished' : Math.round(pr * 100) + '%') : m.sched), { prog: pr, onTap: this.go('mission', id) }); }
+  fleetRow(id) { const f = this.F[id]; return this.R('fleet', f.name, f.members.length + ' assets · ' + f.rule, { onTap: this.go('fleet', id) }); }
+  dataRow(d) { return this.R('data', d.name, d.type + ' · ' + d.meta + ' · ' + this.A[d.asset].name + ' · ' + this.P[d.place].name, { trail: d.when, onTap: this.go('data', d.id) }); }
+  runRow(r) { const m = this.M[r.m]; const live = this.state.running[r.m]; const isRun = r.res === 'Running'; return this.R('run', m.name, r.when + ' · ' + (isRun ? (live == null ? 'Stopped' : live >= 1 ? 'Finished' : 'Running ' + Math.round(live * 100) + '%') : r.res), { color: isRun ? '#2A7050' : r.res.startsWith('Aborted') ? '#FF3B30' : '#34C759', onTap: this.go('mission', r.m) }); }
+  missionsFor(assetId) { return Object.keys(this.M).filter(k => { const w = this.M[k].who; return (w[0] === 'asset' && w[1] === assetId) || (w[0] === 'fleet' && this.F[w[1]].members.includes(assetId)); }); }
+  btn(label, onTap, primary, danger) { return { label, onTap, bg: primary ? (danger ? '#FF3B30' : '#2A7050') : 'rgba(42,112,80,0.1)', color: primary ? '#fff' : '#2A7050' }; }
+  hero(kind, kicker, title, sub, o = {}) { return { icon: this.IC[kind], color: o.color || this.COL[kind], kicker, title, sub, chips: o.chips || [], hasChips: !!(o.chips && o.chips.length), actions: o.actions || [], hasActions: !!(o.actions && o.actions.length), hasProg: o.prog != null, progW: Math.round((o.prog || 0) * 100) + '%' }; }
+  screen() {
+    const s = this.state; const st = this.stack(); const top = st[st.length - 1];
+    if (!s.lens) return { large: 'Good morning', largeSub: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }), sections: [] };
+    if (!top) { const r = this.lensRoot(); if (r) return r; }
+    const sec = (title, rows, note) => ({ title, rows, note });
+    const unreadN = this.N.filter(n => !s.read[n.id]);
+    if (!top) {
+      if (s.tab === 'home') {
+        return { ent: null, large: 'Home', largeSub: 'What needs you right now', sections: [
+          sec('LIVE NOW', Object.keys(s.running).map(k => this.missionRow(k))),
+          sec('NEEDS ATTENTION', [...unreadN.slice(0, 3).map(n => this.R('alert', n.title, n.sub, { color: n.color, trail: n.time, onTap: () => this.openNotif(n) })), this.R('alert', 'All notifications', unreadN.length + ' unread', { color: '#8E8E93', onTap: this.openNotifs })]),
+          sec('PLACES', ['room', 'lab', 'aus'].map(k => this.placeRow(k))),
+        ] };
+      }
+      if (s.tab === 'places') return { ent: 'place', large: 'Places', largeSub: 'Sites contain floors, rooms and zones', sections: [
+        sec('SITES', Object.keys(this.P).filter(k => !this.P[k].parent).map(k => this.placeRow(k))),
+        sec('ROOMS WITH A 3D TWIN', Object.keys(this.P).filter(k => this.P[k].twin).map(k => this.placeRow(k))),
+      ] };
+      if (s.tab === 'assets') {
+        const ids = Object.keys(this.A);
+        const pick = k => ids.filter(i => this.A[i].kind === k).map(i => this.assetRow(i));
+        const secs = [sec('FLEETS', Object.keys(this.F).map(k => this.fleetRow(k)), 'A fleet groups assets for bulk updates and missions. It is not a location.')];
+        if (s.assetSeg !== 'device') secs.push(sec('ROBOTS', pick('robot')));
+        if (s.assetSeg !== 'robot') secs.push(sec('DEVICES', pick('device')));
+        return { ent: 'asset', large: 'Assets', largeSub: ids.length + ' devices and robots', segs: [['all', 'All'], ['robot', 'Robots'], ['device', 'Devices']].map(([k, l]) => ({ l, on: s.assetSeg === k, onTap: () => this.setState({ assetSeg: k }) })), sections: secs };
+      }
+      if (s.tab === 'missions') {
+        const segs = [['missions', 'Missions'], ['runs', 'Runs']].map(([k, l]) => ({ l, on: s.missionSeg === k, onTap: () => this.setState({ missionSeg: k }) }));
+        if (s.missionSeg === 'runs') return { ent: 'mission', large: 'Missions', largeSub: 'Every run, newest first', segs, sections: [sec('RUNS', this.RUNS.map(r => this.runRow(r)))] };
+        const secs = [];
+        if (Object.keys(s.running).length) secs.push(sec('RUNNING', Object.keys(s.running).map(k => this.missionRow(k))));
+        secs.push(sec('SCHEDULED & SAVED', Object.keys(this.M).filter(k => s.running[k] == null).map(k => this.missionRow(k))));
+        return { ent: 'mission', large: 'Missions', largeSub: 'Routes, detections and goals', segs, sections: secs };
+      }
+      if (s.tab === 'data') {
+        const f = s.dataF;
+        const runM = id => { const r = this.RUNS.find(x => x.id === id); return r && r.m; };
+        const lk = s.lens === 'devices' ? 'device' : s.lens === 'robots' ? 'robot' : null;
+        const list = this.D.filter(d => (!lk || this.A[d.asset].kind === lk) && (!f.place || this.sub(f.place).includes(d.place)) && (!f.asset || d.asset === f.asset) && (!f.mission || runM(d.run) === f.mission));
+        const cyc = (key, opts) => () => this.setState(st2 => { const i = opts.indexOf(st2.dataF[key]); return { dataF: { ...st2.dataF, [key]: opts[(i + 1) % opts.length] } }; });
+        const fl = (key, label, opts, nm) => ({ label: f[key] ? nm(f[key]) : label, bg: f[key] ? '#2A7050' : 'rgba(23,28,35,0.07)', color: f[key] ? '#fff' : '#171C23', onTap: cyc(key, [null, ...opts]) });
+        return { ent: 'data', large: 'Data', largeSub: 'Recordings from every asset and place', filters: [
+          fl('place', 'Any place', ['room', 'lab', 'hq', 'aus'], k => this.P[k].name), fl('asset', 'Any asset', (lk === 'device' ? ['jetson', 'pi', 'dockcam'] : lk === 'robot' ? ['go2', 'so101', 'g1'] : ['go2', 'so101', 'jetson', 'g1']), k => this.A[k].name), fl('mission', 'Any mission', ['night', 'audit', 'demos'], k => this.M[k].name),
+        ], sections: [sec(list.length + ' RECORDINGS', list.map(d => this.dataRow(d)), list.length ? null : 'Nothing matches. Tap a filter to change it.')] };
+      }
+    }
+    if (top.t === 'notifs') { const nr = n => this.R('alert', n.title, n.sub, { color: s.read[n.id] ? '#C7C7CC' : n.color, trail: n.time, onTap: () => this.openNotif(n) }); return { ent: 'alert', title: 'Notifications', sections: [sec('TODAY', this.N.filter(n => n.today).map(nr)), sec('EARLIER', this.N.filter(n => !n.today).map(nr))] }; }
+    if (top.t === 'place') {
+      const id = top.id, p = this.P[id], ids = this.sub(id);
+      const kids = Object.keys(this.P).filter(k => this.P[k].parent === id);
+      const homeHere = Object.keys(this.A).filter(k => ids.includes(this.A[k].home));
+      const visiting = Object.keys(this.A).filter(k => ids.includes(this.A[k].now) && !ids.includes(this.A[k].home));
+      const ms = Object.keys(this.M).filter(k => ids.includes(this.M[k].place));
+      const dn = this.D.filter(d => ids.includes(d.place)).length;
+      const secs = [];
+      if (kids.length) secs.push(sec('INSIDE', kids.map(k => this.placeRow(k))));
+      secs.push(sec('ASSETS BASED HERE', homeHere.map(k => { const a = this.A[k]; return this.assetRow(k, a.model + (!ids.includes(a.now) ? ' · now in ' + this.P[a.now].name : ids.length > 1 ? ' · ' + this.P[a.home].name : '')); })));
+      if (visiting.length) secs.push(sec('VISITING NOW', visiting.map(k => this.assetRow(k, 'Based in ' + this.P[this.A[k].home].name)), 'Each asset has one home place and a live location, so a robot shows up wherever it is right now.'));
+      if (ms.length) secs.push(sec('MISSIONS HERE', ms.map(k => this.missionRow(k))));
+      if (s.lens !== 'site') secs.push(sec('DATA', [this.R('data', dn + ' recordings', 'Opens Data filtered to ' + p.name, { onTap: this.openData({ place: id }) })]));
+      const pth = this.path(id);
+      return { ent: 'place', title: p.name, twin: !!p.twin, hero: this.hero(this.pKind(id), p.kind.toUpperCase() + (pth ? ' · ' + pth.toUpperCase() : ''), p.name, [p.where, homeHere.length + ' assets', ms.length + ' missions'].filter(Boolean).join(' · ')), sections: secs };
+    }
+    if (top.t === 'asset') {
+      if (s.lens === 'site') return this.simpleAsset(top.id);
+      if (this.A[top.id].kind === 'device') return this.deviceScreen(top.id);
+      const id = top.id, a = this.A[id];
+      const fl = Object.keys(this.F).filter(k => this.F[k].members.includes(id));
+      const ms = this.missionsFor(id); const dn = this.D.filter(d => d.asset === id).length;
+      const chips = [a.battery != null ? 'Battery ' + a.battery + '%' : null, a.kind === 'device' ? (a.update ? 'Agent update available' : 'Agent 0.9.5') : null, a.st === 'off' ? 'Last seen 2 h ago' : 'Cloud', a.now === 'room' ? 'Mesh' : null].filter(Boolean);
+      const actions = a.kind === 'robot' ? [this.btn('Drive', this.toastMsg('Opens live drive view')), this.btn('Start mission', this.toastMsg('Pick a mission for ' + a.name), true)] : [this.btn('Logs', this.toastMsg('Opens live logs')), a.update ? this.btn('Update agent', this.toastMsg('Updating agent to 0.9.5'), true) : this.btn('Apps', this.toastMsg('Opens apps'), true)];
+      const secs = [sec('LOCATION', [this.R(this.pKind(a.home), 'Home · ' + this.P[a.home].name, this.path(a.home) || 'Site', { onTap: this.go('place', a.home) }), this.R('pin', 'Now · ' + this.P[a.now].name, a.now === a.home ? 'At home' : 'Visiting', { color: '#FF2D55', onTap: this.go('place', a.now) })])];
+      if (a.kind === 'robot') secs.push(sec('BODY & COMPUTE', [this.R('health', 'Health', a.health, { color: '#FF9500', onTap: this.toastMsg('Opens joints, temperatures and battery') }), this.R('device', 'Compute', a.compute, { onTap: this.toastMsg('Opens the onboard computer’s apps and logs') })]));
+      if (a.kind === 'robot') { const sm = this.S.filter(x => x.robot === id); if (sm.length) secs.push(sec('SIMULATION', sm.map(x => this.simRow(x)))); }
+      if (fl.length) secs.push(sec('FLEETS', fl.map(k => this.fleetRow(k))));
+      if (ms.length) secs.push(sec('MISSIONS', ms.map(k => this.missionRow(k))));
+      secs.push(sec('DATA', [this.R('data', dn + ' recordings', 'Opens Data filtered to ' + a.name, { onTap: this.openData({ asset: id }) })]));
+      return { ent: 'asset', title: a.name, hero: this.hero(a.kind, (a.kind === 'robot' ? 'ROBOT · ' : 'DEVICE · ') + a.model.toUpperCase(), a.name, a.status, { chips, actions }), sections: secs };
+    }
+    if (top.t === 'fleet') {
+      const f = this.F[top.id]; const ms = Object.keys(this.M).filter(k => this.M[k].who[0] === 'fleet' && this.M[k].who[1] === top.id);
+      const secs = [sec('MEMBERS', f.members.map(k => this.assetRow(k)), f.rule.startsWith('Rule') ? 'Members update automatically when assets match the rule.' : null)];
+      if (ms.length) secs.push(sec('MISSIONS ASSIGNED', ms.map(k => this.missionRow(k))));
+      return { ent: 'fleet', title: f.name, hero: this.hero('fleet', 'FLEET · ' + f.members.length + ' ASSETS', f.name, f.rule, { actions: [this.btn('Update all', this.toastMsg('Updating ' + f.members.length + ' assets, one at a time')), this.btn('Run mission', this.toastMsg('Pick a mission for ' + f.name), true)] }), sections: secs };
+    }
+    if (top.t === 'mission') {
+      const id = top.id, m = this.M[id], pr = s.running[id], running = pr != null && pr < 1;
+      const whoRow = m.who[0] === 'asset' ? this.assetRow(m.who[1]) : this.fleetRow(m.who[1]);
+      const actions = running ? [this.btn('Pause', this.toastMsg('Paused · robot holds position')), this.btn('Stop', () => this.setState(st2 => { const r = { ...st2.running }; delete r[id]; return { running: r }; }), true, true)] : [this.btn('Edit', this.toastMsg('Opens the mission editor')), this.btn('Run now', () => this.setState(st2 => ({ running: { ...st2.running, [id]: 0 } })), true)];
+      const dn = this.D.filter(d => { const r = this.RUNS.find(x => x.id === d.run); return r && r.m === id; }).length;
+      return { ent: 'mission', title: m.name, hero: this.hero('mission', 'MISSION · ' + (running ? 'RUNNING ' + Math.round(pr * 100) + '%' : m.sched.toUpperCase()), m.name, this.P[m.place].name + ' · ' + (m.who[0] === 'asset' ? this.A[m.who[1]].name : this.F[m.who[1]].name), { prog: running ? pr : null, actions }), sections: [
+        sec('WHERE & WHO', [this.placeRow(m.place), whoRow]),
+        sec('STEPS', m.steps.map(([k, t, d]) => this.R(k, t, d, { color: '#2A7050', onTap: this.toastMsg(k === 'route' ? 'Edit the route on ' + this.P[m.place].name + '’s map' : 'Edit ' + t.toLowerCase()) }))),
+        sec('RUNS', this.RUNS.filter(r => r.m === id).map(r => this.runRow(r))),
+        sec('DATA', [this.R('data', dn + ' recordings', 'Opens Data filtered to ' + m.name, { onTap: this.openData({ mission: id }) })]),
+      ].filter(x => s.lens !== 'site' || x.title !== 'DATA') };
+    }
+    if (top.t === 'devlist') { const loc = top.id === 'local'; const d = Object.keys(this.A).filter(i => this.A[i].kind === 'device' && this.CONN[i] === top.id); return { title: loc ? 'Local devices' : 'Cloud devices', sections: [sec(loc ? 'ON THIS NETWORK OR BLUETOOTH' : 'REACHABLE THROUGH WENDY CLOUD', d.map(i => this.assetRow(i)), loc ? 'Found nearby by this iPhone. Commands go direct, no cloud round-trip.' : 'Not nearby right now. Commands and logs go through the cloud tunnel.')] }; }
+    if (top.t === 'app') return this.appScreen(top.id);
+    if (top.t === 'sim') return this.simScreen(top.id);
+    if (top.t === 'data') {
+      const d = this.D.find(x => x.id === top.id); const run = d.run && this.RUNS.find(r => r.id === d.run);
+      const rows = [this.assetRow(d.asset), this.placeRow(d.place)]; if (run) rows.push(this.runRow(run));
+      return { ent: 'data', title: d.name, hero: this.hero('data', 'DATA · ' + d.type.toUpperCase(), d.name, d.meta + ' · ' + d.when, { actions: [this.btn('Share', this.toastMsg('Share sheet')), this.btn('Play', this.toastMsg('Opens the recording player'), true)] }), sections: [sec('CAME FROM', rows, 'Data has no home of its own: it is tagged with the asset, place and run that produced it.')] };
+    }
+    return { sections: [] };
+  }
+  openNotif = (n) => this.setState(s => { const k = this.key(s); return { read: { ...s.read, [n.id]: true }, stacks: { ...s.stacks, [k]: [...(s.stacks[k] || []), { t: n.go[0], id: n.go[1] }] } }; });
+  openNotifs = () => { if (this.state.lens === 'site') return this.goTab('alerts'); if (this.state.lens === 'devices') { this.setState({ actSeg: 'alerts' }); return this.goTab('activity'); } this.setState(s => { const k = this.key(s); const st = s.stacks[k] || []; if (st.length && st[st.length - 1].t === 'notifs') return null; return { orgOpen: false, stacks: { ...s.stacks, [k]: [...st, { t: 'notifs' }] } }; }); };
+  renderVals() {
+    const s = this.state; const sc = this.screen(); const st = this.stack(); const root = !st.length;
+    const tabsDef = [['home', 'Home', this.IC.home], ['places', 'Places', this.IC.site], ['assets', 'Assets', this.IC.robot], ['missions', 'Missions', this.IC.mission], ['data', 'Data', this.IC.data]];
+    const ent = s.orgOpen ? 'org' : sc.ent;
+    const map = [
+      ['org', 'Org', 'org', 'Switcher, top-left. Owns every place, asset and recording.', null],
+      ['place', 'Places', 'site', 'Nest: Site › Floor › Room. Rooms carry the 3D twin.', 'places'],
+      ['asset', 'Assets', 'robot', 'Devices and robots. One home place plus a live location.', 'assets'],
+      ['fleet', 'Fleets', 'fleet', 'Groups of assets, by rule or by hand. For bulk updates and missions.', null],
+      ['mission', 'Missions', 'mission', 'Happen in a place, by an asset or fleet. Steps: route, detect, goal.', 'missions'],
+      ['data', 'Data', 'data', 'Tagged with the asset, place and run that made it.', 'data'],
+      ['alert', 'Notifications', 'alert', 'From assets, missions and places. Bell on every screen.', null],
+    ];
+    const orgs = [['wendy', 'Wendy Labs', '9 assets · 2 sites'], ['acme', 'Acme Robotics', 'Invited · 24 assets · 5 sites']];
+    return {
+      navTitle: root ? '' : (sc.title || ''), hasBack: !root, back: this.pop, hasOrg: root, openOrg: () => this.setState({ orgOpen: true }), closeOrg: () => this.setState({ orgOpen: false }),
+      orgName: 'Wendy Labs', orgInitial: 'W',
+      orgOpen: s.orgOpen, orgRows: orgs.map(([k, n, sub]) => ({ name: n, sub, initial: n[0], on: s.org === k, onTap: () => { this.setState({ orgOpen: false }); if (k !== s.org) this.toastMsg('In the real app, every tab now shows ' + n)(); } })),
+      openNotifs: this.openNotifs, unread: this.N.filter(n => !s.read[n.id]).length + (s.lens === 'devices' ? this.ALERTS.filter(x => x[0][0] === 'a' && !s.read[x[0]] && !(s.archived || {})[x[0]]).length : 0), hasUnread: (this.N.some(n => !s.read[n.id])) || (s.lens === 'devices' && this.ALERTS.some(x => !s.read[x[0]])),
+      isRoot: root, largeTitle: sc.large || '', largeSub: sc.largeSub || '',
+      hasTwin: !!sc.twin, open3d: this.toastMsg('Opens the full-screen 3D twin'),
+      twinDots: sc.twin ? Object.keys(this.A).filter(k => this.A[k].now === 'room' && this.A[k].tx != null).map(k => ({ x: this.A[k].tx + 'px', y: this.A[k].ty + 'px', color: this.COL[this.A[k].kind], label: this.A[k].name, onTap: this.go('asset', k) })) : [],
+      hasHero: !!sc.hero, hero: sc.hero || { chips: [], actions: [] },
+      hasSeg: !!sc.segs, segs: (sc.segs || []).map(g => ({ label: g.l, onTap: g.onTap, weight: g.on ? 600 : 500, bg: g.on ? '#2A7050' : 'transparent', fg: g.on ? '#fff' : '#171C23', shadow: g.on ? '0 1px 3px rgba(0,0,0,0.12)' : 'none' })),
+      hasFilters: !!sc.filters, filters: sc.filters || [],
+      sections: sc.sections.map(x => ({ title: x.title, note: x.note || '', hasNote: !!x.note, rows: x.rows.map((r, i) => ({ ...r, sep: i < x.rows.length - 1 })) })),
+      toastOn: !!s.toast, toast: s.toast,
+      tabs: tabsDef.map(([k, l, ic]) => ({ label: l, icon: ic, onTap: () => this.goTab(k), bg: s.tab === k ? 'rgba(42,112,80,0.12)' : 'transparent', color: s.tab === k ? '#2A7050' : '#171C23' })),
+      entityMap: map.map(([k, n, ic, d, tab]) => ({ name: n, desc: d, icon: this.IC[ic], color: this.COL[k], bg: ent === k ? '#fff' : 'rgba(255,255,255,0.45)', border: ent === k ? this.COL[k] : 'transparent', onTap: () => { if (k === 'alert') this.openNotifs(); else if (k === 'org') this.setState({ orgOpen: true }); else if (k === 'fleet') this.setState(st2 => ({ tab: 'assets', orgOpen: false, stacks: { ...st2.stacks, assets: [{ t: 'fleet', id: 'patrol' }] } })); else this.goTab(tab); } })),
+      ...(() => {
+        const LD = this.lensDef(), L = s.lens ? LD[s.lens] : null;
+        const un = s.lens ? this.lensNotifs(s.lens).filter(n => !s.read[n.id]).length : this.N.filter(n => !s.read[n.id]).length;
+        return {
+          isLauncher: !s.lens, isRoot: root,
+          ...(() => {
+            const tint = { devices: 'rgba(159,226,191,0.35)', robots: 'rgba(255,149,0,0.12)', site: 'rgba(75,92,122,0.14)' }; const mk = k => { const d = LD[k]; const u = this.lensNotifs(k).filter(n => !s.read[n.id]).length; const st = this.cardStats(k); return { k, tint: tint[k], shadow: tint[k], name: d.name, color: d.color, icon: d.icon, hasAttn: u > 0, attn: u + ' need attention', attnN: String(u), stats: st.map(([v, l, c]) => ({ v: String(v), l, color: c || '#171C23' })), line: st.slice(0, 2).map(([v, l]) => v + ' ' + l.toLowerCase()).join(' · '), onTap: () => this.setState({ lens: k, tab: 'home' }) }; };
+            const f = s.focus;
+            return { main: { ...mk(f), isDev: f === 'devices', isRob: f === 'robots', isSite: f === 'site' }, minor: Object.keys(LD).filter(k => k !== f).map(k => mk(k)),
+              onboardOpen: s.onboard, onboardDone: () => this.setState({ onboard: false }),
+              onboardOpts: [['devices', 'I build with devices', 'Pis, Jetsons and sensors: apps, logs, updates'], ['robots', 'I work on robots', 'Go2, G1, arms, drones: health, missions, sim'], ['site', 'I run a site', 'Rooms and warehouses: what’s happening, alerts']].map(([k, n, d]) => ({ name: n, desc: d, color: LD[k].color, icon: LD[k].icon, border: f === k ? LD[k].color : 'transparent', ring: f === k ? '#2A7050' : '#CBCBCB', dot: f === k ? '#2A7050' : 'transparent', onTap: () => this.setState({ focus: k }) })), focusSegs: Object.keys(LD).map(k => ({ label: LD[k].name, onTap: () => this.setState({ focus: k }), weight: f === k ? 600 : 500, bg: f === k ? '#fff' : 'transparent', shadow: f === k ? '0 1px 3px rgba(0,0,0,0.12)' : 'none' })) };
+          })(),
+          lensCards: Object.keys(LD).map(k => { const d = LD[k]; const u = this.lensNotifs(k).filter(n => !s.read[n.id]).length; return { name: d.name, who: d.who, color: d.color, icon: d.icon, hasAttn: u > 0, attn: u + ' need attention', stats: this.cardStats(k).map(([v, l, c]) => ({ v: String(v), l, color: c || '#171C23' })), onTap: () => this.setState({ lens: k, tab: 'home' }) }; }),
+          ...this.epView(sc), ...this.alertView(sc), hasDevHero: !!sc.devHero, dh: sc.devHero ? (() => { const x = sc.devHero; const parts = [[x.ok, '#34C759', 'online'], [x.warn, '#FF9500', 'weak'], [x.off, '#C7C7CC', 'offline']].filter(p => p[0]); return { total: String(x.total), legend: parts.map(([n, c, t]) => ({ c, t: n + ' ' + t })), bar: parts.map(([n, c]) => ({ n, c })), split: [{ v: String(x.local), l: 'Local · nearby', c: '#2A7050', icon: this.IC.bt, onTap: this.go('devlist', 'local') }, { v: String(x.cloud), l: 'Cloud', c: '#2A7050', icon: this.IC.globe, onTap: this.go('devlist', 'cloud') }] }; })() : { legend: [], bar: [], split: [] }, openSetup: this.openSetup,
+          hasStats: !!sc.stats, stats: (sc.stats || []).map(t => ({ v: String(t.v), l: t.l, color: t.c || '#171C23', onTap: t.onTap || (() => {}), tap: !!t.onTap, cursor: t.onTap ? 'pointer' : 'default' })),
+          ...this.setupView(),
+          ...(() => {
+            const c = this.ctx(); const updId = Object.keys(s.upd).find(k => typeof s.upd[k] === 'number');
+            let prev = null;
+            const msgs = [{ id: 0, who: 'ai', text: 'Hi, I’m Wendy. I follow you around the app, so I always know what you’re looking at. Ask me to change something or explain it.' }, ...s.chat];
+            return {
+              accOn: !s.chatOpen && !s.setup && !s.browser, accBottom: '96px', accW: s.accMini ? '52px' : '370px', accFull: false, accOpacity: s.accMini ? 0.92 : 1, accMiniBusy: !!updId && !s.chatUnread, accHasUnread: !!s.chatUnread, accUnread: String(s.chatUnread || 0),
+              accText: s.chatUnread ? 'Wendy replied · tap to read' : 'Ask about ' + c.name + '…', accColor: s.chatUnread ? '#171C23' : '#5B5A56',
+              accHasSub: !!updId, accSub: updId ? 'Updating ' + this.A[updId].name + ' · ' + Math.round(s.upd[updId] * 100) + '%' : '',
+              openChat: () => this.setState({ chatOpen: true, chatSize: 'mid', chatUnread: 0 }), closeChat: () => { clearTimeout(this.aT); this.setState({ chatOpen: false, accMini: true }); }, toggleChatSize: () => this.setState(st => ({ chatSize: { peek: 'mid', mid: 'big', big: 'peek' }[st.chatSize] })),
+              chatOpen: s.chatOpen, chatBottom: '96px', chatH: { peek: '150px', mid: '360px', big: '640px' }[s.chatSize], mainPadB: '120px', chatCtx: c.name, chatRef: this.chatRef,
+              chatMsgs: msgs.map(m => { const mine = m.who === 'me'; const card = this.cardView(m); const tag = mine && m.ctx !== prev ? 'About ' + m.ctx : ''; if (mine) prev = m.ctx; return { text: m.text, align: mine ? 'flex-end' : 'flex-start', bg: mine ? '#2A7050' : '#F1EEE7', color: mine ? '#fff' : '#171C23', hasTag: !!tag, tag, hasCard: !!card, card: card || {} }; }),
+              chatTyping: s.chatTyping, chatText: s.chatText, onChatText: e => this.setState({ chatText: e.target.value }), onChatKey: e => { if (e.key === 'Enter') { e.preventDefault(); this.sendChat(); } },
+              chatSend: () => this.sendChat(), sendBg: s.chatText.trim() ? '#2A7050' : 'rgba(23,28,35,0.07)', sendFg: s.chatText.trim() ? '#fff' : '#9A978F',
+              chatPlaceholder: 'Ask about ' + c.name, chatSuggest: this.suggest(c).map(t => ({ text: t, onTap: () => this.sendChat(t) })),
+            };
+          })(),
+          browserOpen: !!s.browser, browserUrl: s.browser ? s.browser.url.replace(/^https?:\/\//, '') : '', browserTitle: s.browser ? s.browser.label : '', browserApp: s.browser ? s.browser.app + ' · port ' + s.browser.port : '',
+          browserVia: s.browser ? (s.browser.local ? 'Served by ' + s.browser.dev + ' on your local network' : 'Served by ' + s.browser.dev + ' through the Wendy Cloud tunnel') : '',
+          closeBrowser: () => this.setState({ browser: null }), openSafari: this.toastMsg('Opens in Safari'),
+          hasFeeds: !!(sc.feeds && sc.feeds.length), feeds: sc.feeds || [],
+          hasMesh: !!sc.mesh, meshManage: this.toastMsg('Opens mesh settings: channel, mode, join'),
+          ...(() => { const PH = 'M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2';
+            const N = { phone: ['This iPhone', 50, 95, PH], jetson: ['Jetson 4F2A', 160, 95], pi: ['Pi B3C1', 255, 45], thor: ['Thor T1', 255, 148], xiao: ['Xiao Sense', 335, 95] };
+            const E = [['phone', 'jetson', 'good'], ['jetson', 'pi', 'good'], ['jetson', 'thor', 'good'], ['pi', 'thor', 'good'], ['pi', 'xiao', 'weak']];
+            const weak = new Set(E.filter(e => e[2] === 'weak').flatMap(e => [e[0], e[1]]));
+            return { meshSummary: Object.keys(N).length + ' nodes · ' + E.filter(e => e[2] === 'weak').length + ' weak link',
+              meshEdges: E.map(([a, b, q]) => ({ x1: N[a][1], y1: N[a][2], x2: N[b][1], y2: N[b][2], c: q === 'good' ? '#9FE2BF' : '#FFD60A', dash: q === 'good' ? 'none' : '5 5' })),
+              meshNodes: Object.keys(N).map(k => ({ label: N[k][0], x: N[k][1] + 'px', y: N[k][2] + 'px', icon: N[k][3] || this.IC.device, c: k === 'xiao' ? '#FFD60A' : '#9FE2BF', onTap: k === 'phone' ? this.toastMsg('This iPhone joined the mesh as a node') : this.go('asset', k) })) }; })(),
+          showTabs: !!s.lens, tabCount: L ? L.tabs.length : 3,
+          tabs: L ? L.tabs.map(([k, l, ic]) => ({ label: l, icon: ic, onTap: () => this.goTab(k), bg: s.tab === k ? 'rgba(42,112,80,0.12)' : 'transparent', color: s.tab === k ? '#2A7050' : '#171C23' })) : Object.keys(LD).map(k => ({ label: LD[k].name, icon: LD[k].icon, onTap: () => this.setState({ focus: k }), bg: s.focus === k ? 'rgba(42,112,80,0.12)' : 'transparent', color: s.focus === k ? '#2A7050' : '#171C23' })),
+          hasOrg: !s.lens, openOrg: () => this.setState({ orgOpen: true }), hasBack: !!s.lens, back: root ? () => this.setState({ lens: null, tab: 'home' }) : this.pop, navTitle: root ? (s.lens ? '' : '') : (sc.title || ''),
+          orgName: L ? L.name : 'Wendy Labs', orgInitial: '', pillLogo: !L, pillBg: L ? L.color : '#171C23', pillRadius: L ? '9px' : '999px', pillHasIcon: !!L, pillIcon: L ? L.icon : '',
+          unread: un, hasUnread: un > 0,
+          sections: sc.sections.filter(x => x.rows.length || x.note).map(x => ({ title: x.title, note: x.note || '', hasNote: !!x.note, rows: x.rows.map((r, i) => ({ ...r, sep: i < x.rows.length - 1 })) })),
+          goLauncher: () => this.setState({ lens: null, tab: 'home', orgOpen: false }),
+          lnBg: !s.lens ? '#fff' : 'rgba(255,255,255,0.45)', lnBorder: !s.lens ? '#171C23' : 'transparent',
+          lensMap: Object.keys(LD).map(k => { const d = LD[k], on = s.lens === k; return { name: d.name, who: d.who, color: d.color, icon: d.icon, home: d.home, bg: on ? '#fff' : 'rgba(255,255,255,0.45)', border: on ? d.color : 'transparent', onTap: () => this.setState({ lens: k, tab: 'home', orgOpen: false }),
+            tabs: d.tabs.map(([t, l]) => ({ label: l, bg: on && s.tab === t ? d.color : 'rgba(23,28,35,0.07)', color: on && s.tab === t ? '#fff' : '#171C23', onTap: (ev) => { ev.stopPropagation(); this.setState(st2 => ({ lens: k, tab: t, orgOpen: false, stacks: { ...st2.stacks, [k + ':' + t]: [] } })); } })) }; }),
+        };
+      })(),
+    };
+  }
+}
+</script>
+</body>
+</html>

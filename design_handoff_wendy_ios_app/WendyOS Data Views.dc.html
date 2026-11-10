@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><template id="__bundler_thumbnail" data-bg-color="#F1EEE7"><svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg"><rect x="470" y="160" width="260" height="480" rx="44" fill="#fff" stroke="#171C23" stroke-width="10"></rect><rect x="510" y="260" width="180" height="110" rx="14" fill="#242B35"></rect><rect x="510" y="400" width="180" height="110" rx="14" fill="#2A7050"></rect></svg></template><style>body{margin:0;background:#E6E2D8;font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:#171C23}a{color:#2A7050;text-decoration:none}a:hover{color:#171C23}*{box-sizing:border-box}</style></helmet>
+<section style="padding:48px 40px 32px;display:flex;flex-direction:column;gap:28px">
+  <div style="display:flex;flex-direction:column;gap:6px;max-width:900px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.5px;color:#5B5A56">TURN 3 · DEVICES WITH DATA › EPISODE PICKER</div>
+    <div style="font-size:30px;font-weight:700;letter-spacing:-0.4px">Scroll devices, then pick an episode</div>
+    <div style="font-size:15px;line-height:21px;color:#5B5A56;text-wrap:pretty">Only devices that have saved data are listed. The right side shows how many episodes each has and their labels. Tap a device (or a label) to open its episode picker.</div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+  <div id="3a" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">3a</div><div style="font-size:17px;font-weight:700">Device list + episode picker</div></div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 16px 110px;display:flex;flex-direction:column;gap:12px">
+          <div style="flex:none;display:flex;flex-direction:column;gap:2px;padding:0 4px 4px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="font-size:15px;color:#5B5A56">{{ epSummary }}</div></div>
+          <sc-for list="{{ epDevs }}" as="g" hint-placeholder-count="4">
+            <div onClick="{{ g.open }}" style="flex:none;background:#fff;border-radius:22px;padding:12px;display:flex;flex-direction:column;gap:10px;cursor:pointer;outline:{{ g.ring }};transition:transform .15s" style-active="transform:scale(0.98)">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="width:60px;height:60px;border-radius:14px;overflow:hidden;flex:none"><dc-import name="Clip Thumb" clip="{{ g.latest }}" compact="{{ true }}" hint-size="60px,60px" style="width:60px;height:60px"></dc-import></div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                  <div style="font-size:16px;font-weight:600">{{ g.name }}</div>
+                  <div style="font-size:12px;color:#5B5A56">{{ g.model }} · latest {{ g.latestL }} · {{ g.size }}</div>
+                </div>
+                <div style="flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:0"><div style="font-size:26px;font-weight:700;letter-spacing:-0.4px;line-height:28px">{{ g.count }}</div><div style="font-size:11px;color:#5B5A56">episodes</div></div>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;padding-left:72px">
+                <sc-for list="{{ g.labels }}" as="l" hint-placeholder-count="2">
+                  <div onClick="{{ l.onTap }}" style="height:24px;padding:0 9px;border-radius:999px;background:#F1EEE7;font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer"><div style="width:6px;height:6px;border-radius:50%;background:{{ l.c }}"></div>{{ l.l }}<div style="color:#9A978F">{{ l.n }}</div></div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <div style="flex:none;display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:13px;color:#9A978F"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1018 0a9 9 0 10-18 0M8 12h8"></path></svg>2 devices have no saved data</div>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+        <div onClick="{{ epClose }}" style="position:absolute;inset:0;background:rgba(23,28,35,0.28);z-index:20;opacity:{{ epShadeO }};pointer-events:{{ epPE }};transition:opacity .25s"></div>
+        <div style="position:absolute;left:8px;right:8px;bottom:8px;height:640px;background:#F1EEE7;border-radius:38px;z-index:21;display:flex;flex-direction:column;transform:translateY({{ epY }});transition:transform .35s cubic-bezier(.3,.8,.3,1);box-shadow:0 -6px 30px rgba(0,0,0,0.12)">
+          <div style="flex:none;padding:8px 18px 0;display:flex;flex-direction:column;gap:12px">
+            <div style="width:36px;height:5px;border-radius:3px;background:rgba(23,28,35,0.2);align-self:center"></div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-size:20px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ ep.name }}</div><div style="font-size:13px;color:#5B5A56">{{ ep.sub }}</div></div>
+              <div onClick="{{ epClose }}" style="width:36px;height:36px;border-radius:50%;background:rgba(23,28,35,0.07);display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#171C23" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></div>
+            </div>
+            <div style="display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px">
+              <sc-for list="{{ ep.chips }}" as="t" hint-placeholder-count="3">
+                <div onClick="{{ t.onTap }}" style="height:32px;padding:0 12px;border-radius:999px;background:{{ t.bg }};color:{{ t.c }};font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;flex:none;cursor:pointer"><div style="width:7px;height:7px;border-radius:50%;background:{{ t.dot }}"></div>{{ t.l }}<div style="opacity:0.6">{{ t.n }}</div></div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="flex:1;overflow:auto;padding:12px 16px 24px;display:flex;flex-direction:column;gap:14px">
+            <sc-for list="{{ ep.days }}" as="d" hint-placeholder-count="2">
+              <div style="flex:none;display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:13px;font-weight:600;color:#5B5A56;padding:0 6px;letter-spacing:0.2px">{{ d.day }}</div>
+                <div style="background:#fff;border-radius:20px;overflow:hidden">
+                  <sc-for list="{{ d.items }}" as="c" hint-placeholder-count="2">
+                    <div onClick="{{ c.pickEp }}" style="display:flex;align-items:center;gap:12px;padding:10px 12px;position:relative;cursor:pointer;background:{{ c.rowBg }}" style-active="background:rgba(0,0,0,0.03)">
+                      <div style="width:84px;height:54px;border-radius:10px;overflow:hidden;flex:none"><dc-import name="Clip Thumb" clip="{{ c }}" compact="{{ true }}" hint-size="84px,54px" style="width:84px;height:54px"></dc-import></div>
+                      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                        <div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div>
+                        <div style="font-size:12px;color:#5B5A56">{{ c.time }} · {{ c.dur }} · {{ c.typeL }}</div>
+                        <div style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600"><div style="width:6px;height:6px;border-radius:50%;background:{{ c.trigC }}"></div>{{ c.trig }}</div>
+                      </div>
+                      <sc-if value="{{ c.isSel }}" hint-placeholder-val="{{ false }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2A7050" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6"></path></svg></sc-if>
+                      <sc-if value="{{ c.sep }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:108px;right:0;bottom:0;height:0.5px;background:#D7D6D2"></div></sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex:none;padding:10px 16px 18px;display:flex;gap:8px;border-top:0.5px solid #D7D6D2">
+            <div onClick="{{ epExport }}" style="flex:1;height:48px;border-radius:999px;background:rgba(42,112,80,0.1);color:#2A7050;font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Export</div>
+            <div onClick="{{ epPlay }}" style="flex:1.4;height:48px;border-radius:999px;background:#2A7050;color:#fff;font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ epPlayL }}</div>
+          </div>
+        </div>
+        <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:50%;top:110px;transform:translateX(-50%);padding:10px 16px;border-radius:999px;background:rgba(23,28,35,0.88);color:#fff;font-size:14px;white-space:nowrap;z-index:30">{{ toast }}</div></sc-if>
+      </div>
+    </x-import>
+  </div>
+  </div>
+</section>
+<section style="padding:32px 40px 32px;display:flex;flex-direction:column;gap:28px">
+  <div style="display:flex;flex-direction:column;gap:6px;max-width:900px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.5px;color:#5B5A56">TURN 2 · BUILDING ON <a href="#1b">1b</a> BY DEVICE</div>
+    <div style="font-size:30px;font-weight:700;letter-spacing:-0.4px">Four takes on “by device”</div>
+    <div style="font-size:15px;line-height:21px;color:#5B5A56;text-wrap:pretty">Same recordings. Tapping a clip still loads it into the player in <a href="#1e">1e</a>.</div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+
+  <div id="2a" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">2a</div><div style="font-size:17px;font-weight:700">Device cards, latest clip first</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">Each device is a card: newest clip big, the rest as a strip. Status and storage live on the card.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 16px 110px;display:flex;flex-direction:column;gap:14px">
+          <div style="flex:none;display:flex;flex-direction:column;gap:2px;padding:0 4px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="font-size:15px;color:#5B5A56">11 recordings · 4 devices</div></div>
+          <sc-for list="{{ devCards }}" as="g" hint-placeholder-count="3">
+            <div style="flex:none;background:#fff;border-radius:22px;overflow:hidden;display:flex;flex-direction:column">
+              <div style="display:flex;align-items:center;gap:10px;padding:12px 14px">
+                <div style="width:32px;height:32px;border-radius:9px;background:#2A7050;display:flex;align-items:center;justify-content:center;flex:none"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h12v12H6zM9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"></path></svg></div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-size:16px;font-weight:600">{{ g.name }}</div><div style="display:flex;align-items:center;gap:5px;font-size:12px;color:#5B5A56"><div style="width:7px;height:7px;border-radius:50%;background:{{ g.stC }}"></div>{{ g.st }} · {{ g.storage }}</div></div>
+                <div style="font-size:15px;font-weight:600;color:#2A7050;white-space:nowrap;flex:none">All {{ g.count }}</div>
+              </div>
+              <div onClick="{{ g.hero.onTap }}" style="height:168px;cursor:pointer;position:relative"><dc-import name="Clip Thumb" clip="{{ g.hero }}" show-trig="{{ true }}" hint-size="100%,168px" style="width:100%;height:168px"></dc-import></div>
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 14px 4px"><div style="flex:1;min-width:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ g.hero.name }}</div><div style="font-size:12px;color:#5B5A56;flex:none">{{ g.hero.day }} {{ g.hero.time }}</div></div>
+              <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:8px 14px 14px">
+                <sc-for list="{{ g.rest }}" as="c" hint-placeholder-count="2">
+                  <div onClick="{{ c.onTap }}" style="height:52px;border-radius:10px;overflow:hidden;cursor:pointer;outline:{{ c.ring }};outline-offset:1px"><dc-import name="Clip Thumb" clip="{{ c }}" compact="{{ true }}" hint-size="100%,52px" style="width:100%;height:52px"></dc-import></div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+      </div>
+    </x-import>
+  </div>
+
+  <div id="2b" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">2b</div><div style="font-size:17px;font-weight:700">Expandable device list</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">Compact list; tap a device to open its grid, storage and bulk actions in place. Scales to many devices.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 16px 110px;display:flex;flex-direction:column;gap:14px">
+          <div style="flex:none;display:flex;flex-direction:column;gap:2px;padding:0 4px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="font-size:15px;color:#5B5A56">54 GB across 4 devices</div></div>
+          <div style="flex:none;background:#fff;border-radius:22px;overflow:hidden">
+            <sc-for list="{{ accDevs }}" as="g" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;position:relative">
+                <div onClick="{{ g.toggle }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer" style-active="background:rgba(0,0,0,0.03)">
+                  <div style="width:46px;height:46px;border-radius:11px;overflow:hidden;flex:none"><dc-import name="Clip Thumb" clip="{{ g.latest }}" compact="{{ true }}" hint-size="46px,46px" style="width:46px;height:46px"></dc-import></div>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div style="font-size:16px;font-weight:600">{{ g.name }}</div><div style="font-size:12px;color:#5B5A56">{{ g.count }} recordings · latest {{ g.latest.time }}</div></div>
+                  <sc-if value="{{ g.hasNew }}" hint-placeholder-val="{{ false }}"><div style="height:22px;padding:0 8px;border-radius:999px;background:rgba(42,112,80,0.12);color:#2A7050;font-size:11px;font-weight:700;display:flex;align-items:center;white-space:nowrap;flex:none">{{ g.newL }}</div></sc-if>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex:none;transform:rotate({{ g.rot }});transition:transform .2s"><path d="M4 2l4 4-4 4" stroke="#9A978F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                </div>
+                <sc-if value="{{ g.open }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:2px 14px 14px;display:flex;flex-direction:column;gap:12px">
+                    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+                      <sc-for list="{{ g.clips }}" as="c" hint-placeholder-count="3">
+                        <div onClick="{{ c.onTap }}" style="display:flex;flex-direction:column;gap:4px;cursor:pointer"><div style="height:70px;border-radius:10px;overflow:hidden;outline:{{ c.ring }};outline-offset:1px"><dc-import name="Clip Thumb" clip="{{ c }}" compact="{{ true }}" hint-size="100%,70px" style="width:100%;height:70px"></dc-import></div><div style="font-size:11px;color:#5B5A56;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.day }} {{ c.time }}</div></div>
+                      </sc-for>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;font-size:12px;color:#5B5A56"><div>Storage on device</div><div>{{ g.storage }}</div></div><div style="height:6px;border-radius:3px;background:#E6E2D8;overflow:hidden"><div style="height:100%;width:{{ g.usedW }};background:{{ g.usedC }};border-radius:3px"></div></div></div>
+                    <div style="display:flex;gap:8px">
+                      <div onClick="{{ g.sync }}" style="flex:1;height:38px;border-radius:999px;background:rgba(42,112,80,0.1);color:#2A7050;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Sync to cloud</div>
+                      <div onClick="{{ g.free }}" style="flex:1;height:38px;border-radius:999px;background:rgba(23,28,35,0.06);color:#171C23;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Free up space</div>
+                    </div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ g.sep }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:72px;right:0;bottom:0;height:0.5px;background:#D7D6D2"></div></sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+        <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:50%;top:110px;transform:translateX(-50%);padding:10px 16px;border-radius:999px;background:rgba(23,28,35,0.88);color:#fff;font-size:14px;white-space:nowrap;z-index:9">{{ toast }}</div></sc-if>
+      </div>
+    </x-import>
+  </div>
+
+  <div id="2c" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">2c</div><div style="font-size:17px;font-weight:700">Device switcher on top</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">Round device avatars (ring = new clips) filter the grid below. One device’s data at a time, full width.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 0 110px;display:flex;flex-direction:column;gap:16px">
+          <div style="flex:none;display:flex;flex-direction:column;gap:2px;padding:0 20px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="font-size:15px;color:#5B5A56">{{ pickSub }}</div></div>
+          <div style="flex:none;display:flex;gap:14px;overflow-x:auto;padding:4px 20px;scrollbar-width:none">
+            <sc-for list="{{ avatars }}" as="v" hint-placeholder-count="5">
+              <div onClick="{{ v.onTap }}" style="width:66px;flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer">
+                <div style="width:64px;height:64px;border-radius:50%;padding:3px;background:{{ v.ring }}"><div style="width:100%;height:100%;border-radius:50%;border:2px solid #F1EEE7;overflow:hidden;background:#171C23;display:flex;align-items:center;justify-content:center"><sc-if value="{{ v.isAll }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"></path></svg></sc-if><sc-if value="{{ v.hasClip }}" hint-placeholder-val="{{ true }}"><dc-import name="Clip Thumb" clip="{{ v.clip }}" compact="{{ true }}" hint-size="54px,54px" style="width:54px;height:54px"></dc-import></sc-if></div></div>
+                <div style="font-size:12px;font-weight:{{ v.w }};color:{{ v.c }};white-space:nowrap">{{ v.l }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-for list="{{ pickDays }}" as="d" hint-placeholder-count="2">
+            <div style="flex:none;display:flex;flex-direction:column;gap:8px;padding:0 16px">
+              <div style="display:flex;justify-content:space-between;padding:0 4px"><div style="font-size:20px;font-weight:700">{{ d.day }}</div><div style="font-size:13px;color:#5B5A56;padding-top:4px">{{ d.meta }}</div></div>
+              <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+                <sc-for list="{{ d.clips }}" as="c" hint-placeholder-count="2">
+                  <div onClick="{{ c.onTap }}" style="display:flex;flex-direction:column;gap:6px;cursor:pointer">
+                    <div style="height:104px;border-radius:14px;overflow:hidden;outline:{{ c.ring }};outline-offset:2px"><dc-import name="Clip Thumb" clip="{{ c }}" show-trig="{{ true }}" hint-size="100%,104px" style="width:100%;height:104px"></dc-import></div>
+                    <div style="display:flex;flex-direction:column;gap:1px;padding:0 2px"><div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div><div style="font-size:12px;color:#5B5A56">{{ c.sub }}</div></div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+      </div>
+    </x-import>
+  </div>
+
+  <div id="2d" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">2d</div><div style="font-size:17px;font-weight:700">Device rows with a day strip</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty"><a href="#1b">1b</a> plus a mini timeline per device, so you see when each one recorded before you scroll its clips.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 0 110px;display:flex;flex-direction:column;gap:14px">
+          <div style="flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 20px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="height:28px;padding:0 10px;margin-bottom:6px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center">Today</div></div>
+          <sc-for list="{{ stripDevs }}" as="g" hint-placeholder-count="4">
+            <div style="flex:none;background:#fff;border-radius:22px;margin:0 16px;padding:12px 0 14px;display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;gap:10px;padding:0 14px"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px"><div style="font-size:16px;font-weight:600">{{ g.name }}</div><div style="font-size:12px;color:#5B5A56">{{ g.meta }}</div></div><div style="font-size:15px;font-weight:600;color:#2A7050">See all</div></div>
+              <div style="padding:0 14px;display:flex;flex-direction:column;gap:4px">
+                <div style="position:relative;height:18px;border-radius:5px;background:#F1EEE7">
+                  <sc-for list="{{ g.blocks }}" as="b" hint-placeholder-count="2"><div onClick="{{ b.onTap }}" style="position:absolute;top:3px;bottom:3px;left:{{ b.left }};width:{{ b.width }};min-width:6px;border-radius:3px;background:{{ b.bg }};outline:{{ b.ring }};outline-offset:1px;cursor:pointer"></div></sc-for>
+                </div>
+                <div style="display:flex;justify-content:space-between;font:600 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#9A978F"><div>07:00</div><div>12:00</div><div>18:00</div></div>
+              </div>
+              <div style="display:flex;gap:8px;overflow-x:auto;padding:0 14px;scrollbar-width:none">
+                <sc-for list="{{ g.clips }}" as="c" hint-placeholder-count="2">
+                  <div onClick="{{ c.onTap }}" style="width:120px;flex:none;display:flex;flex-direction:column;gap:4px;cursor:pointer"><div style="height:74px;border-radius:11px;overflow:hidden;outline:{{ c.ring }};outline-offset:1px"><dc-import name="Clip Thumb" clip="{{ c }}" hint-size="120px,74px" style="width:120px;height:74px"></dc-import></div><div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div></div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+      </div>
+    </x-import>
+  </div>
+
+  </div>
+</section>
+<section style="padding:32px 40px 64px;display:flex;flex-direction:column;gap:28px">
+  <div style="display:flex;flex-direction:column;gap:6px;max-width:900px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.5px;color:#5B5A56">TURN 1 · DEVICES LENS › DATA</div>
+    <div style="font-size:30px;font-weight:700;letter-spacing:-0.4px">Five ways to show many clips</div>
+    <div style="font-size:15px;line-height:21px;color:#5B5A56;text-wrap:pretty">Same 11 recordings from 4 devices in every option. Tap any clip to load it into the player in <a href="#1e">1e</a>. Recommended: <a href="#1a">1a</a> as the default, with the trigger labels from <a href="#1d">1d</a>, and <a href="#1c">1c</a> behind a toggle.</div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start">
+
+  <div id="1a" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">1a</div><div style="font-size:17px;font-weight:700">By day, with thumbnails</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">Photos-style grid. Each type has its own preview. Type filter and storage on top.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 16px 110px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;padding:0 4px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="font-size:15px;font-weight:600;color:#2A7050;padding-bottom:6px">Select</div></div>
+          <div style="flex:none;background:#fff;border-radius:18px;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;justify-content:space-between;font-size:13px"><div style="font-weight:600">Storage on devices</div><div style="color:#5B5A56">42 of 64 GB</div></div>
+            <div style="height:6px;border-radius:3px;background:#E6E2D8;display:flex;overflow:hidden;gap:2px"><div style="flex:24;background:#242B35"></div><div style="flex:9;background:#2A7050"></div><div style="flex:6;background:#9A978F"></div><div style="flex:3;background:#9FE2BF"></div><div style="flex:22"></div></div>
+            <div style="display:flex;gap:12px;font-size:11px;color:#5B5A56"><div>■ Video</div><div style="color:#2A7050">■ Bags</div><div>■ Images</div><div style="color:#248A3D">■ Audio</div></div>
+          </div>
+          <div style="height:32px;border-radius:999px;background:rgba(23,28,35,0.07);display:flex;padding:2px;flex:none">
+            <sc-for list="{{ segA }}" as="g" hint-placeholder-count="4">
+              <div onClick="{{ g.onTap }}" style="flex:1;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:{{ g.w }};background:{{ g.bg }};box-shadow:{{ g.sh }};cursor:pointer">{{ g.l }}</div>
+            </sc-for>
+          </div>
+          <sc-for list="{{ daysA }}" as="d" hint-placeholder-count="2">
+            <div style="flex:none;display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;justify-content:space-between;padding:0 4px"><div style="font-size:20px;font-weight:700">{{ d.day }}</div><div style="font-size:13px;color:#5B5A56;padding-top:4px">{{ d.meta }}</div></div>
+              <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+                <sc-for list="{{ d.clips }}" as="c" hint-placeholder-count="4">
+                  <div onClick="{{ c.onTap }}" style="display:flex;flex-direction:column;gap:6px;cursor:pointer">
+                    <div style="height:104px;border-radius:14px;overflow:hidden;outline:{{ c.ring }};outline-offset:2px"><dc-import name="Clip Thumb" clip="{{ c }}" show-trig="{{ true }}" hint-size="100%,104px" style="width:100%;height:104px"></dc-import></div>
+                    <div style="display:flex;flex-direction:column;gap:1px;padding:0 2px"><div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div><div style="font-size:12px;color:#5B5A56">{{ c.devShort }} · {{ c.time }}</div></div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+      </div>
+    </x-import>
+  </div>
+
+  <div id="1b" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">1b</div><div style="font-size:17px;font-weight:700">By device, album rows</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">One swipeable row per device. The same row drops into the device page’s Data tab.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 0 110px;display:flex;flex-direction:column;gap:22px">
+          <div style="display:flex;flex-direction:column;gap:2px;padding:0 20px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="font-size:15px;color:#5B5A56">11 recordings · 4 devices</div></div>
+          <sc-for list="{{ byDev }}" as="g" hint-placeholder-count="4">
+            <div style="flex:none;display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;gap:10px;padding:0 20px">
+                <div style="width:30px;height:30px;border-radius:9px;background:#2A7050;display:flex;align-items:center;justify-content:center;flex:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h12v12H6zM9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"></path></svg></div>
+                <div style="flex:1;display:flex;flex-direction:column"><div style="font-size:16px;font-weight:600">{{ g.name }}</div><div style="font-size:12px;color:#5B5A56">{{ g.meta }}</div></div>
+                <div style="font-size:15px;font-weight:600;color:#2A7050">See all</div>
+              </div>
+              <div style="display:flex;gap:10px;overflow-x:auto;padding:0 20px;scrollbar-width:none">
+                <sc-for list="{{ g.clips }}" as="c" hint-placeholder-count="3">
+                  <div onClick="{{ c.onTap }}" style="width:150px;flex:none;display:flex;flex-direction:column;gap:6px;cursor:pointer">
+                    <div style="height:96px;border-radius:14px;overflow:hidden;outline:{{ c.ring }};outline-offset:2px"><dc-import name="Clip Thumb" clip="{{ c }}" hint-size="150px,96px" style="width:150px;height:96px"></dc-import></div>
+                    <div style="display:flex;flex-direction:column;gap:1px;padding:0 2px"><div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div><div style="font-size:12px;color:#5B5A56">{{ c.day }} · {{ c.time }}</div></div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+      </div>
+    </x-import>
+  </div>
+
+  <div id="1c" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">1c</div><div style="font-size:17px;font-weight:700">Timeline, one lane per device</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">Answers “what happened at 14:30”. Tap a block to select it; everything recorded at that moment is listed below.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 16px 110px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:flex-end;justify-content:space-between;padding:0 4px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="display:flex;gap:6px;padding-bottom:6px"><div style="height:28px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center">Today</div><div style="height:28px;padding:0 10px;border-radius:999px;background:rgba(23,28,35,0.07);font-size:13px;font-weight:600;display:flex;align-items:center">Yesterday</div></div></div>
+          <div style="flex:none;background:#fff;border-radius:22px;padding:14px 14px 10px;display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;padding-left:78px;font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace;color:#9A978F">
+              <sc-for list="{{ hours }}" as="h" hint-placeholder-count="5"><div style="flex:1">{{ h }}</div></sc-for>
+            </div>
+            <div style="position:relative;display:flex;flex-direction:column;gap:8px">
+              <sc-for list="{{ lanes }}" as="ln" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:8px;height:34px">
+                  <div style="width:70px;font-size:12px;font-weight:600;line-height:14px;flex:none">{{ ln.name }}</div>
+                  <div style="position:relative;flex:1;height:34px;border-radius:8px;background:#F1EEE7">
+                    <sc-for list="{{ ln.blocks }}" as="b" hint-placeholder-count="2">
+                      <div onClick="{{ b.onTap }}" style="position:absolute;top:4px;bottom:4px;left:{{ b.left }};width:{{ b.width }};min-width:8px;border-radius:5px;background:{{ b.bg }};outline:{{ b.ring }};outline-offset:1px;cursor:pointer"></div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+              <div style="position:absolute;top:-4px;bottom:-4px;left:{{ cursorX }};width:2px;margin-left:-1px;background:#FF3B30;border-radius:1px;pointer-events:none"></div>
+            </div>
+            <div style="display:flex;gap:12px;font-size:11px;color:#5B5A56;padding-left:78px"><div style="display:flex;align-items:center;gap:4px"><div style="width:8px;height:8px;border-radius:2px;background:#242B35"></div>Video</div><div style="display:flex;align-items:center;gap:4px"><div style="width:8px;height:8px;border-radius:2px;background:#2A7050"></div>Bag</div><div style="display:flex;align-items:center;gap:4px"><div style="width:8px;height:8px;border-radius:2px;background:#9FE2BF"></div>Audio</div><div style="display:flex;align-items:center;gap:4px"><div style="width:8px;height:8px;border-radius:2px;background:#9A978F"></div>Images</div></div>
+          </div>
+          <div style="font-size:13px;font-weight:600;color:#5B5A56;padding:0 16px;letter-spacing:0.2px">AT {{ selTime }} · {{ momentCount }}</div>
+          <div style="flex:none;background:#fff;border-radius:22px;overflow:hidden">
+            <sc-for list="{{ moment }}" as="c" hint-placeholder-count="2">
+              <div onClick="{{ c.onTap }}" style="display:flex;align-items:center;gap:12px;padding:10px 14px;position:relative;cursor:pointer">
+                <div style="width:72px;height:46px;border-radius:9px;overflow:hidden;flex:none"><dc-import name="Clip Thumb" clip="{{ c }}" compact="{{ true }}" hint-size="72px,46px" style="width:72px;height:46px"></dc-import></div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div><div style="font-size:12px;color:#5B5A56">{{ c.devShort }} · {{ c.time }} · {{ c.dur }}</div></div>
+                <sc-if value="{{ c.sep }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:100px;right:0;bottom:0;height:0.5px;background:#D7D6D2"></div></sc-if>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:8px"><div onClick="{{ exportMoment }}" style="flex:1;height:44px;border-radius:999px;background:rgba(42,112,80,0.1);color:#2A7050;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Export this moment</div></div>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+        <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:50%;top:110px;transform:translateX(-50%);padding:10px 16px;border-radius:999px;background:rgba(23,28,35,0.88);color:#fff;font-size:14px;white-space:nowrap;z-index:9">{{ toast }}</div></sc-if>
+      </div>
+    </x-import>
+  </div>
+
+  <div id="1d" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">1d</div><div style="font-size:17px;font-weight:700">Event-first</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">Leads with why a clip exists. Filter by trigger; pairs with Campaigns (event-triggered recording).</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#F1EEE7;color:#171C23">
+        <div style="height:54px;flex:none"></div>
+        <div style="flex:1;overflow:auto;padding:8px 16px 110px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;flex-direction:column;gap:2px;padding:0 4px"><div style="font-size:34px;font-weight:700;letter-spacing:0.4px">Data</div><div style="font-size:15px;color:#5B5A56">What your devices caught</div></div>
+          <div style="display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;flex:none">
+            <sc-for list="{{ trigs }}" as="t" hint-placeholder-count="4">
+              <div onClick="{{ t.onTap }}" style="height:34px;padding:0 12px;border-radius:999px;background:{{ t.bg }};color:{{ t.c }};font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;flex:none;cursor:pointer"><div style="width:8px;height:8px;border-radius:50%;background:{{ t.dot }}"></div>{{ t.l }}<div style="opacity:0.6">{{ t.n }}</div></div>
+            </sc-for>
+          </div>
+          <sc-for list="{{ evClips }}" as="c" hint-placeholder-count="3">
+            <div onClick="{{ c.onTap }}" style="flex:none;background:#fff;border-radius:22px;overflow:hidden;cursor:pointer;outline:{{ c.ring }}">
+              <div style="height:170px"><dc-import name="Clip Thumb" clip="{{ c }}" show-trig="{{ true }}" hint-size="100%,170px" style="width:100%;height:170px"></dc-import></div>
+              <div style="padding:12px 14px;display:flex;align-items:center;gap:10px">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div style="font-size:16px;font-weight:600">{{ c.name }}</div><div style="font-size:12px;color:#5B5A56">{{ c.devName }} · {{ c.day }} {{ c.time }}</div></div>
+                <div style="height:24px;padding:0 9px;border-radius:999px;background:{{ c.syncBg }};color:{{ c.syncC }};font-size:11px;font-weight:700;display:flex;align-items:center;flex:none">{{ c.syncL }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="position:absolute;left:16px;right:16px;bottom:25px;height:62px;border-radius:999px;background:rgba(255,255,255,0.8);backdrop-filter:blur(14px);border:0.5px solid rgba(0,0,0,0.06);box-shadow:0 1px 3px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.08);display:grid;grid-template-columns:repeat(4,1fr);padding:4px;font-size:10px;font-weight:600;z-index:5">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4"><div style="border-radius:999px;background:{{ t.bg }};color:{{ t.c }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>{{ t.l }}</div></sc-for>
+        </div>
+      </div>
+    </x-import>
+  </div>
+
+  <div id="1e" style="display:flex;flex-direction:column;gap:12px;width:402px">
+    <div style="display:flex;align-items:center;gap:10px"><div style="height:26px;padding:0 10px;border-radius:999px;background:#171C23;color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center">1e</div><div style="font-size:17px;font-weight:700">Player</div></div>
+    <div style="font-size:13px;color:#5B5A56;line-height:18px;text-wrap:pretty">Opens from any option. Detection marks on the scrubber; other clips from the same moment underneath.</div>
+    <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" dark="{{ true }}" hint-size="402px,874px">
+      <div style="position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;background:#0E1216;color:#fff">
+        <div style="height:54px;flex:none"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 16px;height:56px;flex:none">
+          <div style="width:44px;height:44px;border-radius:999px;background:rgba(255,255,255,0.12);display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:1px;min-width:0"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px">{{ sel.name }}</div><div style="font-size:12px;color:rgba(255,255,255,0.6)">{{ sel.devName }} · {{ sel.day }} {{ sel.time }}</div></div>
+          <div style="width:44px;height:44px;border-radius:999px;background:rgba(255,255,255,0.12);display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4M5 13v7h14v-7"></path></svg></div>
+        </div>
+        <div style="flex:1;overflow:auto;padding:8px 0 40px;display:flex;flex-direction:column;gap:16px">
+          <div style="flex:none;height:236px"><dc-import name="Clip Thumb" clip="{{ sel }}" show-trig="{{ true }}" hint-size="100%,236px" style="width:100%;height:236px"></dc-import></div>
+          <div style="flex:none;padding:0 18px;display:flex;flex-direction:column;gap:8px">
+            <div style="position:relative;height:28px;display:flex;align-items:center">
+              <div style="position:absolute;left:0;right:0;height:4px;border-radius:2px;background:rgba(255,255,255,0.2)"></div>
+              <div style="position:absolute;left:0;width:{{ playW }};height:4px;border-radius:2px;background:#fff;transition:width .25s linear"></div>
+              <sc-for list="{{ marks }}" as="m" hint-placeholder-count="3">
+                <div onClick="{{ m.onTap }}" style="position:absolute;left:{{ m.x }};top:2px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:{{ m.c }};border:2px solid #0E1216;cursor:pointer"></div>
+              </sc-for>
+              <div style="position:absolute;left:{{ playW }};width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#fff;transition:left .25s linear"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:rgba(255,255,255,0.6)"><div>{{ posLabel }}</div><div>{{ sel.dur }}</div></div>
+          </div>
+          <div style="display:flex;justify-content:center;align-items:center;gap:36px">
+            <div onClick="{{ skipBack }}" style="cursor:pointer;opacity:0.85"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M11 6L5 12l6 6M19 6l-6 6 6 6"></path></svg></div>
+            <div onClick="{{ togglePlay }}" style="width:64px;height:64px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer"><svg width="26" height="26" viewBox="0 0 24 24" fill="#0E1216"><path d="{{ playIcon }}"></path></svg></div>
+            <div onClick="{{ skipFwd }}" style="cursor:pointer;opacity:0.85"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 6l6 6-6 6M5 6l6 6-6 6"></path></svg></div>
+          </div>
+          <div style="flex:none;display:flex;flex-direction:column;gap:6px;padding:0 18px">
+            <div style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.6);letter-spacing:0.2px">DETECTIONS</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <sc-for list="{{ marks }}" as="m" hint-placeholder-count="3">
+                <div onClick="{{ m.onTap }}" style="height:30px;padding:0 10px;border-radius:999px;background:rgba(255,255,255,0.1);font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer"><div style="width:7px;height:7px;border-radius:50%;background:{{ m.c }}"></div>{{ m.l }}<div style="font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:rgba(255,255,255,0.55)">{{ m.t }}</div></div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="flex:none;display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.6);letter-spacing:0.2px;padding:0 18px">SAME MOMENT</div>
+            <div style="display:flex;gap:10px;overflow-x:auto;padding:0 18px;scrollbar-width:none">
+              <sc-for list="{{ sameMoment }}" as="c" hint-placeholder-count="2">
+                <div onClick="{{ c.onTap }}" style="width:132px;flex:none;display:flex;flex-direction:column;gap:5px;cursor:pointer">
+                  <div style="height:80px;border-radius:12px;overflow:hidden"><dc-import name="Clip Thumb" clip="{{ c }}" hint-size="132px,80px" style="width:132px;height:80px"></dc-import></div>
+                  <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;padding:0 18px">
+            <div onClick="{{ exportSel }}" style="flex:1;height:44px;border-radius:999px;background:rgba(255,255,255,0.12);font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Export</div>
+            <div onClick="{{ trainSel }}" style="flex:1;height:44px;border-radius:999px;background:#2A7050;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer">Send to training</div>
+          </div>
+        </div>
+        <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:50%;top:120px;transform:translateX(-50%);padding:10px 16px;border-radius:999px;background:rgba(255,255,255,0.92);color:#171C23;font-size:14px;white-space:nowrap;z-index:9">{{ toast }}</div></sc-if>
+      </div>
+    </x-import>
+  </div>
+
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { open: 'jetson', pickDev: 'jetson', segA: 'all', trig: 'all', sel: 'c1', pos: 0.34, playing: false, toast: '' };
+  DEV = { jetson: ['Jetson Orin 4F2A', 'Jetson'], pi: ['Raspberry Pi B3C1', 'Pi B3C1'], gate: ['Warehouse Gate', 'Gate'], dockcam: ['Dock Camera 2', 'Dock Cam'] };
+  TRIG = { person: ['Person', '#FF3B30'], door: ['Door opened', '#FF9500'], motion: ['Motion', '#FFD60A'], sched: ['Schedule', '#64D2FF'], manual: ['Manual', '#9FE2BF'] };
+  CLIPS = [
+    ['c1', 'Front door · person', 'video', 'jetson', 'Today', '14:32', 134, 'person', 870, 2.2, 'local', 'cam0 · 1080p'],
+    ['c2', 'people-counter bag', 'bag', 'jetson', 'Today', '14:30', 600, 'person', 870, 10, 'cloud'],
+    ['c3', 'Hallway mic', 'audio', 'pi', 'Today', '14:31', 95, 'motion', 871, 1.6, 'local'],
+    ['c4', 'Gate · plate read', 'video', 'gate', 'Today', '14:33', 42, 'motion', 873, 1, 'cloud', 'gate-cam · 720p'],
+    ['c5', 'Dock timelapse', 'images', 'dockcam', 'Today', '08:00', 21600, 'sched', 480, 360, 'cloud'],
+    ['c6', 'Back door opened', 'video', 'jetson', 'Today', '11:05', 58, 'door', 665, 1, 'local', 'cam1 · 1080p'],
+    ['c7', 'Sensor log', 'bag', 'pi', 'Today', '09:00', 7200, 'sched', 540, 120, 'cloud'],
+    ['c8', 'Gate · person at night', 'video', 'gate', 'Yesterday', '22:14', 76, 'person', 0, 0, 'cloud', 'gate-cam · 720p'],
+    ['c9', 'Lab ambient', 'audio', 'pi', 'Yesterday', '18:20', 300, 'manual', 0, 0, 'local'],
+    ['c10', 'Cube picks', 'dataset', 'jetson', 'Yesterday', '16:02', 1260, 'manual', 0, 0, 'cloud'],
+    ['c11', 'Dock motion', 'video', 'dockcam', 'Yesterday', '07:41', 31, 'motion', 0, 0, 'local', 'dock-cam · 1080p'],
+  ];
+  componentWillUnmount() { clearInterval(this.iv); clearTimeout(this.tt); }
+  rnd(seed, i) { const x = Math.sin(seed * 97 + i * 13.7) * 10000; return x - Math.floor(x); }
+  fmt(s) { if (s >= 3600) return Math.floor(s / 3600) + ' h'; const m = Math.floor(s / 60), r = s % 60; return m + ':' + String(r).padStart(2, '0'); }
+  toastMsg = t => () => { clearTimeout(this.tt); this.setState({ toast: t }); this.tt = setTimeout(() => this.setState({ toast: '' }), 2000); };
+  pick = id => () => { clearInterval(this.iv); this.setState({ sel: id, pos: 0, playing: false }); };
+  clip(r) {
+    const [id, name, type, dev, day, time, dur, trig, start, len, sync, cam] = r, n = parseInt(id.slice(1));
+    const bg = { video: '#242B35', audio: '#E8F6EE', bag: '#171C23', images: '#E6E2D8', dataset: '#F9F9F9' }[type];
+    const bars = Array.from({ length: 26 }, (_, i) => Math.round(18 + this.rnd(n, i) * 70) + '%');
+    const topics = ['/cam', '/imu', '/det'].map((t, k) => ({ n: t, segs: Array.from({ length: 4 }, (_, i) => ({ f: 1 + Math.round(this.rnd(n + k, i) * 4), c: i % 2 ? 'transparent' : ['#2A7050', '#9FE2BF', '#FF9500'][k] })) }));
+    const cells = Array.from({ length: 18 }, (_, i) => i < 14 ? (this.rnd(n, i) > 0.3 ? '#2A7050' : '#9FE2BF') : '#E6E2D8');
+    return { id, name, type, dev, day, time, start, len, devName: this.DEV[dev][0], devShort: this.DEV[dev][1], dur: this.fmt(dur), bg, cam: cam || '', isVideo: type === 'video', isWave: type === 'audio', isBag: type === 'bag', isImg: type === 'images', isSet: type === 'dataset', ink: '#2A7050', bars, topics, cells, trigKey: trig, trig: this.TRIG[trig][0], trigC: this.TRIG[trig][1], syncIcon: sync === 'cloud' ? 'M7 18h10a4 4 0 000-8 6 6 0 00-11.5 1.5A3.5 3.5 0 007 18z' : 'M6 6h12v12H6zM9 3v3M15 3v3M9 18v3M15 18v3', syncL: sync === 'cloud' ? 'SYNCED' : 'ON DEVICE', syncBg: sync === 'cloud' ? 'rgba(42,112,80,0.12)' : 'rgba(23,28,35,0.07)', syncC: sync === 'cloud' ? '#2A7050' : '#5B5A56', ring: this.state.sel === id ? '2.5px solid #2A7050' : 'none', onTap: this.pick(id) };
+  }
+  togglePlay = () => { if (this.state.playing) { clearInterval(this.iv); this.setState({ playing: false }); return; } clearInterval(this.iv); this.setState(s => ({ playing: true, pos: s.pos >= 1 ? 0 : s.pos })); this.iv = setInterval(() => this.setState(s => { const p = Math.min(1, s.pos + 0.01); if (p >= 1) clearInterval(this.iv); return { pos: p, playing: p < 1 }; }), 250); };
+  renderVals() {
+    const s = this.state, all = this.CLIPS.map(r => this.clip(r)), sep = a => a.map((c, i) => ({ ...c, sep: i < a.length - 1 }));
+    const segDef = [['all', 'All'], ['video', 'Video'], ['audio', 'Audio'], ['bag', 'Bags']];
+    const fA = all.filter(c => s.segA === 'all' || c.type === s.segA);
+    const daysA = ['Today', 'Yesterday'].map(d => { const cl = fA.filter(c => c.day === d); return { day: d, meta: cl.length + (cl.length === 1 ? ' clip' : ' clips'), clips: cl }; }).filter(d => d.clips.length);
+    const byDev = Object.keys(this.DEV).map(k => { const cl = all.filter(c => c.dev === k); return { name: this.DEV[k][0], meta: cl.length + ' recordings · latest ' + cl[0].time, clips: cl }; });
+    const t0 = 420, t1 = 1080, X = m => ((m - t0) / (t1 - t0) * 100);
+    const typeC = { video: '#242B35', bag: '#2A7050', audio: '#9FE2BF', images: '#9A978F', dataset: '#9A978F' };
+    const today = all.filter(c => c.day === 'Today');
+    const lanes = Object.keys(this.DEV).map(k => ({ name: this.DEV[k][1], blocks: today.filter(c => c.dev === k).map(c => ({ left: Math.max(0, X(c.start)) + '%', width: Math.max(1.5, Math.min(100 - X(c.start), c.len / (t1 - t0) * 100)) + '%', bg: typeC[c.type], ring: s.sel === c.id ? '2px solid #FF3B30' : 'none', onTap: c.onTap })) }));
+    const selC = all.find(c => c.id === s.sel);
+    const selStart = selC.start || 870;
+    const moment = today.filter(c => c.start <= selStart + 3 && c.start + c.len >= selStart - 3);
+    const trigKeys = ['all', 'person', 'door', 'motion', 'sched', 'manual'];
+    const trigs = trigKeys.map(k => ({ l: k === 'all' ? 'All' : this.TRIG[k][0], n: k === 'all' ? all.length : all.filter(c => c.trigKey === k).length, dot: k === 'all' ? '#171C23' : this.TRIG[k][1], bg: s.trig === k ? '#171C23' : '#fff', c: s.trig === k ? '#fff' : '#171C23', onTap: () => this.setState({ trig: k }) }));
+    const secs = { c1: 134, c2: 600, c3: 95, c4: 42, c5: 21600, c6: 58, c7: 7200, c8: 76, c9: 300, c10: 1260, c11: 31 }[selC.id];
+    const markDef = selC.type === 'video' || selC.type === 'bag' ? [[0.18, 'Person', '#FF3B30'], [0.52, 'Person', '#FF3B30'], [0.77, 'Door opened', '#FF9500']] : selC.type === 'audio' ? [[0.4, 'Loud noise', '#FFD60A']] : [[0.6, 'Truck arrived', '#64D2FF']];
+    const marks = markDef.map(([p, l, c]) => ({ x: (p * 100) + '%', l, c, t: this.fmt(Math.round(p * secs)), onTap: () => this.setState({ pos: p }) }));
+    const pickTime = selC.day === 'Today' ? selC.time : selC.time;
+    const DS = { jetson: ['Online', '#34C759', '18.2 of 64 GB', 0.28], pi: ['Online', '#34C759', '4.1 of 32 GB', 0.13], gate: ['Weak link', '#FF9500', '22 of 128 GB', 0.17], dockcam: ['Online', '#34C759', '29 of 32 GB', 0.91] };
+    const devIds = Object.keys(this.DEV), of = k => all.filter(c => c.dev === k);
+    const devCards = devIds.map(k => { const cl = of(k); return { name: this.DEV[k][0], st: DS[k][0], stC: DS[k][1], storage: DS[k][2], count: cl.length, hero: cl[0], rest: cl.slice(1, 5) }; });
+    const accDevs = devIds.map((k, i) => { const cl = of(k), nT = cl.filter(c => c.day === 'Today').length, open = s.open === k; return { name: this.DEV[k][0], count: cl.length, latest: cl[0], clips: cl, hasNew: nT > 0, newL: nT + ' today', open, rot: open ? '90deg' : '0deg', toggle: () => this.setState(st => ({ open: st.open === k ? null : k })), storage: DS[k][2], usedW: Math.round(DS[k][3] * 100) + '%', usedC: DS[k][3] > 0.85 ? '#FF3B30' : '#2A7050', sync: this.toastMsg('Syncing ' + cl.length + ' recordings to the cloud'), free: this.toastMsg('Deletes synced recordings from ' + this.DEV[k][1]), sep: i < devIds.length - 1 }; });
+    const pk = s.pickDev || 'all';
+    const avatars = [{ l: 'All', isAll: true, hasClip: false, clip: all[0], k: 'all' }].concat(devIds.map(k => ({ l: this.DEV[k][1], isAll: false, hasClip: true, clip: of(k)[0], k, isNew: of(k).some(c => c.day === 'Today') }))).map(v => ({ ...v, ring: pk === v.k ? '#2A7050' : v.isNew ? '#9FE2BF' : '#D7D6D2', w: pk === v.k ? 700 : 500, c: pk === v.k ? '#171C23' : '#5B5A56', onTap: () => this.setState({ pickDev: v.k }) }));
+    const pl = pk === 'all' ? all : of(pk);
+    const pickDays = ['Today', 'Yesterday'].map(d => { const cl = pl.filter(c => c.day === d).map(c => ({ ...c, sub: (pk === 'all' ? c.devShort + ' · ' : '') + c.time + ' · ' + c.dur })); return { day: d, meta: cl.length + (cl.length === 1 ? ' clip' : ' clips'), clips: cl }; }).filter(d => d.clips.length);
+    const pickSub = pk === 'all' ? 'All devices · ' + all.length + ' recordings' : this.DEV[pk][0] + ' · ' + DS[pk][0] + ' · ' + DS[pk][2];
+    const stripDevs = devIds.map(k => { const cl = of(k), td = cl.filter(c => c.day === 'Today'); return { name: this.DEV[k][0], meta: td.length + ' today · ' + cl.length + ' total · ' + DS[k][2], blocks: td.map(c => ({ left: Math.max(0, X(c.start)) + '%', width: Math.max(2, Math.min(100 - X(c.start), c.len / (t1 - t0) * 100)) + '%', bg: typeC[c.type], ring: s.sel === c.id ? '2px solid #FF3B30' : 'none', onTap: c.onTap })), clips: cl }; });
+    const MODEL = { jetson: 'Jetson Orin Nano', pi: 'Raspberry Pi 5', gate: 'Jetson Orin NX', dockcam: 'Raspberry Pi 5' };
+    const SIZE = { jetson: '4.3 GB', pi: '1.1 GB', gate: '310 MB', dockcam: '3.5 GB' };
+    const TYPEL = { video: 'Video', audio: 'Audio', bag: 'Rosbag', images: 'Images', dataset: 'Dataset' };
+    const labelsOf = cl => { const m = {}; cl.forEach(c => { m[c.trigKey] = (m[c.trigKey] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, n]) => ({ k, l: this.TRIG[k][0], c: this.TRIG[k][1], n })); };
+    const openEp = (k, lab) => (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.setState({ epDev: k, epLabel: lab || 'all' }); };
+    const epDevs = devIds.filter(k => of(k).length).map(k => { const cl = of(k); return { name: this.DEV[k][0], model: MODEL[k], latest: cl[0], latestL: cl[0].day === 'Today' ? cl[0].time : cl[0].day.toLowerCase(), size: SIZE[k], count: cl.length, labels: labelsOf(cl).slice(0, 3).map(l => ({ ...l, onTap: openEp(k, l.k) })), open: openEp(k), ring: s.epDev === k ? '2px solid #2A7050' : 'none' }; });
+    const eK = s.epDev, eOpen = !!eK, eAll = eK ? of(eK) : [], eLab = s.epLabel || 'all';
+    const eList = eAll.filter(c => eLab === 'all' || c.trigKey === eLab);
+    const eSel = eList.find(c => c.id === s.epPick) || null;
+    const ep = eK ? { name: this.DEV[eK][0], sub: eAll.length + ' episodes · ' + SIZE[eK], chips: [{ k: 'all', l: 'All', c: '#171C23', n: eAll.length }].concat(labelsOf(eAll)).map(t => ({ l: t.l, n: t.n, dot: t.c, bg: eLab === t.k ? '#171C23' : '#fff', c: eLab === t.k ? '#fff' : '#171C23', onTap: () => this.setState({ epLabel: t.k }) })), days: ['Today', 'Yesterday'].map(d => { const it = eList.filter(c => c.day === d); return { day: d.toUpperCase(), items: it.map((c, i) => ({ ...c, typeL: TYPEL[c.type], isSel: s.epPick === c.id, rowBg: s.epPick === c.id ? 'rgba(42,112,80,0.07)' : '#fff', sep: i < it.length - 1, pickEp: () => this.setState({ epPick: c.id, sel: c.id, pos: 0 }) })) }; }).filter(d => d.items.length) } : { name: '', sub: '', chips: [], days: [] };
+    return {
+      epSummary: epDevs.length + ' devices with data · ' + all.length + ' episodes', epDevs, ep,
+      epY: eOpen ? '0px' : '110%', epShadeO: eOpen ? 1 : 0, epPE: eOpen ? 'auto' : 'none',
+      epClose: () => this.setState({ epDev: null, epPick: null }),
+      epPlayL: eSel ? 'Play episode' : 'Pick an episode',
+      epPlay: eSel ? this.toastMsg('Opens player · ' + eSel.name) : this.toastMsg('Tap an episode first'),
+      epExport: this.toastMsg(eSel ? 'Exporting ' + eSel.name : 'Exporting ' + eList.length + ' episodes'),
+      devCards, accDevs, avatars, pickDays, pickSub, stripDevs,
+      segA: segDef.map(([k, l]) => ({ l, onTap: () => this.setState({ segA: k }), w: s.segA === k ? 600 : 500, bg: s.segA === k ? '#fff' : 'transparent', sh: s.segA === k ? '0 1px 3px rgba(0,0,0,0.12)' : 'none' })),
+      daysA, byDev,
+      hours: ['07', '10', '13', '16', '18'], lanes, cursorX: 'calc(78px + (100% - 78px) * ' + (Math.max(0, X(selStart)) / 100) + ')'.replace('78px + (100% - 78px)', '78px + (100% - 78px)'),
+      selTime: selC.day === 'Today' ? pickTime : '14:32', momentCount: moment.length + ' recordings', moment: sep(moment.length ? moment : [selC]),
+      exportMoment: this.toastMsg('Exporting ' + moment.length + ' recordings as one bundle'),
+      trigs, evClips: all.filter(c => s.trig === 'all' || c.trigKey === s.trig),
+      sel: { ...selC, ring: 'none' }, playW: Math.round(s.pos * 1000) / 10 + '%', posLabel: this.fmt(Math.round(s.pos * secs)), marks, playIcon: s.playing ? 'M7 5h3v14H7zM14 5h3v14h-3z' : 'M8 5l11 7-11 7z',
+      togglePlay: this.togglePlay, skipBack: () => this.setState(st => ({ pos: Math.max(0, st.pos - 0.1) })), skipFwd: () => this.setState(st => ({ pos: Math.min(1, st.pos + 0.1) })),
+      sameMoment: all.filter(c => c.id !== selC.id && c.day === selC.day && Math.abs((c.start || 0) - (selC.start || 0)) < 5).concat(all.filter(c => c.id !== selC.id && c.dev === selC.dev).slice(0, 2)).filter((c, i, a) => a.findIndex(x => x.id === c.id) === i).slice(0, 4),
+      exportSel: this.toastMsg('Exporting ' + selC.name), trainSel: this.toastMsg('Added to training set'),
+      toastOn: !!s.toast, toast: s.toast,
+      tabs: [['Home', 'M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1z'], ['Devices', 'M6 6h12v12H6zM9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3'], ['Data', 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'], ['Activity', 'M3 12a9 9 0 1018 0a9 9 0 10-18 0M12 7v5l3 2']].map(([l, icon]) => ({ l, icon, bg: l === 'Data' ? 'rgba(42,112,80,0.12)' : 'transparent', c: l === 'Data' ? '#2A7050' : '#171C23' })),
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -110,8 +110,7 @@ struct DeviceEnrollmentSettings: View {
         VStack(alignment: .leading, spacing: 6) {
             if let snapshot {
                 Label(snapshot.title, systemImage: snapshot.enrolled ? "checkmark.shield" : "exclamationmark.triangle.fill")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(snapshot.enrolled ? Color.secondary : Color.orange)
+                    .foregroundStyle(snapshot.enrolled ? Color.primary : Color.orange)
                 if !snapshot.enrolled {
                     if lite {
                         Text("Enroll this Wendy Lite device over Bluetooth.")
@@ -124,13 +123,18 @@ struct DeviceEnrollmentSettings: View {
                     }
                 }
             } else if loading {
-                ProgressView("Checking enrollment…").controlSize(.small)
+                HStack {
+                    Label("Enrollment", systemImage: "checkmark.shield")
+                    Spacer()
+                    Text("Checking…").foregroundStyle(.secondary)
+                    ProgressView().controlSize(.small)
+                }.accessibilityElement(children: .combine)
             } else {
-                Label("Enrollment status unavailable", systemImage: "questionmark.circle").font(.subheadline)
+                Label("Enrollment status unavailable", systemImage: "questionmark.circle")
                 if let error { Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             }
             if !loading && snapshot?.enrolled != true {
-                Button("Check enrollment again") { actions.submit { await refresh() } }.font(.caption)
+                Button("Check enrollment again", systemImage: "arrow.clockwise") { actions.submit { await refresh() } }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -266,3 +266,15 @@ func WDVisualGalleryDataAt(selector, episode *C.char, summary C.int) *C.WDVisual
 	snapshot, err := desktop.VisualGalleryDataAt(C.GoString(selector), C.GoString(episode), summary != 0)
 	return visualSnapshotResult(snapshot, err)
 }
+
+//export WDHomeCampaign
+func WDHomeCampaign(session C.uint64_t, name *C.char, trigger C.int32_t) *C.WDVisualEpisodesResult {
+	p := alloc[C.WDVisualEpisodesResult](1)
+	rows, err := desktop.HomeCampaign(uint64(session), C.GoString(name), trigger != 0)
+	p.status = status(err)
+	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
+	for i, row := range rows {
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes())}
+	}
+	return p
+}

@@ -22,6 +22,7 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 		b.tunnelSession.SetActive(false)
 		b.resetNearbyDiscovery(true)
 		b.galleryReset(true)
+		b.recordings.setActive(false)
 		b.cancelOperation()
 		b.ReserveConnection()
 		// Retire device streams while their packet carrier can still deliver
@@ -48,6 +49,9 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 	}
 	if err == nil && active {
 		b.allowNearbyDiscovery()
+	}
+	if err == nil {
+		b.recordings.setActive(active)
 	}
 	return err
 }
