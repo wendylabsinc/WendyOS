@@ -92,6 +92,29 @@ SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
     "cloud/organizations.proto"
 )
 
+check_shared_grpc_api_contracts_ancestry() (
+    local ref="${SHARED_GRPC_API_CONTRACTS_REF:-}" scratch
+    if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "error: shared contract pin must be a full 40-character commit SHA" >&2
+        return 1
+    fi
+    scratch="$(mktemp -d)" || return $?
+    trap 'rm -rf "$scratch"' EXIT
+    git init --bare --quiet "$scratch" || return $?
+    # Fetch complete master history, independently of the consumer's checkout.
+    # Fetch the pin too so an existing branch-only commit is rejected by ancestry.
+    git -C "$scratch" fetch --quiet --no-tags --filter=blob:none \
+        https://github.com/wendylabsinc/service-protos.git \
+        '+refs/heads/master:refs/heads/master' "$ref:refs/heads/contract-pin" || {
+        echo "error: could not fetch service-protos master and pinned commit $ref" >&2
+        return 1
+    }
+    git -C "$scratch" merge-base --is-ancestor "$ref" refs/heads/master || {
+        echo "error: shared contract pin $ref is not an ancestor of service-protos master, or ancestry could not be verified" >&2
+        return 1
+    }
+)
+
 check_shared_grpc_api_contracts_sources() {
     local proto_dir="$1" catalogue_dir="$2" catalogue file proto exception alias
     local seen="" allowed catalogue_proto
