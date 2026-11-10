@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 type FigureProps = {
   src: string;
   alt: string;
@@ -19,6 +21,33 @@ export function Figure({ src, alt, caption }: FigureProps) {
         className="aspect-video h-auto w-full border bg-fd-muted object-cover object-center"
       />
       {caption ? <figcaption className="mt-2 text-sm text-fd-muted-foreground">{caption}</figcaption> : null}
+    </figure>
+  );
+}
+
+// A row of small pictures that show a sequence, such as a robot along a route.
+export function Frames({ columns = 2, children }: { columns?: 2 | 3; children: ReactNode }) {
+  return (
+    <div className={`not-prose my-6 grid gap-3 ${columns === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
+      {children}
+    </div>
+  );
+}
+
+// One picture in <Frames>. Like Figure, the caption is a prop so `wendy docs`
+// drops the whole tag.
+export function Frame({ src, alt, caption }: FigureProps) {
+  return (
+    <figure>
+      <img
+        src={src}
+        alt={alt}
+        width={1280}
+        height={720}
+        loading="lazy"
+        className="aspect-video h-auto w-full border bg-fd-muted object-cover object-center"
+      />
+      {caption ? <figcaption className="mt-1.5 text-xs text-fd-muted-foreground">{caption}</figcaption> : null}
     </figure>
   );
 }
