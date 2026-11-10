@@ -137,6 +137,59 @@ func TestDesktopUnpinClearsOnlySelectedDevice(t *testing.T) {
 	}
 }
 
+// A probe marks a row as mTLS from the connection it negotiated, but the row
+// keeps the port it was advertised with. While that advertisement still names
+// the plaintext port, the agent's mTLS listener is one port above it.
+func TestDesktopSecureLANReachesMTLSListenerAbovePlaintextPort(t *testing.T) {
+	good, tlsConfig := legacyLiteTestPKI(t, 7, certs.AssetURN(7, 42))
+	cfg := &config.Config{CurrentContext: good.Name, Auth: []config.AuthConfig{*good}}
+	cfg.SetDevicePin("127.0.0.1", 7, good.CloudGRPC, "42", certs.AssetURN(7, 42))
+	setTempConfig(t, cfg)
+	setPinCache(t)
+	var listener net.Listener
+	var plaintextPort int
+	for attempt := 0; attempt < 20 && listener == nil; attempt++ {
+		first, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		plaintextPort = first.Addr().(*net.TCPAddr).Port
+		second, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", plaintextPort+1))
+		first.Close() // nothing answers on the plaintext port
+		if err == nil {
+			listener = second
+		}
+	}
+	if listener == nil {
+		t.Fatal("could not reserve two adjacent ports")
+	}
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+	agentpb.RegisterWendyAgentServiceServer(server, versionOnlyAgent{os: "wendyos"})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	original := plaintextConnectFn
+	plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		t.Error("secure target attempted a plaintext connection")
+		return nil, errors.New("plaintext is not allowed here")
+	}
+	t.Cleanup(func() { plaintextConnectFn = original })
+
+	device := desktopNearbyDevice(models.LANDevice{IPAddress: "127.0.0.1", Port: plaintextPort, IsMTLS: true})
+	if !device.RequiresMTLS {
+		t.Fatal("probed mTLS row does not require mTLS")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	conn, err := DesktopConnectSecureLAN(ctx, device.Selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if !conn.IsMTLS {
+		t.Fatal("agent answered without mutual TLS")
+	}
+}
+
 func TestDesktopSecureLANRenewsExpiredSelectedAccount(t *testing.T) {
 	for _, offline := range []bool{false, true} {
 		t.Run(fmt.Sprintf("offline=%v", offline), func(t *testing.T) {
