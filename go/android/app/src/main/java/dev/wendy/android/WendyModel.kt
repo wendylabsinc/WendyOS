@@ -70,6 +70,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
 
     // Cameras on the selected device. Tiles own their streams.
     var cameras by mutableStateOf(emptyList<JSONObject>()); private set
+    /** The session whose apps and cameras have been read at least once. */
+    var detailsSession by mutableLongStateOf(0L); private set
     var camerasError by mutableStateOf<String?>(null); private set
     val cameraEvents = mutableStateMapOf<Long, JSONObject>()
     val videoConsumers = mutableMapOf<Long, (JSONObject) -> Unit>()
@@ -261,6 +263,22 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
             val result = backend.call("Cameras").items()
             if (session == captured) { cameras = result; camerasError = null }
         } catch (e: CancellationException) { throw e } catch (e: Exception) { if (session == captured) camerasError = e.message }
+        if (session == captured) detailsSession = captured
+    }
+    /**
+     * Connects to [device] and waits until its apps and cameras are read or the connection fails
+     * (iOS awaits model.connect). Returns whether [device] is the ready, connected device.
+     */
+    suspend fun connectAndWait(device: Device): Boolean {
+        connect(device)
+        val epoch = connectionGeneration
+        withTimeoutOrNull(70_000) {
+            snapshotFlow { Triple(session, connecting, detailError) to detailsSession }.first { (state, details) ->
+                val (s, c, e) = state
+                epoch != connectionGeneration || (s != 0L && details == s) || (!c && e != null)
+            }
+        }
+        return epoch == connectionGeneration && session != 0L && selected?.selector == device.selector
     }
 
     // MARK: Apps

@@ -121,6 +121,16 @@ class LensTest {
         assertEquals(HomeWidgetSize.Small, HomeWidgetSize.of("Compact"))
     }
 
+    @Test fun smallWidgetsFillTheOpenHalfRowLikeIOS() {
+        val (s, m, l) = Triple(HomeWidgetSize.Small, HomeWidgetSize.Medium, HomeWidgetSize.Large)
+        // A later small widget sits beside the first one, above the medium widget between them.
+        assertEquals(listOf(HomeWidgetPlacement(0, 0, 2, 2), HomeWidgetPlacement(0, 2, 4, 2), HomeWidgetPlacement(2, 0, 2, 2)), packWidgets(listOf(s, m, s)))
+        assertEquals(listOf(HomeWidgetPlacement(0, 0, 2, 2), HomeWidgetPlacement(0, 2, 4, 4), HomeWidgetPlacement(2, 0, 2, 2), HomeWidgetPlacement(0, 6, 2, 2)), packWidgets(listOf(s, l, s, s)))
+        // Widgets are identified by their recording owner, so one device on the LAN and in Cloud matches.
+        assertEquals("76/42", widgetDeviceID(Device("spiffe://wendy.sh/tenant/76/device/42", "pi", "pi.local", "LAN")))
+        assertEquals("sel", widgetDeviceID(Device("", "pi", "sel", "LAN")))
+    }
+
     @Test fun homeLayoutKeysSeparateAccountsAndOrganizations() {
         val key = HomeWidgetStore.storageKey("a", "b")
         assertTrue(key.startsWith("wendy.home.widgets.v1."))
