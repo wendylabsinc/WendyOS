@@ -197,12 +197,10 @@ struct `'wendy project entitlements add'` {
      With `--json`, emits one JSON object describing the entitlement, whether
      the file changed, and the project path.
      */
-    @Test(
-        .disabled(
-            "WDY-1909: 'wendy project entitlements add' ignores global --json and prints the human confirmation only; JSON output is not implemented."
-        )
-    )
+    @Test
     func `prints JSON add result for automation`() async throws {
-        // TODO: enable once 'wendy project entitlements add' emits a JSON result under --json (WDY-1909).
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.entitlementChange(cli, operation: "add")
+        }
     }
 }
