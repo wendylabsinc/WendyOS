@@ -250,6 +250,8 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 // presence with the Cloud relay again, and only then can a new tunnel reach it.
 const cloudAgentRestartTimeout = 60 * time.Second
 
+const cloudAgentRestartProbeTimeout = 15 * time.Second
+
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
 	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
 	defer cancel()
@@ -271,11 +273,10 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 		// connect only creates a lazy client, so the tunnel itself (Cloud
 		// authorization, both sides joining the relay, the mTLS handshake) is
 		// built inside the probe RPC. That takes 6-10 s when the device is on a
-		// slow uplink, so the probe gets the whole attempt budget, the same one
-		// `cloud discover` gives a new tunnel to fetch the agent version. A
-		// short probe deadline cancels every attempt and reports a successful
+		// slow uplink, so the probe gets the whole attempt budget. A short
+		// probe deadline cancels every attempt and reports a successful
 		// restart as a timeout.
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudAgentRestartProbeTimeout)
 		conn, err := connect(attemptCtx)
 		if err != nil {
 			attemptCancel()
