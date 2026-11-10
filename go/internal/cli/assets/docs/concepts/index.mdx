@@ -7,21 +7,19 @@ Start with the [quickstart](/docs/) if you have not run an app yet.
 
 ## Wendy in 60 seconds
 
-```text
-YOUR DEVELOPMENT MACHINE
-  Wendy CLI / editor
-          |
-          | build, run, debug
-          v
-YOUR TARGET
-  WendyOS, or an existing machine with Wendy Agent
-    Your app
-    Camera / GPU / GPIO / ROS 2
-          |
-          | optional enrollment
-          v
-  Wendy Cloud: fleet management and remote deployment
-```
+<Flow label="The Wendy CLI builds, runs and debugs your app on a target. Enrolling the target in Wendy Cloud is optional.">
+  <FlowNode title="Your development machine">
+    <FlowPart>Wendy CLI</FlowPart>
+    <FlowPart>Your editor</FlowPart>
+  </FlowNode>
+  <FlowArrow>build, run, debug</FlowArrow>
+  <FlowNode wide title="Your target" note="WendyOS, or an existing machine with Wendy Agent">
+    <FlowPart>Your app</FlowPart>
+    <FlowPart>Camera · GPU · GPIO · ROS 2</FlowPart>
+  </FlowNode>
+  <FlowArrow optional>optional enrollment</FlowArrow>
+  <FlowNode optional title="Wendy Cloud" note="Fleet management and remote deployment" />
+</Flow>
 
 | Name | What it does |
 | --- | --- |
@@ -32,6 +30,8 @@ YOUR TARGET
 | `wendy.json` | Your app's configuration, including its target platform and hardware permissions. |
 
 ## Your development machine and your target
+
+<Figure src="/images/get-started/jetson-usb-c.webp" alt="Overhead view of a laptop connected to an NVIDIA Jetson Orin Nano developer kit by one USB-C cable" caption="A development machine and a target: a laptop and a Jetson Orin Nano joined by one USB-C cable." />
 
 The CLI runs on your development machine. A target is the machine that runs your app. WendyOS includes Wendy Agent; existing Linux and supported Mac machines can run the agent without replacing their OS. A simulator is a local VM running WendyOS.
 
