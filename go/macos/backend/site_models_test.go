@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -121,5 +122,53 @@ func TestSiteModelsBackendReportsWhyTheDeviceRefusedAnUpload(t *testing.T) {
 		if status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "storage limit reached") {
 			t.Fatalf("%d byte archive: got %v, want the device's storage limit refusal", size, err)
 		}
+	}
+}
+
+type stalledSiteUpload struct {
+	pb.UnimplementedSiteModelServiceServer
+	started chan struct{}
+}
+
+func (s *stalledSiteUpload) Upload(stream grpc.ClientStreamingServer[pb.SiteModelUploadRequest, pb.SiteModelInfo]) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	close(s.started)
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
+// A transfer can take minutes over a slow link. Other requests to the same
+// device must not wait for it, and it must not outlive the connection.
+func TestSiteModelsBackendTransferDoesNotHoldTheRequestLock(t *testing.T) {
+	device := &stalledSiteUpload{started: make(chan struct{})}
+	b := siteBackendServing(t, device)
+	saved := make(chan error, 1)
+	go func() {
+		_, err := b.SiteModels(42, "save", siteArchive(t, 16<<20), "Warehouse", "")
+		saved <- err
+	}()
+	<-device.started
+	other := make(chan error, 1)
+	go func() { other <- b.StopLogs(1, 42) }()
+	select {
+	case err := <-other:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("another request waited for the model transfer")
+	}
+	if err := b.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-saved:
+		if err == nil {
+			t.Fatal("transfer succeeded after its connection closed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("transfer outlived its connection")
 	}
 }

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,18 +18,28 @@ const siteTransferLimit = 256 << 20
 
 // Local paths are supplied by the app's archive store, never by the device.
 func (b *Backend) SiteModels(session uint64, action, path, name, id string) (result []*pb.SiteModelInfo, err error) {
-	ctx, done := b.beginTimeout(10 * time.Minute)
-	defer done()
 	defer func() {
 		if status.Code(err) == codes.Unimplemented {
 			err = errors.New("This device needs an agent update that supports saved site models.")
 		}
 	}()
+	// A transfer can take minutes. Hold the request lock only to choose the
+	// connection, so the device's apps, logs and cameras stay usable meanwhile.
+	// The transfer ends with that connection.
+	b.mu.Lock()
 	conn, err := b.connection(session)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, err
 	}
+	life := b.life
+	if life == nil {
+		life = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(life, 10*time.Minute)
 	client := pb.NewSiteModelServiceClient(conn.Conn)
+	b.mu.Unlock()
+	defer cancel()
 	switch action {
 	case "list":
 		value, e := client.List(ctx, &pb.SiteModelListRequest{})
