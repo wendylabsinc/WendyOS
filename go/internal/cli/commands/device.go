@@ -959,6 +959,15 @@ func promptWifiIfNeeded(ctx context.Context, conn *grpcclient.AgentConnection) e
 	if err != nil {
 		return enrollmentWifiError(err)
 	}
+	if selected, _ := ctx.Value(wifiCredentialTargetKey{}).(*SelectedDevice); selected != nil && password != "" {
+		if err := confirmUnverifiedWiFiCredentials(selected); errors.Is(err, errUnverifiedWiFiDeclined) {
+			// Declining Wi-Fi is not declining enrollment, as above.
+			fmt.Println("WiFi credentials were not sent.")
+			return nil
+		} else if err != nil {
+			return enrollmentWifiError(err)
+		}
+	}
 
 	fmt.Printf("Connecting to %s...\n", ssid)
 	wifiResp, err := conn.AgentService.ConnectToWiFi(ctx, &agentpb.ConnectToWiFiRequest{

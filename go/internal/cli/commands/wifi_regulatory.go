@@ -28,7 +28,7 @@ func newWifiRegulatoryCmd() *cobra.Command {
 }
 
 func runWiFiRegulatory(cmd *cobra.Command, country string) error {
-	target, err := resolveTarget(cmd.Context(), ExcludeProviders("local", "docker"), SuppressUpdateCheck())
+	target, err := resolveWifiTargetFn(cmd.Context(), ExcludeProviders("local", "docker"), SuppressUpdateCheck())
 	if err != nil {
 		return err
 	}
