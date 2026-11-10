@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -125,6 +126,18 @@ func TestWiFiFirstBootSetup(t *testing.T) {
 					networks, err := client.List(ctx)
 					if err != nil || len(networks) != 1 || networks[0].Ssid != "Setup WiFi" {
 						t.Fatalf("scan: %v, %v", networks, err)
+					}
+					// Credentials need consent over an unverified setup connection.
+					if err := client.Connect(ctx, &agentpb.ConnectToWiFiRequest{Ssid: "Setup WiFi", Password: "fixture-password"}); !errors.Is(err, errUnverifiedWiFiCredentials) || service.connects.Load() != 0 {
+						t.Fatalf("Wi-Fi credentials sent without consent: %v", err)
+					}
+					if err := confirmUnverifiedWiFiCredentials(target); !errors.Is(err, errUnverifiedWiFiCredentials) {
+						t.Fatalf("non-interactive consent did not require the flag: %v", err)
+					}
+					allowUnverifiedWiFiDevice = true
+					t.Cleanup(func() { allowUnverifiedWiFiDevice = false })
+					if err := confirmUnverifiedWiFiCredentials(target); err != nil {
+						t.Fatal(err)
 					}
 					if err := client.Connect(ctx, &agentpb.ConnectToWiFiRequest{Ssid: "Setup WiFi", Password: "fixture-password"}); err != nil {
 						t.Fatal(err)
@@ -277,5 +290,115 @@ func TestWiFiSetupPickerKeepsBluetoothFallback(t *testing.T) {
 	target, err := connectLocalPickerChoice(withWiFiSetupSelection(ctx), &tui.PickerItem{Value: &pickerEntry{mergedDevice: dev}}, true)
 	if err != nil || target == nil || target.Bluetooth != bluetooth {
 		t.Fatalf("Wi-Fi setup picker lost its Bluetooth fallback: target=%+v err=%v", target, err)
+	}
+}
+
+func stubUnverifiedWiFiConsent(t *testing.T, interactive bool, answer bool, answerErr error) *int {
+	t.Helper()
+	oldInteractive, oldConfirm, oldAllow, oldJSON := isInteractiveTerminalFn, confirmUnverifiedWiFiFn, allowUnverifiedWiFiDevice, jsonOutput
+	t.Cleanup(func() {
+		isInteractiveTerminalFn, confirmUnverifiedWiFiFn, allowUnverifiedWiFiDevice, jsonOutput = oldInteractive, oldConfirm, oldAllow, oldJSON
+	})
+	prompts := 0
+	isInteractiveTerminalFn = func() bool { return interactive }
+	confirmUnverifiedWiFiFn = func() (bool, error) { prompts++; return answer, answerErr }
+	allowUnverifiedWiFiDevice, jsonOutput = false, false
+	return &prompts
+}
+
+func TestUnverifiedWiFiConsent(t *testing.T) {
+	unverified := func() *SelectedDevice {
+		return &SelectedDevice{Agent: &grpcclient.AgentConnection{DevicePinKey: "robot.local"}, unverifiedSetup: true}
+	}
+	t.Run("verified target", func(t *testing.T) {
+		prompts := stubUnverifiedWiFiConsent(t, true, false, nil)
+		if err := confirmUnverifiedWiFiCredentials(&SelectedDevice{Agent: &grpcclient.AgentConnection{}}); err != nil || *prompts != 0 {
+			t.Fatalf("verified target prompted: %v", err)
+		}
+	})
+	t.Run("json refuses", func(t *testing.T) {
+		prompts := stubUnverifiedWiFiConsent(t, true, true, nil)
+		jsonOutput = true
+		if err := confirmUnverifiedWiFiCredentials(unverified()); !errors.Is(err, errUnverifiedWiFiCredentials) || *prompts != 0 {
+			t.Fatalf("--json sent credentials without the flag: %v", err)
+		}
+	})
+	t.Run("flag", func(t *testing.T) {
+		prompts := stubUnverifiedWiFiConsent(t, false, false, nil)
+		allowUnverifiedWiFiDevice = true
+		if err := confirmUnverifiedWiFiCredentials(unverified()); err != nil || *prompts != 0 {
+			t.Fatalf("flag did not grant consent: %v", err)
+		}
+	})
+	t.Run("accept once", func(t *testing.T) {
+		prompts := stubUnverifiedWiFiConsent(t, true, true, nil)
+		target := unverified()
+		for range 2 {
+			if err := confirmUnverifiedWiFiCredentials(target); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if *prompts != 1 || !target.unverifiedSetupAccepted {
+			t.Fatalf("consent prompts = %d", *prompts)
+		}
+	})
+	t.Run("decline", func(t *testing.T) {
+		stubUnverifiedWiFiConsent(t, true, false, nil)
+		target := unverified()
+		err := confirmUnverifiedWiFiCredentials(target)
+		if !errors.Is(err, errUnverifiedWiFiDeclined) || !errors.Is(err, ErrUserCancelled) || target.unverifiedSetupAccepted {
+			t.Fatalf("decline: %v", err)
+		}
+	})
+	t.Run("cancel", func(t *testing.T) {
+		stubUnverifiedWiFiConsent(t, true, false, tui.ErrCancelled)
+		err := confirmUnverifiedWiFiCredentials(unverified())
+		if !errors.Is(err, ErrUserCancelled) || errors.Is(err, errUnverifiedWiFiDeclined) {
+			t.Fatalf("cancel: %v", err)
+		}
+	})
+}
+
+type enrollmentWifiConnectClient struct {
+	enrollmentWifiClient
+	connects int
+}
+
+func (c *enrollmentWifiConnectClient) ConnectToWiFi(context.Context, *agentpb.ConnectToWiFiRequest, ...grpc.CallOption) (*agentpb.ConnectToWiFiResponse, error) {
+	c.connects++
+	return &agentpb.ConnectToWiFiResponse{Success: true}, nil
+}
+
+// Enrollment's Wi-Fi prompt sends the password over the same unverified setup
+// connection, so it asks too. Declining skips Wi-Fi, not enrollment.
+func TestEnrollmentWifiAsksBeforeUnverifiedPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		unverified  bool
+		accept      bool
+		wantPrompts int
+		wantConnect int
+	}{
+		{name: "verified", wantConnect: 1},
+		{name: "unverified accepted", unverified: true, accept: true, wantPrompts: 1, wantConnect: 1},
+		{name: "unverified declined", unverified: true, wantPrompts: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prompts := stubUnverifiedWiFiConsent(t, true, tc.accept, nil)
+			confirm, pick, password := confirmEnrollmentWifiFn, pickEnrollmentWifiFn, promptWifiPassword
+			t.Cleanup(func() { confirmEnrollmentWifiFn, pickEnrollmentWifiFn, promptWifiPassword = confirm, pick, password })
+			confirmEnrollmentWifiFn = func() (bool, error) { return true, nil }
+			pickEnrollmentWifiFn = func(context.Context, *SelectedDevice) (string, error) { return "Home", nil }
+			promptWifiPassword = func(string) (string, error) { return "fixture-password", nil }
+			client := &enrollmentWifiConnectClient{enrollmentWifiClient: enrollmentWifiClient{response: &agentpb.GetWiFiStatusResponse{}}}
+			conn := &grpcclient.AgentConnection{AgentService: client}
+			target := &SelectedDevice{Agent: conn, unverifiedSetup: tc.unverified}
+			if err := promptWifiIfNeeded(context.WithValue(context.Background(), wifiCredentialTargetKey{}, target), conn); err != nil {
+				t.Fatal(err)
+			}
+			if *prompts != tc.wantPrompts || client.connects != tc.wantConnect {
+				t.Fatalf("prompts = %d, connects = %d", *prompts, client.connects)
+			}
+		})
 	}
 }

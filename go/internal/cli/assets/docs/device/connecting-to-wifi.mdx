@@ -51,6 +51,9 @@ If you selected enrollment during `wendy install`, you can configure Wi-Fi over
 USB-C before enrollment completes. Run `wendy device wifi`, select the device,
 and connect it to your network. The CLI allows this setup connection only when
 there is no saved device binding and the device reports that it is unprovisioned.
+The device cannot prove its identity yet and the connection is unencrypted, so
+the CLI asks before it sends the Wi-Fi password. Pass
+`--allow-unverified-device` to send it without asking in scripts.
 
 The agent waits for the Cloud enrollment directory to become reachable before
 starting its first enrollment attempt. Connecting to Wi-Fi allows that attempt to

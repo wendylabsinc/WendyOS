@@ -29,6 +29,23 @@ wendy device wifi connect [--ssid <name>]
 
 Pass `--ssid` to skip the interactive network picker.
 
+### Unenrolled devices
+
+Before first-boot enrollment completes, a device has no identity the CLI can
+verify. If you are signed in, the Wi-Fi commands still reach a device that has
+no saved binding and reports that it is unprovisioned. The connection is
+unencrypted, though, and any host answering the selected name receives the
+Wi-Fi password. The CLI asks before it sends one, and the interactive table asks
+once when it opens. Non-interactive and `--json` runs refuse unless you pass
+`--allow-unverified-device`:
+
+```sh
+wendy device wifi connect --device wendyos-robot.local --ssid Home --password '<password>' --allow-unverified-device
+```
+
+Scanning, status, ranking and forgetting networks send no credentials and do
+not ask.
+
 ### `wendy device wifi status`
 
 Shows the device's current WiFi connection.
