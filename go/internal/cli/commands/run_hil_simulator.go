@@ -46,7 +46,7 @@ func pickHILSimulator(ctx context.Context) (string, error) {
 	updated, _ := picker.Update(tui.PickerSetMsg{Items: simulatorRows(statuses)})
 	updated, _ = updated.(tui.PickerModel).Update(tui.PickerDoneMsg{})
 	model := hilSimulatorPickerModel{picker: updated.(tui.PickerModel), purpose: devicePickerPurposeFromContext(ctx)}
-	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	final, err := tui.RunProgram(tea.NewProgram(model, tea.WithContext(ctx)))
 	if err != nil {
 		return "", err
 	}

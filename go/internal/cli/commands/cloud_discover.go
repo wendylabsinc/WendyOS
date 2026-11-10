@@ -54,7 +54,7 @@ func newCloudDiscoverCmd() *cobra.Command {
 			// Alt screen restores the user's terminal content on exit. The
 			// picker-mode embedding in `wendy cloud tunnel` stays inline.
 			p := tea.NewProgram(m, tea.WithAltScreen())
-			if _, err := p.Run(); err != nil {
+			if _, err := tui.RunProgram(p); err != nil {
 				return fmt.Errorf("TUI error: %w", err)
 			}
 			return nil

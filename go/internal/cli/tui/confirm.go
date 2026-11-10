@@ -155,7 +155,7 @@ func (m ConfirmModel) Cancelled() bool {
 
 func runConfirm(m ConfirmModel, programOpts []tea.ProgramOption) (bool, error) {
 	p := tea.NewProgram(m, programOpts...)
-	result, err := p.Run()
+	result, err := RunProgram(p)
 	if err != nil {
 		return false, fmt.Errorf("confirm prompt: %w", err)
 	}

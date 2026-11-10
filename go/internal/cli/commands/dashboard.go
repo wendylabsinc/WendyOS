@@ -36,7 +36,7 @@ func newDeviceDashboardCmd() *cobra.Command {
 
 			m := newDashboardModel(conn, appName, ctx)
 			p := tea.NewProgram(m, tea.WithAltScreen())
-			if _, err := p.Run(); err != nil {
+			if _, err := tui.RunProgram(p); err != nil {
 				return fmt.Errorf("dashboard: %w", err)
 			}
 			return nil

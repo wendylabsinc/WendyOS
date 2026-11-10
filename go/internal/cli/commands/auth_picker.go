@@ -222,7 +222,7 @@ func pickAuthSession(cfg *config.Config) (*config.AuthConfig, error) {
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("picker: %w", err)
 	}

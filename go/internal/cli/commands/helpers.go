@@ -35,6 +35,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"golang.org/x/term"
@@ -546,7 +547,7 @@ func retryOnHandshakeTimeout(ctx context.Context, cause error, retry func() (*gr
 			// The trigger is any timeout-class error (isReachabilityTimeoutError
 			// also matches a bare dial timeout to a down device), not strictly a
 			// handshake stall, so keep the wording generic.
-			fmt.Fprintf(os.Stderr, "connection timed out; retrying (%d/%d)...\n", attempt, maxHandshakeTimeoutRetries)
+			fmt.Fprintf(terminaloutput.Stderr, "connection timed out; retrying (%d/%d)...\n", attempt, maxHandshakeTimeoutRetries)
 		}
 		conn, err := retry()
 		if err == nil {
@@ -645,7 +646,7 @@ var runAgentConnectionSpinner = func(ctx context.Context, label string, fn func(
 		prog.Send(tui.SpinnerDoneMsg{})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-doneCh
@@ -1051,7 +1052,7 @@ func promptDefaultDeviceRecovery(hostname string) recoveryChoice {
 			"Exit",
 		},
 	}
-	final, err := tea.NewProgram(m).Run()
+	final, err := tui.RunProgram(tea.NewProgram(m))
 	if err != nil {
 		return recoveryExit
 	}
@@ -2108,7 +2109,7 @@ func dialAgentLKG(ctx context.Context, e discoverycache.Entry, pinKey string) (*
 	tlsDebug := os.Getenv("WENDY_TLS_DEBUG") != ""
 	if !lkgTCPAlive(addr) {
 		if tlsDebug {
-			fmt.Fprintf(os.Stderr, "[tls-debug] lkg %s: tcp pre-check failed\n", addr)
+			fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg %s: tcp pre-check failed\n", addr)
 		}
 		return nil, nil, lkgDeadTCP
 	}
@@ -2131,12 +2132,12 @@ func dialAgentLKG(ctx context.Context, e discoverycache.Entry, pinKey string) (*
 			conn.Close()
 		}
 		if tlsDebug {
-			fmt.Fprintf(os.Stderr, "[tls-debug] lkg %s: direct dial failed: %s\n", addr, reason)
+			fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg %s: direct dial failed: %s\n", addr, reason)
 		}
 		return nil, mtlsErr, lkgHandshakeFailed
 	}
 	if tlsDebug {
-		fmt.Fprintf(os.Stderr, "[tls-debug] lkg %s: connected\n", addr)
+		fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg %s: connected\n", addr)
 	}
 	return conn, mtlsErr, lkgConnected
 }
@@ -2322,7 +2323,7 @@ func connectWithAutoTLSDiagnosticsTarget(ctx context.Context, plaintextAddr, pin
 				plaintextAddr, fromCache = cachedAddr, true
 			default:
 				if tlsDebug {
-					fmt.Fprintf(os.Stderr, "[tls-debug] lkg-ineligible %s: tcp pre-check failed, skipping cached-IP ladder\n", cachedAddr)
+					fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg-ineligible %s: tcp pre-check failed, skipping cached-IP ladder\n", cachedAddr)
 				}
 			}
 		}
@@ -2675,7 +2676,7 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 				}
 				w.recordMTLSErr(mtlsAddr, tlsErr, isPrimary)
 				if w.tlsDebug {
-					fmt.Fprintf(os.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
+					fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
 				}
 				continue
 			}
@@ -2715,7 +2716,7 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 				return nil, spkiRefusal(w.target.refusalKey(), pm)
 			}
 			if w.tlsDebug {
-				fmt.Fprintf(os.Stderr, "[tls-debug] GetAgentVersion(%s) error: %v\n", mtlsAddr, probeErr)
+				fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] GetAgentVersion(%s) error: %v\n", mtlsAddr, probeErr)
 			}
 			if conn.TCPDialError() != nil {
 				// The actual dial never reached TCP. Another credential cannot
@@ -3048,7 +3049,7 @@ func suggestProvisioning(conn *grpcclient.AgentConnection) {
 	if conn.IsMTLS || jsonOutput {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Hint: connected without mTLS. Run 'wendy device setup' to provision this device.\n")
+	fmt.Fprintf(terminaloutput.Stderr, "Hint: connected without mTLS. Run 'wendy device setup' to provision this device.\n")
 }
 
 // updateCheckTTL bounds how often checkAndOfferUpdate probes the agent. Within
@@ -3144,12 +3145,12 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	}
 
 	if !isInteractiveTerminal() {
-		fmt.Fprintf(os.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
+		fmt.Fprintf(terminaloutput.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
 		return conn, nil
 	}
 	warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
-	fmt.Fprintf(os.Stderr, warn.Render("Agent is behind the CLI (agent: %s, CLI: %s).")+"\n", agentVer, version.Version)
+	fmt.Fprintf(terminaloutput.Stderr, warn.Render("Agent is behind the CLI (agent: %s, CLI: %s).")+"\n", agentVer, version.Version)
 	if !confirmFn("Update the agent now?") {
 		return conn, nil
 	}
@@ -3158,19 +3159,19 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	osName := resp.GetOs()
 
 	if err := performAgentUpdate(ctx, conn, osName, arch, false); err != nil {
-		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
+		fmt.Fprintf(terminaloutput.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
 		return conn, nil
 	}
 
 	conn.Close()
 
-	fmt.Fprintf(os.Stderr, "Waiting for agent to restart...")
+	fmt.Fprintf(terminaloutput.Stderr, "Waiting for agent to restart...")
 	newConn, err := reconnectAgentAfterRestart(ctx, conn)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, " failed.\n")
+		fmt.Fprintf(terminaloutput.Stderr, " failed.\n")
 		return nil, fmt.Errorf("agent did not come back after update: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, " ready.\n")
+	fmt.Fprintf(terminaloutput.Stderr, " ready.\n")
 	return newConn, nil
 }
 
@@ -3187,17 +3188,17 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, o
 	if arch == "" {
 		return fmt.Errorf("device did not report CPU architecture")
 	}
-	fmt.Fprintf(os.Stderr, "Fetching agent for %s...\n", agentPlatformLabel(osName, arch))
+	fmt.Fprintf(terminaloutput.Stderr, "Fetching agent for %s...\n", agentPlatformLabel(osName, arch))
 	binaryData, resolvedVer, source, err := resolveAgentArtifact(osName, arch, nightly)
 	if err != nil {
 		return fmt.Errorf("resolving agent binary: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Downloaded agent %s (from %s)\n", resolvedVer, source)
+	fmt.Fprintf(terminaloutput.Stderr, "Downloaded agent %s (from %s)\n", resolvedVer, source)
 
 	h := sha256.Sum256(binaryData)
 	sha256Hash := hex.EncodeToString(h[:])
 
-	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
+	fmt.Fprintf(terminaloutput.Stderr, "Uploading to device...\n")
 	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
 }
 
@@ -3825,7 +3826,7 @@ func explicitProviderDevice(ctx context.Context, p providers.DeviceProvider) (*S
 	devices, err := p.DiscoverDevices(providers.WithProbeTimeout(ctx, explicitProviderProbeTimeout))
 	var slow *providers.ProbeTimeoutError
 	if errors.As(err, &slow) && humanPresent() {
-		fmt.Fprintf(os.Stderr, "%s is not responding yet; waiting up to %s for it...\n", p.DisplayName(), dockerDaemonReadyWait)
+		fmt.Fprintf(terminaloutput.Stderr, "%s is not responding yet; waiting up to %s for it...\n", p.DisplayName(), dockerDaemonReadyWait)
 		devices, err = p.DiscoverDevices(providers.WithProbeTimeout(ctx, dockerDaemonReadyWait))
 	}
 	if err != nil {
@@ -4387,7 +4388,7 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 
 	// Cancel continuous discovery when the picker exits.
 	discoverCtx, discoverCancel := context.WithCancel(ctx)
-	p := tea.NewProgram(newDevicePickerModel(discoverCtx, picker, cloudAuth, defaultOrgID, disableEnroll, openOn))
+	p := tea.NewProgram(newDevicePickerModel(discoverCtx, picker, cloudAuth, defaultOrgID, disableEnroll, openOn), tea.WithFilter(tui.InterruptFilter))
 
 	sendLANItem := func(dev models.LANDevice, insecure bool, probe tui.ProbeState) {
 		p.Send(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(dev, insecure, probe)}}})
@@ -4490,7 +4491,7 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 		}()
 	}
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	discoverCancel() // stop all background discovery
 	if err != nil {
 		return nil, fmt.Errorf("device picker: %w", err)

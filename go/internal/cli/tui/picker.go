@@ -747,6 +747,21 @@ var (
 )
 
 func (m PickerModel) View() string {
+	view := strings.TrimRight(m.viewContent(), "\n")
+	if m.height > 0 {
+		if excess := lipgloss.Height(view) - m.height; excess > 0 {
+			m.table.SetHeight(max(2, m.table.Height()-excess))
+			view = strings.TrimRight(m.viewContent(), "\n")
+		}
+		lines := strings.Split(view, "\n")
+		if len(lines) > m.height {
+			view = strings.Join(lines[:m.height], "\n")
+		}
+	}
+	return view
+}
+
+func (m PickerModel) viewContent() string {
 	if m.quitting || m.selected != nil {
 		return ""
 	}

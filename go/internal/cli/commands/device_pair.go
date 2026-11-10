@@ -129,7 +129,7 @@ func runPicker(title string, items []tui.PickerItem) (*tui.PickerItem, error) {
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("picker: %w", err)
 	}
@@ -302,7 +302,7 @@ func newDevicePairCmd() *cobra.Command {
 			if unitreeFlags {
 				model.active = pairUnitreeTab
 			}
-			if _, err := tea.NewProgram(model, tea.WithContext(pairCtx)).Run(); err != nil {
+			if _, err := tui.RunProgram(tea.NewProgram(model, tea.WithContext(pairCtx))); err != nil {
 				return fmt.Errorf("device pairing: %w", err)
 			}
 			return nil

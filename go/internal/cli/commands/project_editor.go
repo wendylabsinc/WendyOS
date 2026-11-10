@@ -34,7 +34,7 @@ func pickProjectItem(title string, items []tui.PickerItem) (string, error) {
 		p.Send(tui.PickerAddMsg{Items: items})
 		p.Send(tui.PickerDoneMsg{})
 	}()
-	result, err := p.Run()
+	result, err := tui.RunProgram(p)
 	if err != nil {
 		return "", err
 	}

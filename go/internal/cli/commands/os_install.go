@@ -1134,7 +1134,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		wp.Send(tui.ProgressDoneMsg{Err: writeErr})
 	}()
 
-	writeFinal, err := wp.Run()
+	writeFinal, err := tui.RunProgram(wp)
 	if err != nil {
 		return fmt.Errorf("progress TUI: %w", err)
 	}
@@ -1215,7 +1215,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 				}
 			})})
 		}()
-		fallbackFinal, ferr := fp.Run()
+		fallbackFinal, ferr := tui.RunProgram(fp)
 		if ferr != nil {
 			return fmt.Errorf("progress TUI: %w", ferr)
 		}
@@ -1617,7 +1617,7 @@ func downloadImageContext(ctx context.Context, img *imageInfo, opts ...tea.Progr
 		p.Send(tui.ProgressDoneMsg{Err: err})
 	}()
 
-	model, runErr := p.Run()
+	model, runErr := tui.RunProgram(p)
 	var uiErr error
 	if err := ctx.Err(); err != nil {
 		uiErr = err
@@ -2102,7 +2102,7 @@ func measureImageWithProgress(stream *imageStream) error {
 		p.Send(tui.ProgressDoneMsg{Err: stream.measureUncompressedSize(sendProgress)})
 	}()
 
-	final, err := p.Run()
+	final, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("progress TUI: %w", err)
 	}
@@ -2495,7 +2495,7 @@ func selectWifiNetworkStreaming() (wifiScanSelection, error) {
 	defer cancel()
 	p := tea.NewProgram(newLocalWifiPickerModel(ctx))
 	fmt.Println()
-	finalModel, runErr := p.Run()
+	finalModel, runErr := tui.RunProgram(p)
 	if errors.Is(runErr, tea.ErrInterrupted) {
 		return wifiScanSelection{}, ErrUserCancelled
 	}
@@ -3119,7 +3119,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 			fp.Send(tui.ProgressDoneMsg{Err: flashErr})
 		}()
 
-		flashFinal, err := fp.Run()
+		flashFinal, err := tui.RunProgram(fp)
 		if err != nil {
 			return fmt.Errorf("flash TUI: %w", err)
 		}
