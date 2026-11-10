@@ -157,7 +157,7 @@ private fun presenceCounts(model: WendyModel): List<PresenceCount> {
         return listOf(PresenceCount("online", online, LensStyle.online), PresenceCount("offline", rows.size - online, LensStyle.offline)).filter { it.count > 0 }
     }
     if (!model.nearbyLoaded || model.nearbyError != null) return emptyList()
-    return listOf(PresenceCount("nearby", model.nearbyDevices.size, LensStyle.green))
+    return listOf(PresenceCount("nearby", model.nearbyDevices.size, LensStyle.green)).filter { it.count > 0 }
 }
 
 /** Devices Home: counts and presence, Local and Cloud tiles, setup, attention and recent data (iOS MobileDevicesHome). */
@@ -187,7 +187,8 @@ private fun DevicesHome(model: WendyModel, setup: () -> Unit, notifications: () 
                             }
                         }
                     }
-                    val counts = presenceCounts(model)
+                    // Zero counts have no segment: a zero weight is invalid in Compose.
+                    val counts = presenceCounts(model).filter { it.count > 0 }
                     val sum = counts.sumOf { it.count }.coerceAtLeast(1)
                     Row(Modifier.fillMaxWidth().height(7.dp).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape).clipToCircle()) {
                         counts.forEach { Box(Modifier.weight(it.count.toFloat() / sum).fillMaxHeight().background(it.color)) }
