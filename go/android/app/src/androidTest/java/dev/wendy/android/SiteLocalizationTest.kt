@@ -164,6 +164,30 @@ class SiteLocalizationTest {
         assertFalse(SiteSolver.localize(map, ByteArray(960 * 720) { 90 }, 960, 720, live.known, false).success)
     }
 
+    @Test fun theEngineAlignsFromASavedVisualMap() {
+        val reference = map(Camera(doubleArrayOf(0.3, 1.5, 0.2), doubleArrayOf(0.0, 1.2, 5.0), 700.0, 960, 720),
+            Camera(doubleArrayOf(-0.4, 1.4, 0.5), doubleArrayOf(0.5, 1.0, 5.0), 700.0, 960, 720))
+        val model = "usdz".toByteArray(); val revision = Site(name = "Room").modelRevision
+        val bytes = java.nio.ByteBuffer.allocate(reference.count * 131 * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply { reference.export().forEach { putFloat(it) } }.array()
+        // Saved and read back in the iOS file format.
+        val saved = SiteVisualMap(1, revision, SiteVisualMap.digest(model), 784_000_000.0, 2, bytes)
+        val engine = SiteLocalizationEngine().apply { load(SiteVisualMap.parse(saved.json().toString().toByteArray()), revision, model) }
+        val live = Camera(doubleArrayOf(0.1, 1.6, 0.3), doubleArrayOf(-0.3, 1.1, 5.0), 700.0, 960, 720)
+        val result = engine.localize(render(live), 960, 720, revision, null)
+        assertTrue(result.lens.measured); assertTrue(result.fittedLens)
+        val p = result.pose.position
+        assertTrue(sqrt((p.x - live.position[0]).let { it * it } + (p.y - live.position[1]).let { it * it } + (p.z - live.position[2]).let { it * it }) < .15)
+        val m = result.pose.matrix()
+        assertTrue(Math.toDegrees(acos(dot(doubleArrayOf(m[6], m[7], m[8]), live.forward).coerceIn(-1.0, 1.0))) < 3)
+        // It passes the checks that guard saving on the gateway.
+        SiteCalibrationRecords.alignment("usb-1", result)
+        // With that lens known, a second frame verifies the position.
+        val verification = engine.localize(render(live), 960, 720, revision, result.lens)
+        assertFalse(verification.fittedLens)
+        // A map for another model revision is refused.
+        assertThrows(SiteLocalizationException::class.java) { SiteLocalizationEngine().load(saved, Site(name = "Other").modelRevision, model) }
+    }
+
     @Test fun landmarkMapsRoundTripAndRejectDamage() {
         val map = map(Camera(doubleArrayOf(0.3, 1.5, 0.2), doubleArrayOf(0.0, 1.2, 5.0), 700.0, 960, 720))
         val exported = map.export()

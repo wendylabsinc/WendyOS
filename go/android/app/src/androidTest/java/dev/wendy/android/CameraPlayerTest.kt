@@ -34,6 +34,24 @@ class CameraPlayerTest {
         }
     }
 
+    /** Calibration decodes IDR pictures to luma beside the display path (red ≈ 76, blue ≈ 29 in full range). */
+    @Test fun decodesKeyframesToLumaForCalibration() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val video = instrumentation.context.assets.open("multislice-640x480.h264").use { it.readBytes() }
+        val frames = CameraCalibrationFrames().apply { acquire() }
+        render(video, 113, calibration = frames) { true }
+        var frame: CameraCalibrationFrame? = null
+        repeat(50) { if (frame == null) { frame = frames.latest; if (frame == null) Thread.sleep(100) } }
+        val decoded = frame
+        assertNotNull("No calibration frame was decoded", decoded)
+        assertEquals(640, decoded!!.width); assertEquals(480, decoded.height); assertEquals("H.264", decoded.codec)
+        assertTrue(decoded.isFresh(System.currentTimeMillis()))
+        fun luma(y: Int) = decoded.gray[y * 640 + 320].toInt() and 255
+        assertTrue("top ${luma(60)}", luma(60) in 60..95); assertTrue("bottom ${luma(420)}", luma(420) in 15..45)
+        // Releasing the last owner clears the frame and stops decoding.
+        frames.release(); assertNull(frames.latest); assertFalse(frames.enabled)
+    }
+
     /** Optional diagnostic replay; camera captures stay outside the repository. */
     @Test fun replaysCapturedStreamWhenProvided() {
         val name = InstrumentationRegistry.getArguments().getString("cameraFixture")
@@ -45,7 +63,7 @@ class CameraPlayerTest {
         }
     }
 
-    private fun render(video: ByteArray, chunkSize: Int, checkFrame: (Bitmap) -> Boolean) {
+    private fun render(video: ByteArray, chunkSize: Int, calibration: CameraCalibrationFrames? = null, checkFrame: (Bitmap) -> Boolean) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val failure = AtomicReference<String?>()
         val ready = CountDownLatch(1)
@@ -54,7 +72,7 @@ class CameraPlayerTest {
             scenario.onActivity { activity ->
                 activity.setTurnScreenOn(true)
                 activity.setShowWhenLocked(true)
-                player = CameraPlayer(activity, failed = { failure.set(it) })
+                player = CameraPlayer(activity, failed = { failure.set(it) }).also { it.calibration = calibration }
                 player.holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: SurfaceHolder) { ready.countDown() }
                     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
