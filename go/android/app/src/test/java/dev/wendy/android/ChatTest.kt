@@ -57,4 +57,22 @@ class ChatTest {
         assertEquals("Create campaign", approval.confirmLabel)
         assertEquals("this campaign", ChatApproval(2, "enable_campaign_notifications", "not json").campaignName)
     }
+
+    @Test fun cloudKeysAreValidatedLikeIOS() {
+        assertEquals("sk-abc", validCloudKey("  sk-abc \n".trimEnd('\n')))
+        assertThrows(IllegalArgumentException::class.java) { validCloudKey("   ") }
+        assertThrows(IllegalArgumentException::class.java) { validCloudKey("a\nb") }
+        assertThrows(IllegalArgumentException::class.java) { validCloudKey("x".repeat(8193)) }
+        assertEquals(listOf("openai", "anthropic"), ChatCloudProvider.entries.map { it.raw })
+    }
+
+    @Test fun rememberedAIDevicesKeepOnlyVerifiedMetadata() {
+        val record = RememberedAIDevice("76/42", "Pi", listOf(RememberedAIModel("qwen", "Qwen 3", 11434), RememberedAIModel("llama", "Llama 3", 11435)), 10, 20, "llama")
+        assertEquals(record, RememberedAIDevice.parse(record.json()))
+        assertEquals("llama", record.preferred?.id)
+        assertEquals("qwen", record.copy(lastModel = "gone").preferred?.id)
+        assertEquals(setOf("id", "name", "checked", "models", "lastUsed", "lastModel"), record.json().keys().asSequence().toSet())
+        assertNotEquals(RememberedAIDevices.key("a", "b"), RememberedAIDevices.key("ab", ""))
+        assertTrue(RememberedAIDevices.key("a", "b").startsWith("wendy.aiDevices.v1."))
+    }
 }
