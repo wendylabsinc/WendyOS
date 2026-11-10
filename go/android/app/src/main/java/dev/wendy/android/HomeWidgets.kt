@@ -417,7 +417,7 @@ private fun GalleryWidget(model: WendyModel, widget: HomeWidget, recordings: () 
     fun openPicker(device: Device, selected: String?) = nav.push(device.title) { EpisodePickerPage(model, recordingDeviceID(device), device, widget.label.ifEmpty { null }, widget.dataKind, selected) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (entries.isEmpty()) {
-            if (catalog.loading && libraries.isEmpty()) LensLoading("Loading recordings…") else Text("No matching recordings", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (catalog.loading && libraries.isEmpty()) LoadingPlaceholder("Loading recordings…", PlaceholderStyle.Recordings, rows = 1) else Text("No matching recordings", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.weight(1f))
         } else {
             val columns = if (widget.size == HomeWidgetSize.Small) 1 else 3

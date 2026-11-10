@@ -99,7 +99,7 @@ fun DevicesDataTab(model: WendyModel, openDevice: (Device) -> Unit) {
                     RecordingDeviceCard(library) { label -> nav.push(library.device.title) { EpisodePickerPage(model, recordingDeviceID(library.device), library.device, label, kind) } }
                 }
                 when {
-                    waiting && libraries.isEmpty() -> Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface) { LensLoading("Loading recordings…") }
+                    waiting && libraries.isEmpty() -> Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface) { LoadingPlaceholder("Loading recordings…", PlaceholderStyle.Recordings, modifier = Modifier.padding(16.dp)) }
                     waiting -> LensLoading("Updating recordings…")
                     libraries.isEmpty() -> {
                         val incomplete = problems.isNotEmpty() || sources.unavailable > 0 || kind != null
@@ -269,7 +269,7 @@ fun EpisodePickerPage(model: WendyModel, targetID: String, fallback: Device, ini
         Box(Modifier.fillMaxSize().padding(20.dp)) {
             when {
                 read?.problem != null -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Could not load recordings", style = MaterialTheme.typography.titleMedium); FailureNote(read.problem); TextButton(onClick = { refresh++ }) { Text("Try again") } }
-                sources.targets.any { it.id == targetID } -> LensLoading("Loading recordings…")
+                sources.targets.any { it.id == targetID } -> LoadingPlaceholder("Loading recordings…", PlaceholderStyle.Recordings)
                 else -> EmptyMessage("Device unavailable", fallback.title, Icons.Outlined.WifiOff)
             }
         }
@@ -419,6 +419,6 @@ internal fun exportTitle(value: String): String {
 /** Plays an episode read directly from its device, without changing the connected device. */
 @Composable
 fun RecordingPlayback(model: WendyModel, device: Device, episode: String) {
-    EpisodeSnapshotViewer(model) { RecordingSnapshot(model.readRecordings(device) { id -> model.backend.call("PlayRecording", id, device.selector, device.requiresMTLS, episode).obj() }) }
+    EpisodeSnapshotViewer(model, startPlaying = true) { RecordingSnapshot(model.readRecordings(device) { id -> model.backend.call("PlayRecording", id, device.selector, device.requiresMTLS, episode).obj() }) }
 }
 

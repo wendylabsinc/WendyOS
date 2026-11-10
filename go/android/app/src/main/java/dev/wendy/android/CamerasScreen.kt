@@ -52,7 +52,7 @@ import java.nio.ByteBuffer
     PullToRefreshBox(refreshing, onRefresh = { scope.launch { refreshing = true; model.refreshDetails(); refreshing = false } }) {
         PageColumn {
             model.camerasError?.let { item { FormSection { FailureNote(it) } } }
-            if (model.cameras.isEmpty() && model.camerasError == null && model.detailsSession != session) item { Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface) { LensLoading("Loading cameras…") } }
+            if (model.cameras.isEmpty() && model.camerasError == null && model.detailsSession != session) item { LoadingPlaceholder("Loading cameras…", PlaceholderStyle.Camera) }
             else if (model.cameras.isEmpty() && model.camerasError == null) item { EmptyMessage("No cameras attached", "Connect a camera or pair an IP camera in device settings.", Icons.Outlined.VideocamOff) }
             // A full-screen camera owns the stream, so the wall pauses its tile meanwhile.
             items(model.cameras, key = { cameraKey(it) }) { camera -> if (fullscreen?.let(::cameraKey) != cameraKey(camera)) CameraTile(model, camera, onOpen = { fullscreen = camera }, onExpand = { fullscreen = camera }) else Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(RoundedCornerShape(16.dp)).background(Color.Black)) }
@@ -125,7 +125,7 @@ private fun CameraSettingsPage(model: WendyModel, camera: JSONObject, session: L
         }
         formSection("Camera controls") {
             when {
-                loading && controls.isEmpty() && error == null -> LoadingRow("Loading controls…")
+                loading && controls.isEmpty() && error == null -> LoadingPlaceholder("Loading controls…", rows = 2)
                 error != null -> { FailureNote(error!!); TextButton(onClick = { scope.launch { load() } }) { Text("Retry") } }
                 controls.isEmpty() -> SecondaryText("This camera does not expose adjustable controls.")
                 else -> {

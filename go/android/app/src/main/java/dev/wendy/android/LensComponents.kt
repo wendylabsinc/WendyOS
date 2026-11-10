@@ -15,6 +15,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -144,3 +148,39 @@ fun LensLoading(label: String) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+enum class PlaceholderStyle { Rows, Recordings, Camera }
+
+/**
+ * Shapes of the incoming layout, without invented content or progress, gently pulsing unless animations
+ * are off (iOS MobileLoadingPlaceholder). The label is the only thing announced.
+ */
+@Composable
+fun LoadingPlaceholder(label: String, style: PlaceholderStyle = PlaceholderStyle.Rows, rows: Int = 3, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val animate = remember { android.provider.Settings.Global.getFloat(context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f }
+    val alpha = if (!animate) 1f else {
+        val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "placeholder")
+        transition.animateFloat(1f, .55f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween<Float>(1300), androidx.compose.animation.core.RepeatMode.Reverse), label = "pulse").value
+    }
+    val fill = MaterialTheme.colorScheme.onSurface.copy(alpha = .10f)
+    Column(modifier.fillMaxWidth().androidx_semantics(label), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.graphicsAlphaOf(alpha), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            if (style == PlaceholderStyle.Camera) Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).background(fill, RoundedCornerShape(18.dp)))
+            else repeat(rows.coerceIn(1, 4)) { index ->
+                Row(Modifier.heightIn(min = 56.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(if (style == PlaceholderStyle.Recordings) 70.dp else 42.dp, if (style == PlaceholderStyle.Recordings) 48.dp else 42.dp).background(fill, RoundedCornerShape(12.dp)))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Box(Modifier.fillMaxWidth(if (index % 2 == 0) .72f else .56f).height(13.dp).background(fill, CircleShape))
+                        Box(Modifier.fillMaxWidth(.42f).height(9.dp).background(fill, CircleShape))
+                    }
+                }
+            }
+        }
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private fun Modifier.graphicsAlphaOf(alpha: Float) = this.then(Modifier.alpha(alpha))
+private fun Modifier.androidx_semantics(label: String) = this.then(Modifier.clearAndSetSemantics { contentDescription = label })
+

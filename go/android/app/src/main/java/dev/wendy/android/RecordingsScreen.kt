@@ -187,7 +187,7 @@ fun EpisodeViewer(model: WendyModel, initialEpisode: String?) {
 
 /** Loads one recording with [load] and plays it. [key] identifies the recording; [export] adds a share button. */
 @Composable
-fun EpisodeSnapshotViewer(model: WendyModel, key: Any? = Unit, export: (suspend () -> Unit)? = null, load: suspend () -> RecordingSnapshot) {
+fun EpisodeSnapshotViewer(model: WendyModel, key: Any? = Unit, export: (suspend () -> Unit)? = null, startPlaying: Boolean = false, load: suspend () -> RecordingSnapshot) {
     val context = LocalContext.current
     var data by remember { mutableStateOf<RecordingSnapshot?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -204,16 +204,17 @@ fun EpisodeSnapshotViewer(model: WendyModel, key: Any? = Unit, export: (suspend 
         loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingRow("Loading recording…") }
         error != null -> FailureView("Could not load recording", error!!) { reload++ }
         current == null -> EmptyMessage("No recordings", "Campaign recordings will appear here.", Icons.Outlined.VideoLibrary)
-        else -> SnapshotPlayer(model, current, export)
+        else -> SnapshotPlayer(model, current, export, startPlaying)
     }
 }
 
 @Composable
-private fun SnapshotPlayer(model: WendyModel, current: RecordingSnapshot, export: (suspend () -> Unit)?) {
+private fun SnapshotPlayer(model: WendyModel, current: RecordingSnapshot, export: (suspend () -> Unit)?, startPlaying: Boolean = false) {
     val scope = rememberCoroutineScope()
     var track by remember(current) { mutableStateOf(current.videos.firstOrNull()?.track ?: current.tracks.firstOrNull()?.id ?: "") }
     var cursor by remember(current) { mutableDoubleStateOf(current.start) }
-    var playing by remember(current) { mutableStateOf(false) }
+    // Play episode starts playback once, as iOS DataVisualizerView(startPlaying:) does.
+    var playing by remember(current) { mutableStateOf(startPlaying && current.end > current.start) }
     var viewport by remember(current) { mutableStateOf(TimelineViewport.fitted(current.start, current.end)) }
     var exporting by remember { mutableStateOf(false) }
     LaunchedEffect(current, playing) {
