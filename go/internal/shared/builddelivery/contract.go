@@ -74,7 +74,7 @@ type header struct {
 	Chain     []string `json:"x5c"`
 }
 
-// Verified is returned only after signature, primary PKI path, embedded rights
+// Verified is returned only after signature, primary operator PKI path
 // and target policy have passed. A JWS-supplied root never establishes trust.
 type Verified struct {
 	claims     Claims
@@ -220,9 +220,6 @@ func Admit(compact string, roots []*x509.Certificate, target meshid.Device, now 
 	}
 	if c.AdmitBefore > op.NotAfter().Unix() {
 		return result, errors.New("admission window outlives operator credential")
-	}
-	if err = authorizeEntitlements(leaf, target); err != nil {
-		return result, err
 	}
 	algorithm, err := signingAlgorithm(leaf.PublicKey)
 	if err != nil {

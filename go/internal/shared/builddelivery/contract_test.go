@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -29,7 +28,7 @@ type fixture struct {
 	builderChain   [][]byte
 	claims         Claims
 	op, key, chain string
-	mint           func(string, []string) (string, string)
+	mint           func(string) (string, string)
 }
 
 func newFixture(t *testing.T) fixture {
@@ -58,7 +57,7 @@ func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Para
 	}
 	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
 	serial := int64(1)
-	mint := func(principal string, rights []string) (string, string) {
+	mint := func(principal string) (string, string) {
 		t.Helper()
 		serial++
 		key, err := mldsa.GenerateKey(parameters)
@@ -70,17 +69,6 @@ func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Para
 			t.Fatal(err)
 		}
 		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "delivery test leaf"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(15 * time.Minute), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, URIs: []*url.URL{uri}}
-		if rights != nil {
-			values := make([]asn1.RawValue, len(rights))
-			for i, s := range rights {
-				values[i] = asn1.RawValue{Tag: asn1.TagUTF8String, Bytes: []byte(s)}
-			}
-			der, err := asn1.Marshal(values)
-			if err != nil {
-				t.Fatal(err)
-			}
-			leaf.ExtraExtensions = []pkix.Extension{{Id: entitlementOID, Value: der}}
-		}
 		der, err := x509.CreateCertificate(rand.Reader, leaf, root, key.Public(), rootKey)
 		if err != nil {
 			t.Fatal(err)
@@ -94,14 +82,14 @@ func newFixtureWithParameters(t *testing.T, now time.Time, parameters mldsa.Para
 	const tenant = "11111111-1111-4111-8111-111111111111"
 	target, _ := meshid.DeviceFromPrincipal("spiffe://wendy.sh/tenant/" + tenant + "/device/22222222-2222-4222-8222-222222222222")
 	builderPrincipal := "spiffe://wendy.sh/tenant/" + tenant + "/device/33333333-3333-4333-8333-333333333333"
-	builderPEM, _ := mint(builderPrincipal, nil)
+	builderPEM, _ := mint(builderPrincipal)
 	block, _ := pem.Decode([]byte(builderPEM))
 	builder, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	operator := "spiffe://wendy.sh/tenant/" + tenant + "/operator/alice"
-	op, key := mint(operator, []string{"entitlement:deployment:create:device:" + target.UUID().String() + ":allow"})
+	op, key := mint(operator)
 	claims := Claims{Version: Version, JobID: uuid.NewString(), Operator: operator, Target: target.Principal(), Builder: builderPrincipal, BuilderSPKI: Fingerprint(builder), Reference: "lab/app:latest", InputSHA256: encode(make([]byte, 32)), IssuedAt: now.Unix(), AdmitBefore: now.Add(time.Minute).Unix(), ValidUntil: now.Add(time.Hour).Unix(), Operations: []string{"stage", "publish"}, MaxBytes: 1 << 30}
 	return fixture{now: now, roots: []*x509.Certificate{root}, target: target, builder: builder, builderChain: [][]byte{builder.Raw, rootDER}, claims: claims, op: op, key: key, chain: chain, mint: mint}
 }
@@ -148,32 +136,41 @@ func TestContractOfflineAdmissionAndAuthority(t *testing.T) {
 		t.Fatal("tampered reference accepted")
 	}
 }
-func TestEmbeddedEntitlementsDenyWins(t *testing.T) {
+
+// The same existing operator credential used for management authorizes the
+// grant. No additional entitlement certificate is required, and a device
+// cannot obtain operator authority by constructing and signing its own JWS.
+func TestDeliveryRequiresOperatorCertificate(t *testing.T) {
 	f := newFixture(t)
 	for _, tc := range []struct {
-		name   string
-		rights []string
-		allow  bool
+		name, principal string
+		allow           bool
 	}{
-		{"identity alone", nil, false}, {"unscoped allow", []string{"entitlement:deployment:create:allow"}, true}, {"wildcard permission", []string{"entitlement:deployment:*:allow"}, true}, {"wrong verb", []string{"entitlement:deployment:read:allow"}, false}, {"wrong device", []string{"entitlement:deployment:create:device:33333333-3333-4333-8333-333333333333:allow"}, false}, {"site unproven", []string{"entitlement:deployment:create:site:lab:allow"}, false}, {"deny", []string{"entitlement:deployment:*:allow", "entitlement:deployment:create:deny"}, false}, {"unproven tag deny", []string{"entitlement:deployment:create:allow", "entitlement:deployment:create:tag:prod:deny"}, false}, {"foreign device deny", []string{"entitlement:deployment:create:allow", "entitlement:deployment:create:device:other:deny"}, true},
+		{"existing operator", f.claims.Operator, true},
+		{"device", f.claims.Builder, false},
+		{"signer", "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/signer/release", false},
+		{"another tenant", "spiffe://wendy.sh/tenant/44444444-4444-4444-8444-444444444444/operator/alice", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			op, key := f.mint(f.claims.Operator, tc.rights)
-			j, err := Sign(f.claims, op, f.chain, key)
+			certificate, privateKey := f.mint(tc.principal)
+			leafBlock, _ := pem.Decode([]byte(certificate))
+			keyBlock, _ := pem.Decode([]byte(privateKey))
+			key, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = Admit(j, f.roots, f.target, f.now)
+			hb, _ := json.Marshal(header{Algorithm: algorithm65, Type: Type, Chain: []string{base64.StdEncoding.EncodeToString(leafBlock.Bytes), base64.StdEncoding.EncodeToString(f.roots[0].Raw)}})
+			payload, _ := json.Marshal(f.claims)
+			input := encode(hb) + "." + encode(payload)
+			signature, err := key.(crypto.Signer).Sign(rand.Reader, []byte(input), crypto.Hash(0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Admit(input+"."+encode(signature), f.roots, f.target, f.now)
 			if (err == nil) != tc.allow {
-				t.Fatalf("admit=%v allow=%v", err, tc.allow)
+				t.Fatalf("admit=%v; allow=%v", err, tc.allow)
 			}
 		})
-	}
-	device, key := f.mint(f.claims.Builder, []string{"entitlement:deployment:create:allow"})
-	c := f.claims
-	c.Operator = c.Builder
-	if _, err := Sign(c, device, f.chain, key); err == nil {
-		t.Fatal("device can issue operator contract")
 	}
 }
 func TestBuilderPKIVerificationBindsExpectedIdentity(t *testing.T) {

@@ -41,7 +41,7 @@ func TestDurableAdmissionSurvivesOperatorExpiryAndPinsOutput(t *testing.T) {
 	if _, err = s.Authorize(id, operator, ""); err == nil {
 		t.Fatal("operator substituted for bound builder")
 	}
-	other, key := f.mint(f.claims.Builder, nil)
+	other, key := f.mint(f.claims.Builder)
 	_ = key
 	block, _ = pem.Decode([]byte(other))
 	rotated, _ := x509.ParseCertificate(block.Bytes)
