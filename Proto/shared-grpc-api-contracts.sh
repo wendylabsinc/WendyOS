@@ -92,6 +92,17 @@ SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
     "cloud/organizations.proto"
 )
 
+check_shared_grpc_api_contracts_ancestry() (
+    local scratch
+    scratch="$(mktemp -d)" || return $?
+    trap 'rm -rf "$scratch"' EXIT
+    # Policy comes from authoritative master, independently of the schema pin.
+    curl --fail --silent --show-error --location \
+        https://raw.githubusercontent.com/wendylabsinc/service-protos/master/tools/check-pin.sh \
+        --output "$scratch/check-pin.sh" || return $?
+    bash "$scratch/check-pin.sh" "${SHARED_GRPC_API_CONTRACTS_REF:-}"
+)
+
 check_shared_grpc_api_contracts_sources() {
     local proto_dir="$1" catalogue_dir="$2" catalogue file proto exception alias
     local seen="" allowed catalogue_proto
