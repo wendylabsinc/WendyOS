@@ -95,6 +95,9 @@ fun GeneralHomeScreen(model: WendyModel, widgets: HomeWidgetStore, editing: Bool
     }
 }
 
+/** The app model for screens that only need it to draw shared chrome. */
+val LocalWendyModel = staticCompositionLocalOf<WendyModel?> { null }
+
 enum class DevicesTab(val title: String) { Home("Home"), Data("Data"), Activity("Activity") }
 
 /** The Devices lens: Home, Data and Activity, with Ask Wendy above the tabs (iOS lens tabs). */
@@ -332,7 +335,7 @@ private enum class DeviceSegment(val title: String) { Apps("Apps"), Cameras("Cam
 
 /** A device: Apps, Cameras, Data, Location and Settings, with the More device tools menu (iOS MobileDeviceView). */
 @Composable
-fun DeviceLensPage(model: WendyModel, device: Device) {
+fun DeviceLensPage(model: WendyModel, device: Device, openRecordings: () -> Unit = {}) {
     val nav = LocalNavigator.current
     val ready = model.selected?.selector == device.selector && model.session != 0L
     var segment by rememberSaveableString(DeviceSegment.Apps.name)
@@ -348,7 +351,7 @@ fun DeviceLensPage(model: WendyModel, device: Device) {
                 DeviceSegment.Settings -> DeviceSettingsScreen(model)
                 DeviceSegment.Data -> Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     RecentRecordings(model, {})
-                    LensSection(null) { LensRow("All recordings", "", Icons.Outlined.Storage) { nav.push("All recordings") { RecordingsScreen(model) } } }
+                    LensSection(null) { LensRow("All recordings", "", Icons.Outlined.Storage, onClick = openRecordings) }
                 }
                 DeviceSegment.Location -> Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val site = model.presence?.firstOrNull { it.selector == device.selector }?.site?.ifEmpty { null }
@@ -385,6 +388,9 @@ fun DeviceLensActions(model: WendyModel, device: Device) {
         else if (u.available) "Update" else "Device info"
     } ?: "Device info"
     if (ready) CampaignEventButton(model)
+    else if (model.selected?.selector == device.selector && model.session != 0L && model.lite) IconButton(onClick = { model.logApp = ""; nav.push("Logs") { DeviceLogsPage(model) } }) {
+        Icon(Icons.AutoMirrored.Outlined.Article, "Logs")
+    }
     OverflowMenu("More device tools", buildList {
         add(MenuItem("Customize appearance", Icons.Outlined.Palette) { nav.push("Appearance") { DeviceAppearanceEditor(model, device) } })
         if (ready) {
@@ -415,7 +421,7 @@ private fun DeviceAppsList(model: WendyModel, device: Device) {
             LensSection(null) {
                 model.visibleApps.forEachIndexed { index, app ->
                     if (index > 0) LensDivider()
-                    Row(Modifier.fillMaxWidth().clickable { nav.push(app.name) { AppLensPage(model, device, app.name) } }.padding(horizontal = 16.dp, vertical = 10.dp),
+                    Row(Modifier.fillMaxWidth().clickable { nav.push(app.name, actions = { if (model.selected?.selector == device.selector && model.session != 0L) CampaignEventButton(model) }) { AppLensPage(model, device, app.name) } }.padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         LensIcon(Icons.Outlined.GridView, if (app.state == AppState.Running) LensStyle.online else LensStyle.offline)
                         Column(Modifier.weight(1f)) {
@@ -429,6 +435,7 @@ private fun DeviceAppsList(model: WendyModel, device: Device) {
                 val error = model.appsError
                 when {
                     error != null -> Box(Modifier.padding(16.dp)) { FailureNote(error) }
+                    model.visibleApps.isEmpty() && model.detailsSession != model.session -> LensLoading("Loading apps…")
                     model.visibleApps.isEmpty() -> Text("No visible apps on this device.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (model.hiddenAppCount > 0) Box(Modifier.padding(horizontal = 12.dp)) { ToggleRow("Show hidden apps", model.showHiddenApps, subtitle = "${model.hiddenAppCount} hidden apps") { model.showHiddenApps = it } }
@@ -498,6 +505,24 @@ private fun endpoint(device: Device, app: DeviceApp): String = when {
     device.selector.startsWith("cloud://") -> "Wendy Cloud tunnel"
     device.selector.startsWith("mesh:") -> "Wendy mesh tunnel"
     else -> device.selector.substringBefore(':').takeIf { it.isNotEmpty() }?.let { "http://$it:${app.httpPort}" } ?: "Published HTTP endpoint"
+}
+
+/** A lens still being designed: four tabs, each under construction, with Ask Wendy above them (iOS unfinishedLensTabs). */
+@Composable
+fun UnfinishedLensTabs(lens: Lens, askWendy: () -> Unit) {
+    var tab by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
+    val tabs = listOf(Triple("Home", Icons.Outlined.Home, lens.title), Triple(lens.title, lens.icon, lens.title),
+        Triple("Data", Icons.Outlined.Storage, lens.title + " Data"), Triple("Activity", Icons.Outlined.Schedule, lens.title + " Activity"))
+    Column(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f)) { UnderConstructionLens(tabs[tab].third) }
+        AskWendyBar(LocalWendyModel.current ?: return@Column, askWendy)
+        NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+            tabs.forEachIndexed { index, (title, icon, _) ->
+                NavigationBarItem(selected = tab == index, onClick = { tab = index }, label = { Text(title) }, icon = { Icon(icon, null) },
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = LensStyle.accent, selectedTextColor = LensStyle.accent, indicatorColor = LensStyle.green.copy(alpha = .12f)))
+            }
+        }
+    }
 }
 
 /** Lenses still being designed show the iOS under-construction state. */

@@ -82,16 +82,21 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
                 DevicesLens(model, devicesTab, { devicesTab = it }, { openSetup() }, ::openActivity, { chat = true }, ::select, activitySegment, { activitySegment = it })
             }
             Lens.Sites -> nav.push("Sites") { LensWithChat { SitesScreen(model) } }
-            Lens.Robots -> nav.push("Robots") { LensWithChat { UnderConstructionLens("Robots") } }
+            Lens.Robots -> nav.push("Robots") { CompositionLocalProvider(LocalWendyModel provides model) { UnfinishedLensTabs(Lens.Robots) { chat = true } } }
         }
         lensPage = nav.stack.first().key to lens
     }
     fun select(device: Device) {
         enter(Lens.Devices); devicesTab = DevicesTab.Home
-        nav.pushScoped(device.title, actions = { DeviceLensActions(model, device) }) { DeviceLensPage(model, device) }
+        nav.pushScoped(device.title, actions = { DeviceLensActions(model, device) }) { DeviceLensPage(model, device) { openRecordings(device) } }
     }
     fun openActivity() { activitySegment = ActivitySegment.Alerts; nav.push("Activity") { DeviceActivityScreen(model, activitySegment, { activitySegment = it }, ::select) } }
     fun openRecordings() { enter(Lens.Devices); devicesTab = DevicesTab.Data }
+    /** The Data tab with this device's episodes open (iOS openRecordings(for:)). */
+    fun openRecordings(device: Device) {
+        openRecordings()
+        nav.push(device.title) { EpisodePickerPage(model, recordingDeviceID(device), device, null, null) }
+    }
     fun openSetup(device: SetupDevice? = null) = nav.push("Device setup") { NearbySetupScreen(model, device) { nav.pop(); model.task { model.refresh() } } }
     fun openVpn() = nav.push("Private network") { VpnScreen(model) { nav.pop() } }
 
