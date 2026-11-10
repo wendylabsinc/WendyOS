@@ -156,6 +156,10 @@ private fun TwinWorkspace(model: WendyModel, store: SiteModelStore, current: Sto
     val records = rememberSiteCameraRecords(model, saved != null && gateway.id.isNotEmpty(), known = gateway.takeIf { it.id.isNotEmpty() }, refresh = revision)
     val statuses = rememberAutomaticAlignment(model, saved, records, enabled = saved != null && placing == null)
     val coverage = saved?.let { records.geometry(model, it) }.orEmpty()
+    var showCoverage by remember { mutableStateOf(true) }
+    var showImagery by remember { mutableStateOf(true) }
+    val imagery = rememberSiteImagery(model, saved, coverage, showImagery && placing == null)
+    var projection by remember { mutableStateOf(mapOf<String, String>()) }
     // Fixed cameras of this gateway with a persistent identity, unique on the device.
     val groups = model.cameras.groupBy { it.text("stable_id") }
     val available = model.cameras.filter { val id = it.text("stable_id"); id.isNotEmpty() && groups[id]?.size == 1 }
@@ -167,7 +171,8 @@ private fun TwinWorkspace(model: WendyModel, store: SiteModelStore, current: Sto
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when {
-                geometry != null -> SiteSceneView(geometry, site.cameras.mapNotNull { siteMarker(it, it.id == selected, it.id == placing, coverage[it.id]) }, placing != null && !busy, onSelect = setSelected,
+                geometry != null -> SiteSceneView(geometry, site.cameras.mapNotNull { siteMarker(it, it.id == selected, it.id == placing, coverage[it.id])?.let { m -> if (showCoverage) m else m.withoutCone() } }, placing != null && !busy, onSelect = setSelected,
+                    projectors = if (showImagery && placing == null) imagery.projectors else emptyList(), onProjection = { projection = it },
                     onPlace = { point ->
                         val id = placing ?: return@SiteSceneView
                         val i = site.cameras.indexOfFirst { it.id == id }
@@ -176,6 +181,9 @@ private fun TwinWorkspace(model: WendyModel, store: SiteModelStore, current: Sto
                 loadError != null -> EmptyMessage("Model unavailable", loadError, Icons.Outlined.ViewInAr)
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LensLoading("Loading model…") }
             }
+            if (geometry != null && placing == null) SiteViewMenu(showCoverage, showImagery, { showCoverage = it }, { showImagery = it }, emptyList(), {}, Modifier.align(Alignment.TopEnd).padding(12.dp))
+            if (saved != null && geometry != null && placing == null && showImagery && coverage.isNotEmpty())
+                SiteCoverageNote(saved, records, coverage, statuses, imagery, projection, Modifier.align(Alignment.BottomStart).padding(12.dp))
             if (placing != null) Surface(Modifier.align(Alignment.TopCenter).padding(12.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surface.copy(alpha = .92f)) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Tap the model where the camera is mounted.", style = MaterialTheme.typography.bodyMedium)

@@ -107,6 +107,13 @@ run on a real phone against a real WendyOS device yet.
   aligned on the gateway (by either phone) shows its view cone.
   Calibration frames come from H.264 keyframes decoded by a separate
   MediaCodec, or from JPEG frames.
+- Live imagery: each aligned camera's latest picture is projected onto the
+  model (iOS `SiteCameraColorRenderer`): a depth map rendered from the
+  camera's pose decides what it can see, its lens distortion is applied, and
+  the best-facing camera colours each surface. The wall a camera hangs on is
+  left out of its depth view, as on iOS. The View menu turns camera coverage
+  and live imagery on or off. This needs OpenGL ES 3; on ES 2 the model is
+  drawn without imagery.
 - Digital Twin (device tool): saved captures with import, share, remove and
   restore, and the gateway's cameras placed, previewed and aligned.
 - Apps, logs, settings, Wendy Lite boards, campaigns, chat and the model
@@ -122,7 +129,6 @@ compilation does not establish that hardware-dependent workflows work.
 | --- | --- |
 | Sites: room scanning and photo reconstruction | Not available: iOS uses RoomPlan and Object Capture on LiDAR devices. Android imports models made on iOS. |
 | Sites: scan reference capture (the visual map) | Not available: iOS records it with ARKit LiDAR depth during the room scan, in the scan's coordinates. Android uses maps made on iOS, carried in `.wendysite` files. |
-| Sites: projected live video on the model and the RealityKit preview viewer | Not ported. Android draws the model, camera markers and view cones. |
 | Digital Twin robot map, localization, people tracking and Go2 controls | Not ported. These move a physical robot and need a robot to test against. |
 | Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. |
 | USB flashing and host simulator management | Desktop workflows, also absent from the iOS app. |

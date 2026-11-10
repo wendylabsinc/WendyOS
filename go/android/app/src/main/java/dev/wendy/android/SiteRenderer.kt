@@ -65,14 +65,16 @@ private fun tan(radians: Double) = kotlin.math.tan(radians)
  * fingers to pan, double-tap to reset. A tap selects a camera marker, or places one on the model while placing.
  */
 @Composable
-fun SiteSceneView(geometry: SiteGeometry, markers: List<SiteMarker>, placing: Boolean, onSelect: (String) -> Unit, onPlace: (SitePoint) -> Unit, modifier: Modifier = Modifier) {
+fun SiteSceneView(geometry: SiteGeometry, markers: List<SiteMarker>, placing: Boolean, onSelect: (String) -> Unit, onPlace: (SitePoint) -> Unit, modifier: Modifier = Modifier,
+                  projectors: List<SiteProjector> = emptyList(), onProjection: (Map<String, String>) -> Unit = {}) {
     val select by rememberUpdatedState(onSelect)
     val place by rememberUpdatedState(onPlace)
+    val projection by rememberUpdatedState(onProjection)
     val orbit = remember(geometry) { SiteOrbit() }
     // One GL surface at a time: a covered page releases its view and rebuilds it, at the same orbit, on return.
     if (!LocalPageVisible.current) { androidx.compose.foundation.layout.Box(modifier); return }
-    AndroidView(factory = { context -> SiteGLView(context, orbit).also { view -> view.callbacks = Pair({ id: String -> select(id) }, { point: SitePoint -> place(point) }) } }, modifier = modifier,
-        onReset = { it.resume() }, update = { view -> view.resume(); view.show(geometry, markers, placing) }, onRelease = { it.pause() })
+    AndroidView(factory = { context -> SiteGLView(context, orbit).also { view -> view.callbacks = Pair({ id: String -> select(id) }, { point: SitePoint -> place(point) }); view.projectionStatus = { projection(it) } } }, modifier = modifier,
+        onReset = { it.resume() }, update = { view -> view.resume(); view.show(geometry, markers, placing, projectors) }, onRelease = { it.pause() })
 }
 
 /** Where the person is looking from; it outlives the GL view so returning to a page keeps the view. */
@@ -81,6 +83,7 @@ class SiteOrbit { var yaw = 35f; var pitch = 30f; var distance = 6f; val target 
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
 private class SiteGLView(context: Context, private val orbit: SiteOrbit) : GLTextureView(context) {
     var callbacks: Pair<(String) -> Unit, (SitePoint) -> Unit>? = null
+    var projectionStatus: (Map<String, String>) -> Unit = {}
     private var paused = false
     fun pause() { paused = true }
     fun resume() { if (paused) { paused = false; requestRender() } }
@@ -97,12 +100,13 @@ private class SiteGLView(context: Context, private val orbit: SiteOrbit) : GLTex
     init {
         setRenderer(renderer)
         contentDescription = "3D site model"
+        renderer.statusChanged = { statuses -> post { projectionStatus(statuses) } }
     }
 
-    fun show(next: SiteGeometry, nextMarkers: List<SiteMarker>, nextPlacing: Boolean) {
+    fun show(next: SiteGeometry, nextMarkers: List<SiteMarker>, nextPlacing: Boolean, nextProjectors: List<SiteProjector> = emptyList()) {
         if (next !== geometry) { geometry = next; if (!orbit.framed) reset(); queueEvent { renderer.load(next) } }
         markers = nextMarkers; placing = nextPlacing
-        queueEvent { renderer.markers = nextMarkers }
+        queueEvent { renderer.markers = nextMarkers; renderer.projectors = nextProjectors }
         update()
     }
     /** Frames the whole model in the narrower of the two fields of view, so portrait screens fit it too. */
@@ -230,8 +234,14 @@ private class SiteRendererGL : GLSurfaceView.Renderer {
     private var meshes = emptyList<Uploaded>()
     private var pending: SiteGeometry? = null
     var markers: List<SiteMarker> = emptyList()
+    /** Cameras whose latest picture is projected onto the model (iOS live imagery). */
+    var projectors: List<SiteProjector> = emptyList()
+    var statusChanged: (Map<String, String>) -> Unit = {}
+    private val projection = SiteProjectionGL()
+    private var lastStatuses: Map<String, String> = emptyMap()
+    private var surfaceWidth = 1; private var surfaceHeight = 1
     private var program = 0
-    private val view = FloatArray(16); private val projection = FloatArray(16); private val vp = FloatArray(16)
+    private val view = FloatArray(16); private val projectionMatrix = FloatArray(16); private val vp = FloatArray(16)
     private var eye = floatArrayOf(0f, 2f, 6f); private var target = FloatArray(3); private var distance = 6f
     private var aspect = 1f
     private val cube by lazy { floatBuffer(cubeVertices()) }
@@ -249,32 +259,57 @@ private class SiteRendererGL : GLSurfaceView.Renderer {
             precision mediump float; uniform vec3 uColor; uniform float uLit; varying float vLight;
             void main() { gl_FragColor = vec4(uColor * mix(1.0, vLight, uLit), 1.0); }
         """)
+        projection.create(::link)
         meshes = emptyList()
         pending = pending ?: lastGeometry
     }
     private var lastGeometry: SiteGeometry? = null
-    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) { GLES20.glViewport(0, 0, width, height); aspect = width.toFloat() / height.coerceAtLeast(1) }
+    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+        GLES20.glViewport(0, 0, width, height); surfaceWidth = width; surfaceHeight = height; aspect = width.toFloat() / height.coerceAtLeast(1)
+    }
 
-    override fun onDrawFrame(gl: GL10?) {
-        pending?.let { upload(it); lastGeometry = it; pending = null }
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-        Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], target[0], target[1], target[2], 0f, 1f, 0f)
-        Matrix.perspectiveM(projection, 0, 50f, aspect, maxOf(0.01f, distance * 0.01f), distance * 40f + 100f)
-        Matrix.multiplyMM(vp, 0, projection, 0, view, 0)
-        GLES20.glUseProgram(program)
-        val position = GLES20.glGetAttribLocation(program, "aPosition"); val normal = GLES20.glGetAttribLocation(program, "aNormal")
-        val mvp = GLES20.glGetUniformLocation(program, "uMVP"); val color = GLES20.glGetUniformLocation(program, "uColor"); val lit = GLES20.glGetUniformLocation(program, "uLit")
-        GLES20.glUniformMatrix4fv(mvp, 1, false, vp, 0)
-        GLES20.glUniform1f(lit, 1f)
-        GLES20.glEnableVertexAttribArray(position); GLES20.glEnableVertexAttribArray(normal)
-        for (mesh in meshes) {
+    /** Draws the model into a camera's depth map, leaving out its mounting wall. */
+    private fun drawDepth(program: Int) {
+        meshes.forEachIndexed { index, mesh ->
+            if (index in projection.excludedMeshes) return@forEachIndexed
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, mesh.buffer)
-            GLES20.glVertexAttribPointer(position, 3, GLES20.GL_FLOAT, false, 24, 0)
-            GLES20.glVertexAttribPointer(normal, 3, GLES20.GL_FLOAT, false, 24, 12)
-            GLES20.glUniform3fv(color, 1, mesh.color, 0)
+            GLES20.glVertexAttribPointer(projection.depthPosition, 3, GLES20.GL_FLOAT, false, 24, 0)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.count)
         }
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
+    }
+
+    override fun onDrawFrame(gl: GL10?) {
+        pending?.let { upload(it); lastGeometry = it; pending = null; projection.invalidate() }
+        val ready = if (projectors.isEmpty()) emptyList() else projection.prepare(projectors, lastGeometry, ::drawDepth, surfaceWidth, surfaceHeight)
+        val statuses = if (projectors.isEmpty()) emptyMap() else projection.statuses
+        if (statuses != lastStatuses) { lastStatuses = statuses; statusChanged(statuses) }
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], target[0], target[1], target[2], 0f, 1f, 0f)
+        Matrix.perspectiveM(projectionMatrix, 0, 50f, aspect, maxOf(0.01f, distance * 0.01f), distance * 40f + 100f)
+        Matrix.multiplyMM(vp, 0, projectionMatrix, 0, view, 0)
+        // With live imagery the model is drawn by the projection program; markers always use the plain one.
+        val modelProgram = if (ready.isNotEmpty()) projection.program else program
+        GLES20.glUseProgram(modelProgram)
+        val modelPosition = GLES20.glGetAttribLocation(modelProgram, "aPosition"); val modelNormal = GLES20.glGetAttribLocation(modelProgram, "aNormal")
+        GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(modelProgram, "uMVP"), 1, false, vp, 0)
+        if (ready.isNotEmpty()) projection.bind(ready) else GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uLit"), 1f)
+        val modelColor = GLES20.glGetUniformLocation(modelProgram, "uColor")
+        GLES20.glEnableVertexAttribArray(modelPosition); GLES20.glEnableVertexAttribArray(modelNormal)
+        for (mesh in meshes) {
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, mesh.buffer)
+            GLES20.glVertexAttribPointer(modelPosition, 3, GLES20.GL_FLOAT, false, 24, 0)
+            GLES20.glVertexAttribPointer(modelNormal, 3, GLES20.GL_FLOAT, false, 24, 12)
+            GLES20.glUniform3fv(modelColor, 1, mesh.color, 0)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.count)
+        }
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
+        GLES20.glDisableVertexAttribArray(modelPosition); GLES20.glDisableVertexAttribArray(modelNormal)
+        GLES20.glUseProgram(program)
+        val position = GLES20.glGetAttribLocation(program, "aPosition"); val normal = GLES20.glGetAttribLocation(program, "aNormal")
+        val mvp = GLES20.glGetUniformLocation(program, "uMVP"); val color = GLES20.glGetUniformLocation(program, "uColor"); val lit = GLES20.glGetUniformLocation(program, "uLit")
+        GLES20.glUniform1f(lit, 1f)
+        GLES20.glEnableVertexAttribArray(position); GLES20.glEnableVertexAttribArray(normal)
         // Markers stay readable at any zoom: a fixed fraction of the view distance.
         val size = maxOf(0.06f, distance * 0.025f)
         for (marker in markers) {

@@ -51,11 +51,18 @@ open class GLTextureView(context: Context) : TextureView(context), TextureView.S
             val display: EGLDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
             val version = IntArray(2)
             if (!EGL14.eglInitialize(display, version, 0, version, 1)) return
-            val attributes = intArrayOf(EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8, EGL14.EGL_DEPTH_SIZE, 16,
-                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT, EGL14.EGL_NONE)
-            val configs = arrayOfNulls<EGLConfig>(1); val count = IntArray(1)
-            if (!EGL14.eglChooseConfig(display, attributes, 0, configs, 0, 1, count, 0) || count[0] == 0) { EGL14.eglTerminate(display); return }
-            val context: EGLContext = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT, intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0)
+            // OpenGL ES 3 when available (camera projection needs depth textures and derivatives); ES 2 otherwise.
+            fun config(renderable: Int): EGLConfig? {
+                val attributes = intArrayOf(EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8, EGL14.EGL_DEPTH_SIZE, 16,
+                    EGL14.EGL_RENDERABLE_TYPE, renderable, EGL14.EGL_NONE)
+                val configs = arrayOfNulls<EGLConfig>(1); val count = IntArray(1)
+                return if (EGL14.eglChooseConfig(display, attributes, 0, configs, 0, 1, count, 0) && count[0] > 0) configs[0] else null
+            }
+            val es3 = config(android.opengl.EGLExt.EGL_OPENGL_ES3_BIT_KHR)
+            val configs = arrayOf(es3 ?: config(EGL14.EGL_OPENGL_ES2_BIT) ?: run { EGL14.eglTerminate(display); return })
+            var context: EGLContext = EGL14.EGL_NO_CONTEXT
+            if (es3 != null) context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT, intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0)
+            if (context == EGL14.EGL_NO_CONTEXT) context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT, intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0)
             val surface: EGLSurface = EGL14.eglCreateWindowSurface(display, configs[0], texture, intArrayOf(EGL14.EGL_NONE), 0)
             try {
                 if (surface == EGL14.EGL_NO_SURFACE || !EGL14.eglMakeCurrent(display, surface, surface, context)) return
