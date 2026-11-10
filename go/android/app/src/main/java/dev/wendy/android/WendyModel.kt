@@ -71,7 +71,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
 
     private val ids = AtomicLong(1)
     private var connectionGeneration = 0L
-    private var foreground = false
+    /** True while the activity is started; background work stops otherwise. */
+    var inForeground by mutableStateOf(false); private set
     private var lifecycleJob: Job? = null
     private var eventJob: Job? = null
     private var maintainJob: Job? = null
@@ -95,7 +96,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 account = preferences.getString("account", "") ?: ""
                 organization = preferences.getString("organization", "") ?: ""
                 refreshAccounts()
-                if (foreground) activate()
+                if (inForeground) activate()
             } catch (e: Exception) { error = e.message }
         }
     }
@@ -128,7 +129,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         account = id; organization = org
         preferences.edit().putString("account", id).putString("organization", org).apply()
         refreshAccounts()
-        backend.call("SetMobileState", foreground, account, organization)
+        backend.call("SetMobileState", inForeground, account, organization)
         refresh()
     }
     suspend fun refresh() {
@@ -137,6 +138,15 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
             val values = backend.call(if (requestedSource == "Cloud") "Cloud" else "Nearby").items().map(Device::parse)
             if (source == requestedSource) { devices = values; discoveryError = null }
         } catch (e: CancellationException) { throw e } catch (e: Exception) { if (source == requestedSource) discoveryError = e.message }
+    }
+    /** Finds a device in the current list, then in Cloud and nearby discovery, without changing the visible list. */
+    suspend fun lookupDevice(match: (Device) -> Boolean): Device? {
+        devices.firstOrNull(match)?.let { return it }
+        for (method in listOf("Cloud", "Nearby")) {
+            val found = try { backend.call(method).items().map(Device::parse).firstOrNull(match) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            if (found != null) return found
+        }
+        return null
     }
     fun changeSource(value: String) { source = value; devices = emptyList(); discoveryError = null; task { refresh() } }
 
@@ -149,7 +159,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val result = backend.call("Connect", device.selector, forget).obj()
-                if (epoch != connectionGeneration || !foreground) return@launch
+                if (epoch != connectionGeneration || !inForeground) return@launch
                 lite = result.flag("lite")
                 val resolved = device.copy(lite = lite)
                 selected = resolved
@@ -292,7 +302,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     }
     fun cancelLogin() { browserURL = null; AuthSessionService.cancelLogin() }
     fun setForeground(active: Boolean) {
-        foreground = active
+        inForeground = active
         getApplication<WendyApplication>().visible = active
         if (!initialized) return
         updatePolling()
@@ -324,7 +334,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     private suspend fun maintainExperience() {
         var failures = 0
         var lastDiscovery = 0L
-        while (currentCoroutineContext().isActive && foreground) {
+        while (currentCoroutineContext().isActive && inForeground) {
             delay(if (failures == 0) 15_000L else minOf(30_000L, 1000L shl minOf(failures, 5)))
             val device = selected
             val failure = detailError
@@ -344,11 +354,11 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         }
     }
     private fun updatePolling() {
-        if (!initialized || (!foreground && !loginPending)) {
+        if (!initialized || (!inForeground && !loginPending)) {
             eventJob?.cancel(); eventJob = null
         } else if (eventJob?.isActive != true) {
             eventJob = viewModelScope.launch {
-                while (isActive && (foreground || loginPending)) {
+                while (isActive && (inForeground || loginPending)) {
                     try { poll() }
                     catch (e: CancellationException) { throw e }
                     catch (e: Exception) { error = e.message; delay(1_000) }
@@ -363,7 +373,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 1 -> if (loginPending) browserURL = event.text("Text")
                 2 -> {
                     try {
-                        if (foreground) { refreshAccounts(); backend.call("SetMobileState", true, account, organization) }
+                        if (inForeground) { refreshAccounts(); backend.call("SetMobileState", true, account, organization) }
                     } finally { loginPending = false; AuthSessionService.complete() }
                 }
                 3 -> { loginPending = false; error = event.text("Text"); AuthSessionService.complete() }

@@ -1,55 +1,109 @@
 package dev.wendy.android
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
-import org.json.JSONObject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import java.text.DateFormat
+import java.util.Date
 
+data class FleetDevice(val id: String, val name: String, val selector: String, val siteID: String, val site: String, val hardware: String, val address: String, val online: Boolean) {
+    val siteKey get() = siteID.ifEmpty { site }
+    val device get() = Device(selector, name, selector, "Cloud")
+}
+
+/** The organization's fleet grouped by site (iOS SitesView on iPhone). */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SitesScreen(model: WendyModel) {
-    if (model.account.isEmpty() || model.organization.isEmpty()) {
-        Column(Modifier.padding(24.dp)) { PageTitle("Your sites", "One place for every location."); EmptyMessage("The bigger picture", "Choose an account and organization above to explore your fleet.", Icons.Outlined.Language) }; return
+    val context = LocalContext.current
+    val preferences = remember { context.getSharedPreferences("sites", 0) }
+    val scope = rememberCoroutineScope()
+    var devices by remember { mutableStateOf<List<FleetDevice>?>(null) }
+    var presenceError by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var updated by remember { mutableStateOf<Long?>(null) }
+    var search by remember { mutableStateOf("") }
+    var onlineOnly by remember { mutableStateOf(preferences.getBoolean("onlineOnly", true)) }
+    var refreshing by remember { mutableStateOf(false) }
+    suspend fun refresh() {
+        if (model.account.isEmpty() || model.organization.isEmpty()) { devices = null; return }
+        val account = model.account; val organization = model.organization
+        loading = true; error = null
+        try {
+            val value = model.backend.call("Fleet", account, organization).obj()
+            if (account != model.account || organization != model.organization) return
+            devices = value.list("Devices").map { FleetDevice(it.text("ID"), it.text("Name"), it.text("Selector"), it.text("SiteID"), it.text("Site"), it.text("Hardware"), it.text("Address"), it.flag("Online")) }
+            presenceError = value.text("PresenceError"); updated = System.currentTimeMillis()
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { loading = false }
     }
-    val fleet = rememberRemote(model, "Fleet", model.account, model.organization)
-    var organization by remember { mutableStateOf(false) }
-    if (organization) { Column { TextButton(onClick = { organization = false }) { Text("Back to sites") }; OrganizationScreen(model) }; return }
-    LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { PageTitle("Your sites", "One place for every location."); RemoteStatus(fleet) }
-        item { SettingsRow("Organization", model.organizations.firstOrNull { it.text("id") == model.organization }?.text("name") ?: "Manage your team and access", Icons.Outlined.Business) { organization = true } }
-        item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Eyebrow("LOCATIONS"); Spacer(Modifier.weight(1f)); IconButton(onClick = fleet::refresh) { Icon(Icons.Outlined.Refresh, "Refresh sites", Modifier.size(20.dp)) }
-        } }
-        fleet.value.obj().list("Devices").groupBy { it.text("Site").ifBlank { "Unassigned" } }.forEach { (site, devices) ->
-            item { SectionCard(site) {
-                Text("${devices.size} devices · ${devices.count { it.flag("Online") }} online", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                devices.forEach { device ->
-                    Surface(onClick = { model.connect(Device.parse(device).copy(transport = "Cloud")) }, color = MaterialTheme.colorScheme.surface) {
-                        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconTile(Icons.Outlined.Memory)
-                            Text(device.text("Name"), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                            StatusPill(if (device.flag("Online")) "Online" else "Offline", active = device.flag("Online"))
+    LaunchedEffect(model.account, model.organization) { devices = null; updated = null; refresh() }
+    val presenceKnown = presenceError.isEmpty()
+    val visible = devices.orEmpty().filter { (!onlineOnly || !presenceKnown || it.online) && (search.isEmpty() || listOf(it.name, it.site, it.hardware).any { v -> v.contains(search, true) }) }
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, FleetDevice::name).thenBy { it.id })
+    val groups = visible.groupBy { it.siteKey }.map { (key, values) -> Triple(key, values.first().site.ifEmpty { "No site reported" }, values) }.sortedBy { it.second.lowercase() }
+    PullToRefreshBox(refreshing, onRefresh = { scope.launch { refreshing = true; refresh(); refreshing = false } }) {
+        PageColumn {
+            item { PageTitle("Sites", "Your fleet, across every site in your organization.") }
+            if (model.accounts.isEmpty()) {
+                item { EmptyMessage("Sign in to view your fleet", "Your organization's devices appear here, grouped by site.", Icons.Outlined.Business) }
+                item { Button(onClick = { model.signIn() }, Modifier.fillMaxWidth(), enabled = !model.loginPending) { Text("Sign in") } }
+                return@PageColumn
+            }
+            devices?.let { all ->
+                formSection {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        Metric("Devices", all.size, MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+                        Metric("Sites", all.filter { it.siteKey.isNotEmpty() }.map { it.siteKey }.toSet().size, MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
+                        if (presenceKnown) Metric("Online", all.count { it.online }, MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                    }
+                    ToggleRow("Online only", onlineOnly, enabled = presenceKnown) { onlineOnly = it; preferences.edit().putBoolean("onlineOnly", it).apply() }
+                }
+            }
+            item { OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Filter fleet") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }) }
+            error?.let { item { FormSection { FailureNote(it) } } }
+            if (!presenceKnown) item { FormSection { FailureNote("Device presence is unavailable. $presenceError") } }
+            if (loading && devices == null) item { LoadingRow("Loading your fleet…") }
+            if (devices != null && visible.isEmpty() && !loading && error == null) item {
+                EmptyMessage(if (search.isEmpty()) "No matching devices" else "No results for “$search”", "Devices enrolled in this organization appear here, including offline devices.", Icons.Outlined.Memory)
+            }
+            groups.forEach { (_, name, members) ->
+                formSection("$name · ${members.size}") {
+                    members.forEach { device ->
+                        val connecting = model.connecting && model.selected?.selector == device.selector
+                        Row(Modifier.fillMaxWidth().clickable { model.connect(device.device) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Icon(Icons.Outlined.Memory, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(device.name, style = MaterialTheme.typography.titleSmall)
+                                SecondaryText(device.hardware.ifEmpty { "Wendy device" })
+                                Text(if (presenceKnown) (if (device.online) "Online" else "Offline") else "Status unknown", style = MaterialTheme.typography.bodySmall,
+                                    color = if (presenceKnown && device.online) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            if (connecting) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
-            } }
+            }
+            updated?.let { item { SecondaryText("Updated ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it))}") } }
         }
-        if (!fleet.loading && fleet.value.obj().list("Devices").isEmpty()) item { EmptyMessage("No sites yet", "Enrolled devices appear here when your organization has devices.") }
+    }
+}
+
+@Composable
+private fun Metric(title: String, count: Int, color: Color, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(count.toString(), style = MaterialTheme.typography.headlineSmall, color = color)
+        Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

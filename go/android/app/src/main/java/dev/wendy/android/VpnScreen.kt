@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -29,7 +31,8 @@ import org.json.JSONObject
     val routes by WendyVpnService.activeRoutes.collectAsState()
     val internetBackup by WendyVpnService.internetBackup.collectAsState()
     val nearby = rememberRemote(model, "Nearby")
-    LaunchedEffect(nearby) { while (true) { delay(5000); if (!nearby.loading) nearby.refresh() } }
+    val visible = LocalPageVisible.current
+    LaunchedEffect(nearby, visible) { while (visible) { delay(5000); if (!nearby.loading) nearby.refresh() } }
     var pending by rememberSaveable { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -63,7 +66,6 @@ import org.json.JSONObject
         pending?.let { requestVpnPermission(it) }
     }
     Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        TextButton(onClick = done) { Text("Back to devices") }
         PageTitle("Wendy VPN", "All your devices over mesh.")
         SectionCard("Mesh") {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -94,15 +96,15 @@ import org.json.JSONObject
                 else -> "Off"
             }, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (changing) LinearProgressIndicator(Modifier.fillMaxWidth())
-            (localError ?: failure)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            (localError ?: failure)?.let { FailureNote(it) }
         }
         SectionCard("Automatic internet backup") {
             Text("If your normal internet goes down, Wendy uses an available mesh uplink and switches back when it recovers.")
         }
         SectionCard("All devices over mesh") {
-            val names = if (phase == VpnPhase.Connected) routes.map { it.name.ifBlank { "Device" } }
-                else nearby.value.items().map(Device::parse).filter { it.selector.startsWith("mesh:") }.map { it.name.ifBlank { "Device" } }
-            names.forEach { Text(it) }
+            val names = if (phase == VpnPhase.Connected) routes.map { DeviceDisplayName.title(it.name.ifBlank { "Device" }) }
+                else nearby.value.items().map(Device::parse).filter { it.selector.startsWith("mesh:") }.map { it.title }
+            names.forEach { name -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Outlined.Lan, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Text(name) } }
             if (names.isEmpty()) Text("Mesh devices appear here automatically.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

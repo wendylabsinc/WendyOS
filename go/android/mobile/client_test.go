@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/macos/backend"
 )
 
 func TestABIValidatesBeforeDispatch(t *testing.T) {
@@ -54,5 +56,19 @@ func TestABIRequiresInitialization(t *testing.T) {
 	json.Unmarshal(New().Invoke([]byte(`{"method":"Nearby","args":[]}`)), &out)
 	if out.Error != "Wendy has not initialized" {
 		t.Fatal(out)
+	}
+}
+
+func TestNearbySetupResultKeepsStateWithError(t *testing.T) {
+	state := backend.NearbySetupState{Session: 7, Attempted: true, Pending: true}
+	result := newNearbySetupResult(state, errors.New("device pki enrollment failed: i/o timeout"))
+	if result.State.Session != 7 || !result.State.Attempted || !result.State.Pending {
+		t.Fatalf("state was not preserved: %+v", result.State)
+	}
+	if result.Error == "" {
+		t.Fatal("error text was dropped")
+	}
+	if newNearbySetupResult(state, nil).Error != "" {
+		t.Fatal("success reported an error")
 	}
 }

@@ -60,6 +60,16 @@ func New() *Client {
 	c.methods = map[string]any{
 		"StartVPN": c.startVPN, "RefreshVPN": c.refreshVPN, "CancelVPN": c.cancelVPN, "StopVPN": c.stopVPN, "VPNRead": c.readPacket, "VPNWrite": c.writePacket,
 		"NearbyDiscover": b.NearbyDiscover, "NearbyOpen": b.NearbyOpen, "NearbyClose": b.NearbyClose, "NearbyAction": b.NearbyAction,
+		// Setup state survives a failed step, as in the iOS bridge: attempted and
+		// pending must stay visible so enrollment is never sent twice.
+		"NearbySetupOpen": func(address string) nearbySetupResult {
+			state, err := b.NearbyOpen(address)
+			return newNearbySetupResult(state, err)
+		},
+		"NearbySetupAction": func(session uint64, action int, ssid, password, account, organization, name string) nearbySetupResult {
+			state, err := b.NearbyAction(session, action, ssid, password, account, organization, name)
+			return newNearbySetupResult(state, err)
+		},
 		"Nearby": b.Nearby, "Cloud": b.Cloud, "Account": b.Account, "Accounts": b.Accounts,
 		"Login": b.Login, "CancelLogin": b.CancelLogin, "SetMobileState": c.setMobileState,
 		"MobileMeshSummary": func() map[string]string {
@@ -447,4 +457,17 @@ func (c *Client) writePacket(packet []byte) error {
 	}
 	engine.Write(packet)
 	return nil
+}
+
+type nearbySetupResult struct {
+	State backend.NearbySetupState
+	Error string `json:",omitempty"`
+}
+
+func newNearbySetupResult(state backend.NearbySetupState, err error) nearbySetupResult {
+	result := nearbySetupResult{State: state}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	return result
 }
