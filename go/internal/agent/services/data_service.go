@@ -27,7 +27,8 @@ import (
 //     out-of-range download offset, malformed or escaping file path).
 //   - NotFound: the episode, manifest, or requested file is genuinely absent.
 //   - FailedPrecondition: the episode exists but is not currently serviceable
-//     (no active episode, or a manifest entry that is not a regular file).
+//     (no active episode, a manifest entry that is not a regular file, or a
+//     deletion of an episode still in progress or being read).
 //   - Internal: everything else, which is an I/O, decode, or seal failure.
 //
 // Messages are the underlying error text, which is generated agent-side and
@@ -46,7 +47,9 @@ func dataStatusError(err error) error {
 	case errors.Is(err, os.ErrNotExist):
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, data.ErrNoActiveEpisode),
-		errors.Is(err, data.ErrEpisodeEntryNotRegular):
+		errors.Is(err, data.ErrEpisodeEntryNotRegular),
+		errors.Is(err, data.ErrEpisodeInProgress),
+		errors.Is(err, data.ErrEpisodeBeingRead):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
@@ -737,6 +740,20 @@ func (s *DataService) Inspect(_ context.Context, req *agentpbv2.DataInspectReque
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &agentpbv2.DataInspectResponse{ManifestJson: append(b, '\n'), VerificationErrors: failures}, nil
+}
+
+// DeleteEpisode permanently removes one finalized episode; see
+// data.Manager.DeleteEpisode for what it refuses and why.
+func (s *DataService) DeleteEpisode(_ context.Context, req *agentpbv2.DataDeleteEpisodeRequest) (*agentpbv2.DataDeleteEpisodeResponse, error) {
+	m, err := s.manager.DeleteEpisode(req.GetEpisode())
+	if err != nil {
+		return nil, dataStatusError(err)
+	}
+	episode := manifestEpisode(m)
+	for _, f := range m.Files {
+		episode.SizeBytes += f.Size
+	}
+	return &agentpbv2.DataDeleteEpisodeResponse{Episode: episode, UploadState: m.Upload.State}, nil
 }
 
 func (s *DataService) Download(req *agentpbv2.DataDownloadRequest, stream agentpbv2.DataService_DownloadServer) error {

@@ -25,6 +25,7 @@ const skipDirs = new Set([
   'scripts',
 ]);
 const publicAssetExtensions = new Set([
+  '.cast',
   '.gif',
   '.ico',
   '.js',
@@ -206,7 +207,7 @@ function normalizeMarkdown(raw, targetRelativePath) {
     .replace(/\]\(\/((?:icons|images|videos)\/[^)#\s]+)(#[^)]+)?\)/g, (_match, assetPath, hash = '') => {
       return `](${relativeAssetImport(targetRelativePath, assetPath, hash)})`;
     })
-    .replace(/src="\/((?:icons|images|videos)\/[^"]+)"/g, (_match, assetPath) => {
+    .replace(/src="\/((?:casts|icons|images|videos)\/[^"]+)"/g, (_match, assetPath) => {
       return `src="${absoluteAssetPath(assetPath)}"`;
     });
 }

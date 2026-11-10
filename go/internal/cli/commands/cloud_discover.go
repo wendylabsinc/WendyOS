@@ -74,36 +74,28 @@ type cloudScanMsg struct {
 	err     error
 }
 
-// cloudAssetVersionMsg carries fetched version metadata for a single cloud asset.
-type cloudAssetVersionMsg struct {
-	assetID string
-	resp    *agentpb.GetAgentVersionResponse // nil on error
-}
-
 type cloudDiscoverModel struct {
-	purpose        devicePickerPurpose
-	ctx            context.Context
-	auth           *config.AuthConfig
-	brokerURL      string
-	all            bool
-	pickerMode     bool
-	devices        []cloudDiscoveryDevice
-	versions       map[string]*agentpb.GetAgentVersionResponse
-	versionPending map[string]bool
-	versionSem     chan struct{}
-	table          tui.BubbleTable
-	quitting       bool
-	flashMessage   string
-	flashIsError   bool
-	updatingName   string
-	selected       *cloudpb.Asset
-	selectedV2     *cloudpbv2.Asset
-	windowWidth    int
-	windowHeight   int
-	err            error
-	hasResults     bool
-	defaultDevice  string
-	certExpired    bool
+	purpose       devicePickerPurpose
+	ctx           context.Context
+	auth          *config.AuthConfig
+	brokerURL     string
+	all           bool
+	pickerMode    bool
+	devices       []cloudDiscoveryDevice
+	versions      map[string]*agentpb.GetAgentVersionResponse // Learned only through explicit updates.
+	table         tui.BubbleTable
+	quitting      bool
+	flashMessage  string
+	flashIsError  bool
+	updatingName  string
+	selected      *cloudpb.Asset
+	selectedV2    *cloudpbv2.Asset
+	windowWidth   int
+	windowHeight  int
+	err           error
+	hasResults    bool
+	defaultDevice string
+	certExpired   bool
 }
 
 // authCertExpired reports whether the session's certificate is past NotAfter.
@@ -118,16 +110,14 @@ func authCertExpired(auth *config.AuthConfig) bool {
 
 func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerURL string, all, pickerMode bool, initialAssets []*cloudpb.Asset) cloudDiscoverModel {
 	m := cloudDiscoverModel{
-		ctx:            ctx,
-		auth:           auth,
-		brokerURL:      brokerURL,
-		all:            all,
-		pickerMode:     pickerMode,
-		table:          newDiscoverTable(true),
-		versions:       make(map[string]*agentpb.GetAgentVersionResponse),
-		versionPending: make(map[string]bool),
-		versionSem:     make(chan struct{}, 5),
-		certExpired:    authCertExpired(auth),
+		ctx:         ctx,
+		auth:        auth,
+		brokerURL:   brokerURL,
+		all:         all,
+		pickerMode:  pickerMode,
+		table:       newDiscoverTable(true),
+		versions:    make(map[string]*agentpb.GetAgentVersionResponse),
+		certExpired: authCertExpired(auth),
 	}
 	if initialAssets != nil {
 		m.devices = legacyDiscoveryDevices(initialAssets)
@@ -142,17 +132,7 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 
 func (m cloudDiscoverModel) Init() tea.Cmd {
 	if m.hasResults {
-		cmds := []tea.Cmd{delayThen(cloudDiscoverRefreshInterval, m.scanCmd())}
-		for _, a := range m.devices {
-			id := a.key
-			if !m.versionPending[id] {
-				if _, cached := m.versions[id]; !cached {
-					m.versionPending[id] = true
-					cmds = append(cmds, m.fetchVersionCmd(a))
-				}
-			}
-		}
-		return tea.Batch(cmds...)
+		return delayThen(cloudDiscoverRefreshInterval, m.scanCmd())
 	}
 	return m.scanCmd()
 }
@@ -190,26 +170,7 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshTable()
 		}
 		m.hasResults = true
-		var cmds []tea.Cmd
-		cmds = append(cmds, delayThen(cloudDiscoverRefreshInterval, m.scanCmd()))
-		for _, a := range m.devices {
-			id := a.key
-			if !m.versionPending[id] {
-				if _, cached := m.versions[id]; !cached {
-					m.versionPending[id] = true
-					cmds = append(cmds, m.fetchVersionCmd(a))
-				}
-			}
-		}
-		return m, tea.Batch(cmds...)
-
-	case cloudAssetVersionMsg:
-		m.versionPending[msg.assetID] = false
-		if msg.resp != nil {
-			m.versions[msg.assetID] = msg.resp
-			m.refreshTable()
-		}
-		return m, nil
+		return m, delayThen(cloudDiscoverRefreshInterval, m.scanCmd())
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -300,18 +261,14 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.err != nil:
 			// Nothing learned about the device; leave the cached row alone.
-		case msg.note != "":
-			// No update happened, but the probe behind the note is fresher than
-			// the cached row.
-			if msg.version != nil {
-				m.versions[key] = msg.version
-				m.versionPending[key] = false
-			}
-		default:
-			// Invalidate cached version so the table shows fresh data after update.
+		case msg.version != nil:
+			// Reuse the version checked by the explicit update or restart probe.
+			m.versions[key] = msg.version
+		case msg.note == "":
+			// Discard the pre-update version without scheduling a device probe.
 			delete(m.versions, key)
-			delete(m.versionPending, key)
 		}
+		m.refreshTable()
 		return m, clearFlashAfter(10 * time.Second)
 
 	case flashClearMsg:
@@ -501,37 +458,6 @@ func cloudDeviceInfoFromAsset(a *cloudpb.Asset, ver *agentpb.GetAgentVersionResp
 	return info
 }
 
-const cloudVersionFetchTimeout = 15 * time.Second
-
-func (m cloudDiscoverModel) fetchVersionCmd(asset cloudDiscoveryDevice) tea.Cmd {
-	ctx := m.ctx
-	auth := m.auth
-	brokerURL := m.brokerURL
-	id := asset.key
-	sem := m.versionSem
-	return func() tea.Msg {
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			return cloudAssetVersionMsg{assetID: id}
-		}
-		defer func() { <-sem }()
-
-		fetchCtx, cancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
-		defer cancel()
-		conn, err := asset.connect(fetchCtx, auth, brokerURL)
-		if err != nil {
-			return cloudAssetVersionMsg{assetID: id}
-		}
-		defer conn.Close()
-		resp, err := conn.AgentService.GetAgentVersion(fetchCtx, &agentpb.GetAgentVersionRequest{})
-		if err != nil {
-			return cloudAssetVersionMsg{assetID: id}
-		}
-		return cloudAssetVersionMsg{assetID: id, resp: resp}
-	}
-}
-
 func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.Cmd {
 	ctx := m.ctx
 	auth := m.auth
@@ -594,8 +520,9 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.
 		if err != nil {
 			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
 		}
+		updatedVersion, _ := newConn.CachedAgentVersion()
 		newConn.Close()
-		return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name}
+		return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, version: updatedVersion}
 	}
 }
 
