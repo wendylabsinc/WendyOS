@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
@@ -25,6 +26,9 @@ func TestDesktopFailureEvidence(t *testing.T) {
 		{"org", orgMismatchDeviceError{}, failure.Info{Code: failure.AccountMismatch, Remedy: failure.ChooseAccount}},
 		{"cloud certificate", cloudCertError{code: cloudpb.CertificateErrorCode_CERTIFICATE_ERROR_UNAUTHORIZED}, failure.Info{Code: failure.AuthenticationRequired, Remedy: failure.SignIn}},
 		{"untyped diagnostic", errors.New("The available client certificates are expired"), failure.Info{Code: failure.Unknown, Remedy: failure.None}},
+		// DesktopNearby joins the browse error with its other sources' errors.
+		{"denied browse", errors.Join(fmt.Errorf("%w (dns-sd error -65570)", discovery.ErrLocalNetworkDenied), errors.New("no Lite devices")), failure.Info{Code: failure.LocalNetworkDenied, Remedy: failure.OpenNetworkSettings}},
+		{"denial text is not evidence", errors.New("local network access denied"), failure.Info{Code: failure.Unknown, Remedy: failure.None}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := DesktopFailure(fmt.Errorf("wrapped: %w", tc.err)); got != tc.want {
