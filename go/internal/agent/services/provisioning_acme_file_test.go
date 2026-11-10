@@ -22,7 +22,7 @@ func bakedACMEFixture(t *testing.T) string {
 	t.Helper()
 	oldWait := waitForFirstBootACME
 	t.Cleanup(func() { waitForFirstBootACME = oldWait })
-	waitForFirstBootACME = func(context.Context, string) error { return nil }
+	waitForFirstBootACME = func(context.Context, string, *zap.Logger) error { return nil }
 	req := acmeProvisionRequest()
 	data, err := json.Marshal(map[string]string{
 		"directoryURL": req.DirectoryUrl, "deviceID": req.DeviceId,
@@ -165,7 +165,7 @@ func TestACMEFirstBootWaitsBeforeRecordingAttempt(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			waited := false
-			waitForFirstBootACME = func(ctx context.Context, directory string) error {
+			waitForFirstBootACME = func(ctx context.Context, directory string, _ *zap.Logger) error {
 				waited = true
 				if directory != acmeProvisionRequest().DirectoryUrl {
 					t.Fatal("wrong connectivity target")
@@ -204,7 +204,7 @@ func TestACMEFirstBootWaitsBeforeRecordingAttempt(t *testing.T) {
 					t.Fatal("offline boot lost its handoff")
 				}
 				// A later boot can still complete the first enrollment attempt.
-				waitForFirstBootACME = func(context.Context, string) error { return nil }
+				waitForFirstBootACME = func(context.Context, string, *zap.Logger) error { return nil }
 				NewProvisioningServiceV2(NewProvisioningService(zap.NewNop(), dir)).ApplyACMEEnrollmentFile(context.Background(), path)
 				if attempts != 1 {
 					t.Fatal("offline boot blocked later enrollment")
@@ -231,7 +231,7 @@ func TestWaitForACMEDirectoryRetriesOnlyPublicDiscovery(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := waitForACMEDirectory(ctx, server.URL+"/directory", time.Millisecond); err != nil {
+	if err := waitForACMEDirectory(ctx, server.URL+"/directory", time.Millisecond, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	}
 	if requests < 2 {
@@ -247,7 +247,70 @@ func TestWaitForACMEDirectoryCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 	defer cancel()
-	if err := waitForACMEDirectory(ctx, server.URL, time.Hour); !errors.Is(err, context.Canceled) {
+	if err := waitForACMEDirectory(ctx, server.URL, time.Hour, zap.NewNop()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
+	}
+}
+
+// A non-network failure is logged with its reason, once per distinct reason,
+// so a wrong directory URL or unset clock does not read as "no network".
+func TestWaitForACMEDirectoryLogsFailureReasons(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch {
+		case requests <= 3:
+			http.NotFound(w, r)
+		case requests == 4:
+			http.Error(w, "captive portal", http.StatusForbidden)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"newNonce":"/nonce","newAccount":"/account","newOrder":"/order"}`)
+		}
+	}))
+	defer server.Close()
+	core, logs := observer.New(zap.InfoLevel)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := waitForACMEDirectory(ctx, server.URL+"/directory", time.Millisecond, zap.New(core)); err != nil {
+		t.Fatal(err)
+	}
+	retries := logs.FilterMessage("ACME directory not reachable yet; retrying").All()
+	if len(retries) != 2 {
+		t.Fatalf("logged %d retry lines for two distinct reasons", len(retries))
+	}
+	for i, want := range []string{"404", "403"} {
+		if reason, _ := retries[i].ContextMap()["error"].(string); !strings.Contains(reason, want) {
+			t.Fatalf("retry %d reason %q does not name %s", i, reason, want)
+		}
+	}
+	if logs.FilterMessage("ACME directory reachable; starting first-boot enrollment").Len() != 1 {
+		t.Fatal("recovery after failed probes was not logged")
+	}
+}
+
+// An enrollment that completes while the handoff waits leaves the handoff
+// unspent and says so.
+func TestACMEFirstBootStandsDownWhenEnrolledWhileWaiting(t *testing.T) {
+	path := bakedACMEFixture(t)
+	dir := t.TempDir()
+	core, logs := observer.New(zap.WarnLevel)
+	svc := NewProvisioningService(zap.New(core), dir)
+	waitForFirstBootACME = func(context.Context, string, *zap.Logger) error {
+		svc.mu.Lock()
+		svc.enrolled = true
+		svc.mu.Unlock()
+		return nil
+	}
+	stubACMEEnroll(t, func(context.Context, acmeenroll.Config, string, []byte) (string, string, error) {
+		t.Fatal("handoff spent after another enrollment completed")
+		return "", "", nil
+	})
+	NewProvisioningServiceV2(svc).ApplyACMEEnrollmentFile(context.Background(), path)
+	if _, err := os.Stat(filepath.Join(dir, "acme-first-boot-attempt.json")); !os.IsNotExist(err) {
+		t.Fatal("unused handoff recorded an attempt")
+	}
+	if logs.FilterMessageSnippet("enrolled by another request").Len() != 1 {
+		t.Fatalf("stand-down was not logged: %v", logs.All())
 	}
 }

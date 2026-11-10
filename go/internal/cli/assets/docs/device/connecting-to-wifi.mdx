@@ -61,6 +61,12 @@ begin. A failed or interrupted issuance still requires explicit recovery; it is
 not automatically repeated. Devices that already recorded a failed attempt on an
 older agent retain that recovery requirement.
 
+Use `wendy device wifi`, not `wendy device enroll`, for such a device. Once it
+reaches the network it enrolls itself within seconds. An enrollment started from
+the CLI at the same time can reserve a Cloud device name that is never used. The
+agent journal reports why the enrollment directory is not reachable yet, for
+example a wrong URL or a certificate rejected because the clock is unset.
+
 ## Troubleshooting
 
 If you're having trouble connecting to Wi-Fi:

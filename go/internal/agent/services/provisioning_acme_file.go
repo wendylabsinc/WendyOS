@@ -12,6 +12,8 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/acme"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ApplyACMEEnrollmentFile consumes the CLI's imaging handoff on first boot.
@@ -68,13 +70,15 @@ func (s *ProvisioningServiceV2) ApplyACMEEnrollmentFile(ctx context.Context, pat
 	// complete first-boot enrollment after the operator configures its network.
 	// The caller runs this in a background goroutine; setup RPCs remain available.
 	svc.logger.Info("Waiting for network connectivity before first-boot enrollment")
-	if err := waitForFirstBootACME(ctx, bake.DirectoryURL); err != nil {
+	if err := waitForFirstBootACME(ctx, bake.DirectoryURL, svc.logger); err != nil {
 		return
 	}
+	// A shutdown right after a successful probe must not record an attempt.
 	if ctx.Err() != nil {
 		return
 	}
 	if _, _, _, enrolled := svc.ProvisioningInfo(); enrolled {
+		svc.logger.Warn("Baked ACME enrollment not used: the device was enrolled by another request while waiting for network; credential retained")
 		return
 	}
 	f, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -117,6 +121,12 @@ func (s *ProvisioningServiceV2) ApplyACMEEnrollmentFile(ctx context.Context, pat
 		EabKeyId: bake.EABKeyID, EabHmacKey: bake.EABHMACKey,
 	})
 	if err != nil {
+		// Another enrollment request can take the provisioning lock between the
+		// check above and this call; nothing was spent, the device is enrolled.
+		if _, _, _, enrolled := svc.ProvisioningInfo(); enrolled && status.Code(err) == codes.FailedPrecondition {
+			svc.logger.Warn("Baked ACME enrollment not used: the device was enrolled by another request; credential retained", zap.String("principalURI", principal))
+			return
+		}
 		// Upstream errors are not guaranteed secret-free. Report the stage,
 		// retain all material, and require explicit recovery instead of a loop.
 		svc.logger.Warn("Baked ACME enrollment failed; credential retained and automatic retry blocked", zap.String("principalURI", principal))
@@ -129,13 +139,25 @@ func (s *ProvisioningServiceV2) ApplyACMEEnrollmentFile(ctx context.Context, pat
 	svc.logger.Info("Baked ACME enrollment completed", zap.String("principalURI", principal))
 }
 
-var waitForFirstBootACME = func(ctx context.Context, directoryURL string) error {
-	return waitForACMEDirectory(ctx, directoryURL, 5*time.Second)
+var waitForFirstBootACME = func(ctx context.Context, directoryURL string, logger *zap.Logger) error {
+	return waitForACMEDirectory(ctx, directoryURL, 5*time.Second, logger)
 }
+
+// acmeDirectoryLogInterval bounds how often an unchanged probe failure is
+// logged while the device waits for network.
+const acmeDirectoryLogInterval = 5 * time.Minute
 
 // Only public directory GETs are retried. Once issuance starts, an uncertain
 // result still requires coordinated recovery rather than another redemption.
-func waitForACMEDirectory(ctx context.Context, directoryURL string, retryDelay time.Duration) error {
+//
+// Each new failure reason is logged, and an unchanged one again every
+// acmeDirectoryLogInterval: a wrong directory URL, a non-ACME response or a
+// TLS failure from an unset clock must not read as "no network". The probe
+// sends no credential, so its error carries only the public directory URL.
+func waitForACMEDirectory(ctx context.Context, directoryURL string, retryDelay time.Duration, logger *zap.Logger) error {
+	failures := 0
+	lastReason := ""
+	var lastLogged time.Time
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -145,7 +167,18 @@ func waitForACMEDirectory(ctx context.Context, directoryURL string, retryDelay t
 		_, err := client.Discover(probeCtx)
 		cancel()
 		if err == nil {
+			if failures > 0 {
+				logger.Info("ACME directory reachable; starting first-boot enrollment", zap.Int("failedProbes", failures))
+			}
 			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		failures++
+		if reason := err.Error(); reason != lastReason || time.Since(lastLogged) >= acmeDirectoryLogInterval {
+			logger.Info("ACME directory not reachable yet; retrying", zap.Int("failedProbes", failures), zap.Error(err))
+			lastReason, lastLogged = reason, time.Now()
 		}
 		timer := time.NewTimer(retryDelay)
 		select {
