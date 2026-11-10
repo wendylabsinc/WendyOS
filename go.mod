@@ -59,7 +59,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/pion/rtcp v1.2.19
-	github.com/pion/rtp v1.10.5
+	github.com/pion/rtp v1.10.6
 	github.com/pion/webrtc/v4 v4.2.23
 	github.com/quic-go/quic-go v0.62.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
