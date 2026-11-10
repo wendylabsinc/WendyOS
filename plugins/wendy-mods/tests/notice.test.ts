@@ -4,7 +4,7 @@ import { RUN_STARTED } from './fixtures'
 import { standIn, START } from './world'
 
 // Review I2: the mod's own calls share the model's MCP session, so the server's
-// one-time CLI update notice can land on them instead of on the model's calls.
+// daily CLI update notice can land on them instead of on the model's calls.
 const NOTICE =
   'A new Wendy CLI version is available: 2026.10.01-013419 (running 2026.09.30-213433). Update with: brew upgrade wendy. Then restart the Wendy MCP server to load the new version and tools.'
 const RELAYED = `wendy-mods: the Wendy MCP server sent this notice to a wendy-mods background check, so it is relayed here: ${NOTICE}`

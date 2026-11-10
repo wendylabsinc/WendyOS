@@ -11,6 +11,8 @@ apps browse it through their own network interface.
 Start by [connecting the devices](/docs/guides/wendy-net) and checking their peers.
 Use current Linux WendyOS images with full Wendy Net support.
 
+Run these commands in an interactive terminal. Select the intended device when prompted and check any automatically selected default.
+
 ## 1. Give the publishing app Wendy Net access
 
 Merge this into its `wendy.json`:
@@ -36,7 +38,11 @@ Merge this into its `wendy.json`:
 
 Keep the literal configuration value `"mesh"`; it selects Wendy Net service
 networking. Use `10.99.0.0/16`, the currently supported service address range.
-Do not replace this with the device's LAN subnet.
+`serviceCIDR` is the virtual address block for mesh services. `/16` fixes the
+first 16 bits, so this block spans `10.99.0.0` through `10.99.255.255`.
+It is not a single server address and does not change the LAN or container IP.
+Use the supported range on both apps; connect to the address returned by discovery,
+not an address invented within the range.
 
 Run your server on the container's address or `0.0.0.0:8080`, not loopback alone.
 The example publishes TCP port 18080 for other Wendy Net apps. Choose an unused
@@ -49,7 +55,7 @@ they use the same port number.
 Deploy after saving:
 
 ```sh
-wendy run --device <publishing-device>
+wendy run
 ```
 
 The port mapping permits incoming connections; it does not announce a service
@@ -82,6 +88,24 @@ Remote browsers receive a Wendy Net service address and port 18080 in this examp
 Use those returned values to connect; do not substitute the publisher's container
 or management address.
 
+### Applications that put endpoints in TXT
+
+Wendy preserves application TXT values. It does not rewrite IP addresses, URLs,
+or extra service ports embedded in them. A client that prefers a TXT address
+over the resolved DNS address can dial the publisher's private container subnet
+instead of its Wendy Net address. Use resolved addresses for mesh connections.
+Private container addresses can be identical on different devices.
+
+If a protocol encodes extra ports in TXT, declare each required incoming port
+and keep the published and container port numbers equal unless the application
+can advertise the translated values. An SRV mapping does not authorize those
+additional ports automatically. See the
+[NVIDIA PAIR example](/docs/guides/nvidia-pair) for this pattern.
+
+Do not add a UDP 5353 port mapping to forward multicast between devices. The
+agent observes app mDNS on its private bridge and projects service records;
+it does not flood raw multicast across the mesh.
+
 ## 3. Browse from a second app
 
 Give the client a private Wendy Net network too. It can omit incoming ports if
@@ -111,6 +135,72 @@ devices; avoid matching an entire generated name as a permanent identifier.
 Service discovery can cross intermediate Wendy Net devices without a direct
 connection to the publishing device. Discovery is not an application health
 check: verify an actual request to the discovered server.
+
+## Try the complete Python example
+
+[Download the publisher and client](/media/mesh-mdns.zip), or use
+[`Examples/MeshMDNS`](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/MeshMDNS).
+Both directories include a Dockerfile, pinned `zeroconf` dependency, and app configuration.
+The publisher starts an HTTP server; the client discovers it and checks the response.
+
+The publisher registers these records through `python-zeroconf`:
+
+```python
+info = ServiceInfo(
+    "_http._tcp.local.",
+    f"{instance}._http._tcp.local.",
+    addresses=[socket.inet_aton(address)],
+    port=8080,
+    properties={"demo": "learn-mesh", "path": "/"},
+    server=f"{hostname}.local.",
+)
+zc.register_service(info, allow_name_change=True)
+```
+
+This is the core excerpt; the download includes imports, server startup, interface
+selection, and cleanup. `address` is the app's private `eth0` IPv4 address. The
+process stays alive to advertise, and unregisters the service on shutdown.
+
+The client uses `ServiceBrowser` for discovery. Its callback queues events; the main
+thread resolves them and makes bounded HTTP requests. Use the returned address and
+port, which can differ from those in the original announcement:
+
+```python
+info = zc.get_service_info(service_type, name, timeout=2000)
+if info and info.properties.get(b"demo") == b"learn-mesh":
+    addresses = info.parsed_addresses(IPVersion.V4Only)
+    if addresses:
+        url = f"http://{addresses[0]}:{info.port}/"
+```
+
+After unzipping, set the two device hostnames or IP addresses from `wendy discover`.
+Replace both example values with your connected devices, then run:
+
+```sh
+PUBLISHER_DEVICE='publisher-device.local'
+CLIENT_DEVICE='client-device.local'
+cd mesh-mdns/publisher
+wendy run --device "$PUBLISHER_DEVICE" --detach
+cd ../client
+wendy run --device "$CLIENT_DEVICE"
+```
+
+The explicit selectors keep both apps on their intended devices, even if you have
+a saved default. Expect a resolved `10.99.x.x:18080` endpoint and JSON with `instance` and
+`status: "ok"`. The client exits after success or a 60-second discovery timeout.
+Its manifest sets `restartPolicy: "no"` so it stays stopped after exiting.
+To check recovery, run `wendy run --device "$PUBLISHER_DEVICE" --detach` again
+from `publisher/`, then rerun the client from `client/`. When finished, stop the
+publisher:
+
+```sh
+wendy --device "$PUBLISHER_DEVICE" device apps stop com.example.learn-mdns-publisher
+```
+
+No Avahi entitlement or UDP 5353 mapping is needed for this app-owned socket.
+The TXT marker filters demo instances; it is not authentication. See the
+[python-zeroconf API](https://python-zeroconf.readthedocs.io/en/latest/api.html)
+for integration into an existing application.
 
 ## Alternative: use private Avahi through D-Bus
 
@@ -167,6 +257,9 @@ and they are not relayed onward across the net.
 Access is limited to the advertised endpoint and port; discovering one service
 does not give an app unrestricted LAN access. Names are discovery labels rather
 than authentication. Use the service's own authentication where it needs it.
+Extra endpoints encoded only in TXT do not receive LAN access grants. Protocols
+that require them need separate eligible service advertisements or a deployment
+where the peer participates as a Wendy Net app with all required ports published.
 
 ## Choose the right grants
 
@@ -185,7 +278,7 @@ the applicable entitlements per service. Shared host networking is a different m
 
 ## Troubleshoot discovery
 
-1. Check `wendy device wendy-net status` and `topology` on both devices.
+1. Check `wendy net status` and `topology` on both devices.
 2. Confirm both apps run with the intended private network and `serviceCIDR`.
 3. Check the publisher listens on the container port and advertises its own IPv4
    address, a complete service record, and the matching transport type.
@@ -204,5 +297,5 @@ the service after the relevant discovery and lease updates. After a partition or
 restart, allow routes and service state to reconcile. An old cached record may
 remain briefly; applications should handle disappearance and failed connections.
 
-See the [network and Avahi reference](/docs/advanced/apps/wendy.json#network)
+See the [network and Avahi reference](/docs/reference/app-configuration#network)
 for detailed limits.

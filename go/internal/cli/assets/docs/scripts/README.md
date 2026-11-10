@@ -14,9 +14,11 @@ The generated CLI pages cover public commands; hidden commands retain their
 workflow documentation. Platform-specific command availability follows the
 build host, Linux in deployment CI.
 
-`publish-markdown.mjs` publishes each page as Markdown, plus `llms.txt` and
-`llms-full.txt`. The raw pages retain MDX components and source-relative links;
-the index includes the rendered canonical URL for each page. App schema and
+`publish-markdown.mjs` publishes each page as Markdown at its page URL plus
+`.md` and under `markdown/`, plus `llms.txt` and `llms-full.txt`. The raw pages
+retain MDX components and source-relative links; the index links each page's
+Markdown with its frontmatter description. `sitemap.mjs` writes `sitemap.xml`,
+dated from each source file's git history, and `robots.txt`. App schema and
 CLI JSON are copied from source during preparation. No generated content is
 checked in. All public files include the configured version base path in their
 index links.

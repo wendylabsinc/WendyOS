@@ -26,6 +26,8 @@ var skillByteBudgets = map[string]int{
 	"wendy-project-setup/SKILL.md":  6144,
 	"wendy-robot-deploy/SKILL.md":   6144,
 	"wendy-template-app/SKILL.md":   4096,
+	// The opt-in training workflow includes job, evidence and checkpoint contracts.
+	"wendy-training/SKILL.md": 12288,
 }
 
 func TestEndUserSkillsStayWithinByteBudgets(t *testing.T) {

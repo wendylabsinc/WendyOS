@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -296,7 +298,44 @@ func unsetPickerDefault() (string, error) {
 // or opening a cloud tunnel.
 var connectCloudDeviceSelectorFn = connectCloudDeviceSelector
 
+var resolveLiteBLESelector = providers.ResolveLiteBLESelector
+
+var connectOperatorMeshSelector = sessionbroker.ConnectOperator
+var describeOperatorMeshTarget = sessionbroker.DescribeOperatorTarget
+
 func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpdate bool) (*SelectedDevice, bool, error) {
+	if external, matched, err := resolveLiteBLESelector(ctx, device); matched {
+		if err != nil {
+			return nil, true, err
+		}
+		return &SelectedDevice{External: &external, Provider: providers.ProviderForKey("wendy-lite"), DefaultSelector: device, PinKey: device}, true, nil
+	}
+	if strings.HasPrefix(device, "mesh:") && !strings.HasPrefix(device, "mesh://") {
+		picked, err := connectMeshSelector(ctx, device)
+		return picked, true, err
+	}
+	if _, matched, err := sessionbroker.ParseMeshSelector(device); matched {
+		if err != nil {
+			return nil, true, err
+		}
+		info, err := describeOperatorMeshTarget(ctx, device)
+		if err != nil {
+			return nil, true, err
+		}
+		if info.Platform == "Lite" {
+			external, err := providers.MeshLiteDevice(info)
+			if err != nil {
+				return nil, true, err
+			}
+			provider := providers.ProviderForKey("wendy-lite")
+			return &SelectedDevice{External: &external, Provider: provider, DefaultSelector: device, PinKey: device}, true, nil
+		}
+		client, err := connectOperatorMeshSelector(ctx, device)
+		if err != nil {
+			return nil, true, err
+		}
+		return &SelectedDevice{Agent: client, DefaultSelector: device, PinKey: device}, true, nil
+	}
 	if selector, matched, err := parseCloudDeviceSelector(device); matched {
 		if err != nil {
 			return nil, true, err
@@ -311,7 +350,7 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 		picked, err := connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, suppressUpdate)
 		return picked, true, err
 	}
-	return nil, false, nil
+	return connectMeshName(ctx, device, suppressUpdate)
 }
 
 // Used by the MCP connection adapter, which receives the selected identity as

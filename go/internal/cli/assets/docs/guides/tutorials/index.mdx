@@ -1,11 +1,15 @@
 ---
 title: App tutorials
-description: Choose a language and build your first Wendy app.
+description: Choose a language and build your first app.
 ---
 
 Choose a language to create and deploy a small application. Start with an
-[installed CLI and connected device](/docs/#1-install-the-wendy-cli), or use a
+[installed CLI and connected device](/docs/installation/cli), or use a
 [virtual device](/docs/installation/wendyos-virtual-machine).
+
+Existing Dockerfiles and Compose projects are supported. Stagefiles are optional. These tutorials use the build format supplied by each example; you do not need to rewrite your own project.
+
+Run examples in an interactive terminal and select the intended device when prompted. A saved default or `WENDY_DEVICE` may select it automatically. Use explicit selectors in automation or when a command must target a specific machine.
 
 | Language | Start here |
 | --- | --- |
@@ -13,9 +17,11 @@ Choose a language to create and deploy a small application. Start with an
 | Swift | [Build a Swift app](/docs/guides/tutorials/swift/hello-world) |
 | C++ | [Build a C++ app](/docs/guides/tutorials/cpp/hello-world) |
 | Rust | [Build a Rust app](/docs/guides/tutorials/rust/hello-world) |
-| TypeScript | [Build a TypeScript app](/docs/guides/tutorials/typescript/hello-world) |
+| TypeScript | [Build a TypeScript app](/docs/getting-started/app) |
 | Mojo | [Build a Mojo app](/docs/guides/tutorials/mojo/hello-world) |
 
 After your first deployment, use the language's other tutorials for web services,
 hardware access, and application integrations. To connect services on several
 Wendy devices, follow [Wendy Net service sharing](/docs/guides/wendy-net-services).
+
+For model-based robotics, start with [VLM observations and VLA actions](/docs/integrations/vision-language-action), then test [imperfect sensor data](/docs/integrations/sensor-fidelity).

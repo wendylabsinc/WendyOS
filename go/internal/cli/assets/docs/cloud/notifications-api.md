@@ -5,8 +5,9 @@ operator-facing Wendy Notifications in a Wendy Cloud organization.
 
 ## Proto package
 
-`wendycloud.v1` is defined in `Proto/cloud/notifications.proto`; the UUID-native
-Cloud v2 service is defined in `Proto/wendycloud/v2/notifications.proto`.
+`wendycloud.v1` is defined in `Proto/cloud/notifications.proto`. The UUID-native
+`wendycloud.v2` service comes from the [shared catalogue](https://github.com/wendylabsinc/service-protos/blob/master/wendycloud/v2/notifications.proto)
+at the revision selected by `Proto/shared-grpc-api-contracts.sh`.
 
 ## App-facing API (`wendy.system.v1`)
 
@@ -59,6 +60,10 @@ forwarding paths.
 | `metadata` | `optional Struct` | Structured JSON-compatible metadata. |
 
 #### `NotificationAudience`
+
+This app-facing message is `wendy.system.v1.NotificationAudience`. It exposes
+`user_ids` and `roles` for Cloud v2 forwarding. The separate Cloud v2 message's
+`role_ids` field is not exposed or forwarded by this local API.
 
 User and role selectors have union semantics. At most 100 raw selectors may be
 supplied. Cloud resolves and deduplicates recipients inside the device's
@@ -122,10 +127,10 @@ CreateNotification(CreateNotificationRequest) → Notification
 
 Creates a Notification for one user. This RPC and `CreateNotificationRequest`
 are deprecated in their protobuf descriptors and remain intact for existing
-Dashboard and legacy clients. `wendycloud.v2` is no longer hypothetical — it is
-vendored at `Proto/wendycloud/v2/` and generated into `go/proto/gen/cloudpb/v2/`
-— and this RPC is still carried there, still marked `deprecated`. The migration
-marker records that it is to be removed from v2, not that it already has been.
+Dashboard and legacy clients. `wendycloud.v2` is generated from the pinned shared
+catalogue into `go/proto/gen/cloudpb/v2/`, where this RPC remains marked
+`deprecated`. The migration marker records that it is to be removed from v2,
+not that it already has been.
 
 ---
 
@@ -150,7 +155,7 @@ the Wendy agent stamps `app_id` from trusted container state.
 | Field | Type | Description |
 |---|---|---|
 | `organization_id` | `optional int32` (v1), `optional string` (v2) | Required for user-authenticated callers; omitted by provisioned devices. |
-| `audience` | `NotificationAudience` | Union of repeated `user_ids` and `roles` for Cloud v2. |
+| `audience` | `NotificationAudience` | For Cloud v2, the union of `user_ids`, `team_ids`, `roles`, and `role_ids`; see the Cloud v2 audience below. |
 | `title` | `string` | Notification title. |
 | `body` | `string` | Notification body. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
@@ -161,6 +166,27 @@ the Wendy agent stamps `app_id` from trusted container state.
 
 ACME-enrolled devices use the Cloud v2 service over device mTLS; the Agent
 forwards user and role selectors and omits the retired team selector.
+
+#### Cloud v2 `NotificationAudience`
+
+`wendycloud.v2.NotificationAudience` selects the deduplicated union of all supplied
+selectors. The shared contract permits at most 100 raw selectors across
+`user_ids`, `team_ids`, `roles`, and `role_ids` (duplicates count), and at most
+10,000 resolved users. Source-specific lower limits still apply, including the
+device-app limits in the [notification guide](/docs/guides/device-notifications).
+Role selectors select recipients; they do not grant recipients permissions.
+
+| Field | Type | Description |
+|---|---|---|
+| `user_ids` | `repeated string` | User IDs to include. |
+| `team_ids` | `repeated string` | Cloud team IDs. The app-facing forwarding API does not expose this Cloud selector. |
+| `roles` | `repeated OrganizationRole` | Deprecated built-in role enum selectors (field 3), retained for existing clients. |
+| `role_ids` | `repeated string` | Organization-role UUIDs (field 4), including built-in and tenant-defined custom roles available in the target organization. |
+
+Direct Cloud clients must wait for deployed server support before relying on
+`role_ids`: older servers silently ignore field 4 and can omit intended recipients.
+When supported, `roles` and `role_ids` select their deduplicated union. The local
+`wendy.system.v1` API and WendyKit flow above continue using `user_ids` and `roles`.
 
 #### `CreateNotificationV2Response`
 

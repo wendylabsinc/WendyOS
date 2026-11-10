@@ -20,18 +20,18 @@ Wendy Lite supports the following ESP32 targets:
 
 For each target, `wendy install` lists the specific boards Wendy Lite supports. Choosing a board selects a Wendy Lite firmware variant pre-configured with that board's flash size, RAM, and peripherals. However, most targets also have a **generic** board, representing any board that exposes the SoC over USB with no further customization. If your specific board isn't listed, you can probably use the generic one instead.
 
-Native app capability is firmware-specific; where the installer offers multiple choices, select a board variant labeled **native app support**. Native applications are built with ESP-IDF 5.5.4 through the ESP-IDF Installation Manager (`eim`).
+Native app capability is firmware-specific; where the installer offers multiple choices, select a board variant labeled **native app support**. Native applications are built with ESP-IDF 6.0.3 through the ESP-IDF Installation Manager (`eim`).
 
 ## Documentation
 
 ### User Guides
-- [Getting Started](getting-started.md)
-- [Native Apps](native-apps.md)
-- [WASM Apps](wasm-apps.md)
-  - [Host API Reference](host-api.md)
+- [Getting Started](./getting-started.md)
+- [Native Apps](./native-apps.md)
+- [WASM Apps](./wasm-apps.md)
+  - [Host API Reference](./host-api.md)
 
 ### Implementation Details
-- [Source Code](repository.md)
-- [Swift SDK Internals](swift-sdk.md)
-- [StdIO](stdio.md)
-- [WendyCom Protocol](wendy-com.md)
+- [Source Code](./repository.md)
+- [Swift SDK Internals](./swift-sdk.md)
+- [StdIO](./stdio.md)
+- [WendyCom Protocol](./wendy-com.md)

@@ -219,7 +219,18 @@ func TestServeRelaysTerminalStatusWhenUpstreamEndsWhileSending(t *testing.T) {
 	}
 }
 
-func TestServeProxiesUnaryAndStreamingRPCsAndExpires(t *testing.T) {
+func TestServeProxiesUnaryAndStreamingRPCsAndExpires(t *testing.T) { serveNormalRPCAndExpiry(t) }
+
+// Named pipes stop admission by closing their listener, rather than unlinking
+// an inode. Exercise that owner/drain path with normal real RPCs on the host.
+func TestServeNormalListenerCloseDrainContract(t *testing.T) {
+	previous := localIPCRequiresListenerClose
+	localIPCRequiresListenerClose = true
+	t.Cleanup(func() { localIPCRequiresListenerClose = previous })
+	serveNormalRPCAndExpiry(t)
+}
+
+func serveNormalRPCAndExpiry(t *testing.T) {
 	dir := shortTempDir(t)
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -684,7 +695,8 @@ func TestServeEvictsBrokerThatStopsAnswering(t *testing.T) {
 		Expected:        certs.WendyIdentity{OrgID: 7, EntityType: "asset", EntityID: "47"},
 		ParentPID:       os.Getpid(),
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	base, exit := exitFixtureContext(context.Background())
+	ctx, cancel := context.WithCancel(base)
 	defer cancel()
 	// A live parent plus stats-event touches used to renew the zombie's TTL off
 	// its own failed probes indefinitely; the hour-long TTL proves the exit
@@ -712,6 +724,9 @@ func TestServeEvictsBrokerThatStopsAnswering(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("broker kept serving (and holding its identity lock) after repeatedly failing to answer")
+	}
+	if cause := exit.first.Load(); cause == nil || cause.reason != "upstream_unavailable" {
+		t.Fatalf("eviction reason missing: %+v", cause)
 	}
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
 		t.Fatalf("socket remains after eviction: %v", err)

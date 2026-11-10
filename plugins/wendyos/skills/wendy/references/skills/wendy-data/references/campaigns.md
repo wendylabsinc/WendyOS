@@ -89,29 +89,85 @@ wendy data download <episode-id> --output ./incident-episode --device <selector>
 `deploy` strictly validates, persists, and arms the plan. It is not a dry-run
 validator. Use a filename to avoid the interactive picker. Capture the returned
 revision and any warnings. Inspect returns the canonical plan even without
-`--json`. An enrolled device's deployment registers `campaign:<name>` in Cloud
+`--json`. An enrolled device's deployment registers `sh.wendy.campaign.<name>` in Cloud
 Apps, using the matching operator session. Registration failures stop deployment;
 `--skip-cloud-registration` supports an intended offline deployment.
 
 Keep the ID returned by `trigger`. Allow `after_trigger` plus `drain` to finish,
 then inspect that episode instead of assuming the newest episode belongs to
-the test. `inspect` verifies sealed payload checksums. `download` resumes per
+the test. Until it is finalized, `wendy --json data status --device <selector>`
+lists it in `in_progress` as `recording`, `draining` or `sealing`. `inspect` verifies sealed payload checksums. `download` resumes per
 file, verifies checksums, and publishes the completed local directory atomically.
 Use a destination that preserves existing local data.
 
 For one-off capture, select returned source IDs explicitly when only a subset
-is wanted. With no source flags, `record` selects every healthy source.
+is wanted. With no source flags, `record` selects every healthy source: the
+table marks them `*`, and in `--json` an unhealthy source's `unusable_reason`
+says why it is left out.
+
+Microphone IDs are stable: `audio:<PipeWire node name>`, or
+`audio:alsa:<card>:<device>` without PipeWire. The old `audio:<number>` form
+still resolves, with a deprecation warning, in `--source`, `--exclude-source`,
+`--calibration` and campaign `audio:` selectors. It can name a different
+microphone after a reboot or replug, so do not write it into a plan.
 
 ```sh
 wendy --json data record --name commissioning --source <source-id> --device <selector>
+wendy --json data status --device <selector>
 wendy --json data stop --device <selector>
 ```
 
+`status` reports every episode not yet finalized, with its duration, trigger,
+sources, and size so far. `episodes` lists those in its separate `in_progress`
+array and keeps `episodes` finalized-only. An agent without `reports_in_progress`
+in its `status` response reports at most one, in `active`.
+
 `stop` finalizes the ad-hoc episode when present, otherwise the single active
-campaign episode. It is not a campaign-disarm command. Do not use it as general
-cleanup when another capture could be active. The current campaign CLI has
-`deploy`, `list`, `inspect`, and `trigger`; do not invent stop, delete, or replay
-subcommands.
+campaign episode. It does not disarm a campaign. Do not use it as general
+cleanup when another capture could be active. The campaign CLI has `deploy`,
+`list`, `inspect`, `trigger`, `arm`, `disarm`, and `remove`; do not invent
+stop or replay subcommands.
+
+`wendy data delete <episode-id>...` permanently deletes finalized episodes from
+the device, and `--all` deletes every finalized one. It cannot be undone, and an
+episode that has not been uploaded is lost, so delete only what the user asked
+to delete, naming the IDs. It confirms interactively; `--force` skips that and
+is required in non-interactive or `--json` mode. It refuses an episode still
+recording, draining or sealing, and one being downloaded or uploaded, and checks
+every ID before deleting any. Removing a campaign keeps its episodes. Agents
+that predate the command answer with a request to update the agent.
+
+## Switch a campaign off, or remove it
+
+```sh
+wendy data campaign disarm incident-review --device <selector>
+wendy data campaign arm incident-review --device <selector>
+wendy data campaign remove incident-review --device <selector>
+```
+
+- `disarm` keeps the plan, revision, and episodes, but stops the campaign's
+  triggers and agent inference and releases its camera pre-roll, so the camera
+  is no longer held for it. `list` and `inspect` show `disarmed`, and
+  `inference_status.state` is `disarmed`. Manual `trigger` is refused. A
+  recording in progress finishes its `after_trigger` window and seals normally.
+- The state survives agent restarts and reboots. Redeploying a disarmed
+  campaign stores the new plan and keeps it disarmed; only `arm` switches it
+  back on. Setting `inference.enabled: false` stops only the model, so prefer
+  `disarm` to switch a campaign off.
+- `remove` deletes the plan and keeps every episode, which still upload under
+  the removed plan's upload policy. It refuses while the campaign is recording
+  and names the episode; `--force` stops and seals that recording first. Do not
+  pass `--force` unless the user accepts ending that recording early.
+- `disarm` and `remove` wait for the campaign's inference to stop, after any
+  episode that is being sealed. If inference is still stopping after 10
+  seconds, they succeed with a warning saying so. After a disarm, run
+  `inspect` again until `inference_status.state` is `disarmed`, not
+  `stopping`, before reporting that the camera is free.
+- These act on the connected device only, even when the plan names a `fleet`.
+  To keep a fleet campaign off on one device, disarm it: a removed campaign
+  returns, armed, if the plan is deployed again.
+- An agent that predates these commands is reported as needing
+  `wendy device update`.
 
 Check the manifest's trigger, campaign revision, source identities and status,
 requested/achieved pre-roll, capture-policy notes, drops, clock evidence,
@@ -147,6 +203,29 @@ and downloads model files, requiring network access and storage outside the
 episode quota. Remote model code is disabled. Check `inference_status`, its
 per-camera states, and actual events after deployment.
 
+Each scored frame produces a `prediction` record for `events.jsonl`. Its
+`detections[].box` is `[x1, y1, x2, y2]` in pixels of the scored picture, and
+`detections[].box_norm` is the same corners clamped to the picture and
+normalised to `[0, 1]`. The record's `width` and `height` give the picture's
+size. Draw from `box_norm` when the picture is shown at another size. Older
+records have only `box` and no picture size.
+
+`accelerator` chooses the hardware: `auto` (the default), `cpu`, or `tensorrt`.
+On a Jetson, `auto` runs a `yolo_onnx` model through TensorRT on the GPU, and
+every other device or backend runs on the CPU. The first TensorRT start builds
+an engine in the background, which takes minutes and about 2.2 GB of memory;
+`auto` keeps detecting on the CPU meanwhile and switches once the engine
+matches the CPU's detections. Under `auto` the build first waits a random
+delay of up to 20 minutes, and every build waits for free memory and for 2
+idle CPUs, so `engine.state` may read `scheduled`, `waiting_for_memory` or
+`waiting_for_cpu` for a while. A busy CPU delays the build by at most 30
+minutes (`engine.build_by`); then it builds at the lowest priority.
+`waiting_for_cpu` is not degraded. `tensorrt` never runs on the CPU and requires
+`backend: yolo_onnx`. Check `inference_status.accelerator`: `active` is what
+runs, `engine.state` is the build, and `degraded: true` with a `reason` means a
+usable GPU is not being used. Do not promise GPU speed until `active` is
+`tensorrt`.
+
 `notify` chooses one delivery condition:
 
 ```yaml
@@ -181,3 +260,10 @@ enforced instead, and deployment warns. It is the smaller of 20% of the store's
 filesystem and `WENDY_DATA_MAX_BYTES`, default 50 GiB, while reserving
 `WENDY_DATA_RESERVE_BYTES`, default 5 GiB. Unuploaded episodes can be evicted as
 a last resort. `export.annotation: cvat` records labeling intent only.
+
+On WendyOS the store is `/var/lib/wendy/wendy-data/episodes`, on the `/data`
+partition; it stays on the root disk only where `/var/lib/wendy` is not a
+separate, larger filesystem. Do not tell users to set `WENDY_DATA_DIR` unless
+they want a custom location. A "Wendy Data can't record" error names the disk,
+its free space and the reserve; read the agent's `Wendy Data episode store` log
+line before changing anything.

@@ -1,7 +1,7 @@
 Controls whether a device will run image builds submitted by other people with
 [`wendy run --build-host`](../run.md#remote-build-host).
 
-For a complete example that sends one build to several devices, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+For a complete example that sends one build to several devices, follow [Build once, deploy to several devices](/docs/guides/fleet-deployment).
 
 ```sh
 wendy device build-host enable  --device spark-office
@@ -61,6 +61,9 @@ device, so a build for one target cannot deliver to another.
 A device whose agent predates chunked delivery receives a registry push instead,
 as does a build run with `--chunking=off`. The build log says which route it took.
 
+These delivery modes apply to the build host's own connection to the target.
+They are unchanged by the separate [CLI upload rules for Cloud v2](../run.md#uploads-over-cloud-v2).
+
 ## Delivery credentials
 
 On the registry-push route, the agent exposes a loopback endpoint for BuildKit to
@@ -80,6 +83,7 @@ before pointing a build at it:
 Builder role: enabled
 BuildKit:     available (v0.32.2)
 Cache:        /data/buildkit/state (823.3 GiB free of 911.7 GiB)
+Internet:     reachable
 Platform:     linux/arm64
 Builds:       linux/arm64 natively
 ```
@@ -92,6 +96,15 @@ Builds:       linux/arm64 natively
 - **Cache** — BuildKit's state directory and the free and total space on its
   filesystem. If it reports `inspection failed`, remote builds are refused
   until the cache location and available space can be determined.
+- **Internet** — whether the host can resolve and connect to Docker Hub's
+  registry (`registry-1.docker.io:443`), where base images come from by
+  default. A device connected over USB alone reports `not reachable` with the
+  reason, such as `cannot resolve registry-1.docker.io`; connect it with
+  `wendy device wifi connect --device <host>` or plug in ethernet.
+  `wendy run --build-host` warns before building on such a host rather than
+  refusing, because a build whose layers are all cached, or whose base images
+  come from a local registry, can still succeed. An agent that predates the
+  check shows no `Internet` line.
 - **Builds** — the platforms this host builds natively. Only its own platform is
   claimed. Emulated platforms are reported empty rather than guessed at, so a
   cross-architecture build is refused up front instead of silently running under

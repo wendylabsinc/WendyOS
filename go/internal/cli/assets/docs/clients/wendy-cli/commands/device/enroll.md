@@ -1,7 +1,7 @@
 # `wendy device enroll`
 
 Add a device to your Wendy Cloud organization so you can manage it remotely.
-For a new board, first follow its [installation guide](/docs/#2-set-up-a-device).
+For a new board, first follow its [installation guide](/docs/installation).
 For Wendy Lite, use the [USB enrollment guide](/docs/advanced/cli/lite-enrollment).
 
 ## Enroll a device
@@ -17,14 +17,13 @@ wendy device enroll --device playful-reed.local --name lab-pi-01
 Replace the address and name. The CLI asks which organization to use when you
 have more than one sign-in. Keep the device powered and connected until the
 command finishes, then run `wendy cloud discover` to check its Cloud presence.
-`wendy cloud enroll-device` uses the same enrollment workflow.
+`wendy cloud enroll-device` is an alias for this command.
 
 The CLI normally renews a nearly expired sign-in automatically. If it asks you
 to sign in again, follow the prompt; there is no need to log out first.
 
-> `wendy device enroll` is an advanced command and is hidden from
-> `wendy device --help`. The interactive `wendy device setup` wizard also helps
-> configure Wi-Fi and enrollment.
+> The interactive `wendy device setup` wizard also helps configure Wi-Fi and
+> enrollment.
 
 ## Choose a name
 

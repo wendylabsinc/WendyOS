@@ -58,6 +58,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          # sitemap.xml dates each page by its source file's last commit, which
+          # needs full history; a shallow clone leaves those dates out.
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
@@ -356,12 +360,19 @@ jobs:
             response_file="$(mktemp)"
             curl -fsS --max-time 30 -o "${response_file}" "${DOCS_URL}"
             grep -q "WendyOS Docs" "${response_file}"
+
+            # rsync sets content types from file extensions. Agents fetch page
+            # Markdown (<page>.md) and expect text/markdown.
+            headers="$(curl -fsSI --max-time 30 "${DOCS_URL}index.md")"
+            grep -qi '^content-type: text/markdown' <<< "${headers}"
           done <<< "${DEPLOY_PATHS}"
 
-      - name: Publish root llms.txt
-        # Agents look for llms.txt at the site root (https://llmstxt.org), but each
-        # deploy path only has its own copy. Stable releases publish the latest/
-        # copies at the root; nightly releases leave the root unchanged.
+      - name: Publish root discovery files
+        # Agents look for llms.txt at the site root (https://llmstxt.org) and
+        # crawlers only read robots.txt there, but each deploy path only has its
+        # own copy. Stable releases publish the latest/ copies at the root;
+        # nightly releases leave the root unchanged. The root 404.html is the
+        # bucket's error page (see development/docs-site.md).
         if: needs.build.outputs.is_release_deploy == 'true'
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -371,14 +382,21 @@ jobs:
           set -euo pipefail
 
           if ! grep -qx 'latest' <<< "${DEPLOY_PATHS}"; then
-            echo "Not a stable release deploy; leaving the root llms.txt unchanged."
+            echo "Not a stable release deploy; leaving the root files unchanged."
             exit 0
           fi
 
-          for file in llms.txt llms-full.txt; do
+          declare -A CONTENT_TYPES=(
+            [llms.txt]="text/plain; charset=utf-8"
+            [llms-full.txt]="text/plain; charset=utf-8"
+            [robots.txt]="text/plain; charset=utf-8"
+            [sitemap.xml]="application/xml; charset=utf-8"
+            [404.html]="text/html; charset=utf-8"
+          )
+          for file in "${!CONTENT_TYPES[@]}"; do
             test -s "out/latest/${file}"
             gcloud storage cp "out/latest/${file}" "gs://${DOCS_BUCKET}/${file}" \
-              --content-type="text/plain; charset=utf-8" \
+              --content-type="${CONTENT_TYPES[${file}]}" \
               --cache-control="public, max-age=300" \
               --quiet \
               --project="${GCP_PROJECT_ID}"
@@ -388,6 +406,17 @@ jobs:
           response_file="$(mktemp)"
           curl -fsS --max-time 30 -o "${response_file}" "https://docs.wendy.dev/llms.txt?deploy=${GITHUB_RUN_ID}"
           grep -q "https://docs.wendy.dev/latest/" "${response_file}"
+          curl -fsS --max-time 30 -o "${response_file}" "https://docs.wendy.dev/sitemap.xml?deploy=${GITHUB_RUN_ID}"
+          grep -q "<loc>https://docs.wendy.dev/latest/</loc>" "${response_file}"
+          curl -fsS --max-time 30 -o "${response_file}" "https://docs.wendy.dev/robots.txt?deploy=${GITHUB_RUN_ID}"
+          grep -qx "Sitemap: https://docs.wendy.dev/sitemap.xml" "${response_file}"
+
+          # Missing pages get 404.html only once the bucket's error page is set.
+          status="$(curl -sS --max-time 30 -o "${response_file}" -w '%{http_code}' \
+            "https://docs.wendy.dev/latest/missing-page-${GITHUB_RUN_ID}/" || true)"
+          if [[ "${status}" != "404" ]] || ! grep -qi "<html" "${response_file}"; then
+            echo "::warning::Missing pages do not return the 404 page (HTTP ${status}); set the bucket's error page as described in development/docs-site.md"
+          fi
 
       - name: Deploy vanity redirects
         if: >-

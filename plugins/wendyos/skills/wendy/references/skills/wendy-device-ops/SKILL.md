@@ -1,6 +1,6 @@
 ---
 name: wendy-device-ops
-description: "Use for Wendy CLI or MCP device operations on WendyOS and Wendy Lite: discover devices, inspect hardware and software, configure WiFi, update the agent or OS, use cameras, Bluetooth or Cloud tunnels, or gather evidence before debugging."
+description: "Use for Wendy CLI or MCP device operations on WendyOS and Wendy Lite: discover devices, inspect hardware and software, configure WiFi, pair SensorLink sources, update the agent or OS, use cameras, Bluetooth or Cloud tunnels, or gather evidence before debugging."
 ---
 
 # Wendy Device Ops Workflow
@@ -25,9 +25,11 @@ Bound discovery so agents do not hang:
 wendy discover --json --type all --timeout 5s
 ```
 
-The CLI reaches a device's agent over gRPC on TCP port 50051, through USB or
-LAN. On Linux, a USB-C tethered device needs a one-time host setup: ask the user
-to run `wendy discover` in a terminal and accept its USB-C setup prompt (it
+Ordinary LAN discovery and direct device management work even when Wendy Net is
+disabled on the device. Use the returned selector and advertised port; enrolled
+WendyOS agents commonly use TLS on port 50052, while unprovisioned agents use
+port 50051. On Linux, a USB-tethered device needs a one-time host setup: ask the user
+to run `wendy discover` in a terminal and accept its USB setup prompt (it
 needs sudo). An empty scan can also mean a board without WendyOS; use
 `wendy-device-install` for that.
 
@@ -40,6 +42,12 @@ wendy device unset-default
 ```
 
 Passing the hostname to `set-default` avoids the interactive picker. Change the default only when that is part of the user's task. For diagnostic commands, use `--device <target>` to select the device without changing the default.
+
+## Reach devices through Wendy Net
+
+Before joining, selecting a mesh destination or disconnecting, read
+[Wendy Net access](references/wendy-net.md). Nearby routers are discovered
+automatically; choose only the destination device.
 
 ## Inspect device state
 
@@ -81,6 +89,18 @@ wendy device wifi rank --order "Home,Office,Cafe" --device <hostname>
 
 Do not echo or store WiFi passwords in issues, PRs, reusable docs, or final summaries. If a password was passed on the command line, avoid copying the full command into shared output.
 
+## SensorLink pairing
+
+Pair a SensorLink source, such as an ESP32 camera, with the consuming device only when the user asks:
+
+```bash
+wendy --json device pair --device <hostname> --list
+wendy --json device pair --device <hostname> --sensorlink "<source>"
+wendy --json device pair --device <hostname> --forget "<source>"
+```
+
+Name the source by its name, asset ID or principal URI; `--forget` takes the pairing name `--list` shows. When none or several match, the error lists candidates; ask the user instead of guessing.
+
 ## Agent update
 
 Only update the agent when the user asks, when the device is clearly behind the CLI, or when a fix requires a newer agent. Prefer checking first:
@@ -104,29 +124,8 @@ wendy --json device update --binary ./path/to/wendy-agent --device <hostname>
 
 ## With MCP tools
 
-The Wendy MCP server covers the same operations on its connected device. Enable
-the groups named below with `wendy_tools(groups=[...])` first; each call replaces
-the enabled set, so list every group you still need.
-
-- Inspect (core): `device_info` (versions, storage, battery) and
-  `hardware_capabilities(category=...)`.
-- Default device (`setup`): `device_set_default(address=...)`.
-- WiFi (`setup`): `wifi_status`, `wifi_list`, `wifi_known_networks`,
-  `wifi_connect(ssid=..., password=...)` and `wifi_disconnect`. Connecting drops
-  the current network, so the session may lose the device. Forget and rank have
-  no MCP tool; use the CLI.
-- Updates (`setup`): `device_update_agent` (`nightly`, `binary_path`) updates only
-  the agent, verifies it and reconnects. `os_update` starts an OS update;
-  `os_update_status` reports whether it committed or rolled back, and why.
-- Cameras and Bluetooth (`hardware`): `camera_list`, `camera_controls`,
-  `camera_set_control`, `camera_snapshot(device_id=...)` (activates the camera,
-  so ask first), `bluetooth_scan`, `bluetooth_connect` and `bluetooth_disconnect`.
-- Cloud (`cloud`): `cloud_discover`, `cloud_connect`, `cloud_ping`, and
-  `cloud_tunnel(local_port=..., remote_port=...)` with `cloud_tunnel_list` and
-  `cloud_tunnel_close(id=...)` for port forwards owned by this server.
-- Enrollment (`setup`): `cloud_enroll_device` uses the current Cloud login;
-  `provisioning_start` needs a supplied enrollment token; `provisioning_status`
-  checks the result.
+Read [MCP tools and groups](references/mcp-tools.md) before device operations.
+It lists supported tools, required groups and when to use the CLI instead.
 
 ## Routing
 

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -23,19 +24,21 @@ import (
 
 type discoveryV2Server struct {
 	cloudpbv2.UnimplementedAssetServiceServer
-	t     *testing.T
-	count int32
-	fail  bool
+	t            *testing.T
+	count        int32
+	fail         bool
+	organization string
 }
 
 func discoveryV2Auth(t *testing.T, count int32, fail bool) *config.AuthConfig {
 	t.Helper()
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := grpc.NewServer()
-	cloudpbv2.RegisterAssetServiceServer(srv, &discoveryV2Server{t: t, count: count, fail: fail})
+	cloudpbv2.RegisterAssetServiceServer(srv, &discoveryV2Server{t: t, count: count, fail: fail, organization: testOperatorTenant})
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	auth := oidcEnrollmentAuth(t)
@@ -246,8 +249,9 @@ func (s *discoveryV2Server) ListAssets(req *cloudpbv2.ListAssetsRequest, stream 
 		}
 		if err := stream.Send(&cloudpbv2.ListAssetsResponse{
 			Asset: &cloudpbv2.Asset{
-				Id:   fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1),
-				Name: name, OsType: &osType, Architecture: &arch,
+				Id:             fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1),
+				OrganizationId: s.organization,
+				Name:           name, OsType: &osType, Architecture: &arch,
 			}, Total: s.count,
 		}); err != nil {
 			return err
@@ -329,6 +333,38 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 	}
 }
 
+func TestCloudDiscoveryJSONPreservesPKIDeviceBinding(t *testing.T) {
+	const assetID = "00000000-0000-4000-8000-000000000001"
+	const deviceID = "00000000-0000-4000-8000-000000000002"
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			asset := &cloudpbv2.Asset{Id: assetID, Name: "Cloud Thor"}
+			if bound {
+				deviceName := deviceID
+				asset.PkiDeviceName = &deviceName
+			}
+			row := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: assetID}
+			encoded, err := json.Marshal(row.info(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if fields["id"] != assetID {
+				t.Fatalf("PKI binding changed the Cloud routing ID: %s", encoded)
+			}
+			if bound && fields["pkiDeviceName"] != deviceID {
+				t.Fatalf("Cloud row lost its different PKI device identity: %s", encoded)
+			}
+			if !bound && fields["pkiDeviceName"] != nil {
+				t.Fatalf("older row invented an explicit PKI binding: %s", encoded)
+			}
+		})
+	}
+}
+
 type discoveryV1Server struct {
 	cloudpb.UnimplementedAssetServiceServer
 }
@@ -398,5 +434,24 @@ func TestCloudPickerUsesV2AndPreservesUUID(t *testing.T) {
 	}
 	if got, err := resolveCloudDiscoveryDevice(duplicates, selected.key); err != nil || got.key != selected.key {
 		t.Fatal("exact UUID did not resolve")
+	}
+}
+
+// The offline re-query only explains a miss. The legacy path skips seeding
+// there too (pickCloudDeviceFromRoster).
+func TestUUIDOfflineRequeryDoesNotSeedPins(t *testing.T) {
+	auth := discoveryV2Auth(t, 1, false)
+	if _, err := pickCloudDiscoveryDevice(context.Background(), auth, "offline-device", ""); !errors.Is(err, errDeviceOffline) {
+		t.Fatalf("want an offline device error, got %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.DevicePinFor("online-device"); !ok {
+		t.Fatal("online lookup did not seed its roster")
+	}
+	if pin, ok := cfg.DevicePinFor("offline-device"); ok {
+		t.Fatalf("offline re-query seeded a pin: %+v", pin)
 	}
 }

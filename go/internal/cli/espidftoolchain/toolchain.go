@@ -19,7 +19,7 @@ import (
 
 // DefaultVersion is the ESP-IDF version used to build Wendy Lite native apps,
 // named as eim (the ESP-IDF Installation Manager) names it.
-const DefaultVersion = "v5.5.4"
+const DefaultVersion = "v6.0.3"
 
 // EIMFormula is Espressif's Homebrew formula for eim, which has macOS and Linux
 // builds. It is tap-qualified so a formula of the same name in another tap

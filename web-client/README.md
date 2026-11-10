@@ -197,31 +197,48 @@ Sign-out is local; it does not log you out of other Wendy applications.
 
 ## Cloud workspace
 
-Choose **Networks** to inspect local net membership, direct peer links, and selected
-routes. The browser reads snapshots from the signed-in Cloud inventory. The
-desktop combines LAN discovery with the current CLI Cloud inventory. Each
-snapshot uses an independent authenticated connection, so viewing networks does
-not replace the device dashboard connection.
+Choose **Networks** to inspect devices, their direct mesh connections and
+selected routes. Select a node to see its reported next hops, carrier types,
+route costs and announcement expiry. A route cost is not a hop count.
 
-Devices are grouped by their verified tenant and device identity. A device seen
-only through another peer remains visible without claiming that it is reachable
-from this client. Selecting a node shows its reported next hops, carrier types,
-route costs, and signed announcement expiry. A signed route authorizes its
-origin and prefix; it does not prove that an intermediary forwards traffic.
+The desktop combines LAN, physical Lite, Cloud and mesh-only devices. The browser
+uses devices from the signed-in Cloud inventory. Different access paths to the
+same enrolled device share one report. A device learned through a neighbour
+remains visible even when this client cannot connect to it directly.
 
-The view polls at most four devices concurrently, then waits ten seconds before
-the next batch. **Pause** stops new reads. Snapshots older than thirty seconds
-are marked stale. An active local network also needs a valid, recent device capture time.
-Failed reads retain the last snapshot visibly as stale. Older agents
-appear as unsupported until updated. Offline, denied, and unverified devices
-remain explicit rather than becoming empty healthy networks.
+On the desktop, **This computer's CLI router** shows the existing background CLI
+router. Enable it explicitly with `wendy net connect`; opening
+Networks does not start it. Operator routers appear separately from enrolled
+devices and show their operator identity and installation UUID. The browser
+cannot read a desktop's private CLI router.
 
-The underlying read-only API is
-`WendyLocalMeshAdminService.GetLocalMeshTopology`, with the same tenant-scoped
-operator authorization as the existing net administration API. The CLI exposes
-it as `wendy --device HOST:PORT --json device wendy-net topology`.
-`--observation` adds a typed result envelope for clients handling partial
-failures. Neither the API nor this view enables the net or changes its policy.
+WendyOS and Lite reports appear in the same view. C5 can report its routing
+state; constrained C6 devices explicitly show a **partial** directory. A partial
+report omits information the device does not retain, so missing details are not
+evidence that another part of the mesh is disconnected. Cloud reporting requires
+a Cloud-enabled firmware profile; the constrained C6 profile disables Cloud.
+
+Slow or unavailable devices do not stop other devices from updating. **Pause**
+stops new refreshes. Failed reads retain the previous report and mark it stale.
+Offline, denied, unverified and unsupported reporters remain distinct from an
+empty healthy mesh. Older firmware may need an update to supply topology.
+
+A C6 has one incoming native mesh management/SensorLink slot. Its topology report may
+be unavailable while another client, such as a SensorLink consumer, occupies
+that slot. Close the other client or retry later; neighbouring reports can still
+show the C6. Reading topology requires operator permissions and does not extend
+a SensorLink-only connection's permissions.
+
+The equivalent CLI read is:
+
+```sh
+wendy --device SELECTOR --json net topology
+wendy net topology --local-cli
+```
+
+Use the selector from discovery. `--observation` adds a result envelope for
+clients handling partial or failed observations. Neither this command nor the
+Networks view enables mesh participation or changes device policy.
 
 The sidebar shows the signed-in email from OIDC UserInfo and the organization
 name from Cloud's v2 OrganizationService. UserInfo must match the authenticated
@@ -282,6 +299,9 @@ release commit reproduces the pin.
 | `init` | `browserauth.Settings` JSON | `true`; once, before sign-in. Services are then called directly, not through `/api/wendy-auth` |
 | `auth-begin` | `{redirect, email?, issuer?}`; `issuer` pins an organization's realm | authorize URL |
 | `auth-complete` | `{code, state, issuer}` | profile |
+| `auth-redirect-begin` | `{redirect, email?, issuer?}` | `{url, pending}`; pending is an opaque handle |
+| `auth-redirect-complete` | `{pending, redirect, code, state, issuer, error?}` | profile |
+| `auth-redirect-cancel` | `{pending}` | `true`; removes this attempt |
 | `auth-restore` | `{tenant?, subject?, refresh?}` | that organization's profile, or `null`; `refresh: true` always rotates the refresh token once and fails the restore if that exchange fails |
 | `credential` | `{tenant?}` | `{profile, algorithm, chainDER, accessToken, publicJWK}`; refreshes a token with under a minute left |
 | `sign` | `{tenant?, bytes: Uint8Array}` | `{signature: Uint8Array}` with the operator key |
@@ -322,6 +342,53 @@ An `issuer` for `auth-begin` must be a Wendy auth realm,
 rejected, compared without case. The callback must return from that same realm;
 `auth-complete` with a different `issuer` fails, and sign-in must start again.
 
+For same-tab sign-in, call `auth-redirect-begin`, save only `pending` in
+**tab-scoped sessionStorage**, and navigate to `url` only after both succeed.
+Pass `redirect: location.origin + "/auth/callback"`: the callback compares it
+exactly, so a host with upper-case letters or a default port such as `:443` is
+refused at begin, as with `auth-begin`.
+If sessionStorage fails, call `auth-redirect-cancel` and stay on the page.
+Cancel an abandoned handle before replacing it. The worker stores the PKCE
+verifier/state, expected issuer (empty for universal login), exact redirect,
+start time and complete environment settings in the separate
+`wendy-auth-pending` IndexedDB database. Records are AES-GCM wrapped under a
+non-extractable WebCrypto wrapping key, limited to 8 KiB, and expire after ten
+minutes. An origin keeps at most 32 live attempts; beyond that a new attempt
+replaces the oldest, whose callback then fails as missing and must start
+again. Subsequent pending operations remove expired, future-dated or abandoned
+expired records. There is no credential schema upgrade, and pending attempts
+never appear as organization slots.
+
+After navigation, start a new worker with the same `init` settings. Read the
+handle from sessionStorage and pass it to `auth-redirect-complete` along with
+`redirect: location.origin + location.pathname` and the callback's `code`,
+`state`, `iss` (as `issuer`) and optional OAuth `error`. Use empty strings for
+absent callback fields. Remove the tab handle when the attempt finishes; strip
+OAuth parameters from browser history after capturing them. Do not pass a
+stored redirect as the current callback location. The worker atomically takes
+and deletes the record before checking its version, size, time, state, issuer,
+redirect and settings. Missing, malformed, changed or replayed transactions
+fail before any token/certificate request; storage failure refuses navigation.
+An error callback validates state/settings/redirect/expiry and validates `iss`
+if present, then reports the bounded OAuth error code without generating a key
+or contacting Auth/PKI. A successful callback always requires a trusted issuer.
+
+The redirect flow creates the ML-DSA-65 operator/DPoP key **after callback
+validation and before token exchange**. Authorization is not pre-bound with
+`dpop_jkt`; Auth binds the token to the token-endpoint proof key. That same key
+signs the CSR, PKI proof and later Cloud requests. No signing key or seed is
+persisted in the pending record or returned to the page. The existing wrapped
+successful-session store, refresh and restore stay unchanged. The Go ML-DSA
+signing key is software-held; **only the AES-GCM wrapping key is a WebCrypto
+non-extractable key**. This preserves the existing custody model, including its
+same-origin script/XSS limitations. The legacy `auth-begin`/`auth-complete`
+in-memory API remains available to existing callers.
+
+Embedding clients must adopt a published release containing these additive
+operations before relying on them. A local bundle can verify integration;
+it is not a published release pin. No popup fallback or weaker isolation
+headers are needed for this redirect protocol.
+
 Each organization keeps its own saved sign-in, keyed by tenant and operator.
 The operator key never leaves the worker. Cloud device sessions still require
 the local browser relay.
@@ -339,6 +406,11 @@ go test -race ./go/internal/cli/browserauth
 node go/experiments/wasmgrpc/auth-worker.mjs
 node web-client/tests/credential-store.test.mjs
 node web-client/tests/wendy-web-bridge.test.mjs   # after npm run build:wasm
+# Optional: installed Playwright + browsers (PLAYWRIGHT_MODULE may name its path;
+# WEBKIT_EXECUTABLE may select an existing WebKit installation).
+node web-client/tests/redirect-navigation.mjs chromium
+node web-client/tests/redirect-navigation.mjs webkit
+node web-client/tests/redirect-navigation.mjs webkit --mobile
 GOOS=js GOARCH=wasm go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth
 node --experimental-strip-types web-client/tests/telemetry.test.mjs
 node --experimental-strip-types --test web-client/tests/auth-proxy.test.mjs
@@ -358,3 +430,12 @@ The agent worker integration fixture lives in `go/experiments/wasmgrpc`.
 
 Browser UI automation has not been run. Optional WebMCP read-only workspace and
 navigation tools are feature-detected; credentials are never exposed to them.
+
+The redirect navigation probe serves the exact raw gzip bundle and synthetic
+OAuth pages through browser-local HTTPS routing. It tests full top-level
+navigation, destruction of the old document/worker, wrapped storage and the
+tab handle surviving, error completion and replay refusal at Dev/Production
+origins. It performs no real sign-in, token exchange or certificate issuance;
+those protocol and same-key checks run in the Go fixture. Physical iOS and a
+real federated account login remain separate integration QA. Embedding clients
+also need to verify their actual static-host delivery and published asset pin.

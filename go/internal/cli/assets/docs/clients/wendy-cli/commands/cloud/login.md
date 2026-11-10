@@ -39,7 +39,7 @@ certificate. See [service-account setup](../auth/login.md#service-account-login)
 `wendy cloud login` signs in to Cloud v2. For devices still enrolled in Cloud
 v1, `wendy cloud login --legacy` opens the legacy dashboard at `cloud.wendy.sh`.
 The flag is hidden from ordinary CLI help but remains supported. It cannot be
-combined with `--email`, `--issuer`, `--service-account`, or `--api-key`.
+combined with `--email`, `--issuer`, or `--service-account`.
 
 Signing in to v2 does not move v1 devices. See the [Cloud guide](/docs/cloud)
 for the Cloud v2 and Legacy workflows, and [Moving to Cloud v2](/docs/cloud-migration)

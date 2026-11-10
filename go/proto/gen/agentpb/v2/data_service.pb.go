@@ -170,14 +170,23 @@ func (x *DataEventsResponse) GetNotifications() bool {
 }
 
 type DataSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
-	ClockDomain   string                 `protobuf:"bytes,3,opt,name=clock_domain,json=clockDomain,proto3" json:"clock_domain,omitempty"`
-	Healthy       bool                   `protobuf:"varint,4,opt,name=healthy,proto3" json:"healthy,omitempty"`
-	Detail        string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Kind        string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	ClockDomain string                 `protobuf:"bytes,3,opt,name=clock_domain,json=clockDomain,proto3" json:"clock_domain,omitempty"`
+	Healthy     bool                   `protobuf:"varint,4,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	Detail      string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
+	// A short name for people, such as "HD Pro Webcam C920", without the driver
+	// strings detail carries (ALSA and PipeWire node names, transport enums). It
+	// is a label, not an identifier: select a source by id. Empty from agents
+	// that predate it, where detail is the only description.
+	Name string `protobuf:"bytes,6,opt,name=name,proto3" json:"name,omitempty"`
+	// Why the source is not healthy, in a few words a person can act on, such as
+	// "no login stored", "camera offline" or "silent audio-hub channel". Set only
+	// when healthy is false. Empty from agents that predate it.
+	UnusableReason string `protobuf:"bytes,7,opt,name=unusable_reason,json=unusableReason,proto3" json:"unusable_reason,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DataSource) Reset() {
@@ -241,6 +250,20 @@ func (x *DataSource) GetHealthy() bool {
 func (x *DataSource) GetDetail() string {
 	if x != nil {
 		return x.Detail
+	}
+	return ""
+}
+
+func (x *DataSource) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DataSource) GetUnusableReason() string {
+	if x != nil {
+		return x.UnusableReason
 	}
 	return ""
 }
@@ -698,8 +721,25 @@ type DataEpisode struct {
 	StartedUnixNanos int64                  `protobuf:"varint,4,opt,name=started_unix_nanos,json=startedUnixNanos,proto3" json:"started_unix_nanos,omitempty"`
 	SizeBytes        int64                  `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	BootId           string                 `protobuf:"bytes,6,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// The fields below are set only on an episode listed in in_progress (see
+	// DataStatusResponse). There, state is "recording", "draining" (capture has
+	// stopped and the episode still accepts late application records) or
+	// "sealing" (its files are being remuxed and checksummed), and size_bytes is
+	// what the episode holds on disk so far.
+	//
+	// What started it: "manual" for `wendy data record`, otherwise the campaign
+	// trigger's reason, such as "event:person_detected".
+	TriggerReason string `protobuf:"bytes,7,opt,name=trigger_reason,json=triggerReason,proto3" json:"trigger_reason,omitempty"`
+	// The campaign that started it; empty for `wendy data record`.
+	CampaignName string `protobuf:"bytes,8,opt,name=campaign_name,json=campaignName,proto3" json:"campaign_name,omitempty"`
+	// IDs of the sources it records. A campaign source that did not resolve at
+	// trigger is left out, because nothing of it is being recorded.
+	Sources []string `protobuf:"bytes,9,rep,name=sources,proto3" json:"sources,omitempty"`
+	// How long it has captured, measured on the device's CLOCK_BOOTTIME so a
+	// wrong wall clock cannot distort it. It stops growing when capture stops.
+	DurationNanos int64 `protobuf:"varint,10,opt,name=duration_nanos,json=durationNanos,proto3" json:"duration_nanos,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DataEpisode) Reset() {
@@ -774,11 +814,48 @@ func (x *DataEpisode) GetBootId() string {
 	return ""
 }
 
+func (x *DataEpisode) GetTriggerReason() string {
+	if x != nil {
+		return x.TriggerReason
+	}
+	return ""
+}
+
+func (x *DataEpisode) GetCampaignName() string {
+	if x != nil {
+		return x.CampaignName
+	}
+	return ""
+}
+
+func (x *DataEpisode) GetSources() []string {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
+func (x *DataEpisode) GetDurationNanos() int64 {
+	if x != nil {
+		return x.DurationNanos
+	}
+	return 0
+}
+
 type DataStatusResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Active        *DataEpisode           `protobuf:"bytes,1,opt,name=active,proto3" json:"active,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One open episode: the ad-hoc one, else the earliest-started campaign
+	// episode, else a draining one. Kept for clients that predate in_progress.
+	Active *DataEpisode `protobuf:"bytes,1,opt,name=active,proto3" json:"active,omitempty"`
+	// Every episode that has not been finalized yet, newest first: recording,
+	// draining or sealing. Episodes lists only finalized episodes, so without
+	// this a recording is invisible until it ends.
+	InProgress []*DataEpisode `protobuf:"bytes,2,rep,name=in_progress,json=inProgress,proto3" json:"in_progress,omitempty"`
+	// True from agents that fill in_progress. An older agent reports at most
+	// one open episode, in active, and none of the in-progress fields.
+	ReportsInProgress bool `protobuf:"varint,3,opt,name=reports_in_progress,json=reportsInProgress,proto3" json:"reports_in_progress,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DataStatusResponse) Reset() {
@@ -818,11 +895,33 @@ func (x *DataStatusResponse) GetActive() *DataEpisode {
 	return nil
 }
 
+func (x *DataStatusResponse) GetInProgress() []*DataEpisode {
+	if x != nil {
+		return x.InProgress
+	}
+	return nil
+}
+
+func (x *DataStatusResponse) GetReportsInProgress() bool {
+	if x != nil {
+		return x.ReportsInProgress
+	}
+	return false
+}
+
 type DataEpisodesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Episodes      []*DataEpisode         `protobuf:"bytes,1,rep,name=episodes,proto3" json:"episodes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Finalized episodes only, newest first, exactly as before in_progress
+	// existed, so a script that downloads every entry keeps working.
+	Episodes []*DataEpisode `protobuf:"bytes,1,rep,name=episodes,proto3" json:"episodes,omitempty"`
+	// The same list as DataStatusResponse.in_progress, without any episode that
+	// finalized while this response was built. Empty from older agents.
+	InProgress []*DataEpisode `protobuf:"bytes,2,rep,name=in_progress,json=inProgress,proto3" json:"in_progress,omitempty"`
+	// True from agents that fill in_progress, so an empty in_progress means
+	// nothing is in progress and a client need not also ask Status.
+	ReportsInProgress bool `protobuf:"varint,3,opt,name=reports_in_progress,json=reportsInProgress,proto3" json:"reports_in_progress,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DataEpisodesResponse) Reset() {
@@ -860,6 +959,20 @@ func (x *DataEpisodesResponse) GetEpisodes() []*DataEpisode {
 		return x.Episodes
 	}
 	return nil
+}
+
+func (x *DataEpisodesResponse) GetInProgress() []*DataEpisode {
+	if x != nil {
+		return x.InProgress
+	}
+	return nil
+}
+
+func (x *DataEpisodesResponse) GetReportsInProgress() bool {
+	if x != nil {
+		return x.ReportsInProgress
+	}
+	return false
 }
 
 type DataInspectResponse struct {
@@ -914,6 +1027,106 @@ func (x *DataInspectResponse) GetVerificationErrors() []string {
 	return nil
 }
 
+type DataDeleteEpisodeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Episode       string                 `protobuf:"bytes,1,opt,name=episode,proto3" json:"episode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataDeleteEpisodeRequest) Reset() {
+	*x = DataDeleteEpisodeRequest{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataDeleteEpisodeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataDeleteEpisodeRequest) ProtoMessage() {}
+
+func (x *DataDeleteEpisodeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataDeleteEpisodeRequest.ProtoReflect.Descriptor instead.
+func (*DataDeleteEpisodeRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *DataDeleteEpisodeRequest) GetEpisode() string {
+	if x != nil {
+		return x.Episode
+	}
+	return ""
+}
+
+type DataDeleteEpisodeResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The episode as it was listed just before it was deleted.
+	Episode *DataEpisode `protobuf:"bytes,1,opt,name=episode,proto3" json:"episode,omitempty"`
+	// Its upload state when it was deleted: "uploaded" means a copy exists at
+	// its upload destination; "local", "pending", "uploading" and "failed" mean
+	// the deleted bytes were the only copy.
+	UploadState   string `protobuf:"bytes,2,opt,name=upload_state,json=uploadState,proto3" json:"upload_state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataDeleteEpisodeResponse) Reset() {
+	*x = DataDeleteEpisodeResponse{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataDeleteEpisodeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataDeleteEpisodeResponse) ProtoMessage() {}
+
+func (x *DataDeleteEpisodeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataDeleteEpisodeResponse.ProtoReflect.Descriptor instead.
+func (*DataDeleteEpisodeResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *DataDeleteEpisodeResponse) GetEpisode() *DataEpisode {
+	if x != nil {
+		return x.Episode
+	}
+	return nil
+}
+
+func (x *DataDeleteEpisodeResponse) GetUploadState() string {
+	if x != nil {
+		return x.UploadState
+	}
+	return ""
+}
+
 // One chunk of one file of an episode.
 //
 // size and sha256 describe the WHOLE FILE, not this chunk, and both are
@@ -952,7 +1165,7 @@ type DataDownloadChunk struct {
 
 func (x *DataDownloadChunk) Reset() {
 	*x = DataDownloadChunk{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[16]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -964,7 +1177,7 @@ func (x *DataDownloadChunk) String() string {
 func (*DataDownloadChunk) ProtoMessage() {}
 
 func (x *DataDownloadChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[16]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -977,7 +1190,7 @@ func (x *DataDownloadChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataDownloadChunk.ProtoReflect.Descriptor instead.
 func (*DataDownloadChunk) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{16}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DataDownloadChunk) GetPath() string {
@@ -1031,7 +1244,7 @@ type DataCampaignDeployRequest struct {
 
 func (x *DataCampaignDeployRequest) Reset() {
 	*x = DataCampaignDeployRequest{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[17]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1043,7 +1256,7 @@ func (x *DataCampaignDeployRequest) String() string {
 func (*DataCampaignDeployRequest) ProtoMessage() {}
 
 func (x *DataCampaignDeployRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[17]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1056,7 +1269,7 @@ func (x *DataCampaignDeployRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataCampaignDeployRequest.ProtoReflect.Descriptor instead.
 func (*DataCampaignDeployRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{17}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DataCampaignDeployRequest) GetCampaignYaml() []byte {
@@ -1074,7 +1287,7 @@ type DataCampaignsRequest struct {
 
 func (x *DataCampaignsRequest) Reset() {
 	*x = DataCampaignsRequest{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[18]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1086,7 +1299,7 @@ func (x *DataCampaignsRequest) String() string {
 func (*DataCampaignsRequest) ProtoMessage() {}
 
 func (x *DataCampaignsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[18]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1099,7 +1312,7 @@ func (x *DataCampaignsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataCampaignsRequest.ProtoReflect.Descriptor instead.
 func (*DataCampaignsRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{18}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{20}
 }
 
 type DataCampaignInspectRequest struct {
@@ -1111,7 +1324,7 @@ type DataCampaignInspectRequest struct {
 
 func (x *DataCampaignInspectRequest) Reset() {
 	*x = DataCampaignInspectRequest{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[19]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1123,7 +1336,7 @@ func (x *DataCampaignInspectRequest) String() string {
 func (*DataCampaignInspectRequest) ProtoMessage() {}
 
 func (x *DataCampaignInspectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[19]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1136,7 +1349,7 @@ func (x *DataCampaignInspectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataCampaignInspectRequest.ProtoReflect.Descriptor instead.
 func (*DataCampaignInspectRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{19}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *DataCampaignInspectRequest) GetName() string {
@@ -1156,7 +1369,7 @@ type DataCampaignTriggerRequest struct {
 
 func (x *DataCampaignTriggerRequest) Reset() {
 	*x = DataCampaignTriggerRequest{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[20]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +1381,7 @@ func (x *DataCampaignTriggerRequest) String() string {
 func (*DataCampaignTriggerRequest) ProtoMessage() {}
 
 func (x *DataCampaignTriggerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[20]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +1394,7 @@ func (x *DataCampaignTriggerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataCampaignTriggerRequest.ProtoReflect.Descriptor instead.
 func (*DataCampaignTriggerRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{20}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *DataCampaignTriggerRequest) GetName() string {
@@ -1213,7 +1426,7 @@ type DataCampaign struct {
 
 func (x *DataCampaign) Reset() {
 	*x = DataCampaign{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[21]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1225,7 +1438,7 @@ func (x *DataCampaign) String() string {
 func (*DataCampaign) ProtoMessage() {}
 
 func (x *DataCampaign) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[21]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1238,7 +1451,7 @@ func (x *DataCampaign) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataCampaign.ProtoReflect.Descriptor instead.
 func (*DataCampaign) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{21}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *DataCampaign) GetName() string {
@@ -1299,7 +1512,7 @@ type DataCampaignsResponse struct {
 
 func (x *DataCampaignsResponse) Reset() {
 	*x = DataCampaignsResponse{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[22]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1311,7 +1524,7 @@ func (x *DataCampaignsResponse) String() string {
 func (*DataCampaignsResponse) ProtoMessage() {}
 
 func (x *DataCampaignsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[22]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1324,12 +1537,365 @@ func (x *DataCampaignsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataCampaignsResponse.ProtoReflect.Descriptor instead.
 func (*DataCampaignsResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{22}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *DataCampaignsResponse) GetCampaigns() []*DataCampaign {
 	if x != nil {
 		return x.Campaigns
+	}
+	return nil
+}
+
+type DataCampaignArmRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataCampaignArmRequest) Reset() {
+	*x = DataCampaignArmRequest{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataCampaignArmRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataCampaignArmRequest) ProtoMessage() {}
+
+func (x *DataCampaignArmRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataCampaignArmRequest.ProtoReflect.Descriptor instead.
+func (*DataCampaignArmRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *DataCampaignArmRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DataCampaignArmResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The campaign as stored after the call; state is "armed".
+	Campaign *DataCampaign `protobuf:"bytes,1,opt,name=campaign,proto3" json:"campaign,omitempty"`
+	// False when the campaign was already armed.
+	Changed       bool `protobuf:"varint,2,opt,name=changed,proto3" json:"changed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataCampaignArmResponse) Reset() {
+	*x = DataCampaignArmResponse{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataCampaignArmResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataCampaignArmResponse) ProtoMessage() {}
+
+func (x *DataCampaignArmResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataCampaignArmResponse.ProtoReflect.Descriptor instead.
+func (*DataCampaignArmResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *DataCampaignArmResponse) GetCampaign() *DataCampaign {
+	if x != nil {
+		return x.Campaign
+	}
+	return nil
+}
+
+func (x *DataCampaignArmResponse) GetChanged() bool {
+	if x != nil {
+		return x.Changed
+	}
+	return false
+}
+
+type DataCampaignDisarmRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataCampaignDisarmRequest) Reset() {
+	*x = DataCampaignDisarmRequest{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataCampaignDisarmRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataCampaignDisarmRequest) ProtoMessage() {}
+
+func (x *DataCampaignDisarmRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataCampaignDisarmRequest.ProtoReflect.Descriptor instead.
+func (*DataCampaignDisarmRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *DataCampaignDisarmRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DataCampaignDisarmResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The campaign as stored after the call; state is "disarmed".
+	Campaign *DataCampaign `protobuf:"bytes,1,opt,name=campaign,proto3" json:"campaign,omitempty"`
+	// False when the campaign was already disarmed.
+	Changed bool `protobuf:"varint,2,opt,name=changed,proto3" json:"changed,omitempty"`
+	// The campaign's recording in progress, if it had one. Disarming does not
+	// cut it short.
+	Recording *DataEpisode `protobuf:"bytes,3,opt,name=recording,proto3" json:"recording,omitempty"`
+	// Notes for the operator about this call, such as the recording above, an
+	// inference still stopping when the call returned, or a fleet that may
+	// deploy the plan again. Not stored with the plan.
+	Warnings      []string `protobuf:"bytes,4,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataCampaignDisarmResponse) Reset() {
+	*x = DataCampaignDisarmResponse{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataCampaignDisarmResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataCampaignDisarmResponse) ProtoMessage() {}
+
+func (x *DataCampaignDisarmResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataCampaignDisarmResponse.ProtoReflect.Descriptor instead.
+func (*DataCampaignDisarmResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *DataCampaignDisarmResponse) GetCampaign() *DataCampaign {
+	if x != nil {
+		return x.Campaign
+	}
+	return nil
+}
+
+func (x *DataCampaignDisarmResponse) GetChanged() bool {
+	if x != nil {
+		return x.Changed
+	}
+	return false
+}
+
+func (x *DataCampaignDisarmResponse) GetRecording() *DataEpisode {
+	if x != nil {
+		return x.Recording
+	}
+	return nil
+}
+
+func (x *DataCampaignDisarmResponse) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
+}
+
+type DataCampaignRemoveRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Stop and seal the campaign's recording in progress, then remove it.
+	// Without it, a campaign that is recording is refused.
+	Force         bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataCampaignRemoveRequest) Reset() {
+	*x = DataCampaignRemoveRequest{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataCampaignRemoveRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataCampaignRemoveRequest) ProtoMessage() {}
+
+func (x *DataCampaignRemoveRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataCampaignRemoveRequest.ProtoReflect.Descriptor instead.
+func (*DataCampaignRemoveRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *DataCampaignRemoveRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DataCampaignRemoveRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+type DataCampaignRemoveResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The revision of the plan that was removed.
+	Revision string `protobuf:"bytes,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	// The fleet the plan named, if any.
+	Fleet string `protobuf:"bytes,3,opt,name=fleet,proto3" json:"fleet,omitempty"`
+	// The recording force stopped and sealed before the removal, if any.
+	Sealed *DataEpisode `protobuf:"bytes,4,opt,name=sealed,proto3" json:"sealed,omitempty"`
+	// Notes for the operator about this call, such as an inference still
+	// stopping when the call returned, or a fleet that may deploy the plan
+	// again.
+	Warnings      []string `protobuf:"bytes,5,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataCampaignRemoveResponse) Reset() {
+	*x = DataCampaignRemoveResponse{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataCampaignRemoveResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataCampaignRemoveResponse) ProtoMessage() {}
+
+func (x *DataCampaignRemoveResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataCampaignRemoveResponse.ProtoReflect.Descriptor instead.
+func (*DataCampaignRemoveResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *DataCampaignRemoveResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DataCampaignRemoveResponse) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *DataCampaignRemoveResponse) GetFleet() string {
+	if x != nil {
+		return x.Fleet
+	}
+	return ""
+}
+
+func (x *DataCampaignRemoveResponse) GetSealed() *DataEpisode {
+	if x != nil {
+		return x.Sealed
+	}
+	return nil
+}
+
+func (x *DataCampaignRemoveResponse) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
 	}
 	return nil
 }
@@ -1350,7 +1916,7 @@ type DataRecordingExportRequest struct {
 
 func (x *DataRecordingExportRequest) Reset() {
 	*x = DataRecordingExportRequest{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[23]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1362,7 +1928,7 @@ func (x *DataRecordingExportRequest) String() string {
 func (*DataRecordingExportRequest) ProtoMessage() {}
 
 func (x *DataRecordingExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[23]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1375,7 +1941,7 @@ func (x *DataRecordingExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataRecordingExportRequest.ProtoReflect.Descriptor instead.
 func (*DataRecordingExportRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{23}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *DataRecordingExportRequest) GetAppId() string {
@@ -1418,7 +1984,7 @@ type DataRecordingExportAckRequest struct {
 
 func (x *DataRecordingExportAckRequest) Reset() {
 	*x = DataRecordingExportAckRequest{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[24]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1430,7 +1996,7 @@ func (x *DataRecordingExportAckRequest) String() string {
 func (*DataRecordingExportAckRequest) ProtoMessage() {}
 
 func (x *DataRecordingExportAckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[24]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1443,7 +2009,7 @@ func (x *DataRecordingExportAckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataRecordingExportAckRequest.ProtoReflect.Descriptor instead.
 func (*DataRecordingExportAckRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{24}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DataRecordingExportAckRequest) GetAppId() string {
@@ -1482,7 +2048,7 @@ type DataRecordingExportAckResponse struct {
 
 func (x *DataRecordingExportAckResponse) Reset() {
 	*x = DataRecordingExportAckResponse{}
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[25]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1494,7 +2060,7 @@ func (x *DataRecordingExportAckResponse) String() string {
 func (*DataRecordingExportAckResponse) ProtoMessage() {}
 
 func (x *DataRecordingExportAckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[25]
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1507,7 +2073,7 @@ func (x *DataRecordingExportAckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataRecordingExportAckResponse.ProtoReflect.Descriptor instead.
 func (*DataRecordingExportAckResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{25}
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{33}
 }
 
 var File_wendy_agent_services_v2_data_service_proto protoreflect.FileDescriptor
@@ -1526,14 +2092,16 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"eventsJson\x12\x16\n" +
 	"\x06cursor\x18\x02 \x01(\tR\x06cursor\x12\x10\n" +
 	"\x03gap\x18\x03 \x01(\bR\x03gap\x12$\n" +
-	"\rnotifications\x18\x04 \x01(\bR\rnotifications\"\x85\x01\n" +
+	"\rnotifications\x18\x04 \x01(\bR\rnotifications\"\xc2\x01\n" +
 	"\n" +
 	"DataSource\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12!\n" +
 	"\fclock_domain\x18\x03 \x01(\tR\vclockDomain\x12\x18\n" +
 	"\ahealthy\x18\x04 \x01(\bR\ahealthy\x12\x16\n" +
-	"\x06detail\x18\x05 \x01(\tR\x06detail\"\x14\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\x12\x12\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\x12'\n" +
+	"\x0funusable_reason\x18\a \x01(\tR\x0eunusableReason\"\x14\n" +
 	"\x12DataSourcesRequest\"T\n" +
 	"\x13DataSourcesResponse\x12=\n" +
 	"\asources\x18\x01 \x03(\v2#.wendy.agent.services.v2.DataSourceR\asources\"a\n" +
@@ -1556,7 +2124,7 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x13DataDownloadRequest\x12\x18\n" +
 	"\aepisode\x18\x01 \x01(\tR\aepisode\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x03R\x06offset\"\xad\x01\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\"\xba\x02\n" +
 	"\vDataEpisode\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -1564,14 +2132,30 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x12started_unix_nanos\x18\x04 \x01(\x03R\x10startedUnixNanos\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x05 \x01(\x03R\tsizeBytes\x12\x17\n" +
-	"\aboot_id\x18\x06 \x01(\tR\x06bootId\"R\n" +
+	"\aboot_id\x18\x06 \x01(\tR\x06bootId\x12%\n" +
+	"\x0etrigger_reason\x18\a \x01(\tR\rtriggerReason\x12#\n" +
+	"\rcampaign_name\x18\b \x01(\tR\fcampaignName\x12\x18\n" +
+	"\asources\x18\t \x03(\tR\asources\x12%\n" +
+	"\x0eduration_nanos\x18\n" +
+	" \x01(\x03R\rdurationNanos\"\xc9\x01\n" +
 	"\x12DataStatusResponse\x12<\n" +
-	"\x06active\x18\x01 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\x06active\"X\n" +
+	"\x06active\x18\x01 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\x06active\x12E\n" +
+	"\vin_progress\x18\x02 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\n" +
+	"inProgress\x12.\n" +
+	"\x13reports_in_progress\x18\x03 \x01(\bR\x11reportsInProgress\"\xcf\x01\n" +
 	"\x14DataEpisodesResponse\x12@\n" +
-	"\bepisodes\x18\x01 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\bepisodes\"k\n" +
+	"\bepisodes\x18\x01 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\bepisodes\x12E\n" +
+	"\vin_progress\x18\x02 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\n" +
+	"inProgress\x12.\n" +
+	"\x13reports_in_progress\x18\x03 \x01(\bR\x11reportsInProgress\"k\n" +
 	"\x13DataInspectResponse\x12#\n" +
 	"\rmanifest_json\x18\x01 \x01(\fR\fmanifestJson\x12/\n" +
-	"\x13verification_errors\x18\x02 \x03(\tR\x12verificationErrors\"\x91\x01\n" +
+	"\x13verification_errors\x18\x02 \x03(\tR\x12verificationErrors\"4\n" +
+	"\x18DataDeleteEpisodeRequest\x12\x18\n" +
+	"\aepisode\x18\x01 \x01(\tR\aepisode\"~\n" +
+	"\x19DataDeleteEpisodeResponse\x12>\n" +
+	"\aepisode\x18\x01 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\aepisode\x12!\n" +
+	"\fupload_state\x18\x02 \x01(\tR\vuploadState\"\x91\x01\n" +
 	"\x11DataDownloadChunk\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x12\n" +
@@ -1596,7 +2180,28 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\tplan_json\x18\x06 \x01(\fR\bplanJson\x12\x1a\n" +
 	"\bwarnings\x18\a \x03(\tR\bwarnings\"\\\n" +
 	"\x15DataCampaignsResponse\x12C\n" +
-	"\tcampaigns\x18\x01 \x03(\v2%.wendy.agent.services.v2.DataCampaignR\tcampaigns\"\x85\x01\n" +
+	"\tcampaigns\x18\x01 \x03(\v2%.wendy.agent.services.v2.DataCampaignR\tcampaigns\",\n" +
+	"\x16DataCampaignArmRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"v\n" +
+	"\x17DataCampaignArmResponse\x12A\n" +
+	"\bcampaign\x18\x01 \x01(\v2%.wendy.agent.services.v2.DataCampaignR\bcampaign\x12\x18\n" +
+	"\achanged\x18\x02 \x01(\bR\achanged\"/\n" +
+	"\x19DataCampaignDisarmRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\xd9\x01\n" +
+	"\x1aDataCampaignDisarmResponse\x12A\n" +
+	"\bcampaign\x18\x01 \x01(\v2%.wendy.agent.services.v2.DataCampaignR\bcampaign\x12\x18\n" +
+	"\achanged\x18\x02 \x01(\bR\achanged\x12B\n" +
+	"\trecording\x18\x03 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\trecording\x12\x1a\n" +
+	"\bwarnings\x18\x04 \x03(\tR\bwarnings\"E\n" +
+	"\x19DataCampaignRemoveRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\"\xbc\x01\n" +
+	"\x1aDataCampaignRemoveResponse\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\tR\brevision\x12\x14\n" +
+	"\x05fleet\x18\x03 \x01(\tR\x05fleet\x12<\n" +
+	"\x06sealed\x18\x04 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\x06sealed\x12\x1a\n" +
+	"\bwarnings\x18\x05 \x03(\tR\bwarnings\"\x85\x01\n" +
 	"\x1aDataRecordingExportRequest\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x16\n" +
@@ -1611,7 +2216,7 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\n" +
 	"checkpoint\x18\x04 \x01(\tR\n" +
 	"checkpoint\" \n" +
-	"\x1eDataRecordingExportAckResponse2\xd5\v\n" +
+	"\x1eDataRecordingExportAckResponse2\xb5\x0f\n" +
 	"\vDataService\x12a\n" +
 	"\x06Events\x12*.wendy.agent.services.v2.DataEventsRequest\x1a+.wendy.agent.services.v2.DataEventsResponse\x12k\n" +
 	"\x0fExportRecording\x123.wendy.agent.services.v2.DataRecordingExportRequest\x1a!.wendy.agent.apps.v1.StoredRecord0\x01\x12\x8d\x01\n" +
@@ -1622,11 +2227,15 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x06Status\x12*.wendy.agent.services.v2.DataStatusRequest\x1a+.wendy.agent.services.v2.DataStatusResponse\x12g\n" +
 	"\bEpisodes\x12,.wendy.agent.services.v2.DataEpisodesRequest\x1a-.wendy.agent.services.v2.DataEpisodesResponse\x12d\n" +
 	"\aInspect\x12+.wendy.agent.services.v2.DataInspectRequest\x1a,.wendy.agent.services.v2.DataInspectResponse\x12f\n" +
-	"\bDownload\x12,.wendy.agent.services.v2.DataDownloadRequest\x1a*.wendy.agent.services.v2.DataDownloadChunk0\x01\x12k\n" +
+	"\bDownload\x12,.wendy.agent.services.v2.DataDownloadRequest\x1a*.wendy.agent.services.v2.DataDownloadChunk0\x01\x12v\n" +
+	"\rDeleteEpisode\x121.wendy.agent.services.v2.DataDeleteEpisodeRequest\x1a2.wendy.agent.services.v2.DataDeleteEpisodeResponse\x12k\n" +
 	"\x0eCampaignDeploy\x122.wendy.agent.services.v2.DataCampaignDeployRequest\x1a%.wendy.agent.services.v2.DataCampaign\x12j\n" +
 	"\tCampaigns\x12-.wendy.agent.services.v2.DataCampaignsRequest\x1a..wendy.agent.services.v2.DataCampaignsResponse\x12m\n" +
 	"\x0fCampaignInspect\x123.wendy.agent.services.v2.DataCampaignInspectRequest\x1a%.wendy.agent.services.v2.DataCampaign\x12l\n" +
-	"\x0fCampaignTrigger\x123.wendy.agent.services.v2.DataCampaignTriggerRequest\x1a$.wendy.agent.services.v2.DataEpisodeBAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\x0fCampaignTrigger\x123.wendy.agent.services.v2.DataCampaignTriggerRequest\x1a$.wendy.agent.services.v2.DataEpisode\x12p\n" +
+	"\vCampaignArm\x12/.wendy.agent.services.v2.DataCampaignArmRequest\x1a0.wendy.agent.services.v2.DataCampaignArmResponse\x12y\n" +
+	"\x0eCampaignDisarm\x122.wendy.agent.services.v2.DataCampaignDisarmRequest\x1a3.wendy.agent.services.v2.DataCampaignDisarmResponse\x12y\n" +
+	"\x0eCampaignRemove\x122.wendy.agent.services.v2.DataCampaignRemoveRequest\x1a3.wendy.agent.services.v2.DataCampaignRemoveResponseBAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_data_service_proto_rawDescOnce sync.Once
@@ -1640,7 +2249,7 @@ func file_wendy_agent_services_v2_data_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_data_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_data_service_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_wendy_agent_services_v2_data_service_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_wendy_agent_services_v2_data_service_proto_goTypes = []any{
 	(*DataEventsRequest)(nil),              // 0: wendy.agent.services.v2.DataEventsRequest
 	(*DataEventsResponse)(nil),             // 1: wendy.agent.services.v2.DataEventsResponse
@@ -1658,57 +2267,80 @@ var file_wendy_agent_services_v2_data_service_proto_goTypes = []any{
 	(*DataStatusResponse)(nil),             // 13: wendy.agent.services.v2.DataStatusResponse
 	(*DataEpisodesResponse)(nil),           // 14: wendy.agent.services.v2.DataEpisodesResponse
 	(*DataInspectResponse)(nil),            // 15: wendy.agent.services.v2.DataInspectResponse
-	(*DataDownloadChunk)(nil),              // 16: wendy.agent.services.v2.DataDownloadChunk
-	(*DataCampaignDeployRequest)(nil),      // 17: wendy.agent.services.v2.DataCampaignDeployRequest
-	(*DataCampaignsRequest)(nil),           // 18: wendy.agent.services.v2.DataCampaignsRequest
-	(*DataCampaignInspectRequest)(nil),     // 19: wendy.agent.services.v2.DataCampaignInspectRequest
-	(*DataCampaignTriggerRequest)(nil),     // 20: wendy.agent.services.v2.DataCampaignTriggerRequest
-	(*DataCampaign)(nil),                   // 21: wendy.agent.services.v2.DataCampaign
-	(*DataCampaignsResponse)(nil),          // 22: wendy.agent.services.v2.DataCampaignsResponse
-	(*DataRecordingExportRequest)(nil),     // 23: wendy.agent.services.v2.DataRecordingExportRequest
-	(*DataRecordingExportAckRequest)(nil),  // 24: wendy.agent.services.v2.DataRecordingExportAckRequest
-	(*DataRecordingExportAckResponse)(nil), // 25: wendy.agent.services.v2.DataRecordingExportAckResponse
-	(*recordingpb.StoredRecord)(nil),       // 26: wendy.agent.apps.v1.StoredRecord
+	(*DataDeleteEpisodeRequest)(nil),       // 16: wendy.agent.services.v2.DataDeleteEpisodeRequest
+	(*DataDeleteEpisodeResponse)(nil),      // 17: wendy.agent.services.v2.DataDeleteEpisodeResponse
+	(*DataDownloadChunk)(nil),              // 18: wendy.agent.services.v2.DataDownloadChunk
+	(*DataCampaignDeployRequest)(nil),      // 19: wendy.agent.services.v2.DataCampaignDeployRequest
+	(*DataCampaignsRequest)(nil),           // 20: wendy.agent.services.v2.DataCampaignsRequest
+	(*DataCampaignInspectRequest)(nil),     // 21: wendy.agent.services.v2.DataCampaignInspectRequest
+	(*DataCampaignTriggerRequest)(nil),     // 22: wendy.agent.services.v2.DataCampaignTriggerRequest
+	(*DataCampaign)(nil),                   // 23: wendy.agent.services.v2.DataCampaign
+	(*DataCampaignsResponse)(nil),          // 24: wendy.agent.services.v2.DataCampaignsResponse
+	(*DataCampaignArmRequest)(nil),         // 25: wendy.agent.services.v2.DataCampaignArmRequest
+	(*DataCampaignArmResponse)(nil),        // 26: wendy.agent.services.v2.DataCampaignArmResponse
+	(*DataCampaignDisarmRequest)(nil),      // 27: wendy.agent.services.v2.DataCampaignDisarmRequest
+	(*DataCampaignDisarmResponse)(nil),     // 28: wendy.agent.services.v2.DataCampaignDisarmResponse
+	(*DataCampaignRemoveRequest)(nil),      // 29: wendy.agent.services.v2.DataCampaignRemoveRequest
+	(*DataCampaignRemoveResponse)(nil),     // 30: wendy.agent.services.v2.DataCampaignRemoveResponse
+	(*DataRecordingExportRequest)(nil),     // 31: wendy.agent.services.v2.DataRecordingExportRequest
+	(*DataRecordingExportAckRequest)(nil),  // 32: wendy.agent.services.v2.DataRecordingExportAckRequest
+	(*DataRecordingExportAckResponse)(nil), // 33: wendy.agent.services.v2.DataRecordingExportAckResponse
+	(*recordingpb.StoredRecord)(nil),       // 34: wendy.agent.apps.v1.StoredRecord
 }
 var file_wendy_agent_services_v2_data_service_proto_depIdxs = []int32{
 	2,  // 0: wendy.agent.services.v2.DataSourcesResponse.sources:type_name -> wendy.agent.services.v2.DataSource
 	5,  // 1: wendy.agent.services.v2.DataStartRequest.calibrations:type_name -> wendy.agent.services.v2.DataCalibration
 	12, // 2: wendy.agent.services.v2.DataStatusResponse.active:type_name -> wendy.agent.services.v2.DataEpisode
-	12, // 3: wendy.agent.services.v2.DataEpisodesResponse.episodes:type_name -> wendy.agent.services.v2.DataEpisode
-	21, // 4: wendy.agent.services.v2.DataCampaignsResponse.campaigns:type_name -> wendy.agent.services.v2.DataCampaign
-	0,  // 5: wendy.agent.services.v2.DataService.Events:input_type -> wendy.agent.services.v2.DataEventsRequest
-	23, // 6: wendy.agent.services.v2.DataService.ExportRecording:input_type -> wendy.agent.services.v2.DataRecordingExportRequest
-	24, // 7: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:input_type -> wendy.agent.services.v2.DataRecordingExportAckRequest
-	3,  // 8: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
-	6,  // 9: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
-	7,  // 10: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
-	8,  // 11: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
-	9,  // 12: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
-	10, // 13: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
-	11, // 14: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
-	17, // 15: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
-	18, // 16: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
-	19, // 17: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
-	20, // 18: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
-	1,  // 19: wendy.agent.services.v2.DataService.Events:output_type -> wendy.agent.services.v2.DataEventsResponse
-	26, // 20: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
-	25, // 21: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:output_type -> wendy.agent.services.v2.DataRecordingExportAckResponse
-	4,  // 22: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
-	12, // 23: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
-	12, // 24: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
-	13, // 25: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
-	14, // 26: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
-	15, // 27: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
-	16, // 28: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
-	21, // 29: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
-	22, // 30: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
-	21, // 31: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
-	12, // 32: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
-	19, // [19:33] is the sub-list for method output_type
-	5,  // [5:19] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	12, // 3: wendy.agent.services.v2.DataStatusResponse.in_progress:type_name -> wendy.agent.services.v2.DataEpisode
+	12, // 4: wendy.agent.services.v2.DataEpisodesResponse.episodes:type_name -> wendy.agent.services.v2.DataEpisode
+	12, // 5: wendy.agent.services.v2.DataEpisodesResponse.in_progress:type_name -> wendy.agent.services.v2.DataEpisode
+	12, // 6: wendy.agent.services.v2.DataDeleteEpisodeResponse.episode:type_name -> wendy.agent.services.v2.DataEpisode
+	23, // 7: wendy.agent.services.v2.DataCampaignsResponse.campaigns:type_name -> wendy.agent.services.v2.DataCampaign
+	23, // 8: wendy.agent.services.v2.DataCampaignArmResponse.campaign:type_name -> wendy.agent.services.v2.DataCampaign
+	23, // 9: wendy.agent.services.v2.DataCampaignDisarmResponse.campaign:type_name -> wendy.agent.services.v2.DataCampaign
+	12, // 10: wendy.agent.services.v2.DataCampaignDisarmResponse.recording:type_name -> wendy.agent.services.v2.DataEpisode
+	12, // 11: wendy.agent.services.v2.DataCampaignRemoveResponse.sealed:type_name -> wendy.agent.services.v2.DataEpisode
+	0,  // 12: wendy.agent.services.v2.DataService.Events:input_type -> wendy.agent.services.v2.DataEventsRequest
+	31, // 13: wendy.agent.services.v2.DataService.ExportRecording:input_type -> wendy.agent.services.v2.DataRecordingExportRequest
+	32, // 14: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:input_type -> wendy.agent.services.v2.DataRecordingExportAckRequest
+	3,  // 15: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
+	6,  // 16: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
+	7,  // 17: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
+	8,  // 18: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
+	9,  // 19: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
+	10, // 20: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
+	11, // 21: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
+	16, // 22: wendy.agent.services.v2.DataService.DeleteEpisode:input_type -> wendy.agent.services.v2.DataDeleteEpisodeRequest
+	19, // 23: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
+	20, // 24: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
+	21, // 25: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
+	22, // 26: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
+	25, // 27: wendy.agent.services.v2.DataService.CampaignArm:input_type -> wendy.agent.services.v2.DataCampaignArmRequest
+	27, // 28: wendy.agent.services.v2.DataService.CampaignDisarm:input_type -> wendy.agent.services.v2.DataCampaignDisarmRequest
+	29, // 29: wendy.agent.services.v2.DataService.CampaignRemove:input_type -> wendy.agent.services.v2.DataCampaignRemoveRequest
+	1,  // 30: wendy.agent.services.v2.DataService.Events:output_type -> wendy.agent.services.v2.DataEventsResponse
+	34, // 31: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
+	33, // 32: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:output_type -> wendy.agent.services.v2.DataRecordingExportAckResponse
+	4,  // 33: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
+	12, // 34: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
+	12, // 35: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
+	13, // 36: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
+	14, // 37: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
+	15, // 38: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
+	18, // 39: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
+	17, // 40: wendy.agent.services.v2.DataService.DeleteEpisode:output_type -> wendy.agent.services.v2.DataDeleteEpisodeResponse
+	23, // 41: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
+	24, // 42: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
+	23, // 43: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
+	12, // 44: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
+	26, // 45: wendy.agent.services.v2.DataService.CampaignArm:output_type -> wendy.agent.services.v2.DataCampaignArmResponse
+	28, // 46: wendy.agent.services.v2.DataService.CampaignDisarm:output_type -> wendy.agent.services.v2.DataCampaignDisarmResponse
+	30, // 47: wendy.agent.services.v2.DataService.CampaignRemove:output_type -> wendy.agent.services.v2.DataCampaignRemoveResponse
+	30, // [30:48] is the sub-list for method output_type
+	12, // [12:30] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_data_service_proto_init() }
@@ -1722,7 +2354,7 @@ func file_wendy_agent_services_v2_data_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_data_service_proto_rawDesc), len(file_wendy_agent_services_v2_data_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

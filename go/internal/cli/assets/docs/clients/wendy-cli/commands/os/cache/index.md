@@ -1,1 +1,1 @@
-Alias to [`wendy cache`](../../cache/).
+Alias to [`wendy cache`](/docs/reference/cli/cache).

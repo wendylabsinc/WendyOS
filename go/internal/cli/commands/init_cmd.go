@@ -77,6 +77,7 @@ type entitlementQuestion struct {
 type initOptions struct {
 	appID               string
 	here                bool
+	force               bool
 	target              string
 	language            string
 	template            string
@@ -264,6 +265,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos (writes \"linux\" to wendy.json), wendy-lite, or darwin")
 	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, cpp, or mojo")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
+	cmd.Flags().BoolVar(&opts.force, "force", false, "Overwrite template files in an existing directory (requires --template)")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
 	cmd.Flags().StringVar(&opts.gitInit, "git-init", "", "Initialize a git repo in the project directory (yes or no)")
@@ -321,6 +323,23 @@ func runInitWizard(args []string, opts initOptions) error {
 
 	if err := validateInitAssistantOptions(opts); err != nil {
 		return err
+	}
+	if opts.force && !opts.templateSet {
+		return fmt.Errorf("--force requires --template; manual initialization does not support forced overwrites")
+	}
+
+	// An explicit template and destination can be checked before contacting
+	// the registry. Refusal must not depend on network availability.
+	templateName := normalizeInitChoice(opts.template)
+	hasDestination := opts.here || opts.appIDSet || len(args) > 0
+	if !opts.force && opts.templateSet && templateName != "" && templateName != bareTemplatePickSentinel && hasDestination {
+		destDir, _, err := resolveInitDestAndID(cwd, args, opts)
+		if err != nil {
+			return err
+		}
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
+		}
 	}
 
 	// Steps 1-2: target and template resolve together — a concrete --template
@@ -419,6 +438,7 @@ func runInitWizard(args []string, opts initOptions) error {
 	if err := scaffoldProject(cwd, appID, target, language); err != nil {
 		return err
 	}
+	scaffoldInitAgentsFiles(cwd, appID, target, language)
 
 	// Step 6: Offer AI assistant session.
 	if err := resolveInitAssistant(appID, target, language, entitlements, opts); err != nil {
@@ -783,16 +803,33 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 	return files, manifest, dlErr
 }
 
+// validateTemplateDestination refuses an overlay before any scaffolding.
+func validateTemplateDestination(cwd, destDir string) error {
+	// Preserve the existing --here diagnostic for a Wendy project.
+	if filepath.Clean(destDir) == filepath.Clean(cwd) {
+		if _, err := os.Stat(filepath.Join(destDir, "wendy.json")); err == nil {
+			return fmt.Errorf("wendy.json already exists here; choose a new or empty directory, or use --force to overwrite template files")
+		}
+	}
+	// Templates write a complete project tree. Refuse populated destinations
+	// before any scaffolding, even when they do not contain a Wendy manifest.
+	entries, err := os.ReadDir(destDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reading project directory %s: %w", destDir, err)
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("project directory %s is not empty; choose a new or empty directory, or use --force to overwrite template files", destDir)
+	}
+
+	return nil
+}
+
 // runTemplateFlow handles init when a template is selected.
 // destDir is the resolved project directory (either cwd or a new subdir).
 func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, opts initOptions) error {
-	// Scaffolding into cwd (most commonly via --here, WDY-2439) must not
-	// silently clobber an existing project. Checked first, before any
-	// network calls or filesystem mutation, mirroring the non-template
-	// wizard's own wendy.json-exists guard.
-	if filepath.Clean(destDir) == filepath.Clean(cwd) {
-		if _, err := os.Stat(filepath.Join(destDir, "wendy.json")); err == nil {
-			return fmt.Errorf("wendy.json already exists here; run from an empty directory or remove it first")
+	if !opts.force {
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
 		}
 	}
 
@@ -846,12 +883,20 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 		}
 	}
 
+	// Preparation may have taken time. Refuse files that arrived meanwhile;
+	// exclusive creation in the writer closes the remaining check/write race.
+	if !opts.force {
+		if err := validateTemplateDestination(cwd, destDir); err != nil {
+			return err
+		}
+	}
+
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return fmt.Errorf("creating project directory: %w", err)
 	}
 
 	// Render and write all template files.
-	if err := renderAndWriteTemplate(files, destDir, appID, tmpl, vals); err != nil {
+	if err := renderAndWriteTemplate(files, destDir, appID, tmpl, vals, opts.force); err != nil {
 		return err
 	}
 
@@ -878,6 +923,7 @@ func runTemplateFlow(cwd, destDir, appID, tmpl, target string, meta *repoMeta, o
 	if len(addedEntitlements) > 0 {
 		cliLogln("  Entitlements added from flags: %s", strings.Join(addedEntitlements, ", "))
 	}
+	scaffoldInitAgentsFiles(destDir, appID, target, language)
 
 	// Offer git init.
 	if err := maybeGitInit(destDir, opts); err != nil {

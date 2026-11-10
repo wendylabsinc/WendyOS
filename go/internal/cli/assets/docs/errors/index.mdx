@@ -7,7 +7,7 @@ Search this page by the symptom or error text. These are troubleshooting entries
 
 ## Target not found
 
-Run `wendy discover` on your development machine. Verify that the target is powered on and connected over USB or the same network. On macOS, allow Local Network access when prompted. For USB tethering on Linux, run `wendy discover` in a terminal and accept the prompt to configure the USB-C link.
+Run `wendy discover` on your development machine. Verify that the target is powered on and connected over USB or the same network. On macOS, allow Local Network access when prompted. For USB tethering on Linux, run `wendy discover` in a terminal and accept the prompt to configure the USB link.
 
 If you know the address, try `wendy device info --device <address>`. If this works, use `wendy run --device <address>` to bypass discovery. See [device discovery](/docs/advanced/clients/wendy-cli/commands/discover).
 
@@ -30,13 +30,41 @@ runs at most once per CLI invocation. If another target needs re-issuance in the
 same command, run `wendy auth refresh-certs` explicitly and retry. See
 [certificate renewal](/docs/advanced/clients/wendy-cli/commands/auth/refresh-certs).
 
+## Wendy Net connection limit
+
+If you see `Wendy Net is closing a backup connection to free a slot; retry shortly`,
+wait briefly and retry your command. The router is making room for another
+neighbour, and automatic discovery will retry the connection after the backup
+finishes closing.
+
+If the connection does not recover, inspect this computer's connections with
+`wendy net topology --local-cli` and check that nearby routers are reachable.
+`Wendy Net connection limit reached` means the receiving router has no
+available connection slot. See [backup connections and recovery](/docs/advanced/development/local-mesh-radio#backup-connections-and-recovery).
+
 ## Image build fails
 
-Read the first build error above the deployment failure. For the HTTP quickstart, confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
+Read the first build error above the deployment failure. For the [first app tutorial](/docs/getting-started/app), confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
+
+## Cloud v2 upload connection lost
+
+Check that the device is online with `wendy cloud discover`, then retry the
+upload. The CLI identifies unnamed devices by their Cloud ID and reports bytes
+sent across resume attempts. A lost connection during upload or while waiting
+for the app's start acknowledgement exits with status 5
+(`device_unreachable`, retryable). Automatic registry fallback is off after that
+transport failure. Use `--chunking=off` to upload through the registry, subject to
+the usual authorization. Old Agents without the chunk RPCs keep their registry
+fallback in `auto`.
+Set `WENDY_TLS_DEBUG=1` to print the underlying upload and reconnect diagnostics
+to stderr. The Compose and multi-service chunk-upload path supports `--builder docker` and `--builder buildkit`.
+Apple Container keeps its direct registry route; use
+`--builder apple-container --chunking=off` to select it explicitly. In `force`,
+a missing capability requires an Agent update. See [Cloud v2 uploads](/docs/advanced/clients/wendy-cli/commands/run#uploads-over-cloud-v2).
 
 ## Host port already in use
 
-Another process may own the app's port, which is 5001 for the quickstart app. Stop that process or change the app's listening port and its readiness configuration together. The simulator forwards the declared TCP readiness port onto your development machine. See [simulator networking](/docs/installation/wendyos-virtual-machine#reaching-an-app-you-deployed).
+Another process may own the app's port, which is 5001 for the first app tutorial. Stop that process or change the app's listening port and its readiness configuration together. The simulator forwards the declared TCP readiness port onto your development machine. See [simulator networking](/docs/installation/simulator-management#reaching-an-app-you-deployed).
 
 ## Readiness probe timed out
 

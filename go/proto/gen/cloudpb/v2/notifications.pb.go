@@ -184,10 +184,31 @@ type NotificationAudience struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// At least one selector is required and must resolve to at least one recipient.
 	// Cloud resolves the selectors as a deduplicated union, with at most 100 raw
-	// selectors across all three lists and at most 10,000 resolved users.
-	UserIds       []string           `protobuf:"bytes,1,rep,name=user_ids,json=userIds,proto3" json:"user_ids,omitempty"`
-	TeamIds       []string           `protobuf:"bytes,2,rep,name=team_ids,json=teamIds,proto3" json:"team_ids,omitempty"`
-	Roles         []OrganizationRole `protobuf:"varint,3,rep,packed,name=roles,proto3,enum=wendycloud.v2.OrganizationRole" json:"roles,omitempty"`
+	// selectors across user_ids, team_ids, roles, and role_ids (duplicates count)
+	// and at most 10,000 resolved users. Existing source-specific limits still apply.
+	// Role selectors select users assigned organization-role allow bindings,
+	// directly or through Cloud or identity-provider groups in this organization.
+	// They select recipients only; they do not grant recipients any permission.
+	UserIds []string `protobuf:"bytes,1,rep,name=user_ids,json=userIds,proto3" json:"user_ids,omitempty"`
+	TeamIds []string `protobuf:"bytes,2,rep,name=team_ids,json=teamIds,proto3" json:"team_ids,omitempty"`
+	// Legacy built-in organization-role identities: OWNER -> owner (the single
+	// current Owner), ADMIN -> admin, BILLING_MANAGER -> billing, MEMBER -> member,
+	// VIEWER -> viewer, including organization roles migrated from these built-ins.
+	// These never match tenant-defined roles by name (e.g. a custom "admin").
+	// Deprecated: use role_ids for new clients, including Developer and custom roles.
+	// Kept for wire compatibility; never remove or renumber this field or enum values.
+	// If roles and role_ids are both set, recipients are their deduplicated union.
+	//
+	// Deprecated: Marked as deprecated in wendycloud/v2/notifications.proto.
+	Roles []OrganizationRole `protobuf:"varint,3,rep,packed,name=roles,proto3,enum=wendycloud.v2.OrganizationRole" json:"roles,omitempty"`
+	// UUIDs of organization-kind roles available in the target organization:
+	// built-in roles (including Developer) or this tenant's custom roles.
+	// Reject malformed UUIDs, device-kind roles, foreign-tenant roles, and absent
+	// roles; failures must not disclose whether a role exists in another tenant.
+	// Requires a server that supports role_ids. Older protobuf servers ignore this
+	// field, so even mixed old/new selectors can silently omit intended recipients.
+	// Deploy supporting Cloud behavior before clients send role_ids.
+	RoleIds       []string `protobuf:"bytes,4,rep,name=role_ids,json=roleIds,proto3" json:"role_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -236,9 +257,17 @@ func (x *NotificationAudience) GetTeamIds() []string {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in wendycloud/v2/notifications.proto.
 func (x *NotificationAudience) GetRoles() []OrganizationRole {
 	if x != nil {
 		return x.Roles
+	}
+	return nil
+}
+
+func (x *NotificationAudience) GetRoleIds() []string {
+	if x != nil {
+		return x.RoleIds
 	}
 	return nil
 }
@@ -318,8 +347,18 @@ type NotificationAttachment struct {
 	// Optional visible description; 1-1,024 UTF-8 bytes when present, with no
 	// surrounding whitespace or control characters.
 	Caption *string `protobuf:"bytes,3,opt,name=caption,proto3,oneof" json:"caption,omitempty"`
-	// Required absolute HTTPS Wendy-managed broker reference; 1-8,192 UTF-8
-	// bytes, with no credentials. Customer-hosted media is not supported in V1.
+	// Required at create. Immutable absolute HTTPS media location: Wendy-owned
+	// storage/broker or direct source such as a signed GCS URL. Returned unchanged
+	// in every notification projection and Resolve, including after expires_at.
+	// 1-8,192 UTF-8 bytes; no username, password, or userinfo.
+	// Signed query capabilities are allowed.
+	// Cloud validates the HTTPS origin and any configured normalized-path prefix
+	// against organization or Wendy-owned allowed sources; it never fetches, proxies,
+	// streams, or buffers media.
+	// Clients resolve by canonical notification + attachment IDs on each open,
+	// then download directly and cache under the documented client cache policy.
+	// The source independently governs byte access, including bearer capabilities;
+	// never send Cloud credentials to it.
 	Url string `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
 	// Optional producer-declared media type; 1-256 ASCII characters when present.
 	ContentType *string `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"`
@@ -338,7 +377,14 @@ type NotificationAttachment struct {
 	//	*NotificationAttachment_Audio
 	Content isNotificationAttachment_Content `protobuf_oneof:"content"`
 	// Optional key of a declared named section. Omitted means the anonymous section.
-	Section       *string `protobuf:"bytes,11,opt,name=section,proto3,oneof" json:"section,omitempty"`
+	Section *string `protobuf:"bytes,11,opt,name=section,proto3,oneof" json:"section,omitempty"`
+	// Optional sender-declared media-retention deadline; absent preserves existing
+	// URL and cache behavior. For clips, use the actual clip-retention deadline;
+	// the source permalink token must expire at the same time.
+	// Cloud stores and returns url and expires_at unchanged after the deadline.
+	// At now >= expires_at, clients show "Media Expired", stop using url and delete
+	// protected cached bytes. The declared deadline is enforced by clients.
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -461,6 +507,13 @@ func (x *NotificationAttachment) GetSection() string {
 		return *x.Section
 	}
 	return ""
+}
+
+func (x *NotificationAttachment) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
 }
 
 type isNotificationAttachment_Content interface {
@@ -1803,10 +1856,19 @@ func (x *ResolveNotificationAttachmentRequest) GetAttachmentId() string {
 
 type ResolveNotificationAttachmentResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Absolute HTTPS URL suitable for a credential-free media request. V1 resolves
-	// Wendy-managed attachments only, and their URLs are short-lived.
+	// Absolute HTTPS URL for a direct client media GET after current recipient,
+	// organization, and source policy validation. May be the stored media location,
+	// Wendy-owned or a direct source; no broker URL or freshly minted ticket is
+	// promised. No userinfo; signed query capabilities are allowed. The URL may be a
+	// bearer capability whose byte access is governed independently by the source.
+	// Never send Cloud credentials with the GET. Cloud never fetches, proxies,
+	// streams, or buffers media.
+	// Returns the stored attachment url unchanged, including after expires_at.
+	// Clients must stop using it at that deadline.
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
-	// Present when url carries time-limited authorization.
+	// Optional source-owned expiry, including the stored attachment deadline when
+	// set. Returned unchanged after expiry; clients enforce the deadline. May be
+	// absent; resolution does not mint or extend the source's authorization.
 	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2790,17 +2852,18 @@ var File_wendycloud_v2_notifications_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\n" +
-	"!wendycloud/v2/notifications.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a!wendycloud/v2/organizations.proto\x1a\"wendycloud/v2/signed_request.proto\"\x83\x01\n" +
+	"!wendycloud/v2/notifications.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a!wendycloud/v2/organizations.proto\x1a\"wendycloud/v2/signed_request.proto\"\xa2\x01\n" +
 	"\x14NotificationAudience\x12\x19\n" +
 	"\buser_ids\x18\x01 \x03(\tR\auserIds\x12\x19\n" +
-	"\bteam_ids\x18\x02 \x03(\tR\ateamIds\x125\n" +
-	"\x05roles\x18\x03 \x03(\x0e2\x1f.wendycloud.v2.OrganizationRoleR\x05roles\"t\n" +
+	"\bteam_ids\x18\x02 \x03(\tR\ateamIds\x129\n" +
+	"\x05roles\x18\x03 \x03(\x0e2\x1f.wendycloud.v2.OrganizationRoleB\x02\x18\x01R\x05roles\x12\x19\n" +
+	"\brole_ids\x18\x04 \x03(\tR\aroleIds\"t\n" +
 	"\x13NotificationSection\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x19\n" +
 	"\x05title\x18\x02 \x01(\tH\x00R\x05title\x88\x01\x01\x12\x1b\n" +
 	"\x06detail\x18\x03 \x01(\tH\x01R\x06detail\x88\x01\x01B\b\n" +
 	"\x06_titleB\t\n" +
-	"\a_detail\"\x95\x04\n" +
+	"\a_detail\"\xe4\x04\n" +
 	"\x16NotificationAttachment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\x05title\x18\x02 \x01(\tH\x01R\x05title\x88\x01\x01\x12\x1d\n" +
@@ -2814,7 +2877,9 @@ const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\x05video\x18\t \x01(\v2*.wendycloud.v2.NotificationAttachmentVideoH\x00R\x05video\x12B\n" +
 	"\x05audio\x18\n" +
 	" \x01(\v2*.wendycloud.v2.NotificationAttachmentAudioH\x00R\x05audio\x12\x1d\n" +
-	"\asection\x18\v \x01(\tH\x05R\asection\x88\x01\x01B\t\n" +
+	"\asection\x18\v \x01(\tH\x05R\asection\x88\x01\x01\x12>\n" +
+	"\n" +
+	"expires_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampH\x06R\texpiresAt\x88\x01\x01B\t\n" +
 	"\acontentB\b\n" +
 	"\x06_titleB\n" +
 	"\n" +
@@ -2822,7 +2887,8 @@ const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\r_content_typeB\r\n" +
 	"\v_size_bytesB\n" +
 	"\n" +
-	"\b_section\"\xc2\x01\n" +
+	"\b_sectionB\r\n" +
+	"\v_expires_at\"\xc2\x01\n" +
 	"\x1bNotificationAttachmentImage\x12!\n" +
 	"\fwidth_pixels\x18\x01 \x01(\rR\vwidthPixels\x12#\n" +
 	"\rheight_pixels\x18\x02 \x01(\rR\fheightPixels\x12\x1e\n" +
@@ -3105,8 +3171,8 @@ var file_wendycloud_v2_notifications_proto_goTypes = []any{
 	(*GetUnreadCountRequest)(nil),                    // 39: wendycloud.v2.GetUnreadCountRequest
 	(*GetUnreadCountResponse)(nil),                   // 40: wendycloud.v2.GetUnreadCountResponse
 	(OrganizationRole)(0),                            // 41: wendycloud.v2.OrganizationRole
-	(*structpb.Struct)(nil),                          // 42: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),                    // 43: google.protobuf.Timestamp
+	(*timestamppb.Timestamp)(nil),                    // 42: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),                          // 43: google.protobuf.Struct
 	(*SignedRequest)(nil),                            // 44: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_notifications_proto_depIdxs = []int32{
@@ -3114,74 +3180,75 @@ var file_wendycloud_v2_notifications_proto_depIdxs = []int32{
 	6,  // 1: wendycloud.v2.NotificationAttachment.image:type_name -> wendycloud.v2.NotificationAttachmentImage
 	7,  // 2: wendycloud.v2.NotificationAttachment.video:type_name -> wendycloud.v2.NotificationAttachmentVideo
 	8,  // 3: wendycloud.v2.NotificationAttachment.audio:type_name -> wendycloud.v2.NotificationAttachmentAudio
-	1,  // 4: wendycloud.v2.NotificationButton.style:type_name -> wendycloud.v2.NotificationControlStyle
-	9,  // 5: wendycloud.v2.NotificationButton.custom:type_name -> wendycloud.v2.NotificationCustomAction
-	10, // 6: wendycloud.v2.NotificationControl.button:type_name -> wendycloud.v2.NotificationButton
-	0,  // 7: wendycloud.v2.Notification.severity:type_name -> wendycloud.v2.NotificationSeverity
-	42, // 8: wendycloud.v2.Notification.related_entities:type_name -> google.protobuf.Struct
-	43, // 9: wendycloud.v2.Notification.created_at:type_name -> google.protobuf.Timestamp
-	43, // 10: wendycloud.v2.Notification.deleted_at:type_name -> google.protobuf.Timestamp
-	42, // 11: wendycloud.v2.Notification.metadata:type_name -> google.protobuf.Struct
-	3,  // 12: wendycloud.v2.Notification.audience:type_name -> wendycloud.v2.NotificationAudience
-	43, // 13: wendycloud.v2.Notification.read_at:type_name -> google.protobuf.Timestamp
-	4,  // 14: wendycloud.v2.Notification.sections:type_name -> wendycloud.v2.NotificationSection
-	5,  // 15: wendycloud.v2.Notification.attachments:type_name -> wendycloud.v2.NotificationAttachment
-	11, // 16: wendycloud.v2.Notification.controls:type_name -> wendycloud.v2.NotificationControl
-	0,  // 17: wendycloud.v2.CreateNotificationRequest.severity:type_name -> wendycloud.v2.NotificationSeverity
-	42, // 18: wendycloud.v2.CreateNotificationRequest.related_entities:type_name -> google.protobuf.Struct
-	3,  // 19: wendycloud.v2.CreateNotificationV2Request.audience:type_name -> wendycloud.v2.NotificationAudience
-	0,  // 20: wendycloud.v2.CreateNotificationV2Request.severity:type_name -> wendycloud.v2.NotificationSeverity
-	42, // 21: wendycloud.v2.CreateNotificationV2Request.metadata:type_name -> google.protobuf.Struct
-	4,  // 22: wendycloud.v2.CreateNotificationV2Request.sections:type_name -> wendycloud.v2.NotificationSection
-	5,  // 23: wendycloud.v2.CreateNotificationV2Request.attachments:type_name -> wendycloud.v2.NotificationAttachment
-	11, // 24: wendycloud.v2.CreateNotificationV2Request.controls:type_name -> wendycloud.v2.NotificationControl
-	0,  // 25: wendycloud.v2.ListNotificationsRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
-	12, // 26: wendycloud.v2.ListNotificationsResponse.notification:type_name -> wendycloud.v2.Notification
-	0,  // 27: wendycloud.v2.ListNotificationsV2Request.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
-	2,  // 28: wendycloud.v2.ListNotificationsV2Request.read_status:type_name -> wendycloud.v2.NotificationReadStatus
-	12, // 29: wendycloud.v2.ListNotificationsV2Response.notifications:type_name -> wendycloud.v2.Notification
-	43, // 30: wendycloud.v2.ResolveNotificationAttachmentResponse.expires_at:type_name -> google.protobuf.Timestamp
-	0,  // 31: wendycloud.v2.DeleteNotificationsThroughRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
-	2,  // 32: wendycloud.v2.SetNotificationReadStatusRequest.read_status:type_name -> wendycloud.v2.NotificationReadStatus
-	0,  // 33: wendycloud.v2.SetNotificationReadStatusThroughRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
-	2,  // 34: wendycloud.v2.SetNotificationReadStatusThroughRequest.read_status:type_name -> wendycloud.v2.NotificationReadStatus
-	0,  // 35: wendycloud.v2.CountNotificationsRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
-	2,  // 36: wendycloud.v2.CountNotificationsRequest.read_status:type_name -> wendycloud.v2.NotificationReadStatus
-	44, // 37: wendycloud.v2.NotificationService.CreateNotification:input_type -> wendycloud.v2.SignedRequest
-	14, // 38: wendycloud.v2.NotificationService.CreateNotificationV2:input_type -> wendycloud.v2.CreateNotificationV2Request
-	16, // 39: wendycloud.v2.NotificationService.ListNotifications:input_type -> wendycloud.v2.ListNotificationsRequest
-	18, // 40: wendycloud.v2.NotificationService.ListNotificationsV2:input_type -> wendycloud.v2.ListNotificationsV2Request
-	20, // 41: wendycloud.v2.NotificationService.GetNotification:input_type -> wendycloud.v2.GetNotificationRequest
-	21, // 42: wendycloud.v2.NotificationService.ResolveNotificationAttachment:input_type -> wendycloud.v2.ResolveNotificationAttachmentRequest
-	23, // 43: wendycloud.v2.NotificationService.PerformNotificationControlAction:input_type -> wendycloud.v2.PerformNotificationControlActionRequest
-	25, // 44: wendycloud.v2.NotificationService.DeleteNotification:input_type -> wendycloud.v2.DeleteNotificationRequest
-	27, // 45: wendycloud.v2.NotificationService.DeleteNotifications:input_type -> wendycloud.v2.DeleteNotificationsRequest
-	29, // 46: wendycloud.v2.NotificationService.DeleteNotificationsThrough:input_type -> wendycloud.v2.DeleteNotificationsThroughRequest
-	31, // 47: wendycloud.v2.NotificationService.MarkAsRead:input_type -> wendycloud.v2.MarkAsReadRequest
-	33, // 48: wendycloud.v2.NotificationService.SetNotificationReadStatus:input_type -> wendycloud.v2.SetNotificationReadStatusRequest
-	35, // 49: wendycloud.v2.NotificationService.SetNotificationReadStatusThrough:input_type -> wendycloud.v2.SetNotificationReadStatusThroughRequest
-	37, // 50: wendycloud.v2.NotificationService.CountNotifications:input_type -> wendycloud.v2.CountNotificationsRequest
-	39, // 51: wendycloud.v2.NotificationService.GetUnreadCount:input_type -> wendycloud.v2.GetUnreadCountRequest
-	12, // 52: wendycloud.v2.NotificationService.CreateNotification:output_type -> wendycloud.v2.Notification
-	15, // 53: wendycloud.v2.NotificationService.CreateNotificationV2:output_type -> wendycloud.v2.CreateNotificationV2Response
-	17, // 54: wendycloud.v2.NotificationService.ListNotifications:output_type -> wendycloud.v2.ListNotificationsResponse
-	19, // 55: wendycloud.v2.NotificationService.ListNotificationsV2:output_type -> wendycloud.v2.ListNotificationsV2Response
-	12, // 56: wendycloud.v2.NotificationService.GetNotification:output_type -> wendycloud.v2.Notification
-	22, // 57: wendycloud.v2.NotificationService.ResolveNotificationAttachment:output_type -> wendycloud.v2.ResolveNotificationAttachmentResponse
-	24, // 58: wendycloud.v2.NotificationService.PerformNotificationControlAction:output_type -> wendycloud.v2.PerformNotificationControlActionResponse
-	26, // 59: wendycloud.v2.NotificationService.DeleteNotification:output_type -> wendycloud.v2.DeleteNotificationResponse
-	28, // 60: wendycloud.v2.NotificationService.DeleteNotifications:output_type -> wendycloud.v2.DeleteNotificationsResponse
-	30, // 61: wendycloud.v2.NotificationService.DeleteNotificationsThrough:output_type -> wendycloud.v2.DeleteNotificationsThroughResponse
-	32, // 62: wendycloud.v2.NotificationService.MarkAsRead:output_type -> wendycloud.v2.MarkAsReadResponse
-	34, // 63: wendycloud.v2.NotificationService.SetNotificationReadStatus:output_type -> wendycloud.v2.SetNotificationReadStatusResponse
-	36, // 64: wendycloud.v2.NotificationService.SetNotificationReadStatusThrough:output_type -> wendycloud.v2.SetNotificationReadStatusThroughResponse
-	38, // 65: wendycloud.v2.NotificationService.CountNotifications:output_type -> wendycloud.v2.CountNotificationsResponse
-	40, // 66: wendycloud.v2.NotificationService.GetUnreadCount:output_type -> wendycloud.v2.GetUnreadCountResponse
-	52, // [52:67] is the sub-list for method output_type
-	37, // [37:52] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	42, // 4: wendycloud.v2.NotificationAttachment.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 5: wendycloud.v2.NotificationButton.style:type_name -> wendycloud.v2.NotificationControlStyle
+	9,  // 6: wendycloud.v2.NotificationButton.custom:type_name -> wendycloud.v2.NotificationCustomAction
+	10, // 7: wendycloud.v2.NotificationControl.button:type_name -> wendycloud.v2.NotificationButton
+	0,  // 8: wendycloud.v2.Notification.severity:type_name -> wendycloud.v2.NotificationSeverity
+	43, // 9: wendycloud.v2.Notification.related_entities:type_name -> google.protobuf.Struct
+	42, // 10: wendycloud.v2.Notification.created_at:type_name -> google.protobuf.Timestamp
+	42, // 11: wendycloud.v2.Notification.deleted_at:type_name -> google.protobuf.Timestamp
+	43, // 12: wendycloud.v2.Notification.metadata:type_name -> google.protobuf.Struct
+	3,  // 13: wendycloud.v2.Notification.audience:type_name -> wendycloud.v2.NotificationAudience
+	42, // 14: wendycloud.v2.Notification.read_at:type_name -> google.protobuf.Timestamp
+	4,  // 15: wendycloud.v2.Notification.sections:type_name -> wendycloud.v2.NotificationSection
+	5,  // 16: wendycloud.v2.Notification.attachments:type_name -> wendycloud.v2.NotificationAttachment
+	11, // 17: wendycloud.v2.Notification.controls:type_name -> wendycloud.v2.NotificationControl
+	0,  // 18: wendycloud.v2.CreateNotificationRequest.severity:type_name -> wendycloud.v2.NotificationSeverity
+	43, // 19: wendycloud.v2.CreateNotificationRequest.related_entities:type_name -> google.protobuf.Struct
+	3,  // 20: wendycloud.v2.CreateNotificationV2Request.audience:type_name -> wendycloud.v2.NotificationAudience
+	0,  // 21: wendycloud.v2.CreateNotificationV2Request.severity:type_name -> wendycloud.v2.NotificationSeverity
+	43, // 22: wendycloud.v2.CreateNotificationV2Request.metadata:type_name -> google.protobuf.Struct
+	4,  // 23: wendycloud.v2.CreateNotificationV2Request.sections:type_name -> wendycloud.v2.NotificationSection
+	5,  // 24: wendycloud.v2.CreateNotificationV2Request.attachments:type_name -> wendycloud.v2.NotificationAttachment
+	11, // 25: wendycloud.v2.CreateNotificationV2Request.controls:type_name -> wendycloud.v2.NotificationControl
+	0,  // 26: wendycloud.v2.ListNotificationsRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
+	12, // 27: wendycloud.v2.ListNotificationsResponse.notification:type_name -> wendycloud.v2.Notification
+	0,  // 28: wendycloud.v2.ListNotificationsV2Request.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
+	2,  // 29: wendycloud.v2.ListNotificationsV2Request.read_status:type_name -> wendycloud.v2.NotificationReadStatus
+	12, // 30: wendycloud.v2.ListNotificationsV2Response.notifications:type_name -> wendycloud.v2.Notification
+	42, // 31: wendycloud.v2.ResolveNotificationAttachmentResponse.expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 32: wendycloud.v2.DeleteNotificationsThroughRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
+	2,  // 33: wendycloud.v2.SetNotificationReadStatusRequest.read_status:type_name -> wendycloud.v2.NotificationReadStatus
+	0,  // 34: wendycloud.v2.SetNotificationReadStatusThroughRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
+	2,  // 35: wendycloud.v2.SetNotificationReadStatusThroughRequest.read_status:type_name -> wendycloud.v2.NotificationReadStatus
+	0,  // 36: wendycloud.v2.CountNotificationsRequest.severity_filter:type_name -> wendycloud.v2.NotificationSeverity
+	2,  // 37: wendycloud.v2.CountNotificationsRequest.read_status:type_name -> wendycloud.v2.NotificationReadStatus
+	44, // 38: wendycloud.v2.NotificationService.CreateNotification:input_type -> wendycloud.v2.SignedRequest
+	14, // 39: wendycloud.v2.NotificationService.CreateNotificationV2:input_type -> wendycloud.v2.CreateNotificationV2Request
+	16, // 40: wendycloud.v2.NotificationService.ListNotifications:input_type -> wendycloud.v2.ListNotificationsRequest
+	18, // 41: wendycloud.v2.NotificationService.ListNotificationsV2:input_type -> wendycloud.v2.ListNotificationsV2Request
+	20, // 42: wendycloud.v2.NotificationService.GetNotification:input_type -> wendycloud.v2.GetNotificationRequest
+	21, // 43: wendycloud.v2.NotificationService.ResolveNotificationAttachment:input_type -> wendycloud.v2.ResolveNotificationAttachmentRequest
+	23, // 44: wendycloud.v2.NotificationService.PerformNotificationControlAction:input_type -> wendycloud.v2.PerformNotificationControlActionRequest
+	25, // 45: wendycloud.v2.NotificationService.DeleteNotification:input_type -> wendycloud.v2.DeleteNotificationRequest
+	27, // 46: wendycloud.v2.NotificationService.DeleteNotifications:input_type -> wendycloud.v2.DeleteNotificationsRequest
+	29, // 47: wendycloud.v2.NotificationService.DeleteNotificationsThrough:input_type -> wendycloud.v2.DeleteNotificationsThroughRequest
+	31, // 48: wendycloud.v2.NotificationService.MarkAsRead:input_type -> wendycloud.v2.MarkAsReadRequest
+	33, // 49: wendycloud.v2.NotificationService.SetNotificationReadStatus:input_type -> wendycloud.v2.SetNotificationReadStatusRequest
+	35, // 50: wendycloud.v2.NotificationService.SetNotificationReadStatusThrough:input_type -> wendycloud.v2.SetNotificationReadStatusThroughRequest
+	37, // 51: wendycloud.v2.NotificationService.CountNotifications:input_type -> wendycloud.v2.CountNotificationsRequest
+	39, // 52: wendycloud.v2.NotificationService.GetUnreadCount:input_type -> wendycloud.v2.GetUnreadCountRequest
+	12, // 53: wendycloud.v2.NotificationService.CreateNotification:output_type -> wendycloud.v2.Notification
+	15, // 54: wendycloud.v2.NotificationService.CreateNotificationV2:output_type -> wendycloud.v2.CreateNotificationV2Response
+	17, // 55: wendycloud.v2.NotificationService.ListNotifications:output_type -> wendycloud.v2.ListNotificationsResponse
+	19, // 56: wendycloud.v2.NotificationService.ListNotificationsV2:output_type -> wendycloud.v2.ListNotificationsV2Response
+	12, // 57: wendycloud.v2.NotificationService.GetNotification:output_type -> wendycloud.v2.Notification
+	22, // 58: wendycloud.v2.NotificationService.ResolveNotificationAttachment:output_type -> wendycloud.v2.ResolveNotificationAttachmentResponse
+	24, // 59: wendycloud.v2.NotificationService.PerformNotificationControlAction:output_type -> wendycloud.v2.PerformNotificationControlActionResponse
+	26, // 60: wendycloud.v2.NotificationService.DeleteNotification:output_type -> wendycloud.v2.DeleteNotificationResponse
+	28, // 61: wendycloud.v2.NotificationService.DeleteNotifications:output_type -> wendycloud.v2.DeleteNotificationsResponse
+	30, // 62: wendycloud.v2.NotificationService.DeleteNotificationsThrough:output_type -> wendycloud.v2.DeleteNotificationsThroughResponse
+	32, // 63: wendycloud.v2.NotificationService.MarkAsRead:output_type -> wendycloud.v2.MarkAsReadResponse
+	34, // 64: wendycloud.v2.NotificationService.SetNotificationReadStatus:output_type -> wendycloud.v2.SetNotificationReadStatusResponse
+	36, // 65: wendycloud.v2.NotificationService.SetNotificationReadStatusThrough:output_type -> wendycloud.v2.SetNotificationReadStatusThroughResponse
+	38, // 66: wendycloud.v2.NotificationService.CountNotifications:output_type -> wendycloud.v2.CountNotificationsResponse
+	40, // 67: wendycloud.v2.NotificationService.GetUnreadCount:output_type -> wendycloud.v2.GetUnreadCountResponse
+	53, // [53:68] is the sub-list for method output_type
+	38, // [38:53] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_notifications_proto_init() }

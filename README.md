@@ -1,29 +1,18 @@
+<a href="https://wendy.dev/videos/wendy-g1-warehouse-turbopuffer-2026-09-29.mp4">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset=".github/assets/readme/header.png">
+    <img src=".github/assets/readme/header.gif" alt="Wendy: build and run apps on robots. A simulated G1 picks up a box in a warehouse. Watch the full demo." width="960" height="400">
+  </picture>
+</a>
+
 # Wendy
 
-Build and run apps on robots, Raspberry Pis, Jetsons, and other Linux devices.
-Wendy builds your code, deploys it, and brings the logs back to your terminal.
-Start with a simulated robot on your own computer, then connect hardware when
-it is ready.
+Build, deploy, and debug apps on robots, Raspberry Pis, Jetsons, and Linux devices.
+Bring your Dockerfile or Compose project. Start with hardware or a simulator.
 
-[Documentation](https://docs.wendy.dev) · [Discord](https://discord.gg/wendylabsinc) · [Examples](Examples)
+[Get started](https://docs.wendy.dev/latest/getting-started/app/) · [Watch the demo](https://wendy.dev/videos/wendy-g1-warehouse-turbopuffer-2026-09-29.mp4) · [Examples](Examples) · [Discord](https://discord.gg/wendylabsinc)
 
-## Start with a moving robot
-
-The guided tour creates a simulated Unitree Go2, opens its 3D view, and runs a
-short walking demonstration. You can try it without a physical robot or a
-Wendy Cloud account.
-
-You need macOS or Linux, a running Docker installation with Buildx, and internet
-access for the initial downloads and build. The robot VM uses four virtual CPUs
-and 4 GiB of memory; allow disk space for the OS image and containers. Apple
-Silicon is the fastest path. x86 computers emulate the ARM64 virtual device and
-can take longer. The first
-run downloads an OS image and builds the robot software, so allow several minutes.
-The tour checks Docker and QEMU before starting. See the prerequisite details
-below if either is missing. Python runs inside the container; you do not need
-to install it on your computer.
-
-### 1. Install the CLI
+## Install
 
 On macOS or Linux:
 
@@ -32,104 +21,74 @@ curl -fsSL https://install.wendy.dev/cli.sh | bash
 wendy --version
 ```
 
-The CLI runs on the computer where you write code. It does not replace that
-computer's operating system.
 
-The installer starts the tour when an interactive terminal is available. When
-it leaves setup for later, it prints `wendy tour` and `wendy tour --simulator`
-as next steps.
+On Windows:
 
-On Windows, install with `winget install WendyLabs.Wendy --source winget`.
-The managed robot VM tour requires macOS or Linux. Windows users can follow the
-[physical-device guides](https://docs.wendy.dev/latest/#2-set-up-a-device) or try
-the [local Docker robot demo](https://wendy.dev/quickstart?target=simulator).
-
-[Other installation methods](INSTALL.md) include Homebrew, .deb, .rpm, and AUR.
-
-Already installed? Run `wendy update --check` to check your version and see the
-right update method. Run `wendy update` to apply a supported update. Restart your
-AI app or Wendy MCP server afterward so it uses the new CLI.
-
-### 2. Take the tour
-
-```sh
-wendy tour
+```powershell
+winget install WendyLabs.Wendy --source winget
 ```
 
-Choose the recommended simulated robot path. The tour checks the environment,
-creates the virtual device, opens its browser viewer, and starts a five-second walk.
-Look for the Go2 moving in the scene. The tour checks that its position changed
-and stops the movement before reporting success.
+The Linux app examples below use a macOS or Linux terminal. On Windows, use
+WSL2 with the Wendy CLI and Docker with Buildx installed inside WSL2.
 
-The tour saves the movement settings in `~/Documents/wendy-robot-tour/tour.json`.
-Change `turn_rps` to `0` to walk straight instead of turning, then run it again:
+[Other installation methods and updates](INSTALL.md)
+
+## Choose a starting point
+
+### Use your own device
+
+```sh
+wendy tour --hardware
+```
+
+The tour guides you through device setup. Start with a Raspberry Pi, NVIDIA
+Jetson, or an existing Linux computer or robot.
+[Find the setup guide for your hardware](https://docs.wendy.dev/latest/installation/).
+
+### Try a simulated robot
 
 ```sh
 wendy tour --simulator
 ```
 
-This reuses the same virtual device. The VM and viewer stay available after the
-check. Use the exact `wendy vm stop` command printed in your terminal when you
-are finished. To keep another tour project, use `wendy tour --simulator --project DIR`.
+The tour creates a simulated Unitree Go2, opens its 3D viewer, and runs a short
+walking demo. No physical robot or cloud account is needed. The installer may
+start the tour automatically.
 
-If setup fails, follow the specific prerequisite or connection instruction in
-the terminal and rerun the tour. See [first-deployment troubleshooting](https://docs.wendy.dev/latest/errors/)
-for builder, network, or readiness errors.
+You need macOS or Linux, Docker with Buildx, and QEMU. Allow 4 GiB of memory for
+the VM and several minutes for the first download and build. Apple Silicon is
+the fastest path; x86 Linux uses ARM64 emulation.
+See [simulator setup](https://docs.wendy.dev/latest/installation/wendyos-virtual-machine/)
+for prerequisites. When finished, use the `wendy vm stop` command printed by the tour.
 
-<details>
-<summary>Install or check the simulator prerequisites</summary>
+## Build and deploy an app
 
-Start Docker, then check:
-
-```sh
-docker info
-docker buildx version
-```
-
-Both commands should succeed. The virtual device also needs QEMU and its ARM64
-firmware. On macOS, Wendy offers to install QEMU through Homebrew when needed.
-On Debian or Ubuntu, install it before the tour:
+With your device set up and Docker running, create a small HTTP app:
 
 ```sh
-sudo apt install qemu-system-arm qemu-efi-aarch64
-```
-
-See [virtual-device setup](https://docs.wendy.dev/latest/installation/wendyos-virtual-machine/)
-for other setup details.
-
-</details>
-
-## Use your own device
-
-Wendy has two parts: the CLI on your development computer, and the Agent on the
-target running your apps. WendyOS includes the Agent. Existing Linux installations
-can keep their OS and install the Agent separately.
-
-| Your target | Setup |
-| --- | --- |
-| NVIDIA Jetson Orin Nano or AGX Orin developer kit | [Full USB recovery](https://docs.wendy.dev/latest/installation/wendyos-nvidia-jetson-orin-nano/) updates boot firmware and OS together. |
-| NVIDIA Jetson AGX Thor | [USB recovery guide](https://docs.wendy.dev/latest/installation/wendyos-nvidia-jetson-agx-thor/) |
-| Raspberry Pi 3, 4, or 5 | [Write a microSD card and connect the Pi](https://docs.wendy.dev/latest/installation/wendyos-raspberry-pi-5/) |
-| Existing Linux computer or robot | [Install Wendy Agent](https://docs.wendy.dev/latest/installation/linux/) and keep your OS. |
-| Unitree G1 | [Install the Agent on the development computer](https://docs.wendy.dev/latest/installation/wendy-agent-unitree-g1/) and keep the vendor OS. |
-| Apple Silicon Mac | [Native Mac target](https://docs.wendy.dev/latest/installation/wendy-agent-macos/), currently beta. |
-| ESP32 | [Wendy Lite setup](https://docs.wendy.dev/latest/installation/wendy-lite-esp32/), currently beta. |
-
-The board guides list storage, power, and cable requirements before flashing.
-Flashing erases the selected target storage. Confirm the intended device boots
-and appears in `wendy discover` before deploying your first app.
-
-For guided device setup, run `wendy tour --hardware`. Once connected, create a small HTTP app:
-
-```sh
-wendy init hello-wendy --target wendyos --language node --template simple-api --assistant skip --git-init no
+wendy init hello-wendy --target wendyos --language node --template simple-api --var APP_ID=hello-wendy --assistant skip --git-init no
 cd hello-wendy
 wendy run
 ```
 
 Select your device. Open the address Wendy prints and check for
-`{"message":"hello-world"}`. Edit `src/index.ts`, save, then run `wendy run` again
-to rebuild and deploy your change. Node.js runs inside the container.
+`{"message":"hello-world"}`. Press Ctrl+C, edit `src/index.ts`, save, then run
+`wendy run` again against the same target. Node.js runs inside the container.
+Follow the [full walkthrough](https://docs.wendy.dev/latest/getting-started/app/)
+for watch mode, local-only Linux targets, and stopping the app when finished.
+
+## Why Wendy?
+
+The CLI runs on your computer; Wendy Agent runs on your device,
+manages your apps, and returns logs. Install the Agent on an existing Linux system,
+or use WendyOS with the Agent included.
+
+- **Build and deploy:** use Docker or Compose, build for the target, and send changes with `wendy run`.
+- **Work with hardware:** declare camera, GPU, and device access in `wendy.json`; inspect ROS 2 nodes and topics.
+- **Use a coding agent:** connect through MCP to deploy changes and inspect the device.
+
+Local development needs no cloud account. [Wendy Cloud](https://cloud.wendy.dev)
+adds remote access and fleet management. [Compare deployment options](https://docs.wendy.dev/latest/concepts/why-wendy/).
 
 ## Build with a coding agent
 
@@ -141,11 +100,17 @@ wendy mcp setup
 ```
 
 Follow the [coding-agent setup guide](https://docs.wendy.dev/latest/guides/llm-integration/)
-for supported tools. For ChatGPT Desktop, see the [ChatGPT guide](docs/guides/chatgpt.mdx).
+for supported tools. For ChatGPT, see the [ChatGPT guide](https://docs.wendy.dev/latest/guides/chatgpt/).
+
 
 ## Keep building
 
-- [Tutorials](https://docs.wendy.dev/latest/guides/tutorials/) cover Python, Swift, Rust, C++, TypeScript, and more.
-- [Hardware access](https://docs.wendy.dev/latest/hardware/) covers cameras, audio, Bluetooth, and GPUs.
-- [Examples](Examples) include robot control, local AI, and web apps.
-- [Wendy Cloud](https://cloud.wendy.dev) adds remote access and fleet management when you need it. Local development does not require a cloud account.
+- [Robot apps](https://docs.wendy.dev/latest/integrations/ros2/) with ROS 2 in containers, remote topic inspection, and a Foxglove bridge.
+- [Camera and AI apps](https://docs.wendy.dev/latest/hardware/) with access to cameras, audio, and GPUs.
+- [Multi-service apps](https://docs.wendy.dev/latest/guides/multi-app-deployments/) with ROS 2 talkers, listeners, and shared configuration.
+- [Data collection](https://docs.wendy.dev/latest/data/) that records sensor data, app events, and model results around triggers.
+
+Browse the [examples](Examples) or follow a
+[tutorial](https://docs.wendy.dev/latest/guides/tutorials/) to build your next app.
+[Wendy Cloud](https://cloud.wendy.dev) adds remote access and fleet management.
+Local development does not require a cloud account.

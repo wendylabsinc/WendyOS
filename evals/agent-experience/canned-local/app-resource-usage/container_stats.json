@@ -1,0 +1,32 @@
+{
+  "tool": "container_stats",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"stats\": [{\"app_name\": \"sensor-dashboard_web\", \"memory_bytes\": 10133504, \"storage_bytes\": 18544712}, {\"app_name\": \"sh.wendy.evals.model-tool-report\", \"memory_bytes\": 259190784, \"storage_bytes\": 4611384831}]}"
+        }
+      ],
+      "structuredContent": {
+        "stats": [
+          {
+            "app_name": "sensor-dashboard_web",
+            "memory_bytes": 10133504,
+            "storage_bytes": 18544712
+          },
+          {
+            "app_name": "sh.wendy.evals.model-tool-report",
+            "memory_bytes": 259190784,
+            "storage_bytes": 4611384831
+          }
+        ]
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "895e0203ec308ff4b5710ddcc46a99fde5315f3f77f200da11c8a70a4c61bbb0",
+    "device_kind": "local"
+  }
+}

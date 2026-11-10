@@ -19,11 +19,12 @@ import (
 // v2 uses UUIDs. Keep them intact in JSON instead of converting them into the
 // numeric identifiers used by legacy sessions.
 type cloudDiscoverV2Info struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Address string `json:"address"`
-	Version string `json:"version,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Address       string `json:"address"`
+	Version       string `json:"version,omitempty"`
+	PKIDeviceName string `json:"pkiDeviceName,omitempty"`
 }
 
 func fetchCloudAssetsV2(ctx context.Context, auth *config.AuthConfig, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
@@ -106,17 +107,35 @@ func legacyDiscoveryDevices(assets []*cloudpb.Asset) []cloudDiscoveryDevice {
 }
 
 func fetchCloudDiscoveryDevices(ctx context.Context, auth *config.AuthConfig, onlineOnly bool) ([]cloudDiscoveryDevice, error) {
+	return readCloudDiscoveryDevices(ctx, auth, onlineOnly, true)
+}
+
+// listCloudDiscoveryDevices reads the roster without seeding pins from it, for
+// lookups that do not go on to use what they find: an offline re-query that
+// only explains a miss, or an unenrollment that deletes the asset it finds.
+func listCloudDiscoveryDevices(ctx context.Context, auth *config.AuthConfig, onlineOnly bool) ([]cloudDiscoveryDevice, error) {
+	return readCloudDiscoveryDevices(ctx, auth, onlineOnly, false)
+}
+
+func readCloudDiscoveryDevices(ctx context.Context, auth *config.AuthConfig, onlineOnly, seedPins bool) ([]cloudDiscoveryDevice, error) {
 	if len(auth.Certificates) == 0 || auth.Certificates[0].PrincipalURI == "" {
 		assets, err := fetchCloudAssetsFiltered(ctx, auth, onlineOnly)
 		if err != nil {
 			return nil, err
 		}
-		seedPinsFromAssetsBestEffort(auth, assets)
+		if seedPins {
+			seedPinsFromAssetsBestEffort(auth, assets)
+		}
 		return legacyDiscoveryDevices(assets), nil
 	}
 	assets, err := fetchCloudAssetsV2(ctx, auth, onlineOnly)
 	if err != nil {
 		return nil, err
+	}
+	if seedPins {
+		if err := seedPinsFromCloudAssetsV2(auth, assets); err != nil {
+			debugPinSeed("seeding UUID cloud pins failed: %v", err)
+		}
 	}
 	devices := make([]cloudDiscoveryDevice, 0, len(assets))
 	for _, a := range assets {
@@ -133,9 +152,8 @@ func (d cloudDiscoveryDevice) info(ver *agentpb.GetAgentVersionResponse) any {
 	if deviceType == "" {
 		deviceType = humanReadableOSType(d.GetOsType(), d.GetArchitecture())
 	}
-	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress()}
+	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress(), PKIDeviceName: d.v2.GetPkiDeviceName()}
 	if d.isLite() {
-		info.Type = liteDeviceType(info.Type)
 		info.Version = d.v2.GetOsVersion()
 		return info
 	}
@@ -212,7 +230,9 @@ func pickCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, name
 	}
 	var missing *errCloudDeviceNotFound
 	if errors.Is(err, errNoCloudDevicesEnrolled) || errors.As(err, &missing) {
-		all, fetchErr := fetchCloudDiscoveryDevices(ctx, auth, false)
+		// Like the legacy pickCloudDeviceFromRoster, this re-query only
+		// explains the miss, so it does not seed pins again.
+		all, fetchErr := listCloudDiscoveryDevices(ctx, auth, false)
 		if fetchErr == nil {
 			if name == "" && len(all) > 0 {
 				return cloudDiscoveryDevice{}, commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check the agents' Cloud presence logs ('wendy cloud discover --all --json' lists enrolled devices)", len(all))

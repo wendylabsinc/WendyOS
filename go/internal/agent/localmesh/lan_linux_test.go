@@ -456,7 +456,7 @@ func lanDevice(t *testing.T, number int) meshid.Device {
 }
 func lanIdentityDevice(t *testing.T, identity TCPIdentity) meshid.Device {
 	t.Helper()
-	c, err := NewCredentials(identity.Certificate, identity.Chain, identity.Key)
+	c, err := newTestCredentials(identity.Certificate, identity.Chain, identity.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,6 +481,8 @@ func TestLANWorkerFailureClosesPendingConnections(t *testing.T) {
 	for _, failure := range []string{"responder", "socket", "cancel"} {
 		t.Run(failure, func(t *testing.T) {
 			a, b := testCredentials(t)
+			node := newActorTestNode(t, b, &handoffActorNetwork{})
+			t.Cleanup(func() { node.cancel(); _ = node.Stop() })
 			socket, err := net.ListenPacket("udp4", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
@@ -497,7 +499,7 @@ func TestLANWorkerFailureClosesPendingConnections(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
 				selected := lanInterface{iface: net.Interface{Name: "no-such-lan"}, ip: net.IPv4(127, 0, 0, 1), net: &net.IPNet{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)}, cost: EthernetLinkCost}
-				done <- serveLANInterface(ctx, LANConfig{Credentials: b}, selected, lanTestClaims(b), socket, mdnsConn, nil)
+				done <- serveLANInterface(ctx, LANConfig{Credentials: b, Node: node}, selected, lanTestClaims(b), socket, mdnsConn, nil)
 			}()
 			tlsConfig, err := a.PeerTLS(b.Device)
 			if err != nil {
@@ -571,7 +573,7 @@ func TestLANWorkerFailureClosesPendingConnections(t *testing.T) {
 	}
 }
 
-func TestLANIncomingAdmissionBoundAndSubnet(t *testing.T) {
+func TestLANIncomingAdmissionBoundAndAddress(t *testing.T) {
 	selected := lanInterface{net: &net.IPNet{IP: net.IPv4(192, 0, 2, 0), Mask: net.CIDRMask(24, 32)}}
 	claims := lanTestClaims(&Credentials{Device: lanDevice(t, 460)})
 	gate := lanIncomingContext(selected, claims)
@@ -592,8 +594,8 @@ func TestLANIncomingAdmissionBoundAndSubnet(t *testing.T) {
 	if _, err := gate(context.Background(), info); err == nil {
 		t.Fatal("unbounded unauthenticated state")
 	}
-	if _, err := gate(context.Background(), &quic.ClientInfo{RemoteAddr: &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2)}}); err == nil {
-		t.Fatal("off-subnet source admitted")
+	if _, err := gate(context.Background(), &quic.ClientInfo{RemoteAddr: &net.UDPAddr{IP: net.IPv4(169, 254, 1, 2)}}); err == nil {
+		t.Fatal("off-subnet link-local source admitted")
 	}
 	cancels[0]()
 	deadline := time.Now().Add(time.Second)

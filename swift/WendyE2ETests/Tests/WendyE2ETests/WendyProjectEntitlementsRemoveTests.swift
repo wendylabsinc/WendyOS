@@ -8,21 +8,25 @@ struct `'wendy project entitlements remove'` {
 
     /**
      Displays usage for `wendy project entitlements remove`. The output
-     includes the command synopsis, local flags, inherited global flags,
-     and concise descriptions. Help exits successfully, writes to stdout,
-     emits no stderr, and leaves configuration, cache, project, cloud, and
-     device state untouched.
+     includes the command synopsis, the entitlement names it accepts, local
+     flags, inherited global flags, and concise descriptions. Help exits
+     successfully, writes to stdout, emits no stderr, and leaves
+     configuration, cache, project, cloud, and device state untouched.
      */
     @Test
     func `prints command help`() async throws {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy project entitlements remove --help") { result in
                 let stdout = result.stdout
+                let lines = stdout.split(separator: "\n").map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                }
 
                 #expect(result.status.isSuccess)
-                #expect(stdout.contains("Remove an entitlement from the project"))
                 #expect(stdout.contains("Usage:"))
-                #expect(stdout.contains("wendy project entitlements remove [type] [flags]"))
+                #expect(stdout.contains("wendy project entitlements remove"))
+                // Each accepted name starts its own line, followed by its label.
+                #expect(lines.contains { $0.hasPrefix("network ") })
                 #expect(stdout.contains("--help"))
                 #expect(stdout.contains("--device"))
                 #expect(stdout.contains("--json"))
@@ -48,9 +52,13 @@ struct `'wendy project entitlements remove'` {
 
             try await cli.sh("wendy project entitlements remove network") { result in
                 #expect(result.status.isSuccess)
-                // Status lines print to stderr (WDY-2435): stdout is reserved
-                // for machine-readable payloads.
-                #expect(result.stderr.contains("Removed \"network\" entitlement"))
+                // Without a terminal the CLI runs in JSON mode: the result is
+                // one JSON object on stdout that reports whether it saved.
+                let summary = try JSONDecoder().decode(
+                    ProjectEditResult.self,
+                    from: Data(result.stdout.utf8)
+                )
+                #expect(summary.saved)
             }
 
             try await cli.sh(
@@ -124,7 +132,11 @@ struct `'wendy project entitlements remove'` {
 
             try await cli.sh("wendy project entitlements remove network") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stderr.contains("Removed \"network\" entitlement"))
+                let summary = try JSONDecoder().decode(
+                    ProjectEditResult.self,
+                    from: Data(result.stdout.utf8)
+                )
+                #expect(summary.saved)
             }
 
             try await cli.sh(

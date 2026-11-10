@@ -24,6 +24,7 @@ const (
 // Tests shorten this interval to exercise the SIGKILL fallback without a
 // ten-second sleep; production uses the same grace as an explicit stop.
 var nanReplacementGracePeriod = stopGracePeriod
+var npuStopGracePeriod = 30 * time.Second
 
 // teardownTask is the subset of containerd.Task the teardown helpers use,
 // factored out so the SIGTERM→SIGKILL escalation and group-kill fallback can
@@ -36,14 +37,69 @@ type teardownTask interface {
 
 // terminateReplacedTask gives a NAN app time to cancel its publish and NDP
 // handles before replacing its container. Those handles live in the host
-// supplicant and survive an abrupt app SIGKILL. Other apps retain the existing
-// immediate whole-process-group kill behavior. terminateTask still escalates
-// a NAN app to SIGKILL after the bounded stop grace period.
-func (c *Client) terminateReplacedTask(ctx context.Context, task teardownTask, containerID string, oldHadNAN bool) error {
+// supplicant and survive an abrupt app SIGKILL. NPU apps use their owner's
+// ordered teardown without forced escalation. Other apps retain the existing
+// immediate whole-process-group kill behavior; NAN grace remains bounded.
+func (c *Client) terminateReplacedTask(ctx context.Context, task teardownTask, containerID string, oldHadNAN, oldHadNPU bool) error {
+	if oldHadNPU {
+		return c.terminateNPUTask(ctx, task, containerID)
+	}
 	if oldHadNAN {
 		return c.terminateTask(ctx, task, containerID, syscall.SIGTERM, nanReplacementGracePeriod, killWaitTimeout)
 	}
 	return c.terminateTask(ctx, task, containerID, syscall.SIGKILL, killWaitTimeout, killWaitTimeout)
+}
+
+// terminateNPUTask lets the owner release its FastRPC/HTP resources in order.
+// A force-killed loaded Genie process can wedge the IQ9 beyond agent recovery.
+// If cleanup cannot be confirmed, retain the task and fail the operation; never
+// silently escalate to a group SIGKILL or load a second model over the first.
+func (c *Client) terminateNPUTask(ctx context.Context, task teardownTask, containerID string) error {
+	waitCh, err := task.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot observe NPU task %q exit; refusing forced teardown: %w", containerID, err)
+	}
+	// Signal only the owner. Its child may have default signal dispositions
+	// and must stay alive long enough to process the owner's cleanup protocol.
+	if err := task.Kill(ctx, syscall.SIGTERM); err != nil && !taskGone(err) {
+		return fmt.Errorf("signalling NPU task %q: %w", containerID, err)
+	}
+	timer := time.NewTimer(npuStopGracePeriod)
+	defer timer.Stop()
+	select {
+	case exit, ok := <-waitCh:
+		if !ok {
+			return fmt.Errorf("NPU task %q exit observation ended without a result; refusing forced teardown", containerID)
+		}
+		if _, _, err := exit.Result(); err != nil {
+			return fmt.Errorf("cannot confirm NPU task %q exit; refusing forced teardown: %w", containerID, err)
+		}
+	case <-timer.C:
+		return fmt.Errorf("NPU task %q did not exit within %s; refusing SIGKILL and replacement", containerID, npuStopGracePeriod)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	// Delete without WithProcessKill: an unreleased descendant must cause a
+	// visible failure, not another forced FastRPC teardown.
+	if _, err := task.Delete(ctx); err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("deleting stopped NPU task %q without forced kill: %w", containerID, err)
+	}
+	c.logger.Info("NPU task exited without forced teardown", zap.String("container_id", containerID))
+	return nil
+}
+
+// A missing task can proceed to ordinary container metadata deletion, which
+// does not kill processes. Any other lookup failure leaves NPU ownership
+// unknown and must not enter the legacy forced runtime-recovery path.
+func (c *Client) recoverReplacedTaskLookup(ctx context.Context, containerID string, hadNPU bool, lookupErr error) error {
+	if hadNPU {
+		if !errdefs.IsNotFound(lookupErr) {
+			return fmt.Errorf("cannot observe NPU task %q; refusing forced teardown: %w", containerID, lookupErr)
+		}
+		return nil
+	}
+	c.forceDeleteTask(ctx, containerID)
+	return nil
 }
 
 // Compile-time check that containerd.Task satisfies teardownTask.

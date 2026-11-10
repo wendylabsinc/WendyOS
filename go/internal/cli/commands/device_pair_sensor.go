@@ -50,24 +50,33 @@ type sensorPairHandler struct {
 }
 
 func (h *sensorPairHandler) scan() tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(h.ctx, 15*time.Second)
-		defer cancel()
-		resp, err := h.client.ListSensorPairings(ctx, &agentpbv2.ListSensorPairingsRequest{})
-		msg := sensorPairScanMsg{}
-		if err != nil {
-			msg.pairingsErr = cleanRPCError(err)
-		} else {
-			msg.pairings = resp.GetPairings()
-			msg.principalPairing = resp.GetSupportsPrincipalPairing()
-		}
-		msg.devices, msg.localNetwork, msg.discoveryErr = h.discoverSources(ctx)
-		if msg.discoveryErr == nil {
-			msg.discoveryErr = ctx.Err()
-		}
-		return msg
-	}
+	return func() tea.Msg { return h.load(h.ctx) }
 }
+
+// load reads the device's saved pairings and the sensor sources on its
+// network. The SensorLink tab and the scripted operations both start here.
+func (h *sensorPairHandler) load(ctx context.Context) sensorPairScanMsg {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	resp, err := h.client.ListSensorPairings(ctx, &agentpbv2.ListSensorPairingsRequest{})
+	msg := sensorPairScanMsg{}
+	if err != nil {
+		msg.pairingsErr = cleanRPCError(err)
+	} else {
+		msg.pairings = resp.GetPairings()
+		msg.principalPairing = resp.GetSupportsPrincipalPairing()
+	}
+	msg.devices, msg.localNetwork, msg.discoveryErr = h.discoverSources(ctx)
+	if msg.discoveryErr == nil {
+		msg.discoveryErr = ctx.Err()
+	}
+	return msg
+}
+
+// errSensorDiscoveryUnsupported is discoverSources' answer for an agent that
+// predates DiscoverSensorSources when no local fallback is configured, as for
+// scripted pairing.
+var errSensorDiscoveryUnsupported = errors.New("this device's Wendy Agent cannot scan its network for sensor sources; update it")
 
 // discoverSources asks the device which sensor sources it sees on its own
 // network, since that is where its agent looks for the source after pairing.
@@ -79,7 +88,7 @@ func (h *sensorPairHandler) discoverSources(ctx context.Context) (devices []mode
 	resp, err := h.client.DiscoverSensorSources(ctx, &agentpbv2.DiscoverSensorSourcesRequest{})
 	if status.Code(err) == codes.Unimplemented {
 		if h.discoverLocal == nil {
-			return nil, false, errors.New("this device's Wendy Agent cannot scan its network for sensor sources; update it")
+			return nil, false, errSensorDiscoveryUnsupported
 		}
 		devices, err = h.discoverLocal(ctx)
 		return devices, true, err
@@ -109,65 +118,73 @@ func sensorDiscoveryError(ctx context.Context, err error) error {
 
 func (h *sensorPairHandler) pair(source models.DiscoveredDevice) tea.Cmd {
 	return func() tea.Msg {
-		msg := sensorPairOpMsg{assetID: source.AssetID, principal: sensorSourcePrincipal(source)}
-		var err error
-		if msg.principal != "" {
-			if h.tenantIDs == nil {
-				err = fmt.Errorf("sign in to the sensor's organization before pairing")
-			} else {
-				var tenants map[string]bool
-				tenants, err = h.tenantIDs()
-				if err == nil && !tenants[source.TenantUUID] {
-					err = fmt.Errorf("sign in to the sensor's organization before pairing")
-				}
-			}
-		} else {
-			var orgs map[int32]bool
-			orgs, err = h.orgIDs()
-			if err == nil {
-				err = orgAllowed(orgs, source.OrgID)
-			}
-		}
-		if err != nil {
-			msg.err = err
-			return msg
-		}
-		ctx, cancel := context.WithTimeout(h.ctx, 30*time.Second)
-		defer cancel()
-		// Send no address, even one the device itself discovered: the consumer
-		// resolves the source by identity on its own network and re-resolves
-		// on every reconnect, while a pinned address would be reused even
-		// after the source moves.
-		resp, err := h.client.AddSensorPairing(ctx, &agentpbv2.AddSensorPairingRequest{
-			SourceAssetId: source.AssetID, SourcePrincipalUri: msg.principal, Name: pairingName(h.name, &source),
-			SensorAllowlist: h.sensors, Transport: transportForDevice(source),
-		})
-		if err != nil {
-			msg.err = cleanRPCError(err)
-		} else {
-			msg.pairing = resp.GetPairing()
-			if msg.pairing == nil {
-				msg.pairing = &agentpbv2.SensorPairing{
-					SourceAssetId: source.AssetID, SourcePrincipalUri: msg.principal, OrgId: source.OrgID,
-					Name: pairingName(h.name, &source), SensorAllowlist: h.sensors,
-					Transport: transportForDevice(source),
-				}
-			}
-		}
-		return msg
+		pairing, err := h.add(h.ctx, source)
+		return sensorPairOpMsg{assetID: source.AssetID, principal: sensorSourcePrincipal(source), pairing: pairing, err: err}
 	}
+}
+
+// add pairs the device with source once the source's organization or tenant
+// is one the CLI is signed in to.
+func (h *sensorPairHandler) add(ctx context.Context, source models.DiscoveredDevice) (*agentpbv2.SensorPairing, error) {
+	principal := sensorSourcePrincipal(source)
+	var err error
+	if principal != "" {
+		if h.tenantIDs == nil {
+			err = fmt.Errorf("sign in to the sensor's organization before pairing")
+		} else {
+			var tenants map[string]bool
+			tenants, err = h.tenantIDs()
+			if err == nil && !tenants[source.TenantUUID] {
+				err = fmt.Errorf("sign in to the sensor's organization before pairing")
+			}
+		}
+	} else {
+		var orgs map[int32]bool
+		orgs, err = h.orgIDs()
+		if err == nil {
+			err = orgAllowed(orgs, source.OrgID)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	// Send no address, even one the device itself discovered: the consumer
+	// resolves the source by identity on its own network and re-resolves
+	// on every reconnect, while a pinned address would be reused even
+	// after the source moves.
+	resp, err := h.client.AddSensorPairing(ctx, &agentpbv2.AddSensorPairingRequest{
+		SourceAssetId: source.AssetID, SourcePrincipalUri: principal, Name: pairingName(h.name, &source),
+		SensorAllowlist: h.sensors, Transport: transportForDevice(source),
+	})
+	if err != nil {
+		return nil, cleanRPCError(err)
+	}
+	if pairing := resp.GetPairing(); pairing != nil {
+		return pairing, nil
+	}
+	return &agentpbv2.SensorPairing{
+		SourceAssetId: source.AssetID, SourcePrincipalUri: principal, OrgId: source.OrgID,
+		Name: pairingName(h.name, &source), SensorAllowlist: h.sensors,
+		Transport: transportForDevice(source),
+	}, nil
 }
 
 func (h *sensorPairHandler) forget(row sensorPairRow) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(h.ctx, 30*time.Second)
-		defer cancel()
-		_, err := h.client.RemoveSensorPairing(ctx, &agentpbv2.RemoveSensorPairingRequest{SourceAssetId: row.assetID, SourcePrincipalUri: row.principal})
-		if err != nil {
-			err = cleanRPCError(err)
-		}
+		err := h.remove(h.ctx, row.assetID, row.principal)
 		return sensorPairOpMsg{assetID: row.assetID, principal: row.principal, err: err}
 	}
+}
+
+func (h *sensorPairHandler) remove(ctx context.Context, assetID int32, principal string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := h.client.RemoveSensorPairing(ctx, &agentpbv2.RemoveSensorPairingRequest{SourceAssetId: assetID, SourcePrincipalUri: principal}); err != nil {
+		return cleanRPCError(err)
+	}
+	return nil
 }
 
 type sensorPairRow struct {
@@ -184,7 +201,7 @@ func sensorPairRows(devices []models.DiscoveredDevice, pairings []*agentpbv2.Sen
 	byID := make(map[string]sensorPairRow)
 	for i := range devices {
 		d := &devices[i]
-		if d.Sensorlink && (d.AssetID > 0 || (d.IsMTLS && sensorSourcePrincipal(*d) != "")) {
+		if d.Sensorlink && sensorSourcePairable(*d) {
 			principal := sensorSourcePrincipal(*d)
 			byID[sensorPairKey(d.AssetID, principal)] = sensorPairRow{assetID: d.AssetID, principal: principal, name: d.DisplayName, source: d}
 		}
@@ -361,16 +378,8 @@ func (m sensorPairModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.busy, m.message = true, "Forgetting "+row.name+"..."
 				return m, m.handler.forget(row)
 			}
-			if row.pairing != nil {
-				m.message = "Already paired with " + row.name + "."
-				return m, nil
-			}
-			if !m.pairingsKnown {
-				m.message = "Rescan to load current pairings before pairing a device."
-				return m, nil
-			}
-			if row.principal != "" && !m.principalPairing {
-				m.message = "Update the target Wendy Agent to pair PKI-enrolled sensors."
+			if refusal := sensorPairRefusal(row, m.pairingsKnown, m.principalPairing); refusal != "" {
+				m.message = refusal
 				return m, nil
 			}
 			if row.source == nil {
@@ -392,18 +401,11 @@ func (m sensorPairModel) View() string {
 	}
 	var unenrolled, enrolledUnsupported []string
 	for _, source := range m.devices {
-		if !source.Sensorlink || source.AssetID > 0 || (source.IsMTLS && sensorSourcePrincipal(source) != "") {
+		if !source.Sensorlink || sensorSourcePairable(source) {
 			continue
 		}
-		label := source.DisplayName
-		if address := source.Address(); address != "" {
-			if label == "" {
-				label = address
-			} else {
-				label += " (" + address + ")"
-			}
-		}
-		if source.WendyLite && source.IsMTLS && source.TenantUUID != "" {
+		label := sensorSourceLabel(source)
+		if sensorSourcePKIUnsupported(source) {
 			enrolledUnsupported = append(enrolledUnsupported, tui.StripControl(label))
 		} else {
 			unenrolled = append(unenrolled, tui.StripControl(label))
@@ -449,6 +451,50 @@ func (m sensorPairModel) View() string {
 		body = tui.CropANSIView(body, 0, m.width)
 	}
 	return body
+}
+
+// sensorPairRefusal says why the SensorLink tab or a scripted pair will not
+// pair row, or returns "" when it can. pairingsKnown is whether the device's
+// saved pairings loaded, and principalPairing whether its agent can pair by
+// principal.
+func sensorPairRefusal(row sensorPairRow, pairingsKnown, principalPairing bool) string {
+	switch {
+	case row.pairing != nil:
+		return "Already paired with " + row.name + "."
+	case !pairingsKnown:
+		return "Rescan to load current pairings before pairing a device."
+	case row.principal != "" && !principalPairing:
+		return "Update the target Wendy Agent to pair PKI-enrolled sensors."
+	}
+	return ""
+}
+
+// sensorSourcePairable reports whether a discovered source carries an
+// identity to pair by: a legacy asset ID, or a PKI principal over mTLS.
+// Other SensorLink sources need enrollment first.
+func sensorSourcePairable(d models.DiscoveredDevice) bool {
+	return d.AssetID > 0 || (d.IsMTLS && sensorSourcePrincipal(d) != "")
+}
+
+// sensorSourcePKIUnsupported reports whether a source without a pairable
+// identity is a Wendy Lite board already enrolled in a PKI tenant, which this
+// version cannot pair, rather than one needing enrollment.
+func sensorSourcePKIUnsupported(d models.DiscoveredDevice) bool {
+	return d.WendyLite && d.IsMTLS && d.TenantUUID != ""
+}
+
+// sensorSourceLabel names a discovered source by its display name and the
+// address the device sees it at.
+func sensorSourceLabel(d models.DiscoveredDevice) string {
+	label := d.DisplayName
+	if address := d.Address(); address != "" {
+		if label == "" {
+			label = address
+		} else {
+			label += " (" + address + ")"
+		}
+	}
+	return label
 }
 
 func sensorSourcePrincipal(d models.DiscoveredDevice) string {

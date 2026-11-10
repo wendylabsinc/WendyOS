@@ -18,6 +18,7 @@ type PageProps = {
 // OpenGraph cards keyed by page slug.
 const pageOgImages: Record<string, string> = {
   'installation/wendyos-nvidia-jetson-agx-thor': '/images/opengraph-thor.png',
+  'installation/wendyos-qualcomm-dragonwing': '/images/opengraph-dragonwing.png',
   'integrations/ros2': '/images/opengraph-ros2.png',
   'guides/tutorials/mojo/hello-world': '/images/opengraph-mojo.png',
   'guides/tutorials/mojo/simple-web-server': '/images/opengraph-mojo.png',
@@ -36,6 +37,8 @@ const tutorialOgImages: Record<string, string> = {
 };
 
 const legacyRedirects: Record<string, string> = {
+  'apps/wendy.json': '/reference/app-configuration/',
+  'advanced/apps/wendy.json': '/reference/app-configuration/',
   'installation/wendyos-nvidia-jetson': '/installation/wendyos-nvidia-jetson-orin-nano/',
   'installation/wendy-agent-linux': '/installation/linux/',
   'installation/ubuntu': '/installation/linux/',
@@ -44,6 +47,11 @@ const legacyRedirects: Record<string, string> = {
   'get-started/hardware': '/',
   'get-started/mac': '/installation/wendy-agent-macos/',
   'installation/developer-machine-setup': '/',
+  'advanced/wendyos/mender-update': '/advanced/wendyos/ota-update/',
+  'advanced/clients/wendy-cli/commands/analytics/disable': '/reference/cli/analytics/disable/',
+  'advanced/clients/wendy-cli/commands/analytics/enable': '/reference/cli/analytics/enable/',
+  'advanced/clients/wendy-cli/commands/cache/clear': '/reference/cli/cache/clear/',
+  'guides/tutorials/typescript/simple-web-server': '/getting-started/app/',
 };
 
 function getLegacyRedirect(slug?: string[]) {

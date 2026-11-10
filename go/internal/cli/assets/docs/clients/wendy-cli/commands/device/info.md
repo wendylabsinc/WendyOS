@@ -35,7 +35,7 @@ Two headline hardware specs are included when the agent reports them. Both are o
 | `cpuCount` | `CPU Cores:` | Number of online logical CPU cores. |
 | `memTotalBytes` | `Memory:` | Total physical RAM in bytes; human-readable output shows a formatted size (e.g. `131.9 GB`). |
 
-For **live** CPU and memory utilization, use [`wendy device top`](top.md).
+For **live** CPU and memory utilization, use [`wendy device top`](./top.md).
 
 ### Power mode output
 
@@ -45,9 +45,11 @@ On NVIDIA Jetson devices the agent reports the current power mode (nvpmodel), sh
 {"powerMode": {"id": 2, "name": "MODE_30W"}}
 ```
 
-The field is omitted on devices that are not a Jetson, when the mode cannot be read, and on agents that predate it. To see every available mode or switch, use [`wendy device power-mode`](power-mode.md).
+The field is omitted on devices that are not a Jetson, when the mode cannot be read, and on agents that predate it. To see every available mode or switch, use [`wendy device power-mode`](./power-mode.md).
 
 ### Storage output fields
+
+`Storage:` (`storageMedium` in JSON) is the medium the device booted from: the disk that holds `/`. It is one of `nvme`, `emmc`, `sd`, `ufs` or `usb`. When the agent cannot tell what the disk is, it shows the image's own value instead (for example `disk` on a VM, or on x86 booted from SATA). The field is omitted on hosts that are not WendyOS. Older agents report the value the image was built with, which can be wrong when the image boots from more than one kind of disk.
 
 When the agent can identify the filesystem that holds `/var/lib/containerd`, it is reported alongside the mounted partitions. The field is omitted from the JSON map when inspection fails or the agent predates it.
 
@@ -81,7 +83,7 @@ Detection requires a non-secure FastRPC node: the signed-PD nodes are root-only,
 
 FastRPC is the DSP's transport, so it is evidence for the NPU alone. A Dragonwing reports `NPU: qualcomm (qnn)` and no GPU compute backend for the Adreno beside it.
 
-`wendy device info` reports static GPU *metadata* (vendor, architecture, toolkit versions). For **live** GPU utilization, memory, temperature, and power draw, use [`wendy device top`](top.md).
+`wendy device info` reports static GPU *metadata* (vendor, architecture, toolkit versions). For **live** GPU utilization, memory, temperature, and power draw, use [`wendy device top`](./top.md).
 
 ### Network output
 
@@ -93,6 +95,9 @@ Loopback, down, and container/virtual bridge interfaces are omitted, as are link
 |---|---|---|
 | `networkInterfaces[].name` | (row label) | Interface name (e.g. `eth0`, `wlan0`). |
 | `networkInterfaces[].ipAddresses` | (row value) | Routable IPv4/IPv6 addresses assigned to the interface. |
+| `networkInterfaces[].isDefaultRoute` | `default route` | `true` on the interface the device's internet traffic leaves through now. Absent on other interfaces and from older agents. |
+| `networkInterfaces[].routeMetric` | `metric N` | Lowest metric of the interface's default routes; the kernel prefers the lowest. Absent when the interface has no default route. |
+| `networkInterfaces[].connectivity` | `internet: <state>` | NetworkManager's connectivity check for the interface: `full`, `limited`, `portal` or `none`. Absent when NetworkManager runs no connectivity check, which is the case on current WendyOS images. |
 
 ### OS Update output
 

@@ -27,7 +27,7 @@ command from inside `go/`.**
 | --- | --- |
 | `go/cmd/wendy` | The `wendy` CLI (macOS, Linux, Windows) |
 | `go/cmd/wendy-agent` | The `wendy-agent` runtime (Linux only) |
-| `go/cmd/test_mtls`, `go/cmd/local-pki-test` | Small standalone mTLS/PKI test harnesses |
+| `go/cmd/test_mtls` | Standalone mTLS connection test harness |
 | `go/internal/cli/...` | CLI commands, providers, gRPC client, TUI |
 | `go/proto/gen/` | **Generated** Go protobuf/gRPC code (do not hand-edit) |
 | `go/Makefile` | Build / test / proto / lint entrypoints |
@@ -196,15 +196,12 @@ in-process end-to-end test of the agent's gRPC surface. It stands up a real gRPC
 server over an in-memory `bufconn` listener with mock managers — no hardware or
 containerd needed — and runs as part of `go test ./...`.
 
-**mTLS / PKI harnesses** (standalone `main` programs, run with `go run`, not part
+**mTLS probe** (a standalone `main` program, run with `go run`, not part
 of `go test`):
 
 ```sh
 # Quick "does my client cert connect over mTLS" probe against a provisioned agent
 go run ./cmd/test_mtls -addr <host>:<port>
-
-# Full local enrollment + mTLS pipeline against a local pkicore instance
-go run ./cmd/local-pki-test --cloud localhost:50051 --agent localhost:50053
 ```
 
 **CI** (`.github/workflows/go-tests.yml`) runs the race suite, `go vet`, and a
@@ -397,6 +394,16 @@ keyed by Media Access Control (MAC) address, and allocates each one a device ID
 from the reserved 200-255 band. That band is also where the camera's future
 v4l2loopback node number comes from, so the ID does not change later.
 
+The probe goes out of every interface, so it also finds other people's cameras
+on a shared LAN. A camera counts as paired once a login is stored for it, and
+only paired cameras are listed, get a loopback node, or are contacted beyond the
+probe: the agent neither asks unpaired cameras for stream paths nor dials them
+for liveness. `ListVideoDevices` lists unpaired cameras only with
+`include_unpaired`. `RefreshCameras` is the pairing scan and always lists them,
+because a CLI from before that field sends an empty request to pair. On startup the agent drops discovered records that have
+no login and no lease from a camera link, with any loopback node an older agent
+made for them; a real camera is found again next round.
+
 ```sh
 wendy device camera login 200 --user admin   # prompts without echo
 wendy device camera forget 200
@@ -434,9 +441,9 @@ serving DHCP on camera link     {"address": "10.98.0.1/24", "pool": "10.98.0.50+
 camera leased an address        {"address": "10.98.0.50", "cameraId": "200"}
 ```
 
-Diagnostics live behind the same command. `camera list` reports `needs login` for
-a camera with no stored credentials and `offline` for one the last probe could not
-reach, so both are visible before a stream fails.
+Diagnostics live behind the same command. `camera list` reports `offline` for a
+paired camera the last check could not reach, and counts the cameras it hid for
+having no login; `camera list --all` shows those with `needs login`.
 
 ---
 
@@ -454,7 +461,7 @@ reach, so both are visible before a stream fails.
 | `WENDY_TIMING` | Print build/run sub-phase timing to stderr. |
 | `WENDY_CHUNK_UPLOAD_STREAMS` | Concurrent WriteChunks streams per layer upload (1–8, default 4). |
 | `WENDY_CHUNK_UPLOAD_BATCH` | Chunks per stream (1–4096, default 256). |
-| `WENDY_CHUNK_COMPRESSION` | `auto` (default), `gzip` or `none`: compression of chunk uploads. `auto` sends chunks uncompressed only to a device reached at a link-local (USB-C / direct-cable) address, running WendyOS 0.19.0+, with no stall recorded in the last 30 days, with a 30 s stall watchdog that falls back to gzip; a routable LAN/Wi-Fi address, a cloud tunnel, an older or unknown WendyOS version, or a recent stall all keep gzip. |
+| `WENDY_CHUNK_COMPRESSION` | `auto` (default), `gzip` or `none`: compression of chunk uploads. `auto` sends chunks uncompressed only to a device reached at a link-local USB gadget/direct-cable address, running WendyOS 0.19.0+, with no stall recorded in the last 30 days, with a 30 s stall watchdog that falls back to gzip; a routable LAN/Wi-Fi address, a cloud tunnel, an older or unknown WendyOS version, or a recent stall all keep gzip. |
 | `WENDY_DISCOVER_USB_INTERVAL` / `_ETHERNET_INTERVAL` / `_EXTERNAL_INTERVAL` | Discovery poll intervals (defaults 3s/3s/5s). |
 | `WENDY_BUILDX_BUILDER` | Override the buildx builder name. |
 | `WENDY_REGISTRY_CHAOS` / `WENDY_PUSH_SKIP` | Fault injection for the push/registry path (testing). |
@@ -482,10 +489,11 @@ delete it to give a device a fresh chance at uncompressed uploads.
 | `WENDY_BROKER_URL` | Cloud tunnel broker WebSocket URL. |
 | `WENDY_MTLS_ORG_ENFORCEMENT` | `off` / `grace` / `strict` client-org enforcement on the mTLS gate. |
 | `WENDY_COLLECT_DMESG` | `true` to enable kernel dmesg collection. |
+| `WENDY_DATA_DIR` | Wendy Data episode store, for a custom location only. Unset, it is `/var/lib/wendy/wendy-data/episodes` when `/var/lib/wendy` is a separate filesystem larger than the one holding `/var/lib/wendy-agent` (WendyOS `/data`), else `/var/lib/wendy-agent/data/episodes`. |
 | `WENDY_BT_ADAPTER` | Pin a specific BlueZ adapter path. |
 
 > **Two things the docs get wrong, so you don't burn time on them:**
-> - `WENDY_NETWORK_MANAGER` is a **Swift-agent** feature. The Go `wendy-agent`
+> - `WENDY_NETWORK_MANAGER` was read only by the earlier Swift agent for Linux. The Go `wendy-agent`
 >   ignores it and always uses `nmcli`.
 > - There is **no `WENDY_ADB_LOCK`**. The variable for pinning a Thor/Tegra USB
 >   device is `WENDY_ADB_PATH`.
@@ -523,3 +531,22 @@ Swift Testing, `make proto`). See [`swift/README.md`](swift/README.md) and
 - If you touched anything under `Proto/`, run `make proto` and commit the
   regenerated `go/proto/gen/`.
 - If you added or bumped a dependency, run `make licenses`.
+
+
+## Reviewing documentation journeys
+
+For a user-facing change, review the path a reader follows: entry page,
+prerequisites, task, observable result, and next step. Read the linked pages and
+sidebar together. The automated docs review checks the affected journey as well
+as the diff; existing obstacles are concerns, while demonstrated inaccuracies
+introduced by the change can block the PR.
+
+Give each tutorial one outcome. Extend the previous tutorial's project when
+teaching a new capability. Keep platform setup in the target's installation
+guide and field definitions in the configuration reference. Link to those
+instructions instead of copying them. Preserve old URLs when moving content.
+
+In the PR, name the journey reviewed and report which commands and outputs you
+verified. A docs build checks rendering, not successful deployment. If a device
+or simulator run was unavailable, state that limit. For navigation or onboarding
+changes, inspect the rendered pages and follow the path as a new reader would.

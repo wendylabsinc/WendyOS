@@ -44,6 +44,12 @@ Events are posted to:
 https://wendy-cli-telemetry-114319063177.us-central1.run.app/v1/telemetry/events
 ```
 
+The anonymous ID always lives in `~/.wendy/analytics_id`. `WENDY_CONFIG_DIR`
+continues to select device settings, analytics preferences, and milestone state,
+but does not select a separate identity. If the shared ID does not exist yet,
+the CLI preserves an existing ID from the active config directory. Once a shared
+ID exists, it takes precedence over IDs in other config directories.
+
 ## Event payload
 
 Every event is an anonymous JSON object. The fields sent are:
@@ -54,7 +60,7 @@ Every event is an anonymous JSON object. The fields sent are:
 | `event_id` | string | Random event UUID, allowing the receiver to discard duplicate delivery |
 | `occurred_at` | string | UTC event time recorded by the CLI, independent of delivery time |
 | `attempt_id` | string | Random UUID shared by one invocation or tour and its child operations |
-| `anonymous_id` | string | Stable random UUID stored in `~/.wendy/` — never tied to a real identity |
+| `anonymous_id` | string | Stable random UUID stored in `~/.wendy/analytics_id`, shared by CLI and MCP even with different `WENDY_CONFIG_DIR` settings |
 | `event` | string | Event name, e.g. `"command_executed"` |
 | `command_name` | string | Canonical command path, e.g. `"wendy device wifi connect"` |
 | `command_root` | string | Top-level command token |
@@ -133,13 +139,14 @@ categories across commands, including `run`, `watch`, `build`, and device comman
 | `device_auth_required` | A provisioned agent requires authentication that the CLI could not satisfy. |
 | `auth_required`, `auth_session_ambiguous` | Cloud login is missing, or multiple sessions require an explicit choice. |
 | `auth_certificate_failed` | Cloud certificate issuance/renewal returned a structured failure. |
+| `auth_login_expired` | The device refused this computer's login because it has expired. Either renewing it failed, or the CLI did not try: the login has no refresh token (a service account), the command is read-only monitoring, or the command already tried one renewal, for another device. |
 | `registry_auth`, `registry_unavailable` | Required registry credentials/transport are unavailable, or the Mac agent has no reachable registry. |
 | `transfer_failed` | Chunk upload, file sync, or a separate image push failed. |
 | `container_start_failed` | The agent's create/start stream ended before confirming completion. |
 | `readiness_timeout` | The application's TCP readiness probe did not succeed in time. |
 | `user_cancelled`, `context_canceled`, `context_deadline` | A picker or operation was cancelled, or its context deadline expired. |
 | `network_dns`, `network_timeout`, `network_refused`, `network_unreachable`, `connection_closed` | A typed network error identifies DNS, timeout, refused connection, unreachable network/host, or reset/broken pipe. |
-| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. |
+| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. `disk_full` also covers `wendy run` refusing a run when this computer or the device has too little free disk space. |
 | `unexpected_eof`, `process_failed` | An unclassified operation ended with a truncated stream or a subprocess exit failure. |
 | `other` | The error has no recognized category or typed cause. Its message is still never sent. |
 
@@ -159,7 +166,7 @@ These categories apply to events sent by updated clients. Historical events that
 only stored `other` or `grpc_other` cannot be reclassified without additional
 failure data.
 
-The CLI stores a private, timestamp-only `activation-state.json` beside `analytics_id` after a successful install operation. A later `run_started` clears the waiting window. On a subsequent CLI launch, it emits `next_launch_no_run_24h` and `next_launch_no_run_7d` when each threshold has elapsed. Each threshold is acknowledged only after successful HTTP delivery, so failed sends can retry on later launches. These are observations of returning installations; they do not classify absent users as abandoned. The check follows analytics opt-out and creates no state when disabled. Delivery remains best-effort, and concurrent CLI processes can duplicate a threshold observation.
+The CLI stores a private, timestamp-only `activation-state.json` in the active config directory after a successful install operation. A later `run_started` clears the waiting window. On a subsequent CLI launch, it emits `next_launch_no_run_24h` and `next_launch_no_run_7d` when each threshold has elapsed. Each threshold is acknowledged only after successful HTTP delivery, so failed sends can retry on later launches. These are observations of returning installations; they do not classify absent users as abandoned. The check follows analytics opt-out and creates no state when disabled. Delivery remains best-effort, and concurrent CLI processes can duplicate a threshold observation.
 
 ## Opting out
 

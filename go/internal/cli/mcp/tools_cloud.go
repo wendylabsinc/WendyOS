@@ -175,13 +175,17 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("cloud_ping", pingOpts...), s.handleCloudPing)
 
 	runOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Build and deploy a local project to device or the connected target, replacing a running app of the same name. Returns status and build-log tail. Check container_list and telemetry_logs for application readiness."),
+		mcpgo.WithDescription("Build and deploy a local project to the explicit or connected target. Returns a compact deployment result. wait_ready checks configured TCP readiness or process stability, not application behavior. Set include_output for build logs."),
 		mcpgo.WithString("project_path", mcpgo.Required(), mcpgo.Description("Project directory to build and deploy")),
 		mcpgo.WithString("device", mcpgo.Description("device selector from device_list (host:port, vm:NAME, or a cloud:// selector); omit to reuse the connection")),
 		mcpgo.WithString("build_type", mcpgo.Enum("docker", "compose", "swift", "python"), mcpgo.Description("Build system; omit for automatic detection")),
 		mcpgo.WithString("product", mcpgo.Description("Swift package product")),
+		mcpgo.WithString("service", mcpgo.Description("Build and deploy the named service and its dependencies")),
 		mcpgo.WithBoolean("debug", mcpgo.Description("Start under a debugger")),
 		mcpgo.WithBoolean("start", mcpgo.DefaultBool(true), mcpgo.Description("Start after deployment; false only creates the container")),
+		mcpgo.WithBoolean("wait_ready", mcpgo.Description("Wait for configured TCP readiness or process stability on WendyOS targets. Omitted: true when starting, except where run cannot wait (local Docker/Podman, device_name deploys, and Compose, multi-service, Xcode, native-command, host-built Swift or build-host projects); false for create-only requests. Set false to skip readiness.")),
+		mcpgo.WithInteger("readiness_timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.Description("Readiness deadline within timeout_seconds; requires wait_ready")),
+		mcpgo.WithBoolean("include_output", mcpgo.Description("Include the bounded build-log tail on success; failures always include it. Omitted: false.")),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.DefaultNumber(300), mcpgo.Description("Command timeout")),
 		mcpgo.WithInteger("max_bytes", mcpgo.Min(1), mcpgo.Max(1000000), mcpgo.DefaultNumber(16384), mcpgo.Description("Build-log tail byte limit")),
 	}
@@ -295,7 +299,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	hw, hwErr := cloudenroll.ReadHardware(ctx, conn.Conn)
 	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return cloudErrResult(err), nil
 	}
 
 	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
@@ -518,17 +522,29 @@ type cloudResolveErr struct {
 
 func (e *cloudResolveErr) Error() string { return e.msg }
 
+// signInAgainHint ends the message for a session Wendy Cloud no longer accepts.
+const signInAgainHint = "sign in again: call auth_login and show the user the link (or run 'wendy auth login' in a terminal)"
+
 // cloudErrResult maps an error from the cloud auth/asset-resolution helpers
 // (cloudAuthEntry, pickCloudAsset, connectToCloudAgent, mcpListCloudAssets) to
-// an MCP error result with the correct error_code. Tagged errors get their
+// an MCP error result with the correct error_code.
+func cloudErrResult(err error) *mcpgo.CallToolResult {
+	return errResult(cloudErrDetail(err))
+}
+
+// cloudErrDetail is cloudErrResult's code and message. Tagged errors get their
 // specific code; anything else (including real gRPC errors, which may be
 // wrapped with fmt.Errorf %w) falls back to codeFromGRPC.
-func cloudErrResult(err error) *mcpgo.CallToolResult {
+func cloudErrDetail(err error) (errorCode, string) {
 	var re *cloudResolveErr
 	if errors.As(err, &re) {
-		return errResult(re.code, re.msg)
+		return re.code, re.msg
 	}
-	return errResult(codeFromGRPC(err), grpcErrString(err))
+	code, msg := codeFromGRPC(err), grpcErrString(err)
+	if code == errCodeAuthRequired {
+		msg = fmt.Sprintf("Wendy Cloud did not accept the session (%s); %s", msg, signInAgainHint)
+	}
+	return code, msg
 }
 
 func (s *mcpServer) cloudAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
@@ -626,26 +642,10 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 	})
 
 	certInfo := auth.Certificates[0]
-	keyPEM, err := certInfo.PrivateKeyPEM()
+	var verifiedIdentity grpcclient.VerifiedServerIdentity
+	tlsCfg, err := mcpCloudAgentTLSConfig(certInfo, device, &verifiedIdentity)
 	if err != nil {
-		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("loading client key: %w", err)
-	}
-	x509Cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
-	if err != nil {
-		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("loading agent mTLS cert: %w", err)
-	}
-	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:      certInfo.PemCertificateChain,
-		ExpectedOrgID: int32(certInfo.OrganizationID),
-	})
-	if err != nil {
-		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("building TLS verifier: %w", err)
-	}
-	tlsCfg := &tls.Config{
-		Certificates:       []tls.Certificate{x509Cert},
-		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
-		VerifyConnection:   verifyConn,
-		MinVersion:         tls.VersionTLS12,
+		return nil, mcpCloudDevice{}, commandTarget{}, err
 	}
 	grpcConn, err := grpc.NewClient(
 		"passthrough:///cloud-tunnel",
@@ -655,12 +655,13 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 	if err != nil {
 		return nil, mcpCloudDevice{}, commandTarget{}, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
 	}
-	agentConn := grpcclient.NewFromConn(grpcConn)
+	agentConn := grpcclient.NewFromConnWithVerifiedIdentity(grpcConn, &verifiedIdentity)
 	agentConn.Host = device.GetName()
 	if !device.isV2 {
 		agentConn.MeshHost = meshname.Device(device.legacyID)
 	}
 	agentConn.IsMTLS = true
+	agentConn.CertInfo = &certInfo
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
 		return device.openTunnel(ctx, brokerConn, auth, uint32(port))
 	}
@@ -669,7 +670,7 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 		return next, err
 	}
 	if brokerConn != nil {
-		agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
+		agentConn.AddCloser(brokerConn)
 	}
 	cleanupBroker = false
 	return agentConn, device, cloudCommandTarget(auth, device, brokerURL), nil
@@ -850,9 +851,8 @@ func mcpDialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 		return nil, err
 	}
 	dialOptions := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
-	// Per-RPC DPoP proof for a cnf-bound token; nil for unbound sessions. The
-	// MCP provider uses the stored token without refreshing (WDY-3107).
-	dialOptions = append(dialOptions, cloudrequest.DPoPDialOptions(auth, mcpDPoPTokenProvider(auth))...)
+	// Per-RPC DPoP proof for a cnf-bound token; nil for unbound sessions.
+	dialOptions = append(dialOptions, cloudrequest.DPoPDialOptions(auth, cloudTokenProvider(auth))...)
 	conn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
@@ -860,10 +860,45 @@ func mcpDialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
+// dpopTokenProviderFn supplies each cloud RPC's access token. Nil — the
+// default, and what tests that build a server from an in-memory Config get —
+// means mcpDPoPTokenProvider. A package variable like reloadConfigFn: one
+// server runs per process.
+var dpopTokenProviderFn func(*config.AuthConfig) cloudrequest.DPoPTokenProvider
+
+// SetDPoPTokenProvider makes cloud tools take each RPC's access token from fn,
+// which may refresh it. wendy-auth access tokens last an hour and the server
+// runs for days, so the CLI installs its refreshing provider. Call it once,
+// before Start.
+func SetDPoPTokenProvider(fn func(*config.AuthConfig) cloudrequest.DPoPTokenProvider) {
+	dpopTokenProviderFn = fn
+}
+
+// cloudTokenProvider is the DPoP token source for auth. When it cannot produce
+// a token the session needs a new sign-in, so the error becomes AUTH_REQUIRED;
+// a cancelled call or an unreachable wendy-auth keeps its own error.
+func cloudTokenProvider(auth *config.AuthConfig) cloudrequest.DPoPTokenProvider {
+	newProvider := mcpDPoPTokenProvider
+	if dpopTokenProviderFn != nil {
+		newProvider = dpopTokenProviderFn
+	}
+	provider := newProvider(auth)
+	return func(ctx context.Context) (string, crypto.Signer, error) {
+		token, key, err := provider(ctx)
+		var netErr net.Error
+		if err != nil && ctx.Err() == nil && !errors.As(err, &netErr) {
+			return "", nil, &cloudResolveErr{
+				code: errCodeAuthRequired,
+				msg:  fmt.Sprintf("the Wendy Cloud session could not be renewed (%v); %s", err, signInAgainHint),
+			}
+		}
+		return token, key, err
+	}
+}
+
 // mcpDPoPTokenProvider returns the stored access token and its bound ML-DSA key
-// for a DPoP proof. Unlike the CLI it does NOT auto-refresh — the MCP tools path
-// has never refreshed OAuth tokens, so this only adds the proof (no behavior
-// change); an expired token still fails the same way it does today.
+// for a DPoP proof, without refreshing it. It serves until the CLI installs its
+// refreshing provider (SetDPoPTokenProvider); an expired token fails at Cloud.
 func mcpDPoPTokenProvider(auth *config.AuthConfig) cloudrequest.DPoPTokenProvider {
 	return func(context.Context) (string, crypto.Signer, error) {
 		keyPEM, err := auth.OAuthDPoPKey()
@@ -1015,4 +1050,33 @@ func validatePort(port int) error {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// mcpCloudAgentTLSConfig is shared by initial connection and reconnect, keeping
+// the selected inventory identity mandatory in both handshakes.
+func mcpCloudAgentTLSConfig(certInfo config.CertificateInfo, device mcpCloudDevice, verified *grpcclient.VerifiedServerIdentity) (*tls.Config, error) {
+	keyPEM, err := certInfo.PrivateKeyPEM()
+	if err != nil {
+		return nil, fmt.Errorf("loading client key: %w", err)
+	}
+	client, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
+	}
+	expected := device.expectedIdentity(certInfo)
+	verify, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ChainPEM:                 certInfo.PemCertificateChain,
+		ExpectedOrgID:            int32(certInfo.OrganizationID),
+		ExpectedIdentity:         &expected,
+		OnVerifiedServerIdentity: verified.Observe,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building TLS verifier: %w", err)
+	}
+	return &tls.Config{
+		Certificates:       []tls.Certificate{client},
+		InsecureSkipVerify: true, // VerifyConnection enforces chain and selected device identity.
+		VerifyConnection:   verify,
+		MinVersion:         tls.VersionTLS12,
+	}, nil
 }

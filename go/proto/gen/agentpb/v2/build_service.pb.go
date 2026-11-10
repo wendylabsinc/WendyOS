@@ -259,8 +259,29 @@ type GetBuildCapabilitiesResponse struct {
 	// store and honours BuildSpec.chunking. A client MUST check this before
 	// sending CHUNKING_MODE_FORCE — see that field.
 	ChunkDelivery bool `protobuf:"varint,13,opt,name=chunk_delivery,json=chunkDelivery,proto3" json:"chunk_delivery,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Whether this host can reach the internet a build needs.
+	//
+	// A build pulls its base images from a registry, and installing BuildKit in
+	// the first place is a download. A device plugged in over USB alone has only
+	// a link-local route, so it answers every RPC yet fails partway through the
+	// first build that is not fully cached. The agent checks on each call by
+	// resolving and TCP-dialling registry-1.docker.io:443 (Docker Hub, the
+	// default base-image source), bounded to a couple of seconds.
+	//
+	// An agent that runs the check sets internet_check_supported. An older agent
+	// leaves it false, and a client must then say nothing rather than read the
+	// zero internet_reachable as "offline".
+	//
+	// Advisory, not a gate: a build whose layers are all cached, or whose base
+	// images come from a registry on the local network, can succeed without it,
+	// so a client warns rather than refuses.
+	InternetCheckSupported bool `protobuf:"varint,14,opt,name=internet_check_supported,json=internetCheckSupported,proto3" json:"internet_check_supported,omitempty"`
+	InternetReachable      bool `protobuf:"varint,15,opt,name=internet_reachable,json=internetReachable,proto3" json:"internet_reachable,omitempty"`
+	// Empty when reachable. Otherwise a short reason phrased for a developer,
+	// e.g. "cannot resolve registry-1.docker.io", which the CLI prints as-is.
+	InternetDetail string `protobuf:"bytes,16,opt,name=internet_detail,json=internetDetail,proto3" json:"internet_detail,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetBuildCapabilitiesResponse) Reset() {
@@ -382,6 +403,27 @@ func (x *GetBuildCapabilitiesResponse) GetChunkDelivery() bool {
 		return x.ChunkDelivery
 	}
 	return false
+}
+
+func (x *GetBuildCapabilitiesResponse) GetInternetCheckSupported() bool {
+	if x != nil {
+		return x.InternetCheckSupported
+	}
+	return false
+}
+
+func (x *GetBuildCapabilitiesResponse) GetInternetReachable() bool {
+	if x != nil {
+		return x.InternetReachable
+	}
+	return false
+}
+
+func (x *GetBuildCapabilitiesResponse) GetInternetDetail() string {
+	if x != nil {
+		return x.InternetDetail
+	}
+	return ""
 }
 
 // ChunkManifest reconstructs a byte stream from chunks already written through
@@ -987,7 +1029,7 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"7\n" +
 	"\x1bSetBuildHostEnabledResponse\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"\x1d\n" +
-	"\x1bGetBuildCapabilitiesRequest\"\xf7\x04\n" +
+	"\x1bGetBuildCapabilitiesRequest\"\x89\x06\n" +
 	"\x1cGetBuildCapabilitiesResponse\x12-\n" +
 	"\x12buildkit_available\x18\x01 \x01(\bR\x11buildkitAvailable\x12)\n" +
 	"\x10buildkit_version\x18\x02 \x01(\tR\x0fbuildkitVersion\x12\x0e\n" +
@@ -1002,7 +1044,10 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	" \x01(\x04R\x15buildkitRootFreeBytes\x129\n" +
 	"\x19buildkit_root_total_bytes\x18\v \x01(\x04R\x16buildkitRootTotalBytes\x12K\n" +
 	"\"buildkit_root_inspection_supported\x18\f \x01(\bR\x1fbuildkitRootInspectionSupported\x12%\n" +
-	"\x0echunk_delivery\x18\r \x01(\bR\rchunkDelivery\"Q\n" +
+	"\x0echunk_delivery\x18\r \x01(\bR\rchunkDelivery\x128\n" +
+	"\x18internet_check_supported\x18\x0e \x01(\bR\x16internetCheckSupported\x12-\n" +
+	"\x12internet_reachable\x18\x0f \x01(\bR\x11internetReachable\x12'\n" +
+	"\x0finternet_detail\x18\x10 \x01(\tR\x0einternetDetail\"Q\n" +
 	"\rChunkManifest\x12!\n" +
 	"\fchunk_hashes\x18\x01 \x03(\fR\vchunkHashes\x12\x1d\n" +
 	"\n" +

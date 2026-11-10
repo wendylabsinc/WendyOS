@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const gcsBaseURL = "https://storage.googleapis.com/wendyos-images-public"
@@ -25,6 +27,10 @@ type manifestDevice struct {
 	LatestNightly string `json:"latest_nightly"`
 	ManifestPath  string `json:"manifest_path"`
 	Stability     string `json:"stability"`
+	// An alias stays listed for units that still report it; it stands for
+	// AliasStorage of AliasOf, so pickers offer only AliasOf.
+	AliasOf      string `json:"alias_of,omitempty"`
+	AliasStorage string `json:"alias_storage,omitempty"`
 }
 
 // deviceManifest contains version info for a specific device.
@@ -111,6 +117,9 @@ type deviceVersion struct {
 	// (name, kernel). Written by the publisher's --extension-file; the CLI resolves
 	// install-by-name against these. Mirrors the publisher's ExtensionMetadata.
 	Extensions []extensionEntry `json:"extensions,omitempty"`
+	Devkit     *struct {
+		KernelVersion string `json:"kernel_version"`
+	} `json:"devkit,omitempty"`
 }
 
 // extensionEntry is one driver add-on in a version's extensions[]. The fields
@@ -261,29 +270,7 @@ func getAvailableDevices() ([]deviceInfo, error) {
 		return nil, err
 	}
 
-	var devices []deviceInfo
-	for key, dev := range main.Devices {
-		if dev.ManifestPath == "" {
-			continue
-		}
-
-		dm, err := fetchDeviceManifest(dev.ManifestPath)
-		if err != nil {
-			// Skip devices whose manifest can't be fetched.
-			continue
-		}
-
-		info := deviceInfo{
-			Key:            key,
-			Name:           humanizeDeviceKey(key),
-			LatestVersion:  dev.Latest,
-			NightlyVersion: dev.LatestNightly,
-			Stability:      dev.Stability,
-			Manifest:       dm,
-		}
-
-		devices = append(devices, info)
-	}
+	devices := fetchDeviceInfos(main, func(dev manifestDevice) string { return dev.Latest }, fetchDeviceManifest)
 
 	// Stable devices first, then alphabetically within each group.
 	sort.Slice(devices, func(i, j int) bool {
@@ -296,6 +283,55 @@ func getAvailableDevices() ([]deviceInfo, error) {
 	})
 
 	return devices, nil
+}
+
+// deviceManifestFetchLimit caps how many device manifests fetchDeviceInfos
+// downloads at once.
+const deviceManifestFetchLimit = 8
+
+// fetchDeviceInfos downloads the manifest of every device in main that has one
+// and returns a deviceInfo for each, in no particular order. The downloads run
+// in parallel: fetched one after another they took seconds before the device
+// picker could open, and minutes on a slow network. latest picks the version
+// reported as the device's latest. Devices whose manifest can't be fetched are
+// skipped.
+func fetchDeviceInfos(main *mainManifest, latest func(manifestDevice) string, fetch func(path string) (*deviceManifest, error)) []deviceInfo {
+	var keys []string
+	for key, dev := range main.Devices {
+		// Every caller lists devices to pick from; an alias would duplicate its device.
+		if dev.ManifestPath != "" && dev.AliasOf == "" {
+			keys = append(keys, key)
+		}
+	}
+
+	manifests := make([]*deviceManifest, len(keys))
+	errs := make([]error, len(keys))
+	var g errgroup.Group
+	g.SetLimit(deviceManifestFetchLimit)
+	for i, key := range keys {
+		g.Go(func() error {
+			manifests[i], errs[i] = fetch(main.Devices[key].ManifestPath)
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	var devices []deviceInfo
+	for i, key := range keys {
+		if errs[i] != nil {
+			continue
+		}
+		dev := main.Devices[key]
+		devices = append(devices, deviceInfo{
+			Key:            key,
+			Name:           humanizeDeviceKey(key),
+			LatestVersion:  latest(dev),
+			NightlyVersion: dev.LatestNightly,
+			Stability:      dev.Stability,
+			Manifest:       manifests[i],
+		})
+	}
+	return devices
 }
 
 // prBasePath returns the GCS path prefix under which a PR build's manifests
@@ -360,29 +396,7 @@ func getAvailablePRDevices(pr int) ([]deviceInfo, error) {
 		return nil, err
 	}
 
-	var devices []deviceInfo
-	for key, dev := range main.Devices {
-		if dev.ManifestPath == "" {
-			continue
-		}
-
-		dm, err := fetchDeviceManifest(dev.ManifestPath)
-		if err != nil {
-			// Skip devices whose manifest can't be fetched.
-			continue
-		}
-
-		info := deviceInfo{
-			Key:            key,
-			Name:           humanizeDeviceKey(key),
-			LatestVersion:  prDeviceVersion(dev),
-			NightlyVersion: dev.LatestNightly,
-			Stability:      dev.Stability,
-			Manifest:       dm,
-		}
-
-		devices = append(devices, info)
-	}
+	devices := fetchDeviceInfos(main, prDeviceVersion, fetchDeviceManifest)
 
 	sort.Slice(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
 
@@ -583,6 +597,45 @@ const orinNanoDeviceType = "jetson-orin-nano"
 
 func isT234RecoveryDevice(deviceType string) bool {
 	return deviceType == orinDeviceType || deviceType == orinNanoDeviceType
+}
+
+// fetchInstallMainManifest is the master manifest that install aliases are
+// read from; tests replace it so commands that never reach a manifest stay offline.
+var fetchInstallMainManifest = func(ctx context.Context, pr int) (*mainManifest, error) {
+	if pr > 0 {
+		return fetchPRMainManifestContext(ctx, pr)
+	}
+	return fetchMainManifestContext(ctx)
+}
+
+// resolveInstallDeviceType maps a device type that the manifest marks as an
+// alias to the device and storage it stands for.
+func resolveInstallDeviceType(ctx context.Context, deviceType, storage string, pr int) (string, string, error) {
+	if deviceType == "" {
+		return deviceType, storage, nil
+	}
+	main, err := fetchInstallMainManifest(ctx, pr)
+	if err != nil {
+		// No alias is known without the manifest; the steps that need it report the failure.
+		return deviceType, storage, nil
+	}
+	return applyDeviceTypeAlias(main, deviceType, storage)
+}
+
+func applyDeviceTypeAlias(main *mainManifest, deviceType, storage string) (string, string, error) {
+	dev := main.Devices[deviceType]
+	if dev.AliasOf == "" {
+		return deviceType, storage, nil
+	}
+	if dev.AliasStorage == "" {
+		return dev.AliasOf, storage, nil
+	}
+	// The hint omits the requested storage: it may be invalid for the device.
+	if storage != "" && storage != dev.AliasStorage {
+		return "", "", fmt.Errorf("%s always installs to %s; to choose the storage, use --device-type %s with --storage",
+			deviceType, dev.AliasStorage, dev.AliasOf)
+	}
+	return dev.AliasOf, dev.AliasStorage, nil
 }
 
 type recoveryFlashpackInfo struct {

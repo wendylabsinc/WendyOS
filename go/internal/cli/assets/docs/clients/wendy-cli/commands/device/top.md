@@ -1,6 +1,6 @@
 # `wendy device top`
 
-Live CPU, memory, disk, GPU, and temperature telemetry for the device and its containers — an `htop`-style monitor for a WendyOS device.
+Live CPU, memory, disk, GPU, temperature, and network telemetry for the device and its containers.
 
 ## Usage
 
@@ -9,6 +9,31 @@ wendy device top [flags]
 ```
 
 ## Description
+
+Network rows show receive/send rates in bytes per second and cumulative byte
+totals for each physical interface. These include all device traffic and count
+since the interface was created or its counters reset, usually at boot. The
+separate **Wendy agent service** row counts IPv4/IPv6 traffic belonging to the
+agent's systemd service, including helper processes, relayed traffic and IP
+loopback, but excluding app containers. These are IP bytes, not Ethernet wire
+bytes, and start when service accounting is enabled. They are not daily/monthly
+totals or a measure of cellular/internet-only usage.
+
+The agent enables systemd `IPAccounting` for its own service at startup with a
+runtime-only setting. No network access rules change. Unsupported kernels or
+agents report unavailable counters, not zero usage. Rates require two samples
+from the same device boot, interface identity and service accounting session;
+a reset starts a new measurement. Sampling uses the device's monotonic clock.
+
+JSON includes `host.network.interfaces` and, when available,
+`host.network.agent`, with `receivedBytes`, `sentBytes`, and optional
+`receiveBytesPerSecond`/`sendBytesPerSecond`. Virtual and loopback interfaces are
+included in JSON and marked accordingly; do not add them to physical interface
+totals because the same packet may appear on both. An older agent omits
+`host.network`. Individual unavailable sources include a reason.
+
+The macOS and iPhone apps show the same statistics under **Settings → Wi-Fi →
+Network traffic**, refreshing every two seconds while that screen is active.
 
 `wendy device top` opens a full-screen, auto-refreshing dashboard showing whole-machine CPU and memory utilization, the hottest current device temperature, per-GPU utilization/memory (and temperature/power where reported), and a per-app/per-container table of CPU% and memory. CPU percentages are computed from deltas between refreshes, so the first frame may read low until a second sample is taken.
 
@@ -25,7 +50,7 @@ The meters keep showing the last successful sample, since there is nothing newer
 
 Only transport-level failures raise the banner. An error the agent itself returns means the device answered and is therefore still reachable, so it appears as the normal status flash at the bottom of the screen — and it clears the banner if one was up. The banner also clears on the next successful poll.
 
-Apps are grouped the same way as [`wendy device dashboard`](dashboard.md): multi-service apps show a group header with one subrow per service. Running apps (`●`), stopped apps (`○`), and crash-looping apps (`↻`) have distinct row styling and are counted separately. Resource columns show unavailable values for stopped and crash-looping rows instead of presenting them as active zero-usage workloads. A side panel shows the listening ports of the currently selected running app.
+Apps are grouped the same way as [`wendy device dashboard`](./dashboard.md): multi-service apps show a group header with one subrow per service. Running apps (`●`), stopped apps (`○`), and crash-looping apps (`↻`) have distinct row styling and are counted separately. Resource columns show unavailable values for stopped and crash-looping rows instead of presenting them as active zero-usage workloads. A side panel shows the listening ports of the currently selected running app.
 
 Press `Enter` to open the selected app's recent and live logs. Use the arrow keys or Page Up/Page Down to scroll, `End` to resume following, and `Esc` to return to the monitor. Press `s` to start the selected app.
 
@@ -33,7 +58,7 @@ The disk meter shows the filesystem holding container storage, which is `/data` 
 
 Press `x` to stop the selected app. For a multi-service app, this stops the whole app even when the cursor is on one of its service rows. Stop uses Wendy's normal graceful shutdown behavior and may escalate to a force kill when the app does not exit within its grace period.
 
-> **Note:** This command requires a recent device agent. Against an agent that's too old to report resource stats, the command reports that the agent doesn't support resource stats and suggests updating it with [`wendy device update`](update.md).
+> **Note:** This command requires a recent device agent. Against an agent that's too old to report resource stats, the command reports that the agent doesn't support resource stats and suggests updating it with [`wendy device update`](./update.md).
 
 ### Keyboard shortcuts
 
@@ -118,6 +143,6 @@ charge/discharge rate.
 
 ## Related
 
-- [`wendy device dashboard`](dashboard.md) — full-screen app/service status dashboard
-- [`wendy device info`](info.md) — one-shot device hardware and GPU metadata
-- [`wendy device apps`](apps/) — list and manage deployed apps
+- [`wendy device dashboard`](./dashboard.md) — full-screen app/service status dashboard
+- [`wendy device info`](./info.md) — one-shot device hardware and GPU metadata
+- [`wendy device apps`](./apps/list.md) — list and manage deployed apps

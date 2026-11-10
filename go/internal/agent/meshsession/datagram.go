@@ -70,6 +70,7 @@ type DatagramFlow struct {
 	conn        *quic.Conn
 	endpoint    *udpmessage.Endpoint
 	ownsManager bool
+	shared      *muxUDPFlow
 	readMu      udpReceiveLock
 	once        sync.Once
 }
@@ -180,9 +181,18 @@ func (f *DatagramFlow) Send(payload []byte) error {
 	}
 	return f.endpoint.Send(payload)
 }
+func (f *DatagramFlow) Done() <-chan struct{} {
+	if f.shared != nil {
+		return f.shared.done
+	}
+	return f.conn.Context().Done()
+}
 func (f *DatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, error) {
 	if f == nil || f.conn == nil {
 		return nil, net.ErrClosed
+	}
+	if f.shared != nil {
+		return f.shared.receive(ctx)
 	}
 	if err := f.readMu.lock(ctx, f.endpoint.Done()); err != nil {
 		return nil, localUDPError(err)
@@ -203,6 +213,10 @@ func (f *DatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, error)
 	}
 }
 func (f *DatagramFlow) Close() error {
+	if f != nil && f.shared != nil {
+		f.shared.close()
+		return nil
+	}
 	if f == nil || f.conn == nil {
 		return nil
 	}
@@ -243,7 +257,7 @@ func (s *Server) serveDatagrams(parent context.Context, conn *quic.Conn, port ui
 	for _, cert := range conn.ConnectionState().TLS.PeerCertificates {
 		chain = append(chain, cert.Raw)
 	}
-	identity, err := s.credentials.Verify(chain, time.Now())
+	identity, err := s.credentials.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return
 	}

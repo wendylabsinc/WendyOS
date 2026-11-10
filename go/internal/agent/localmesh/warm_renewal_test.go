@@ -1,9 +1,9 @@
 package localmesh
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"testing"
 	"time"
 )
@@ -97,8 +97,8 @@ func TestWarmReceiverDefersNewKeyManifestDuringAdvertisedChainFetch(t *testing.T
 		t.Fatal("verified new-key manifest did not recover after certificate completion")
 	}
 	assertWarmRouteAuthorities(t, dest, now, wire)
-	if _, err = dest.Accept(wire, now.Add(2*time.Minute)); !errors.Is(err, ErrExpiredManifest) {
-		t.Fatal("pending renewal extended the signed lease", err)
+	if _, err = dest.Accept(wire, now.Add(2*time.Minute)); !errors.Is(err, ErrStaleManifest) {
+		t.Fatal("consumed receiver lease accepted the same revision", err)
 	}
 	assertWarmRouteAuthorities(t, dest, now.Add(2*time.Minute))
 }
@@ -184,7 +184,7 @@ func assertWarmRouteAuthorities(t *testing.T, d *Directory, now time.Time, wires
 	}
 	for _, wire := range wires {
 		var m Manifest
-		if err := json.Unmarshal(wire.Body, &m); err != nil {
+		if err := netwire.Unmarshal(wire.Body, &m); err != nil {
 			t.Fatal(err)
 		}
 		if m.Version != ManifestVersionRoute || m.Route == nil || !authorized[*m.Route] {
@@ -602,8 +602,8 @@ func TestWarmRenewalExpiredSignedCandidateDropsBeforeFetchDeadline(t *testing.T)
 	if len(receiver.pending) != 0 || len(receiver.pendingRenewals) != 0 || len(d.Snapshot(at)) != 0 {
 		t.Fatal("expired signed candidate remained pending")
 	}
-	if _, _, active := receiver.certificates.PendingChain(w.Principal, at); !active {
-		t.Fatal("test did not distinguish signed expiry from the longer fetch deadline")
+	if _, _, active := receiver.certificates.PendingChain(w.Principal, at); active {
+		t.Fatal("expired payload retained unfinished certificate repair")
 	}
 	assertWarmRouteAuthorities(t, d, at)
 }

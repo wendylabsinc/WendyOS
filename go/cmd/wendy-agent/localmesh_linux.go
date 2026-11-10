@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -30,7 +31,7 @@ var recoverNetCarrierState = func(ctx context.Context) error {
 
 // runConfiguredNetCarriers runs one Babel node for every enabled carrier.
 // Its observer is cleared only after the radio provider has drained its links.
-func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot)) (runErr error) {
+func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot), agent ...func(context.Context, net.Conn) error) (runErr error) {
 	if err := sharing.Deactivate(); err != nil {
 		return err
 	}
@@ -38,7 +39,7 @@ func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmes
 		return fmt.Errorf("recover Wendy Net Internet sharing: %w", err)
 	}
 	participating, err := runWhileMeshParticipating(ctx, filepath.Join(configDir, "nan-mesh.json"), 2*time.Second, func(active context.Context) error {
-		return runEnabledMeshCarriers(active, configDir, id, logger, catalog, vips, sharing, observe)
+		return runEnabledMeshCarriers(active, configDir, id, logger, catalog, vips, sharing, observe, agent...)
 	})
 	if !participating {
 		// The active runner has drained providers, sharing, catalog and Babel
@@ -53,7 +54,7 @@ func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmes
 	return err
 }
 
-func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot)) (runErr error) {
+func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot), agent ...func(context.Context, net.Conn) error) (runErr error) {
 	path := filepath.Join(configDir, "local-mesh.json")
 	initial, err := localmesh.ReadTCPConfigFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -72,16 +73,13 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 		if cfg.Listen != "" || len(cfg.Peers) != 0 {
 			names = append(names, "TCP")
 		}
-		if cfg.LeafListen != "" {
-			names = append(names, "Leaf")
+		if cfg.TLSListen != "" {
+			names = append(names, "TLS")
 		}
 		if cfg.NAN {
 			names = append(names, "NAN")
 		}
 
-		if len(cfg.LeafBLEPeers) != 0 {
-			names = append(names, "Leaf BLE")
-		}
 		if cfg.BLE {
 			names = append(names, "BLE")
 		}
@@ -151,18 +149,21 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 			observe(nil)
 			return
 		}
+		if len(agent) != 0 {
+			node.SetOperatorAgent(agent[0])
+		}
 		observe(node.Snapshot)
 		if cfg.Listen != "" || len(cfg.Peers) != 0 {
 			sharing.carriers.report(epoch, "TCP", localmesh.CarrierStatus{Ready: true})
 		}
-		if cfg.LeafListen != "" {
-			sharing.carriers.report(epoch, "Leaf", localmesh.CarrierStatus{Ready: true})
+		if cfg.TLSListen != "" {
+			sharing.carriers.report(epoch, "TLS", localmesh.CarrierStatus{Ready: true})
 		}
 		if err := catalog.Activate(runCtx, node.Credentials, node.Snapshot, vips, cfg.Ethernet, cfg.InfrastructureWiFi, node.ControlHub()); err != nil {
 			logger.Error("net service catalog unavailable", zap.Error(err))
 		}
 		sharing.Activate(runCtx, node)
-		if !cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && len(cfg.LeafBLEPeers) == 0 {
+		if !cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi {
 			return
 		}
 		providerCtx, cancel := context.WithCancel(runCtx)
@@ -187,16 +188,10 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 				return provider.Run(ctx)
 			})
 		}
-		// Both consumers select the default physical adapter and share its limits.
+		// The BLE runtime owns the physical adapter setup and connection limits.
 		blePolicy := localmesh.NewConnectionPolicy(node.Credentials.Device, false, localmesh.ConnectionLimits{Outgoing: localmesh.BLEMaxOutgoing, Attempts: localmesh.BLEMaxOutgoingAttempts, Total: localmesh.BLEMaxConnections})
 		bleCandidates := &localmesh.CandidateQueue{}
 		blePacer := &bleprovider.DialPacer{}
-
-		if len(cfg.LeafBLEPeers) != 0 {
-			start("Leaf BLE", func(ctx context.Context, status func(localmesh.CarrierStatus)) error {
-				return bleprovider.RunLeaves(ctx, node, cfg.LeafBLEPeers, cfg.LeafTimeURL, blePolicy, bleCandidates, blePacer, logger, status)
-			})
-		}
 
 		if cfg.BLE {
 			ble := bleprovider.Config{Pacer: blePacer, Policy: blePolicy, Candidates: bleCandidates, Credentials: node.Credentials, Node: node, Selection: selection, NetworkName: fmt.Sprintf("tenant:%s:default", node.Credentials.Device.Tenant()), Logger: logger}

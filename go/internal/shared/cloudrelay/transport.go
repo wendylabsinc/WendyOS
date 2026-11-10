@@ -11,9 +11,20 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 )
+
+// ConnectionSetupTimeout includes TCP/TLS and HTTP/2 startup over a borrowed
+// mesh uplink. Callers' shorter contexts and signed admission deadlines still win.
+const ConnectionSetupTimeout = time.Minute
+
+func cloudConnectBudget() grpc.DialOption {
+	return grpc.WithConnectParams(grpc.ConnectParams{
+		Backoff: backoff.DefaultConfig, MinConnectTimeout: ConnectionSetupTimeout,
+	})
+}
 
 // brokerKeepalive keeps idle presence and relay streams from being dropped by
 // NAT or load-balancer idle timeouts, and detects a dead path without waiting
@@ -22,6 +33,15 @@ import (
 // ACK timeout matches the CLI's broker dial: a device saturated by an OS update
 // can take well over 10s to read the ACK.
 var brokerKeepalive = keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 20 * time.Second, PermitWithoutStream: true}
+
+// Public broker TLS carries no client identity. These dials share the same
+// standard hostname/system-root policy, so a bounded process-local cache can
+// resume their certificate exchange. Device mTLS must not use this cache.
+var brokerSessionCache = tls.NewLRUClientSessionCache(64)
+
+func publicBrokerTLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS13, ClientSessionCache: brokerSessionCache}
+}
 
 // withKeepalive is grpc.WithKeepaliveParams; tests swap it to observe the
 // parameters each dial passes, since gRPC dial options are opaque.
@@ -38,7 +58,7 @@ func DeviceEndpoint(cloud, override string) (string, error) {
 		return "", err
 	}
 	host, port, _ := net.SplitHostPort(t)
-	switch host {
+	switch CanonicalAPIHost(host) {
 	case "api.dev.wendy.sh":
 		host = "devices.dev.wendy.sh"
 	case "api.wendy.sh":
@@ -49,6 +69,18 @@ func DeviceEndpoint(cloud, override string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
+// CanonicalAPIHost maps a Cloud API mirror hostname to its stack's primary
+// hostname. Dev Cloud also serves its API as api.dev.wendy.dev (same listeners
+// and certificate), but its device listener is devices.dev.wendy.sh and it
+// signs every grant with the one issuer https://api.dev.wendy.sh. Anything
+// derived from a Cloud API host must canonicalise it first.
+func CanonicalAPIHost(host string) string {
+	if host == "api.dev.wendy.dev" {
+		return "api.dev.wendy.sh"
+	}
+	return host
+}
+
 // LiteBrokerHost selects the Lite device relay hostname for a Cloud endpoint.
 // Its TLS port is configured independently from the Cloud API port.
 func LiteBrokerHost(cloud string) (string, error) {
@@ -57,10 +89,10 @@ func LiteBrokerHost(cloud string) (string, error) {
 		return "", err
 	}
 	host, _, _ := net.SplitHostPort(t)
-	switch host {
+	switch CanonicalAPIHost(host) {
 	case "api.wendy.sh", "api.wendy.dev":
 		return "tunnel.wendy.dev", nil
-	case "api.dev.wendy.sh", "api.dev.wendy.dev":
+	case "api.dev.wendy.sh":
 		return "tunnel.dev.wendy.dev", nil
 	default:
 		return host, nil
@@ -80,10 +112,11 @@ func Issuer(cloud, override string) (string, error) {
 		return "", err
 	}
 	host, port, _ := net.SplitHostPort(t)
+	host = CanonicalAPIHost(host)
 	if port == "443" {
 		return "https://" + host, nil
 	}
-	return "https://" + t, nil
+	return "https://" + net.JoinHostPort(host, port), nil
 }
 func target(endpoint string) (string, error) {
 	if strings.Contains(endpoint, "://") {
@@ -149,14 +182,21 @@ func DialCloud(endpoint, certPEM, chainPEM string, keyPEM []byte) (*grpc.ClientC
 		}
 		return certs.VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], trust, x509.ExtKeyUsageServerAuth, time.Now(), time.Now())
 	}
-	return grpc.NewClient(t, grpc.WithTransportCredentials(credentials.NewTLS(config)), withKeepalive(brokerKeepalive))
+	return newCloudClient(t, credentials.NewTLS(config), true)
 }
 
 // DialBroker deliberately has no client certificate or identity metadata.
 func DialBroker(endpoint string) (*grpc.ClientConn, error) {
+	return dialBroker(endpoint, true)
+}
+
+func dialBroker(endpoint string, fallback bool) (*grpc.ClientConn, error) {
 	t, err := target(endpoint)
 	if err != nil {
 		return nil, err
 	}
-	return grpc.NewClient(t, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13})), withKeepalive(brokerKeepalive))
+	host, _, _ := net.SplitHostPort(t)
+	config := publicBrokerTLSConfig()
+	config.ServerName = host
+	return newCloudClient(t, credentials.NewTLS(config), fallback)
 }

@@ -1,5 +1,5 @@
 ---
-title: Camera Access
+title: Camera access
 description: Use USB, CSI, IP, and ROS 2 cameras from WendyOS apps
 ---
 
@@ -21,6 +21,8 @@ For complete examples, follow these tutorials:
 - [Read a robot camera with OpenCV](/docs/guides/tutorials/python/robot-camera-opencv)
 - [Process raw camera frames](/docs/guides/tutorials/python/raw-camera-frames)
 
+A live stream can still contain stale or poor-quality observations. Check capture timestamps, exposure, motion blur, and calibration at the resolution your app uses. The [sensor fidelity exercise](/docs/integrations/sensor-fidelity) helps compare ideal simulated input with hardware.
+
 ## Inspect Cameras on a Device
 
 Use the device camera commands to see which cameras WendyOS can see:
@@ -29,7 +31,7 @@ Use the device camera commands to see which cameras WendyOS can see:
 wendy device camera list
 ```
 
-The output includes a device ID, transport type (`usb`, `csi`, `ip`, or `ros2`), name, and — for local cameras — a path such as `/dev/video0`. Network cameras show their address, while ROS 2 cameras show their topic. Use the ID with view commands:
+The output includes a device ID, transport type (`usb`, `csi`, `ip`, or `ros2`), name, and — for local cameras — a path such as `/dev/video0`. Network cameras show their address, while ROS 2 cameras show their topic. Network cameras without a stored login are hidden, and the table ends with how many it hid; `--all` shows them with a Status of `needs login`. See [IP Cameras](#ip-cameras) to pair one. Use the ID with view commands:
 
 ```bash
 wendy device camera view --id 0
@@ -159,7 +161,9 @@ for up to the agent's 15-second first-frame window.
 
 ## IP Cameras
 
-WendyOS also manages network (RTSP/ONVIF) cameras alongside local USB and CSI ones. A discovered camera is registered by its MAC address — the one identity that survives a DHCP address change — and given a stable device ID from a reserved band, `200`–`255`. That ID never changes for the life of the camera, even if its address does.
+WendyOS also manages network (RTSP/ONVIF) cameras alongside local USB and CSI ones. A discovered camera is registered by its MAC address — the one identity that survives a DHCP address change — and given a device ID from a reserved band, `200`–`255`.
+
+Discovery finds every ONVIF camera on the networks the device is connected to, including other people's cameras on a shared home or office LAN. So a network camera is used only once you store a login for it, which pairs it. Until then it is hidden from `camera list`, apps, and other clients, and WendyOS sends it nothing beyond the periodic discovery probe. A paired camera's ID never changes, even if its address does. An unpaired camera's ID can change when the agent restarts.
 
 ### Connect a camera directly to Ethernet
 
@@ -180,8 +184,10 @@ uplink, where another DHCP server normally assigns addresses.
    wendy device camera dhcp status
    ```
 
-3. Wait for `serving`, then discover the camera with
-   `wendy device camera list --refresh`.
+3. Wait for `serving`, then pair the camera in the **IP Cameras** tab of
+   `wendy device pair`, or find its ID with
+   `wendy device camera list --refresh --all` and store its login as described
+   under [Credentials](#credentials).
 
 `waiting` means the port is not ready yet. `blocked` or `degraded` includes a
 reason, such as a competing DHCP server or an address conflict. The agent checks
@@ -223,17 +229,23 @@ Cameras are picked up automatically as the agent's periodic discovery runs. To f
 wendy device camera list --refresh
 ```
 
-Network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `needs login`, `offline`, or `ready`.
+Paired network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `offline` or `ready`. The table ends with the number of cameras it hid for having no login. To pair one, use the **IP Cameras** tab of [`wendy device pair`](/docs/advanced/clients/wendy-cli/commands/device/pair), or find its ID with:
+
+```bash
+wendy device camera list --all
+```
+
+`--all` adds the unpaired cameras with a Status of `needs login`.
 
 ### Credentials
 
-Most IP cameras require a login before they will stream. Store one with:
+Most IP cameras require a login before they will stream, and storing one is also what pairs a camera. Store one with:
 
 ```bash
 wendy device camera login <id>
 ```
 
-This prompts for the password without echoing it, or reads it from the `WENDY_CAMERA_PASSWORD` environment variable when there is no terminal to prompt on (for example, in CI). The username defaults to `admin`; pass `--user` to override it. Credentials are stored on the device and are never returned by any command.
+This prompts for the password without echoing it, or reads it from the `WENDY_CAMERA_PASSWORD` environment variable when there is no terminal to prompt on (for example, in CI). The username defaults to `admin`; pass `--user` to override it. A camera that needs no login can be paired by pressing Enter at the password prompt. Credentials are stored on the device and are never returned by any command.
 
 Remove a camera and its stored credentials with:
 
@@ -249,11 +261,11 @@ wendy device camera test <id>
 
 `test` dials the camera's RTSP port directly and reports one of three outcomes: the credentials were accepted, the camera rejected them (with a `wendy device camera login <id>` hint), or the camera was unreachable. One nuance worth knowing: a camera that never actually challenged for a login — no authentication required, or just a bad stream path — is still reported as success, with a detail like *"did not request authentication; the stream path returned RTSP 404 and may be wrong"* rather than claiming the credentials were verified.
 
-`wendy device camera view --id <id>` works the same way for network cameras as for local ones. If no credentials are stored yet, it reads `user`/`password` from a `camera` entitlement in `wendy.json` if present, or prompts once interactively, before retrying the stream — see the [`camera` entitlement fields](/docs/advanced/apps/wendy.json#camera) for the wendy.json-based option and its plaintext-storage caveat.
+`wendy device camera view --id <id>` works the same way for network cameras as for local ones. If no credentials are stored yet, it reads `user`/`password` from a `camera` entitlement in `wendy.json` if present, or prompts once interactively, before retrying the stream — see the [`camera` entitlement fields](/docs/reference/app-configuration#camera) for the wendy.json-based option and its plaintext-storage caveat.
 
 ### Container Access
 
-Apps with the `camera` entitlement (see [Camera Entitlement](/docs/device/entitlements#camera-entitlement)) see network cameras exactly like local ones: each registered camera is mirrored into a `/dev/video2xx` loopback node numbered to match its own device ID — camera `212` is always `/dev/video212` — and mounted into the container the same way USB and CSI devices are.
+Apps with the `camera` entitlement (see [Camera Entitlement](/docs/device/entitlements#camera-entitlement)) see network cameras exactly like local ones: each paired camera is mirrored into a `/dev/video2xx` loopback node numbered to match its own device ID — camera `212` is always `/dev/video212` — and mounted into the container the same way USB and CSI devices are. Pairing a camera while such an app runs adds its node without restarting the app.
 
 <Callout type="info">
   The loopback node always carries the camera's **sub-stream** — the same lower-resolution feed `camera view` chooses automatically for anything ≤1024px wide. There is currently no way for a container to request the camera's main/high-resolution stream instead.
@@ -316,3 +328,42 @@ wendy run
 ```
 
 <CliShot flow="run" step="deploy" alt="The Wendy CLI deploying a camera app to a WendyOS device" />
+
+## Camera identities in site models
+
+Persist `stable_id` from the camera inventory when associating a camera with a
+site marker. Pass that exact value to `StreamVideoRequest.stable_id` or
+`wendy device camera view --stable-id <value>`. The agent resolves it when the
+stream opens and rejects a missing identity instead of falling back to a reused
+`/dev/videoN` number.
+
+USB cameras use the existing `by-id:` or `by-path:` names. Paired SensorLink
+cameras use `sensorlink:<pairing-key>:<channel-id>` and registered IP cameras use
+`ip-mac:<mac>`. ROS cameras use `ros2:<key>`, scoped to their graph, domain and
+topic so identical topic names in isolated apps stay distinct. A blank stable ID means the source cannot yet be saved safely as
+a site camera. Marker placement is manual and does not calibrate the camera.
+
+Native clients can discover enrolled SensorLink sources through the selected
+gateway without a terminal UI:
+
+```bash
+wendy --device <gateway> --json device sensors list
+wendy --device <gateway> --json device sensors add --source <principal_uri>
+wendy --device <gateway> --json device sensors status
+```
+
+`add` chooses one exact enrolled principal from a new gateway-side discovery,
+checks organization access, and lets the gateway verify the source certificate.
+The returned pairing can have `connected: false`; saving a pairing is not proof
+of arriving sensor data. These commands do not enroll a blank board or update
+its firmware. CLI enrollment of a new Wendy Lite board requires USB; the native
+macOS and iOS apps also offer Bluetooth setup on supported firmware.
+
+For a USB-connected Wendy Lite board, use `wendy discover --json --type external
+--timeout 5s`; the `usb` discovery filter alone scans WendyOS USB connections.
+The external result includes the exact `wendy-lite:/dev/cu...` selector.
+`wendy --device <selector> --json device enrollment-status` reads its hardware
+ID, enrolled device UUID and tenant over USB without changing enrollment. Use
+that UUID to match the source's gateway pairing instead of relying on its name.
+A direct USB camera subscription can report `device busy` while a gateway owns
+the source. In that case, view the gateway's shared feed.

@@ -182,6 +182,9 @@ func (s *AudioService) nameSensorLinkMounts(nodes []audio.Node) []audio.Node {
 				Name:        fmt.Sprintf("plughw:%d,%d,%d", card, device, m.Sub),
 				Description: fmt.Sprintf("sensor-link: %s · %s", label, m.SensorName),
 				IsSink:      false,
+				// Named for the pairing and the sensor, not the subdevice: the
+				// subdevice is whichever one was free when the mount opened.
+				StableName: "sensor-link:" + stableNamePart(label) + ":" + stableNamePart(m.SensorName),
 			})
 		}
 	}

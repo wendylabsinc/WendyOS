@@ -28,7 +28,7 @@ func TestNewOSInstallCmd_Flags(t *testing.T) {
 		t.Errorf("Use = %q; want %q", cmd.Use, "install [image] [drive]")
 	}
 
-	expectedFlags := []string{"nightly", "force", "yes-overwrite-internal", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name", "storage", "no-bmap", "pr"}
+	expectedFlags := []string{"nightly", "force", "yes-overwrite-internal", "device-type", "version", "drive", "wifi-ssid", "wifi-password", "wifi", "no-wifi", "device-name", "storage", "no-bmap", "pr", "binary"}
 	for _, name := range expectedFlags {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("missing flag %q", name)
@@ -924,6 +924,8 @@ func TestResolveDeviceNameFlagValidation(t *testing.T) {
 		{"starts with number", "1device", "start with a lowercase letter"},
 		{"uppercase", "Wendy", "lowercase letters, digits, and hyphens"},
 		{"underscore", "wendy_pi", "lowercase letters, digits, and hyphens"},
+		// Cloud (WDY-3016) and the agent both refuse a trailing hyphen.
+		{"trailing hyphen", "wendy-", "must not end with a hyphen"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

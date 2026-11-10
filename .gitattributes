@@ -1,6 +1,12 @@
 # Mark generated protobuf/gRPC Swift files so GitHub collapses them in PRs
-swift/Sources/*/Proto/**/*.pb.swift    linguist-generated=true
-swift/Sources/*/Proto/**/*.grpc.swift  linguist-generated=true
+swift/WendyAgentCore/Sources/*/Proto/**/*.pb.swift    linguist-generated=true
+swift/WendyAgentCore/Sources/*/Proto/**/*.grpc.swift  linguist-generated=true
+Examples/*/Sources/*/Generated/*.pb.swift            linguist-generated=true
+Examples/*/Sources/*/Generated/*.grpc.swift          linguist-generated=true
+
+# ROS bridge protobuf/gRPC Python bindings only.
+go/ros2/go2-bridge/go2_bridge/*_pb2.py       linguist-generated=true
+go/ros2/go2-bridge/go2_bridge/*_pb2_grpc.py  linguist-generated=true
 
 # Mark generated protobuf/gRPC Go files so GitHub collapses them in PRs.
 # Security review uses its own fixed generated-root allowlist.
@@ -13,4 +19,7 @@ go/proto/gen/**                        linguist-generated=true
 plugins/wendy/scripts/* text eol=lf
 scripts/pin-cli.sh text eol=lf
 scripts/test/plugin-launcher/* text eol=lf
-# Embedded UI bundle includes upstream shader strings with significant formatting.
+
+# Skill entrypoints are parsed and embedded byte-for-byte. Keep their YAML
+# frontmatter delimiters intact on Windows, including packaging sources.
+**/SKILL.md text eol=lf

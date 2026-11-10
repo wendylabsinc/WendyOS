@@ -108,6 +108,8 @@ func formatOSNameVersion(os, version string) string {
 
 // PickerItem represents a selectable row in the device picker.
 type PickerItem struct {
+	// IdentityKey optionally joins distinct discovery paths by an exact canonical identity.
+	IdentityKey string
 	// Display columns rendered in the table.
 	Name         string
 	Description  string // optional secondary text rendered dimmed
@@ -190,6 +192,12 @@ type PickerSetMsg struct {
 // matches Key, case-insensitively like every other key comparison here. It is
 // how a discovery source takes a row back -- a LAN sighting that turned out to
 // be a local VM. An unknown key is a no-op.
+// PickerMapMsg reconciles one path owned by a discovery source without
+// deleting the other paths of merged rows. It runs synchronously on the UI owner.
+type PickerMapMsg struct {
+	Map func(PickerItem) (PickerItem, bool)
+}
+
 type PickerRemoveMsg struct {
 	Key string
 }
@@ -604,7 +612,16 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if idx, ok := m.seenIdx[key]; ok {
+			idx, ok := m.seenIdx[key]
+			if !ok && item.IdentityKey != "" {
+				for i, existing := range m.items {
+					if existing.IdentityKey == item.IdentityKey {
+						idx, ok = i, true
+						break
+					}
+				}
+			}
+			if ok {
 				if m.MergeItem != nil {
 					m.MergeItem(&m.items[idx], item)
 					changed = true
@@ -622,6 +639,20 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PickerDoneMsg:
 		m.scanning = false
 
+	case PickerMapMsg:
+		cursorKey := m.currentCursorKey()
+		var items []PickerItem
+		for _, item := range m.items {
+			if updated, keep := msg.Map(item); keep {
+				items = append(items, updated)
+			}
+		}
+		m.items = items
+		m.seenIdx = make(map[string]int, len(items))
+		for i, item := range items {
+			m.seenIdx[strings.ToLower(pickerItemKey(item))] = i
+		}
+		m.refreshTableWithCursorKey(cursorKey)
 	case PickerRemoveMsg:
 		cursorKey := m.currentCursorKey()
 		if m.removeItemByKey(strings.ToLower(msg.Key)) {

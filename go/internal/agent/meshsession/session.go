@@ -20,12 +20,29 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
+// ALPN retains the original single-UDP-flow protocol for older peers.
 const ALPN = "wendy-app-mesh/1"
+const multiplexALPN = "wendy-app-mesh/2"
 const Port = localmesh.AppSessionPort
 const appSessionSetupTimeout = 60 * time.Second
 
 var ErrNoRoute = errors.New("no authenticated local wendy net route")
 var ErrDenied = errors.New("wendy net app ingress denied")
+
+// Only failure while awaiting an ACK to a completely written app-port request
+// can indicate a live-looking session left behind by a restarted peer. Waiting
+// for stream credit and explicit per-stream rejection are ordinary flow-local
+// capacity/admission outcomes; they must not terminate sibling app flows.
+type portACKError struct{ err error }
+
+func (e *portACKError) Error() string { return e.err.Error() }
+func (e *portACKError) Unwrap() error { return e.err }
+
+func stalePortACK(err error) bool {
+	var ack *portACKError
+	var rejected *quic.StreamError
+	return errors.As(err, &ack) && !errors.As(err, &rejected)
+}
 
 // Authorizer admits only ingress ports belonging to running mesh-mode apps
 // and holds authorization until its verified container endpoint is connected.
@@ -42,7 +59,7 @@ func quicConfig() *quic.Config {
 	// Bound the initial burst on BLE paths with limited buffering; normal
 	// congestion control grows the window as packets are acknowledged.
 	return &quic.Config{MaxCryptoStreamSize: localmesh.MaxQUICCryptoStreamSize, InitialRTT: time.Second, InitialCongestionWindowPackets: 4, HandshakeIdleTimeout: 30 * time.Second, MaxIdleTimeout: 45 * time.Second,
-		MaxIncomingStreams: 8, MaxIncomingUniStreams: -1, EnableDatagrams: true, Allow0RTT: false,
+		MaxIncomingStreams: 8 + udpmessage.PeerFlows, MaxIncomingUniStreams: -1, EnableDatagrams: true, Allow0RTT: false,
 		// The routed TUN carries at most 1320 bytes end to end. quic-go's
 		// default 1280-byte UDP payload exceeds that once IPv6/UDP headers
 		// are added; the kernel drops the Initial before it reaches the TUN.
@@ -59,7 +76,11 @@ func quicConfig() *quic.Config {
 func Resolve(snapshot localmesh.NodeSnapshot, target meshid.Device) (netip.AddrPort, error) {
 	address := target.MeshAddress()
 	prefix := netip.PrefixFrom(address, 128)
-	for _, r := range snapshot.Routes {
+	routes := snapshot.ForwardingRoutes
+	if routes == nil {
+		routes = snapshot.Routes
+	} // Older/synthetic snapshot producers.
+	for _, r := range routes {
 		if r.Prefix == prefix && !r.Unreachable && !r.Local {
 			return netip.AddrPortFrom(address, Port), nil
 		}
@@ -154,13 +175,14 @@ func requestAppPort(ctx context.Context, conn *quic.Conn, port uint16, magic [4]
 	}
 	ack := make([]byte, ackSize)
 	if _, err = io.ReadFull(stream, ack); err != nil {
-		if ctx.Err() != nil {
+		var refusal *quic.StreamError
+		if ctx.Err() != nil && !errors.As(err, &refusal) {
 			err = ctx.Err()
 		}
 		if magic == udpOpenMagic && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
 			return nil, fmt.Errorf("%w: incomplete UDP control ACK", ErrUDPUnsupported)
 		}
-		return nil, fmt.Errorf("wendy net app port ACK: %w", err)
+		return nil, &portACKError{fmt.Errorf("wendy net app port ACK: %w", err)}
 	}
 	if magic == udpOpenMagic {
 		if err := validateUDPAck(ack); err != nil {
@@ -188,6 +210,8 @@ type Server struct {
 	authorizer     Authorizer
 	tickets        *localmesh.TicketStore
 	listener       *quic.Listener
+	tlsListener    net.Listener
+	tlsConnections map[*tls.Conn]struct{}
 	packets        net.PacketConn
 	mu             sync.Mutex
 	closed         bool
@@ -210,14 +234,14 @@ func NewServer(credentials *localmesh.Credentials, authorizer Authorizer, manage
 
 func (s *Server) TLSConfig() *tls.Config {
 	config := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-		NextProtos: []string{ALPN}, Certificates: []tls.Certificate{s.credentials.Certificate},
+		NextProtos: []string{multiplexALPN, ALPN}, Certificates: []tls.Certificate{s.credentials.Certificate},
 		ClientAuth: tls.RequireAnyClientCert,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
 			for _, cert := range state.PeerCertificates {
 				chain = append(chain, cert.Raw)
 			}
-			identity, err := s.credentials.Verify(chain, time.Now())
+			identity, err := s.credentials.VerifyTLS(chain, time.Now())
 			if err != nil {
 				return err
 			}
@@ -229,11 +253,13 @@ func (s *Server) TLSConfig() *tls.Config {
 			}
 			return nil
 		}}
+	s.credentials.ConfigureTLSServer(config)
 	s.tickets.Configure(config)
 	return config
 }
 
-func (s *Server) Run(ctx context.Context, addr string) error {
+// Run calls ready, when supplied, after binding the QUIC listener.
+func (s *Server) Run(ctx context.Context, addr string, ready ...func()) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	packets, err := listenAppPackets(runCtx, s.credentials, addr)
@@ -255,6 +281,9 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	s.packets = packets
 	s.listener = listener
 	s.mu.Unlock()
+	if len(ready) != 0 && ready[0] != nil {
+		ready[0]()
+	}
 	sem := make(chan struct{}, 64)
 	var wg sync.WaitGroup
 	defer func() { cancel(); _ = s.Close(); wg.Wait() }()
@@ -289,7 +318,18 @@ func (s *Server) Close() error {
 	}
 	s.closed = true
 	listener, packets := s.listener, s.packets
+	tlsListener := s.tlsListener
+	tlsConnections := make([]*tls.Conn, 0, len(s.tlsConnections))
+	for conn := range s.tlsConnections {
+		tlsConnections = append(tlsConnections, conn)
+	}
 	s.mu.Unlock()
+	if tlsListener != nil {
+		_ = tlsListener.Close()
+	}
+	for _, conn := range tlsConnections {
+		_ = conn.Close()
+	}
 	var err error
 	if listener != nil {
 		err = errors.Join(listener.Close(), packets.Close())
@@ -326,7 +366,14 @@ func (s *Server) serve(parent context.Context, conn *quic.Conn) {
 		}
 	}()
 	protocol := &sessionProtocol{}
-	sem := make(chan struct{}, 8)
+	capacity := 8
+	if localmesh.ApplicationProtocol(conn.ConnectionState().TLS.NegotiatedProtocol) == multiplexALPN {
+		protocol.mux = newUDPMultiplexer(conn)
+		protocol.tcpSlots = make(chan struct{}, 8)
+		capacity += udpmessage.PeerFlows
+		go protocol.mux.receive()
+	}
+	sem := make(chan struct{}, capacity)
 	for {
 		stream, err := conn.AcceptStream(conn.Context())
 		if err != nil {
@@ -353,9 +400,14 @@ func (s *Server) serve(parent context.Context, conn *quic.Conn) {
 type sessionProtocol struct {
 	mu       sync.Mutex
 	tcp, udp bool
+	mux      *udpMultiplexer
+	tcpSlots chan struct{}
 }
 
 func (p *sessionProtocol) admit(udp bool) bool {
+	if p.mux != nil {
+		return !udp
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if udp {
@@ -386,7 +438,17 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 		return
 	}
 	port := binary.BigEndian.Uint16(hello[4:])
+	if string(hello[:4]) == "WAU4" {
+		if protocol.mux != nil {
+			s.serveMultiplexedDatagrams(parent, conn, port, stream, protocol.mux)
+		}
+		return
+	}
 	if string(hello[:4]) == "WAU2" {
+		if protocol.mux != nil {
+			_ = writeUDPAck(stream, 2)
+			return
+		}
 		s.serveDatagrams(parent, conn, port, stream, protocol)
 		return
 	}
@@ -396,6 +458,15 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 	}
 	if string(hello[:4]) != "WAS1" {
 		return
+	}
+	if protocol.tcpSlots != nil {
+		select {
+		case protocol.tcpSlots <- struct{}{}:
+			defer func() { <-protocol.tcpSlots }()
+		default:
+			deny(stream)
+			return
+		}
 	}
 	local, err := s.authorizer.DialAuthorized(port, func(address string) (net.Conn, error) {
 		return net.DialTimeout("tcp4", address, 5*time.Second)
@@ -413,6 +484,11 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 	if owned, ok := local.(interface{ Done() <-chan struct{} }); ok {
 		revoked = owned.Done()
 	}
+	var closed <-chan struct{}
+	if pipe, ok := local.(interface{ Closed() <-chan struct{} }); ok {
+		closed = pipe.Closed()
+	}
+	drained := make(chan struct{})
 	localDone := make(chan struct{})
 	defer close(localDone)
 	go func() {
@@ -425,6 +501,19 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 			// Revocation closes this stream, not other apps sharing the session.
 			stream.CancelRead(1)
 			stream.CancelWrite(1)
+		case <-closed:
+			// A local full close ends the reverse direction too, but only
+			// after forwarding accepted bytes and queuing their FIN.
+			select {
+			case <-drained:
+				stream.CancelRead(0)
+			case <-revoked:
+				stream.CancelRead(1)
+				stream.CancelWrite(1)
+			case <-parent.Done():
+			case <-conn.Context().Done():
+			case <-localDone:
+			}
 		case <-localDone:
 		}
 	}()
@@ -443,6 +532,7 @@ func (s *Server) serveStream(parent context.Context, conn *quic.Conn, stream *qu
 	go func() {
 		_, _ = io.Copy(stream, local)
 		_ = stream.Close()
+		close(drained)
 		done <- struct{}{}
 	}()
 	<-done

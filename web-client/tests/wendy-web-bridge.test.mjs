@@ -9,21 +9,22 @@ const pub=(name)=>new URL(`../public/${name}`,import.meta.url);
 const gz=readFileSync(pub('wendy.wasm.gz'));
 const pin=createHash('sha256').update(gunzipSync(gz)).digest('hex');
 
-function startWorker(query){
+function startWorker(query, overrides={}){
   const messages=[];let waiting=[];
-  const scope={indexedDB,crypto,TextEncoder,TextDecoder,Uint8Array,URL,Blob,Response,DecompressionStream,WebAssembly,performance,console,setTimeout,clearTimeout,
+  const scope={indexedDB,crypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,URL,Blob,Response,DecompressionStream,WebAssembly,performance,console,setTimeout,clearTimeout,
     location:new URL(`https://console.example/wendy-web/1/wendy-worker.js${query}`),
     fetch:async(url)=>{assert.equal(String(url),'https://console.example/wendy-web/1/wendy.wasm.gz','the module loads next to the worker');return new Response(gz);},
     importScripts:(...names)=>{for(const name of names)vm.runInContext(readFileSync(pub(name),'utf8'),scope);},
     postMessage:(data)=>{messages.push(data);for(const check of waiting)check();},
   };
+  Object.assign(scope,overrides);
   scope.self=scope;scope.globalThis=scope;
   vm.createContext(scope);
   vm.runInContext(readFileSync(pub('wendy-worker.js'),'utf8'),scope);
   const next=(match)=>new Promise((resolve)=>{const check=()=>{const found=messages.find(match);if(found){waiting=waiting.filter((c)=>c!==check);resolve(found);}};waiting.push(check);check();});
   let id=0;
   const call=(method,params)=>{const request={id:++id,method,params};scope.onmessage({data:request});return next((m)=>m.id===request.id);};
-  return {next,call};
+  return {next,call,scope,messages};
 }
 
 const tampered=startWorker('?sha256='+'0'.repeat(64));
@@ -41,5 +42,39 @@ assert.equal((await worker.call('sign',{tenant:'tenant-a'})).error,'Nothing to s
 assert.equal((await worker.call('sign',{tenant:'tenant-a',bytes:'AQID'})).error,'Nothing to sign');
 assert.equal((await worker.call('auth-restore',{tenant:'tenant-a'})).result,null);
 assert.equal((await worker.call('auth-signout',{})).result,true);
-console.log('PASS: wasm sha256 pin, sibling paths, init validation and once-only, credential/sign refuse without sign-in, Uint8Array-only bytes');
+const begun=await worker.call('auth-redirect-begin',{redirect:'https://console.example/auth/callback'});
+assert.deepEqual(Object.keys(begun.result).sort(),['pending','url']);
+assert.match(begun.result.pending,/^[A-Za-z0-9_-]{43}$/);
+const authorize=new URL(begun.result.url);
+assert.equal(authorize.origin,'https://auth.example');
+assert.equal(authorize.searchParams.get('code_challenge_method'),'S256');
+assert.equal(authorize.searchParams.has('dpop_jkt'),false);
+assert.equal(authorize.searchParams.has('code_verifier'),false);
+const replacement=startWorker('?sha256='+pin);
+assert.ok((await replacement.next(m=>m.fatal||m.ready)).ready);
+await replacement.call('init',settings);
+const callback={pending:begun.result.pending,redirect:'https://console.example/auth/callback',state:authorize.searchParams.get('state'),code:'',issuer:'',error:'invalid_scope'};
+assert.equal((await replacement.call('auth-redirect-complete',callback)).error,'Authentication failed: invalid_scope','fresh WASM resumes and preserves an OAuth error without iss');
+assert.match((await worker.call('auth-redirect-complete',callback)).error,/missing or already used/,'original worker cannot replay a consumed transaction');
+const canceled=await worker.call('auth-redirect-begin',{redirect:callback.redirect});
+assert.equal((await replacement.call('auth-redirect-cancel',{pending:canceled.result.pending})).result,true);
+assert.match((await worker.call('auth-redirect-complete',{...callback,pending:canceled.result.pending})).error,/missing or already used/);
+const invalid=await worker.call('auth-redirect-begin',{redirect:callback.redirect});
+assert.match((await replacement.call('auth-redirect-complete',{...callback,pending:invalid.result.pending,state:'wrong'})).error,/state mismatch/);
+assert.match((await replacement.call('auth-redirect-complete',{...callback,pending:invalid.result.pending})).error,/missing or already used/);
+const blocked=startWorker('?sha256='+pin,{indexedDB:{open(){const request={};setTimeout(()=>request.onblocked(),0);return request;}}});
+assert.ok((await blocked.next(m=>m.fatal||m.ready)).ready);
+await blocked.call('init',settings);
+const refused=await blocked.call('auth-redirect-begin',{redirect:callback.redirect});
+assert.match(refused.error,/storage is blocked/);
+assert.equal(refused.result,undefined,'blocked storage cannot return a navigation URL');
+assert.equal(typeof (await blocked.call('auth-begin',{redirect:callback.redirect})).result,'string','legacy begin works without pending storage');
+assert.match((await blocked.call('auth-restore',{tenant:'tenant-a'})).error,/could not access credential storage: Browser storage is blocked/,'credential failures carry their cause');
+// A cached wendy-credentials.js from before redirects has no wendyPending.
+const stale=startWorker('?sha256='+pin);
+assert.ok((await stale.next(m=>m.fatal||m.ready)).ready);
+await stale.call('init',settings);
+vm.runInContext('delete globalThis.wendyPending',stale.scope);
+assert.equal((await stale.call('auth-redirect-begin',{redirect:callback.redirect})).error,'Could not save pending sign-in: Browser pending sign-in storage is unavailable');
+console.log('PASS: WASM pin/loading, init, unsigned credential/sign refusal, redirect begin/resume/error/replay/cancel/state/storage refusal, store-specific storage errors, legacy begin');
 process.exit(0);

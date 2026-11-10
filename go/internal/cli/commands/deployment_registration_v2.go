@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"strconv"
 	"strings"
 
@@ -148,7 +149,7 @@ func registerAppsWithCloudV2(ctx context.Context, conn grpc.ClientConnInterface,
 	for _, id := range appIDs {
 		app, err := client.GetApp(ctx, &cloudpb.GetAppRequest{Id: id, OrganizationId: tenant})
 		if status.Code(err) == codes.NotFound {
-			name := strings.TrimPrefix(id, "campaign:")
+			name := strings.TrimPrefix(id, data.CampaignAppPrefix)
 			app = new(cloudpb.App)
 			err = cloudrequest.Invoke(ctx, conn, auth, cloudpb.AppService_UpsertApp_FullMethodName,
 				&cloudpb.UpsertAppRequest{Id: id, OrganizationId: tenant, Name: &name}, app)

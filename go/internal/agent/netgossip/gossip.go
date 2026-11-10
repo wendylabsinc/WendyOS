@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"sort"
 	"sync"
 	"time"
@@ -28,26 +29,91 @@ const (
 	maxBytes           = 8 << 20
 )
 
-// Digests are raw SHA-256 bytes (base64 in the surrounding JSON envelope), not
-// hex strings. DATA is chunked so actual progress, rather than polling, extends
+// Digests and DATA are native CBOR byte strings. DATA is chunked so actual progress, rather than polling, extends
 // ownership on slow links. Each request belongs to one session incarnation.
 type Message struct {
-	Version int    `json:"v"`
-	Op      string `json:"op"`
-	Type    uint8  `json:"type"`
-	Digest  []byte `json:"digest"`
-	Request uint64 `json:"request,omitempty"`
-	Offset  int    `json:"offset,omitempty"`
-	Total   int    `json:"total,omitempty"`
-	Data    []byte `json:"data,omitempty"`
+	Version int    `json:"v" cbor:"v"`
+	Op      string `json:"op" cbor:"o"`
+	Type    uint8  `json:"type" cbor:"t"`
+	Digest  []byte `json:"digest" cbor:"h"`
+	Request uint64 `json:"request,omitempty" cbor:"r,omitempty"`
+	Offset  int    `json:"offset,omitempty" cbor:"f,omitempty"`
+	Total   int    `json:"total,omitempty" cbor:"l,omitempty"`
+	Data    []byte `json:"data,omitempty" cbor:"d,omitempty"`
+	// deadline is local scheduling metadata, never part of the wire artifact.
+	deadline time.Time
+}
+
+// Deadline is the originating local lease/resource deadline for a generated
+// control. A zero deadline means the message carries no retained payload lease.
+func (m Message) Deadline() time.Time { return m.deadline }
+
+// Expired lets an adapter discard queued controls after their original local
+// lease expires. Receiving or serializing a frame never creates a new lease.
+func (m Message) Expired(now time.Time) bool {
+	return !m.deadline.IsZero() && !m.deadline.After(now)
+}
+
+// Known separates optional future operations from the formats understood here.
+// Unknown operations are consumed without changing hints, claims or authority.
+func (m Message) Known() bool {
+	switch m.Op {
+	case "have", "want", "unavailable", "data", "gone":
+		return true
+	}
+	return false
+}
+
+// FutureType identifies optional artifact families within the current gossip
+// version. Their variant payload is not interpreted using a known family schema.
+func (m Message) FutureType() bool { return m.Version == Version && m.Type > Service }
+
+func (m *Message) UnmarshalCBOR(data []byte) error {
+	var discriminator struct {
+		Version netwire.RawMessage `cbor:"v"`
+		Type    netwire.RawMessage `cbor:"t"`
+	}
+	if err := netwire.Unmarshal(data, &discriminator); err != nil {
+		return err
+	}
+	var version int
+	var kind uint8
+	if netwire.Unmarshal(discriminator.Version, &version) == nil && version == Version &&
+		netwire.Unmarshal(discriminator.Type, &kind) == nil && kind > Service {
+		*m = Message{Version: version, Type: kind}
+		return nil
+	}
+	var head struct {
+		Op string `json:"op" cbor:"o"`
+	}
+	if err := netwire.Unmarshal(data, &head); err != nil {
+		return err
+	}
+	if head.Op != "" && !(Message{Op: head.Op}).Known() {
+		*m = Message{Op: head.Op}
+		return nil
+	}
+	type plain Message
+	var parsed plain
+	if err := netwire.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*m = Message(parsed)
+	return nil
 }
 
 func (m Message) Validate() error {
+	if m.FutureType() {
+		return nil
+	}
+	if m.Op != "" && !m.Known() {
+		return nil
+	}
 	if m.Version != Version || (m.Type != Manifest && m.Type != Service) || len(m.Digest) != sha256.Size {
 		return errors.New("invalid gossip version, type or digest")
 	}
 	switch m.Op {
-	case "have":
+	case "have", "gone":
 		if m.Request != 0 || m.Offset != 0 || m.Total != 0 || len(m.Data) != 0 {
 			return errors.New("invalid HAVE")
 		}
@@ -104,6 +170,7 @@ type fetch struct {
 	total          int
 	received       bool
 	avoid          uint64
+	deadline       time.Time
 }
 
 // Pool is shared by all sessions and both announcement types on one router.
@@ -114,14 +181,18 @@ type Pool struct {
 	pending        map[ID]*fetch
 	owner, request uint64
 	bytes, serving int
+	sessions       map[uint64]*Session
 }
 
-func NewPool() *Pool { return &Pool{objects: make(map[ID]object), pending: make(map[ID]*fetch)} }
+func NewPool() *Pool {
+	return &Pool{objects: make(map[ID]object), pending: make(map[ID]*fetch), sessions: make(map[uint64]*Session)}
+}
 
 type transfer struct {
 	message Message
 	data    []byte
 	offset  int
+	expires time.Time
 }
 
 // Session is owned by its protocol actor. Pool methods serialize cross-link
@@ -140,7 +211,80 @@ func (p *Pool) NewSession(kind uint8) *Session {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.owner++
-	return &Session{pool: p, owner: p.owner, kind: kind, seen: make(map[ID]time.Time), unavailable: make(map[ID]bool)}
+	s := &Session{pool: p, owner: p.owner, kind: kind, seen: make(map[ID]time.Time), unavailable: make(map[ID]bool)}
+	if p.sessions == nil {
+		p.sessions = make(map[uint64]*Session)
+	}
+	p.sessions[s.owner] = s
+	return s
+}
+
+// Sweep releases expired payloads and transfers even when sessions are idle or
+// have no output credit. Callers provide the same local monotonic clock used to
+// establish their receiver-relative object deadlines.
+func (p *Pool) Sweep(now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prune(now)
+}
+
+func (s *Session) Sweep(now time.Time) { s.pool.Sweep(now) }
+
+// Forget removes every retained payload reference for an expired or superseded
+// artifact. Origin revision watermarks live in the adapter, outside this pool.
+func (p *Pool) Forget(id ID) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if o, ok := p.objects[id]; ok {
+		p.bytes -= len(o.data)
+		delete(p.objects, id)
+	}
+	if f := p.pending[id]; f != nil {
+		f.data = nil
+		delete(p.pending, id)
+	}
+	for _, s := range p.sessions {
+		s.dropTransfers(func(x *transfer) bool { return x.message.ID() == id })
+		delete(s.seen, id)
+		delete(s.unavailable, id)
+	}
+}
+
+// PayloadStats describes retained payload holders for diagnostics/tests. Counts
+// include shared references in queued uploads rather than unique allocations.
+type PayloadStats struct {
+	Objects, ObjectBytes, Downloads, DownloadBytes, Uploads, UploadBytes, Sessions int
+}
+
+func (p *Pool) PayloadStats() PayloadStats {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	stats := PayloadStats{Objects: len(p.objects), ObjectBytes: p.bytes, Downloads: len(p.pending), Uploads: p.serving, Sessions: len(p.sessions)}
+	for _, f := range p.pending {
+		stats.DownloadBytes += len(f.data)
+	}
+	for _, s := range p.sessions {
+		for _, x := range s.out {
+			stats.UploadBytes += len(x.data)
+		}
+	}
+	return stats
+}
+
+// dropTransfers requires the pool mutex. Clear vacated slots as well as slice
+// length so an idle backing array cannot retain a complete signed artifact.
+func (s *Session) dropTransfers(drop func(*transfer) bool) {
+	kept := s.out[:0]
+	for _, x := range s.out {
+		if drop(x) {
+			s.pool.serving--
+			x.data = nil
+		} else {
+			kept = append(kept, x)
+		}
+	}
+	clear(s.out[len(kept):])
+	s.out = kept
 }
 
 func (p *Pool) prune(now time.Time) {
@@ -151,18 +295,33 @@ func (p *Pool) prune(now time.Time) {
 		}
 	}
 	for id, f := range p.pending {
+		if !f.deadline.IsZero() && !f.deadline.After(now) {
+			f.data = nil
+			delete(p.pending, id)
+			continue
+		}
 		for owner, until := range f.suppliers {
 			if !until.After(now) {
 				delete(f.suppliers, owner)
 			}
 		}
 		if len(f.suppliers) == 0 {
+			f.data = nil
 			delete(p.pending, id)
 			continue
 		}
 		if f.owner != 0 && !f.received && now.Sub(f.progress) >= IdleTimeout {
 			f.avoid, f.owner = f.owner, 0
 			f.data, f.total = nil, 0
+		}
+	}
+	for _, s := range p.sessions {
+		s.dropTransfers(func(x *transfer) bool { return !x.expires.After(now) })
+		for id, until := range s.seen {
+			if !until.After(now) {
+				delete(s.seen, id)
+				delete(s.unavailable, id)
+			}
 		}
 	}
 }
@@ -173,9 +332,20 @@ func (p *Pool) remember(id ID, data []byte, expires, now time.Time) {
 	p.prune(now)
 	var load func(time.Time) []byte
 	if old, ok := p.objects[id]; ok {
+		// Duplicate/resigned deliveries cannot renew a retained exact artifact.
+		if old.expires.Before(expires) {
+			expires = old.expires
+		}
 		load = old.load
 		p.bytes -= len(old.data)
 		delete(p.objects, id)
+	}
+	for _, s := range p.sessions {
+		for _, x := range s.out {
+			if x.message.ID() == id && expires.Before(x.expires) {
+				x.expires = expires
+			}
+		}
 	}
 	for len(p.objects) >= maxKnown || p.bytes+len(data) > maxBytes {
 		payloadOnly := len(p.objects) < maxKnown
@@ -222,8 +392,23 @@ func (s *Session) Offer(data []byte, expires, now time.Time, loaders ...func(tim
 		o.load = loaders[0]
 		s.pool.objects[id] = o
 	}
+	deadline := s.pool.objects[id].expires
 	s.pool.mu.Unlock()
-	return message("have", id, 0)
+	m := message("have", id, 0)
+	m.deadline = deadline
+	return m
+}
+
+// ClaimDeadline preserves the original resource allowance when an adapter moves
+// downloaded bytes into its bounded certificate-verification continuation.
+func (s *Session) ClaimDeadline(id ID) (time.Time, bool) {
+	s.pool.mu.Lock()
+	defer s.pool.mu.Unlock()
+	f := s.pool.pending[id]
+	if f == nil || f.owner != s.owner {
+		return time.Time{}, false
+	}
+	return f.deadline, true
 }
 
 // Lookup recovers only an already verified receipt, never an unknown digest.
@@ -253,6 +438,12 @@ func (s *Session) Lookup(id ID, now time.Time) []byte {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// The keyed loader ran without the lock. Expiry/supersession may have
+	// removed this exact receipt meanwhile; never resurrect it after Forget.
+	current, stillKnown := p.objects[id]
+	if !stillKnown || !current.expires.Equal(o.expires) {
+		return nil
+	}
 	p.remember(id, data, o.expires, now)
 	return data
 }
@@ -260,6 +451,13 @@ func (s *Session) Lookup(id ID, now time.Time) []byte {
 func Unavailable(request Message) *Message {
 	return message("unavailable", request.ID(), request.Request)
 }
+
+// Gone proactively withdraws this peer's HAVE for exactly one artifact. It is
+// cache residency information, never an origin-signed service withdrawal.
+// Send only to peers supporting this prototype extension, after eviction and
+// before advertising subsequent availability on that session. Accepted outgoing
+// transfers must retain their object; evict an idle object instead.
+func Gone(id ID) *Message { return message("gone", id, 0) }
 
 // Resolve runs only after the adapter's existing identity/signature/scope and
 // version checks finish. Authenticated stale bodies get a short receipt;
@@ -333,19 +531,35 @@ func (s *Session) claim(id ID, now time.Time) *Message {
 		if len(p.pending) >= maxPending {
 			return nil
 		}
-		f = &fetch{suppliers: map[uint64]time.Time{s.owner: s.seen[id]}}
+		f = &fetch{suppliers: map[uint64]time.Time{s.owner: s.seen[id]}, deadline: now.Add(HintLifetime)}
 		p.pending[id] = f
 	}
 	p.request++
 	f.owner, f.request, f.progress = s.owner, p.request, now
-	return message("want", id, f.request)
+	m := message("want", id, f.request)
+	m.deadline = f.deadline
+	return m
 }
 
 // Receive returns a protocol reply and, at most once, a complete untrusted
 // body for the adapter to authenticate. Unsolicited/obsolete DATA is ignored.
 func (s *Session) Receive(m Message, now time.Time) (*Message, []byte, error) {
+	return s.receive(m, now, false)
+}
+
+// ReceiveDeferred retains an accepted WANT in the existing bounded upload
+// slots without advancing its first DATA. Poll emits that DATA only when the
+// adapter has bulk output credit. Immediate replies need at most one slot.
+func (s *Session) ReceiveDeferred(m Message, now time.Time) (*Message, []byte, error) {
+	return s.receive(m, now, true)
+}
+
+func (s *Session) receive(m Message, now time.Time, deferUpload bool) (*Message, []byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, nil, err
+	}
+	if m.FutureType() || !m.Known() {
+		return nil, nil, nil
 	}
 	if s.closed || m.Type != s.kind {
 		return nil, nil, errors.New("gossip session type mismatch")
@@ -356,6 +570,22 @@ func (s *Session) Receive(m Message, now time.Time) (*Message, []byte, error) {
 	p.prune(now)
 	id := m.ID()
 	switch m.Op {
+	case "gone":
+		delete(s.seen, id)
+		delete(s.unavailable, id)
+		if f := p.pending[id]; f != nil {
+			delete(f.suppliers, s.owner)
+			// Completed bytes may already be under independent verification.
+			// Withdrawal cannot release that reservation or discard those bytes.
+			if f.owner == s.owner && !f.received {
+				f.owner, f.request, f.avoid = 0, 0, s.owner
+				f.data, f.total = nil, 0
+			}
+			if f.owner == 0 && len(f.suppliers) == 0 {
+				delete(p.pending, id)
+			}
+		}
+		return nil, nil, nil
 	case "have":
 		if object, known := p.objects[id]; known {
 			object.used = now
@@ -378,9 +608,12 @@ func (s *Session) Receive(m Message, now time.Time) (*Message, []byte, error) {
 		if !ok || len(o.data) == 0 || len(s.out) >= maxPerPeer || p.serving >= maxInFlight {
 			return message("unavailable", id, m.Request), nil, nil
 		}
-		x := &transfer{message: *message("data", id, m.Request), data: o.data}
+		x := &transfer{message: *message("data", id, m.Request), data: o.data, expires: o.expires}
 		s.out = append(s.out, x)
 		p.serving++
+		if deferUpload {
+			return nil, nil, nil
+		}
 		return s.chunk(), nil, nil
 	case "unavailable":
 		if f := p.pending[id]; f != nil && f.owner == s.owner && f.request == m.Request && !f.received {
@@ -422,15 +655,18 @@ func (s *Session) chunk() *Message {
 	}
 	x := s.out[0]
 	m := x.message
+	m.deadline = x.expires
 	m.Offset = x.offset
 	m.Total = len(x.data)
 	end := min(x.offset+ChunkSize, len(x.data))
 	m.Data = append([]byte(nil), x.data[x.offset:end]...)
 	x.offset = end
 	if end == len(x.data) {
+		s.out[0] = nil
 		s.out = s.out[1:]
 		s.pool.serving--
 	} else {
+		s.out[0] = nil
 		s.out = append(s.out[1:], x)
 	}
 	return &m
@@ -496,7 +732,12 @@ func (s *Session) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.serving -= len(s.out)
+	for _, x := range s.out {
+		x.data = nil
+	}
+	clear(s.out)
 	s.out = nil
+	delete(p.sessions, s.owner)
 	for id, f := range p.pending {
 		delete(f.suppliers, s.owner)
 		if f.owner == s.owner {

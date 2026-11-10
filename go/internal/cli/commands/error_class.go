@@ -11,6 +11,8 @@ import (
 var (
 	errBuildFailed           = errors.New("build failed")
 	errBuilderUnavailable    = errors.New("builder unavailable")
+	errDiskSpaceLow          = errors.New("not enough disk space")
+	errBuildxMissing         = errors.New("Docker Buildx is not installed")
 	errNoDevice              = errors.New("no device")
 	errDeviceOffline         = errors.New("device offline")
 	errDeviceUnreachable     = errors.New("device unreachable")
@@ -69,6 +71,8 @@ func ErrorClass(err error) string {
 		return "device_identity_mismatch"
 	case errors.As(err, &orgMismatch):
 		return "device_org_mismatch"
+	case expiredLoginFrom(err) != nil:
+		return "auth_login_expired"
 	case errors.Is(err, errTLSHandshakeRejected):
 		return "device_tls_rejected"
 	case errors.Is(err, errProvisionedAgentUnauthorized):
@@ -105,6 +109,10 @@ func ErrorClass(err error) string {
 		return "registry_unavailable"
 	case errors.Is(err, errBuilderUnavailable):
 		return "builder_unavailable"
+	// Refused before a build for lack of space: the same class as the OS
+	// error the build would otherwise have ended with.
+	case errors.Is(err, errDiskSpaceLow):
+		return "disk_full"
 	// A missing executable during a build is a missing tool, not a failed
 	// compilation. exec.ErrNotFound survives the build failure wrapper.
 	case errors.Is(err, exec.ErrNotFound):

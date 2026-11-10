@@ -11,8 +11,22 @@ Application streams can also retain durable records outside episodes.
 
 ## Choose the available interface
 
-Check the installed CLI's `wendy data --help` and relevant subcommand help when
-a terminal is available. Use explicit `--device <selector>` on device commands.
+In native Wendy chat, inspect sources and existing campaigns with
+`device_campaign_sources` and `device_campaign_list` when available.
+`create_person_detection_campaign` proposes local person-detection clips and,
+when requested, a separate Cloud notification approval. For an existing campaign,
+`enable_campaign_notifications` requests an organization-wide grant for that
+campaign. Read the result. A denial ends the attempt, including through other
+interfaces. These tools belong to native chat; use the Campaigns editor or CLI
+for other models or when the tools are unavailable.
+
+"Let me know when someone walks into frame" maps to managed detection and
+notifications, without a depth camera or custom app. Check source health,
+inference readiness, and notification permission. Deployment or a grant alone
+does not verify detection or delivery.
+
+With a terminal, check `wendy data --help` and relevant subcommand help.
+Use explicit `--device <selector>` on device commands.
 Local CLI commands reconnect independently of an MCP session, so preserve the
 connected target and transport instead of relying on the default device.
 
@@ -36,7 +50,7 @@ requested measurements; preserve returned IDs.
 | Data | Campaign selection and limits |
 | --- | --- |
 | Video | `camera: <selector>` for a USB, CSI, or registered IP camera. A stable ID is preferable to an ambiguous name. `camera: "*"` includes all healthy cameras and cameras discovered later. |
-| Audio | `audio: <selector>` for a discovered capture device. Select the real microphone rather than an internal audio-routing channel. |
+| Audio | `audio: <selector>` for a discovered capture device. Select the real microphone rather than an internal audio-routing channel. Copy its stable ID, such as `audio:alsa_input.usb-…`; the old `audio:<number>` form is deprecated and can change after a reboot or replug. |
 | ROS 2 | `ros2: /topic` for data already published as ROS messages, such as LiDAR, odometry, IMU, GPS, or joint state. A full per-topic source ID selects one graph; a domain source ID captures the whole domain. |
 | Device health | On Linux, `telemetry: true` captures uptime, 1/5/15-minute system load, and total/free RAM at 1 Hz. It does not supply arbitrary hardware measurements. |
 | Application data | Campaigns automatically include application records. Apps with `episode-write` can contribute events, predictions, images, custom bytes, and time series. |
@@ -48,8 +62,8 @@ and units; receipt time alone does not establish when a measurement occurred.
 
 ## Follow the requested workflow
 
-- For campaign YAML, one-off recording, deployment, inference, notifications,
-  and episode retrieval, read [campaigns.md](references/campaigns.md).
+- For campaign YAML, one-off recording, deployment, disarm/remove, inference,
+  notifications, and episode retrieval, read [campaigns.md](references/campaigns.md).
 - For application events, model input references, durable records, custom
   measurements, and `export-stream`, read [application-streams.md](references/application-streams.md).
 - If an app must be built or deployed, use the available `wendy-app-lifecycle`
@@ -59,7 +73,7 @@ and units; receipt time alone does not establish when a measurement occurred.
 For an explanation or a YAML edit, complete that task without starting capture.
 For a requested CLI deployment or test, verify the deployed plan and recorded
 episode on the selected target. Deployment arms
-the campaign immediately.
+the campaign immediately, unless it is disarmed.
 
 ## Report what was achieved
 

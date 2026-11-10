@@ -16,6 +16,9 @@ type Config struct {
 	Auth          []AuthConfig     `json:"auth,omitempty"`
 	Analytics     *AnalyticsConfig `json:"analytics,omitempty"`
 	DefaultDevice string           `json:"defaultDevice,omitempty"`
+	// SessionBrokerIdleTimeout controls the grace period after the final user
+	// lease/operation ends. Empty uses five minutes; housekeeping is not a lease.
+	SessionBrokerIdleTimeout string `json:"sessionBrokerIdleTimeout,omitempty"`
 	// DefaultBuildHost is the device `wendy run` delegates the image
 	// build to when --build-host is not passed. Per-developer rather than
 	// per-project: the right build host depends on which network the developer is
@@ -34,9 +37,11 @@ type Config struct {
 	// CLIUpdateNoticeShown is the AvailableCLIUpdate tag whose non-interactive
 	// update notice has already been printed, so scripts and agents see it
 	// once per release instead of after every command.
-	CLIUpdateNoticeShown   string `json:"cliUpdateNoticeShown,omitempty"`
+	CLIUpdateNoticeShown string `json:"cliUpdateNoticeShown,omitempty"`
+	// CLIUpdatePromptVersion is no longer read; it is still written so older
+	// CLIs, whose snooze applied to this release only, honor a deferral.
 	CLIUpdatePromptVersion string `json:"cliUpdatePromptVersion,omitempty"`
-	CLIUpdatePromptedAt    string `json:"cliUpdatePromptedAt,omitempty"` // interactive reminder snooze, RFC3339
+	CLIUpdatePromptedAt    string `json:"cliUpdatePromptedAt,omitempty"` // snoozes all interactive update prompts for 24h, RFC3339
 	// LastMCPSetupVersion records the CLI version that last ran `wendy mcp
 	// setup`. It lets the root command detect when an upgrade should refresh
 	// the MCP server config and bundled skills. Empty means the user has never

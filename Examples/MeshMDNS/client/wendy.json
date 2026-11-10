@@ -1,0 +1,13 @@
+{
+  "appId": "com.example.learn-mdns-client",
+  "platform": "linux",
+  "isolation": "isolated",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "mesh",
+      "serviceCIDR": "10.99.0.0/16"
+    }
+  ],
+  "restartPolicy": "no"
+}

@@ -183,11 +183,13 @@ func TestRelayPublishedProfileControlsListingAndDispatch(t *testing.T) {
 			t.Fatal("listed simulator_create differs from the published definition")
 		}
 	}
+	if reply := callProtocolTool(t, srv, "simulator_start"); !reply.IsError || structuredMap(t, &reply)["error_code"] != string(errCodeNotFound) {
+		t.Fatalf("unpublished tool did not return NOT_FOUND: %+v", reply)
+	}
 	for _, call := range []struct {
 		name string
 		args map[string]any
 	}{
-		{"simulator_start", map[string]any{"name": "dev"}},
 		{"simulator_create", map[string]any{"name": "dev", "profile": "wendy-lite"}},
 		{"simulator_create", map[string]any{"name": "dev", "profile": "wendy-lite-native"}},
 		{"simulator_create", map[string]any{"name": "dev", "new_argument": true}},

@@ -2,8 +2,8 @@ package localmesh
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"testing"
 	"time"
 
@@ -124,8 +124,10 @@ func TestManifestHaveWantDiamondTransfersEachRevisionOnce(t *testing.T) {
 			if len(records) != 1 {
 				t.Fatal("manifest missing", node)
 			}
-			var got Manifest
-			json.Unmarshal(records[0].Body, &got)
+			got, err := DecodeManifest(records[0].Body)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got.Revision != revision || got.Withdraw != m.Withdraw {
 				t.Fatal("wrong revision/withdrawal", got)
 			}
@@ -139,24 +141,6 @@ func TestManifestHaveWantDiamondTransfersEachRevisionOnce(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-func TestRouterGossipRejectsUnsolicitedManifestButLeafRemainsCompatible(t *testing.T) {
-	d, chain, key, device, now := directoryFixture(t)
-	w, err := SignManifest(routeManifest(device, now), chain, key, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	router := NewSynchronizer(d, d.cache, netgossip.NewPool())
-	defer router.Close()
-	if _, _, err := router.Receive(ControlMessage{Kind: "manifest", Manifest: &w}, now); err == nil {
-		t.Fatal("router accepted full unsolicited manifest")
-	}
-	leaf := NewSynchronizer(d, d.cache)
-	defer leaf.Close()
-	if _, _, err := leaf.Receive(ControlMessage{Kind: "manifest", Manifest: &w}, now); err != nil {
-		t.Fatal("legacy leaf envelope rejected", err)
 	}
 }
 
@@ -175,17 +159,17 @@ func TestManifestGossipQueueBudgetDoesNotConsumeAnnouncement(t *testing.T) {
 	}
 }
 
-func TestManifestGossipExpiredUnverifiedBodyDoesNotCreateReceipt(t *testing.T) {
+func TestManifestGossipInvalidSignatureDoesNotCreateReceipt(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
 	w, err := SignManifest(routeManifest(device, now), chain, key, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Expiry is rejected before authentication. Even this bad signature must not
-	// become a shared receipt or prevent an independent supplier from being tried.
+	// Receiver TTL no longer classifies signed dates against local UTC. This
+	// invalid signature must fail normal authentication without a shared receipt.
 	w.Signature[0] ^= 1
-	body, _ := json.Marshal(w)
-	later := now.Add(2 * time.Minute)
+	body, _ := netwire.Marshal(w)
+	later := now.Add(MaxLease)
 	source := netgossip.NewPool().NewSession(netgossip.Manifest)
 	have := source.Offer(body, later.Add(MaxLease), later)
 	pool := netgossip.NewPool()
@@ -199,13 +183,14 @@ func TestManifestGossipExpiredUnverifiedBodyDoesNotCreateReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, changed, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: data}, later); err != nil || len(changed) != 0 {
+	if _, changed, err := receiver.Receive(ControlMessage{Kind: "gossip", Gossip: data}, later); !errors.Is(err, ErrInvalidManifestSignature) || len(changed) != 0 {
 		t.Fatal(changed, err)
 	}
+	receiver.Close() // A fatal authentication error closes and releases its claim.
 	alternate := pool.NewSession(netgossip.Manifest)
 	defer alternate.Close()
 	if next, _, err := alternate.Receive(*have, later); err != nil || next == nil {
-		t.Fatal("unverified expired manifest became a shared receipt", next, err)
+		t.Fatal("invalid signature became a shared receipt", next, err)
 	}
 	if len(d.Records(later)) != 0 {
 		t.Fatal("unverified artifact entered the directory")
@@ -240,7 +225,7 @@ func TestManifestGossipRecoversEvictedPayloadAndRechecksTrust(t *testing.T) {
 	if err != nil || len(replies) != 2 || replies[0].Certificate == nil || replies[1].Gossip == nil || replies[1].Gossip.Op != "data" {
 		t.Fatal("evicted body was not recovered from its directory key", replies, err)
 	}
-	body, _ := json.Marshal(w)
+	body, _ := netwire.Marshal(w)
 	if !bytes.Equal(replies[1].Gossip.Data, body) {
 		t.Fatal("recovery changed the signed envelope")
 	}

@@ -513,9 +513,10 @@ func newWifiDisconnectCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disconnect",
 		Short: "Disconnect from the current WiFi network",
+		Long:  "Disconnect from the current WiFi network and report whether completion was confirmed. If you are connected to the device over that same WiFi network, the command may lose contact before it can confirm the result. Check WiFi status over Bluetooth or another connection to confirm that the device disconnected.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -536,15 +537,24 @@ func newWifiDisconnectCmd() *cobra.Command {
 				return fmt.Errorf("selected device does not support WiFi disconnect")
 			}
 
-			resp, err := target.Agent.AgentService.DisconnectWiFi(ctx, &agentpb.DisconnectWiFiRequest{})
-			if err != nil {
-				return fmt.Errorf("disconnecting WiFi: %w", err)
+			result, err := target.Agent.DisconnectWiFi(ctx)
+			if jsonOutput {
+				if outputErr := writeJSON(cmd.OutOrStdout(), result); outputErr != nil {
+					return outputErr
+				}
+			} else {
+				if result.Warning != "" {
+					cliNotice("%s", result.Warning)
+				}
+				if err == nil {
+					if result.CompletionConfirmed {
+						cliSuccess("%s", result.Message)
+					} else {
+						cliNotice("%s", result.Message)
+					}
+				}
 			}
-			if !resp.GetSuccess() {
-				return fmt.Errorf("failed to disconnect: %s", resp.GetErrorMessage())
-			}
-			cliSuccess("Disconnected from WiFi.")
-			return nil
+			return err
 		},
 	}
 }
@@ -763,12 +773,13 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		}()
 
 		// While the rescan runs, poll the device's scan cache so SSIDs stream
-		// into the picker as they are found. Each poll returns quickly: the
-		// in-progress scan rejects new rescan requests and the list call reads
-		// the cache. Only over gRPC — the BLE transport can't multiplex
-		// concurrent calls. The deadline caps RPC traffic if the
-		// authoritative scan wedges; its result still lands whenever it
-		// finishes.
+		// into the picker as they are found. Older agents answer each poll at
+		// once from the cache. Agents that scan at most once per 30 s hold a
+		// poll that arrives during their scan until it ends, so there the
+		// picker fills in when the scan does. Only over gRPC — the BLE
+		// transport can't multiplex concurrent calls. The deadline caps RPC
+		// traffic if the authoritative scan wedges; its result still lands
+		// whenever it finishes.
 		if client.agent != nil {
 			go func() {
 				ticker := time.NewTicker(1500 * time.Millisecond)

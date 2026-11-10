@@ -25,6 +25,19 @@ func clearCIEnv(t *testing.T) {
 	}
 }
 
+// Isolate the shared user identity independently of device configuration.
+func isolateIdentityHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".wendy")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func enableTestDelivery(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	Close()
@@ -79,6 +92,7 @@ func TestDisabledViaConfig(t *testing.T) {
 }
 
 func TestEnabledByDefaultWhenNil(t *testing.T) {
+	isolateIdentityHome(t)
 	clearCIEnv(t)
 	t.Setenv("WENDY_ANALYTICS", "")
 	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
@@ -483,8 +497,8 @@ func TestDeliveryCallbackCanTrackAfterFlush(t *testing.T) {
 }
 
 func TestLoadOrCreateIDReadsExistingIdentityWithoutLock(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("WENDY_CONFIG_DIR", dir)
+	dir := isolateIdentityHome(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	const want = "69eedfb8-a7d5-43c5-b61d-3083caa38f63"
 	if err := os.WriteFile(filepath.Join(dir, "analytics_id"), []byte(want), 0o400); err != nil {
 		t.Fatal(err)
@@ -498,9 +512,87 @@ func TestLoadOrCreateIDReadsExistingIdentityWithoutLock(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreateIDSharedAcrossConfigDirectories(t *testing.T) {
+	for _, tc := range []struct {
+		name, shared, legacy string
+	}{
+		{name: "new identity"},
+		{name: "preserve home identity", shared: "69eedfb8-a7d5-43c5-b61d-3083caa38f63"},
+		{name: "migrate config identity", legacy: "805840d4-130b-4317-9c43-a2c28ec21246"},
+		{name: "home wins over config", shared: "69eedfb8-a7d5-43c5-b61d-3083caa38f63", legacy: "805840d4-130b-4317-9c43-a2c28ec21246"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := isolateIdentityHome(t)
+			legacyDir := t.TempDir()
+			t.Setenv("WENDY_CONFIG_DIR", legacyDir)
+			for path, id := range map[string]string{
+				filepath.Join(dir, "analytics_id"):       tc.shared,
+				filepath.Join(legacyDir, "analytics_id"): tc.legacy,
+			} {
+				if id != "" {
+					if err := os.WriteFile(path, []byte(id), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			id, err := loadOrCreateID()
+			if err != nil || id == "" {
+				t.Fatalf("first identity = %q, %v", id, err)
+			}
+			want := tc.shared
+			if want == "" {
+				want = tc.legacy
+			}
+			if want != "" && id != want {
+				t.Fatalf("identity = %q, want preserved %q", id, want)
+			}
+			stored, err := os.ReadFile(filepath.Join(dir, "analytics_id"))
+			if err != nil || string(stored) != id {
+				t.Fatalf("shared identity was not persisted: %q, %v", stored, err)
+			}
+			if tc.legacy != "" {
+				stored, err := os.ReadFile(filepath.Join(legacyDir, "analytics_id"))
+				if err != nil || string(stored) != tc.legacy {
+					t.Fatalf("legacy identity changed: %q, %v", stored, err)
+				}
+			}
+			otherDir := t.TempDir()
+			for _, configDir := range []string{otherDir, "", legacyDir} {
+				t.Setenv("WENDY_CONFIG_DIR", configDir)
+				if got, err := loadOrCreateID(); err != nil || got != id {
+					t.Fatalf("config %q identity = %q, %v; want %q", configDir, got, err, id)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(otherDir, "analytics_id")); !os.IsNotExist(err) {
+				t.Fatalf("created config-specific identity: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadOrCreateIDDoesNotReplaceUnreadableIdentity(t *testing.T) {
+	for _, location := range []string{"shared", "legacy"} {
+		t.Run(location, func(t *testing.T) {
+			dir := isolateIdentityHome(t)
+			legacyDir := t.TempDir()
+			t.Setenv("WENDY_CONFIG_DIR", legacyDir)
+			brokenDir := dir
+			if location == "legacy" {
+				brokenDir = legacyDir
+			}
+			if err := os.Mkdir(filepath.Join(brokenDir, "analytics_id"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if id, err := loadOrCreateID(); err == nil || id != "" {
+				t.Fatalf("unreadable identity replaced with %q: %v", id, err)
+			}
+		})
+	}
+}
+
 func TestLoadOrCreateIDConcurrentFirstLaunchesShareIdentity(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("WENDY_CONFIG_DIR", dir)
+	dir := isolateIdentityHome(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	const count = 32
 	ids := make(chan string, count)
 	errs := make(chan error, count)
@@ -534,8 +626,8 @@ func TestLoadOrCreateIDConcurrentFirstLaunchesShareIdentity(t *testing.T) {
 }
 
 func TestLoadOrCreateIDRechecksAfterWaitingForFirstWriter(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("WENDY_CONFIG_DIR", dir)
+	dir := isolateIdentityHome(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	release, err := flock.Acquire(filepath.Join(dir, "analytics_id.lock"), time.Second)
 	if err != nil {
 		t.Fatal(err)

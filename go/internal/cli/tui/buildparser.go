@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"regexp"
 	"strconv"
@@ -75,12 +76,18 @@ var (
 	buildLogLineRe         = regexp.MustCompile(`^(\d+\.\d+) `)        // "1.563 Collecting ..."
 	buildStepLabelRe       = regexp.MustCompile(`^\[[^\]]*\d+/\d+\] `) // "[4/6] ", "[stage 2/3] "
 	buildContextTransferRe = regexp.MustCompile(`\btransferring context:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B|[kKmMgGtT]?B)\b`)
+	// BuildKit's per-layer unpack status: "extracting sha256:3f26… 0.1s done".
+	buildExtractRe = regexp.MustCompile(`^extracting (\S+)`)
 )
 
 type buildVertexState struct {
 	named   bool
 	kind    BuildVertexKind
 	display string
+	failed  bool
+	// extracts is every layer unpack seen for this vertex ("extracting
+	// sha256:…"), and whether it has finished.
+	extracts map[string]bool
 	// lastStructuredAt is when a sniffer last matched for this vertex. While
 	// structured progress keeps arriving, unstructured chatter (a compiler
 	// warning, a pip notice) must not clobber "[525/1027]". Once it goes stale
@@ -96,6 +103,10 @@ type buildVertexState struct {
 	logTail  []byte
 	statuses map[string]*rawStatusCounter
 	started  time.Time
+	// runs holds every run BuildKit reported for the vertex, keyed by start.
+	runs map[int64]vertexRun
+	// completedAt is the latest end of any run, on the builder's clock.
+	completedAt time.Time
 }
 
 // BuildParser consumes `docker buildx` progress output and calls emit for each
@@ -203,10 +214,17 @@ func (p *BuildParser) parsePlainLine(line string) {
 	}
 
 	if v.named {
-		// A sub-status line ("resolve ... done", "sha256:... 5.24MB / 27.09MB").
-		// Byte counters are the only part worth surfacing.
+		// A sub-status line ("resolve ... done", "sha256:... 5.24MB / 27.09MB",
+		// "extracting sha256:..."). Byte counters and layer unpacks are the only
+		// parts worth surfacing. A line without the trailing "done" is still in
+		// progress, which is what can reopen a finished vertex.
+		open := !strings.HasSuffix(rest, " done")
+		if em := buildExtractRe.FindStringSubmatch(rest); em != nil {
+			p.onExtract(id, v, "extracting "+em[1], !open, open)
+			return
+		}
 		if bp, ok := sniffTransferBytes(rest); ok {
-			p.onBytes(id, v, bp)
+			p.onBytes(id, v, bp, open)
 		}
 		return
 	}
@@ -265,17 +283,74 @@ func (p *BuildParser) onLogLine(id string, v *buildVertexState, raw string) {
 	p.emitProgress(id, v)
 }
 
-func (p *BuildParser) onBytes(id string, v *buildVertexState, bp ByteProgress) {
-	if !v.named || v.kind == BuildVertexHidden || v.terminal {
+// onBytes publishes transfer counters. open reports that the transfer behind
+// this update is still in progress; only that may reopen a finished vertex.
+func (p *BuildParser) onBytes(id string, v *buildVertexState, bp ByteProgress, open bool) {
+	if !v.named || v.kind == BuildVertexHidden {
 		return
+	}
+	reopened := false
+	if v.terminal {
+		if !open || !p.reopen(v) {
+			return
+		}
+		reopened = true
 	}
 	v.bytes = bp
 	now := p.now()
-	if p.throttle > 0 && !v.lastDetailAt.IsZero() && now.Sub(v.lastDetailAt) < p.throttle {
+	if !reopened && p.throttle > 0 && !v.lastDetailAt.IsZero() && now.Sub(v.lastDetailAt) < p.throttle {
 		return
 	}
 	v.lastDetailAt = now
 	p.emitProgress(id, v)
+}
+
+// onExtract records one layer unpack ("extracting sha256:…"), which BuildKit
+// reports when it applies a pulled layer. An unpack has no byte counters and
+// BuildKit never says how many layers are coming, so the detail is the ordinal
+// of the layer being unpacked. Unpacks are a few per layer, so they skip the
+// detail throttle: a dropped one would leave the row frozen on the last layer.
+func (p *BuildParser) onExtract(id string, v *buildVertexState, layer string, done, open bool) {
+	if !v.named || v.kind == BuildVertexHidden {
+		return
+	}
+	if v.extracts == nil {
+		v.extracts = map[string]bool{}
+	}
+	v.extracts[layer] = v.extracts[layer] || done
+	if v.terminal && (!open || !p.reopen(v)) {
+		return
+	}
+	v.detail = unpackDetail(v.extracts)
+	v.lastDetailAt = p.now()
+	p.emitProgress(id, v)
+}
+
+func unpackDetail(layers map[string]bool) string {
+	for _, done := range layers {
+		if !done {
+			return fmt.Sprintf("unpacking layer %d", len(layers))
+		}
+	}
+	if len(layers) == 1 {
+		return "unpacked 1 layer"
+	}
+	return fmt.Sprintf("unpacked %d layers", len(layers))
+}
+
+// reopen returns a finished vertex to running when BuildKit attributes new work
+// to it, and reports whether it did. A base image is resolved lazily: its FROM
+// reports DONE within seconds, and the layers are pulled and unpacked later,
+// when the next step needs the rootfs, reported against the same vertex and
+// finished by another DONE. Without this the row sits at "✓ … 2s" for the
+// whole pull. A failed vertex stays failed, and export and hidden vertices keep
+// their own rules.
+func (p *BuildParser) reopen(v *buildVertexState) bool {
+	if v.failed || v.kind == BuildVertexExport || v.kind == BuildVertexHidden {
+		return false
+	}
+	v.terminal = false
+	return true
 }
 
 // emitProgress republishes a running step with its current detail and bytes.
@@ -302,6 +377,9 @@ func (p *BuildParser) emitStatus(id string, v *buildVertexState, status BuildSte
 		return
 	}
 	v.terminal = true
+	if status == BuildStepFailed {
+		v.failed = true
+	}
 	if v.kind == BuildVertexExport {
 		if status == BuildStepFailed {
 			p.emit(BuildStepEvent{ID: BuildExportVertexID, Kind: BuildVertexExport,

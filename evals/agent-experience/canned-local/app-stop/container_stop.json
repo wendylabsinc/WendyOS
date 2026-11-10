@@ -1,0 +1,18 @@
+{
+  "tool": "container_stop",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "container {{args.app_name}} stopped"
+        }
+      ]
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "895e0203ec308ff4b5710ddcc46a99fde5315f3f77f200da11c8a70a4c61bbb0",
+    "device_kind": "local"
+  }
+}

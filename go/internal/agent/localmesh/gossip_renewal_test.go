@@ -117,7 +117,7 @@ func TestManifestGossipWarmRenewalDescriptorPrecedesData(t *testing.T) {
 	if err != nil || len(want) != 1 {
 		t.Fatal(want, err)
 	}
-	replies, _, err := f.sender.Receive(want[0], f.now, 0)
+	replies, _, err := f.sender.Receive(want[0], f.now, 10)
 	if err != nil || len(replies) != 2 || replies[0].Certificate == nil || replies[1].Gossip == nil || replies[1].Gossip.Op != "data" {
 		t.Fatal(replies, err)
 	}
@@ -186,8 +186,8 @@ func TestManifestGossipLoaderExpiryCannotRollBack(t *testing.T) {
 	if err != nil || len(replies) != 1 || replies[0].Gossip == nil || replies[0].Gossip.Op != "unavailable" {
 		t.Fatal("cached bytes bypassed latched expiry", replies, err)
 	}
-	if !f.source.entries[f.wire.Principal].expired || !f.source.wallHighWater.Equal(future) {
-		t.Fatal("loader overwrote expiry state")
+	if _, retained := f.source.entries[f.wire.Principal]; retained || !f.source.wallHighWater.Equal(future) {
+		t.Fatal("loader retained expired full payload")
 	}
 }
 
@@ -343,7 +343,7 @@ func TestManifestGossipSameLeafIssuerChangeRefreshesDescriptorImmediately(t *tes
 	if err != nil || len(want) != 1 {
 		t.Fatal(want, err)
 	}
-	out, _, err := sender.Receive(want[0], f.now, 0)
+	out, _, err := sender.Receive(want[0], f.now, 10)
 	if err != nil || len(out) != 2 || out[0].Certificate == nil {
 		t.Fatal("fresh leaf hint suppressed changed issuer descriptor", out, err)
 	}

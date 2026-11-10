@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -70,6 +71,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceOSLogsCmd(),
 		newDeviceDashboardCmd(),
 		newTopCmd(),
+		newComputeStatusCmd(),
 	)
 	addToGroup("apps",
 		newAppsCmd(),
@@ -92,14 +94,16 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceSetupCmd(),
 		newDeviceEnrollCmd(),
 		newDeviceUnenrollCmd(),
+		newDeviceEnrollmentStatusCmd(),
 		newDeviceRenameCmd(),
 		newDevicePowerModeCmd(),
 		newDeviceUpdateCmd(),
-		newDeviceLocalMeshCmd(),
+		newLegacyDeviceLocalMeshCmd(),
 		newDeviceSyncTimeCmd(),
 	)
 	addToGroup("hardware",
 		newDevicePairCmd(),
+		newDeviceSensorsCmd(),
 		newDeviceUnpairCmd(),
 		newWifiCmd(),
 		newBluetoothCmd(),
@@ -438,10 +442,22 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if len(netInterfaces) > 0 {
 					ifaces := make([]map[string]any, len(netInterfaces))
 					for i, iface := range netInterfaces {
-						ifaces[i] = map[string]any{
+						entry := map[string]any{
 							"name":        iface.GetName(),
 							"ipAddresses": iface.GetIpAddresses(),
 						}
+						// Absent rather than false/unknown: older agents
+						// report none of these.
+						if iface.GetIsDefaultRoute() {
+							entry["isDefaultRoute"] = true
+						}
+						if iface.RouteMetric != nil {
+							entry["routeMetric"] = iface.GetRouteMetric()
+						}
+						if c := connectivityLabel(iface.GetConnectivity()); c != "" {
+							entry["connectivity"] = c
+						}
+						ifaces[i] = entry
 					}
 					out["networkInterfaces"] = ifaces
 				}
@@ -620,7 +636,7 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 			fmt.Printf("Default device set to: %s\n", tui.Device(device))
 			// Cloud identity is scoped by endpoint, organization and asset ID.
 			// It has no LAN hostname pin to clear or repopulate.
-			if isCloud {
+			if isCloud || strings.HasPrefix(device, "mesh:") {
 				return nil
 			}
 
@@ -860,10 +876,9 @@ func newDeviceEnrollCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:         "enroll",
-		Annotations: map[string]string{"wendy.local-enrollment": "true"},
+		Annotations: map[string]string{localEnrollmentAnnotation: "true"},
 		Short:       "Enroll this device in Wendy Cloud",
 		Long:        "Add the selected device to your organization using your saved sign-in. Run 'wendy cloud login' first. For Wendy Lite, connect over USB and keep it connected while the board reboots and completes enrollment.",
-		Hidden:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
@@ -1030,46 +1045,58 @@ func enrollmentName(host, name string) (string, error) {
 }
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
+	identity, err := runEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURLs...)
+	if err != nil {
+		return err
+	}
+	next, err := verifyAndSaveEnrollment(ctx, conn, auth, identity, name)
+	if next != nil && next != conn {
+		next.Close()
+	}
+	return err
+}
+
+func runEnrollDeviceIdentity(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) (*certs.WendyIdentity, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
-		return validateEnrollmentCertificate(auth)
+		return nil, validateEnrollmentCertificate(auth)
 	}
 	acmeDirectoryURL := ""
 	if len(acmeDirectoryURLs) > 0 {
 		acmeDirectoryURL = acmeDirectoryURLs[0]
 	}
 	if auth.OAuthIssuer == "" && acmeDirectoryURL != "" {
-		return fmt.Errorf("--acme-directory-url requires an OIDC login session")
+		return nil, fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 	if err := validateEnrollmentCertificate(auth); err != nil {
-		return err
+		return nil, err
 	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates
 	// and legacy sessions retain the Cloud enrollment contract.
 	if auth.OAuthIssuer != "" {
-		return runOIDCEnrollDevice(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
+		return runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
 	}
 
 	name, err := enrollmentDeviceName(conn, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	cert := auth.Certificates[0]
 
 	cloudCreds, err := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(cloudCreds)}, dpopDialOptions(auth)...)
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
-		return fmt.Errorf("connecting to cloud: %w", err)
+		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}
 	defer cloudConn.Close()
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// The selected session already identifies the enrollment organization.
@@ -1086,10 +1113,10 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		TtlSeconds:     600,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
+		return nil, fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
 	}
 	if err != nil {
-		return fmt.Errorf("creating enrollment token: %w", err)
+		return nil, fmt.Errorf("creating enrollment token: %w", err)
 	}
 
 	fmt.Println("Enrolling device...")
@@ -1100,12 +1127,12 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
-		return fmt.Errorf("enrolling device: %w", err)
+		return nil, fmt.Errorf("enrolling device: %w", err)
 	}
 
 	fmt.Printf("Device enrolled (org: %s, asset: %d).\n",
 		orgLabel(auth.CloudGRPC, tokenResp.GetOrganizationId()), tokenResp.GetAssetId())
-	return nil
+	return &certs.WendyIdentity{OrgID: tokenResp.GetOrganizationId(), EntityType: certs.EntityAsset, EntityID: strconv.FormatInt(int64(tokenResp.GetAssetId()), 10)}, nil
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
@@ -1166,8 +1193,13 @@ func reportStaleCertificate(err error) {
 		plainNotice("warning: %s. Sign in again to get a new one: wendy auth login", err.Error())
 		return
 	}
-	fmt.Fprintln(os.Stderr, tui.WarningMessage(capitalizeFirst(err.Error())+"."))
-	fmt.Fprintln(os.Stderr, "  Sign in again to get a new one: wendy auth login")
+	fmt.Fprintln(os.Stderr, staleCertificateWarning(err))
+}
+
+// staleCertificateWarning is the styled warning and remedy, also shown inside
+// views that own the terminal.
+func staleCertificateWarning(err error) string {
+	return tui.WarningMessage(capitalizeFirst(err.Error())+".") + "\n  Sign in again to get a new one: wendy auth login"
 }
 
 // capitalizeFirst upper-cases the first rune so an error string reads as a
@@ -2328,7 +2360,7 @@ func reconnectAgentAfterRestart(ctx context.Context, conn *grpcclient.AgentConne
 	if addr == "" {
 		addr = hostPort(conn.Host, defaultAgentPort)
 	}
-	return waitForAgentRestart(ctx, addr)
+	return waitForAgentRestartKeyed(ctx, addr, conn.DevicePinKey)
 }
 
 // osUpdateOutcome reports what `device update`'s OS-update step did, so the

@@ -1,5 +1,6 @@
 import { writeCLIReference } from './cli-reference.mjs';
-import { publishMarkdown } from './publish-markdown.mjs';
+import { pageSlug, publishMarkdown } from './publish-markdown.mjs';
+import { gitLastModified, writeSitemap } from './sitemap.mjs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,13 @@ const publicAssetExtensions = new Set([
   '.zip',
 ]);
 const appFiles = new Set(['package-lock.json', 'package.json', 'tsconfig.json']);
+// Internal process pages stay in the repository but are not published.
+const unpublishedPages = new Set([
+  'RELEASES.md',
+  'incident_response.md',
+  'roadmap.md',
+  'wendy-data-platform-demo.md',
+]);
 
 await rm(contentRoot, { recursive: true, force: true });
 await rm(publicRoot, { recursive: true, force: true });
@@ -50,6 +58,7 @@ const markdownFiles = [];
 const metaFiles = [];
 const assetFiles = [];
 const routeDirsBySourceDir = new Map();
+const sourceBySlug = new Map();
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -57,7 +66,9 @@ async function walk(dir) {
   for (const entry of entries) {
     if (entry.name === 'AGENTS.md' || entry.name === 'CLAUDE.md') continue;
     if (entry.name.startsWith('.') && entry.name !== '.gitignore') continue;
-    if (entry.isDirectory() && skipDirs.has(entry.name)) continue;
+    // Tool folders are skipped at the top level only, so a content folder that
+    // shares a name, such as the `wendy app` command pages, is still published.
+    if (entry.isDirectory() && dir === docsRoot && skipDirs.has(entry.name)) continue;
 
     const absolutePath = path.join(dir, entry.name);
     const relativePath = path.relative(docsRoot, absolutePath);
@@ -65,7 +76,7 @@ async function walk(dir) {
     if (entry.isDirectory()) {
       await walk(absolutePath);
     } else if (entry.isFile() && isMarkdownFile(entry.name)) {
-      markdownFiles.push({ absolutePath, relativePath });
+      if (!isUnpublishedPage(relativePath)) markdownFiles.push({ absolutePath, relativePath });
     } else if (entry.isFile() && entry.name === 'meta.json') {
       metaFiles.push({ absolutePath, relativePath });
     } else if (entry.isFile() && shouldPublishAsset(relativePath)) {
@@ -82,6 +93,7 @@ for (const file of markdownFiles) {
   const raw = normalizeMarkdown(await readFile(file.absolutePath, 'utf8'), targetRelativePath);
 
   addRouteDirForSource(file.relativePath, targetRelativePath);
+  sourceBySlug.set(pageSlug(targetRelativePath), file.relativePath.replaceAll(path.sep, '/'));
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, withFrontmatter(raw, targetRelativePath), 'utf8');
 }
@@ -99,7 +111,8 @@ await writeAdvancedMeta();
 await writeCLIReference(docsRoot, contentRoot, publicRoot, normalizeMarkdown);
 await writePublicAsset(path.join(publicRoot, 'reference/wendy.schema.json'),
   await readFile(path.resolve(docsRoot, '../../../shared/appconfig/wendy.schema.json')));
-await publishMarkdown(contentRoot, publicRoot, basePath);
+const pages = await publishMarkdown(contentRoot, publicRoot, basePath);
+await writePublishedSitemap(pages);
 
 for (const file of assetFiles) {
   const raw = await readFile(file.absolutePath);
@@ -113,6 +126,11 @@ for (const file of assetFiles) {
 }
 
 function normalizeMarkdownPath(relativePath) {
+  // Keep the embedded CLI source path stable while publishing core app
+  // configuration in Reference rather than Advanced.
+  if (relativePath.replaceAll(path.sep, '/') === 'apps/wendy.json.md') {
+    return 'reference/app-configuration.md';
+  }
   const extension = path.extname(relativePath).toLowerCase();
   let targetPath = relativePath;
 
@@ -125,6 +143,13 @@ function normalizeMarkdownPath(relativePath) {
   }
 
   return targetPath;
+}
+
+// development/ is contributor documentation, except for this one user guide.
+function isUnpublishedPage(relativePath) {
+  const page = relativePath.replaceAll(path.sep, '/');
+
+  return unpublishedPages.has(page) || (page.startsWith('development/') && page !== 'development/local-mesh-radio.md');
 }
 
 function isMarkdownFile(filename) {
@@ -242,7 +267,13 @@ function inferDescription(raw) {
 
   if (!paragraph) return 'WendyOS developer documentation.';
 
-  return stripMarkdown(paragraph).replace(/\s+/g, ' ').slice(0, 180);
+  const description = stripMarkdown(paragraph).replace(/\s+/g, ' ');
+  if (description.length <= 180) return description;
+
+  // End at the last whole sentence that fits, or else at a word boundary.
+  const sentences = description.slice(0, 181).match(/^.*[.!?](?=\s)/)?.[0];
+
+  return sentences || `${description.slice(0, 180).replace(/\s+\S*$/, '')}…`;
 }
 
 function stripMarkdown(value) {
@@ -264,9 +295,23 @@ function toTitle(value) {
     .replace(/\bPki\b/g, 'PKI');
 }
 
+// Each hand-written page is dated by its source file's last commit. Generated
+// pages, such as the CLI reference, have no single source and get no date.
+async function writePublishedSitemap(pages) {
+  const lastModified = gitLastModified(docsRoot);
+  const sitemapPages = pages.map(({ slug }) => ({ slug, lastmod: lastModified.get(sourceBySlug.get(slug)) }));
+  const undated = sitemapPages.filter((page) => sourceBySlug.has(page.slug) && !page.lastmod).length;
+
+  if (undated) {
+    console.warn(`sitemap.xml: ${undated} hand-written pages have no git commit date (shallow or missing history); their <lastmod> is omitted.`);
+  }
+
+  await writeSitemap(publicRoot, basePath, sitemapPages);
+}
+
 async function writeAdvancedIndexPage() {
   const targetPath = path.join(contentRoot, 'advanced', 'index.md');
-  const body = `---\ntitle: "Detailed reference"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Detailed reference\n\nBehavioral explanations and lower-level WendyOS documentation live here.\n\n## Reference areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](./apps/wendy.json.md)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n- [Development](./development/)\n`;
+  const body = `---\ntitle: "Detailed reference"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Detailed reference\n\nBehavioral explanations and lower-level WendyOS documentation live here.\n\n## Reference areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](../reference/app-configuration/)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n`;
 
   await writeFile(targetPath, body, 'utf8');
 }
@@ -283,16 +328,14 @@ async function writeAdvancedMeta() {
         'cloud',
         'wendyos',
         'debugging',
-        'development',
+        '...development',
         'architecture',
         'pki',
         'vscode',
         'wendy-lite',
         'wendy-os-publisher',
         'Examples',
-        'RELEASES',
         'entitlements',
-        'roadmap',
       ],
     },
     null,

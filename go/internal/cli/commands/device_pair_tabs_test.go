@@ -23,6 +23,7 @@ type pairTestClient struct {
 	agentpbv2.WendySensorPairingServiceClient
 	pairings          []*agentpbv2.SensorPairing
 	added             *agentpbv2.AddSensorPairingRequest
+	adds, removes     int
 	removed           int32
 	removedPrincipal  string
 	supportsPrincipal bool
@@ -62,12 +63,17 @@ func (c *pairTestClient) ListSensorPairings(context.Context, *agentpbv2.ListSens
 
 func (c *pairTestClient) AddSensorPairing(_ context.Context, req *agentpbv2.AddSensorPairingRequest, _ ...grpc.CallOption) (*agentpbv2.AddSensorPairingResponse, error) {
 	c.added = req
-	return &agentpbv2.AddSensorPairingResponse{Pairing: &agentpbv2.SensorPairing{SourceAssetId: req.SourceAssetId, SourcePrincipalUri: req.SourcePrincipalUri, Name: req.Name}}, c.err
+	c.adds++
+	return &agentpbv2.AddSensorPairingResponse{Pairing: &agentpbv2.SensorPairing{
+		SourceAssetId: req.SourceAssetId, SourcePrincipalUri: req.SourcePrincipalUri, Name: req.Name,
+		SensorAllowlist: req.SensorAllowlist, Transport: req.Transport,
+	}}, c.err
 }
 
 func (c *pairTestClient) RemoveSensorPairing(_ context.Context, req *agentpbv2.RemoveSensorPairingRequest, _ ...grpc.CallOption) (*agentpbv2.RemoveSensorPairingResponse, error) {
 	c.removed = req.SourceAssetId
 	c.removedPrincipal = req.SourcePrincipalUri
+	c.removes++
 	return &agentpbv2.RemoveSensorPairingResponse{}, c.err
 }
 
@@ -236,6 +242,29 @@ func TestSensorPairRowsMergeByIdentity(t *testing.T) {
 		if row.assetID == 42 && (row.name != "Saved camera" || row.source == nil || row.pairing == nil) {
 			t.Fatal("discovered source did not merge with its saved pairing")
 		}
+	}
+}
+
+func TestSensorPairUsesMergedSignedSourceWithoutPinning(t *testing.T) {
+	const tenant = "11111111-2222-4333-8444-555555555555"
+	const principal = "spiffe://wendy.sh/tenant/" + tenant + "/device/44444444-4444-4444-8444-444444444444"
+	signed := models.LANDevice{ID: "signed-id", DisplayName: "Signed camera", IPAddress: "fd45:b891:567f::5", Port: 5055,
+		TenantUUID: tenant, PrincipalURI: principal, IsMTLS: true, WendyLite: true, Sensorlink: true, Caps: []string{"sensors"}}
+	lan := signed
+	lan.DisplayName, lan.Hostname, lan.IPAddress = "LAN camera", "board.local", "192.0.2.20"
+	merged := discovery.MergeSensorSourcesWithMesh([]models.LANDevice{lan}, []models.LANDevice{signed})
+	client := &pairTestClient{supportsPrincipal: true}
+	handler := pairTestHandler(client)
+	client.sources = []*agentpbv2.DiscoveredSensorSource{deviceSource(merged[0])}
+	handler.tenantIDs = func() (map[string]bool, error) { return map[string]bool{tenant: true}, nil }
+	scan := handler.scan()().(sensorPairScanMsg)
+	rows := sensorPairRows(scan.devices, scan.pairings)
+	if len(rows) != 1 || rows[0].name != "Signed camera" || rows[0].source.PrincipalURI != principal {
+		t.Fatalf("signed source did not reach picker: %+v", rows)
+	}
+	message := handler.pair(*rows[0].source)().(sensorPairOpMsg)
+	if message.err != nil || client.added == nil || client.added.SourceAddress != "" || client.added.SourcePrincipalUri != principal || client.added.Transport != "wendycom" {
+		t.Fatalf("picker pinned an address instead of source identity: %+v %v", client.added, message.err)
 	}
 }
 

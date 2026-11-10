@@ -44,7 +44,7 @@ export function parseResult(result: McpToolResult): CallResult {
   return value === undefined ? { ok: false, error: 'the tool returned no JSON object' } : { ok: true, value }
 }
 
-/** Text a successful result carries after its JSON: the CLI's one-time update notice (go/internal/cli/mcp/cli_update.go). */
+/** Text a successful result carries after its JSON: the CLI's daily update notice (go/internal/cli/mcp/cli_update.go). */
 export function noticeIn(result: McpToolResult): string {
   if (result.isError) return ''
   return leadingJson(textOf(result))?.rest.trim() ?? ''

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	toml "github.com/BurntSushi/toml"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -475,5 +476,35 @@ func TestMCPSetupCmd_PreservesCodexConfigAndPrintsRestartNotice(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// The plugin's launcher runs `wendy mcp serve` for Claude or Codex. That
+// process must not rewrite AI tool configs after an upgrade; the next command
+// the user runs in a terminal refreshes instead.
+func TestMaybeRefreshMCPSetup_SkippedUnderPlugin(t *testing.T) {
+	home := setupMCPRefreshTest(t)
+	t.Setenv(pluginmode.EnvVar, "claude")
+	claudePath := filepath.Join(home, ".claude.json")
+	orig := []byte(`{"mcpServers": {"wendy": {"type": "stdio", "command": "/old/wendy", "args": ["mcp", "serve"]}}}`)
+	if err := os.WriteFile(claudePath, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{LastMCPSetupVersion: "9.9.8"}
+	maybeRefreshMCPSetup(cfg)
+
+	if cfg.LastMCPSetupVersion != "9.9.8" {
+		t.Errorf("LastMCPSetupVersion = %q, want it untouched (9.9.8)", cfg.LastMCPSetupVersion)
+	}
+	got, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, orig) {
+		t.Errorf("~/.claude.json was rewritten under WENDY_PLUGIN:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Errorf("Codex config was written under WENDY_PLUGIN (stat err = %v)", err)
 	}
 }

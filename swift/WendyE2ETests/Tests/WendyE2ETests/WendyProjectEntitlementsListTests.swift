@@ -59,7 +59,9 @@ struct `'wendy project entitlements list'` {
 
             try await cli.sh("wendy project entitlements list") { result in
                 #expect(!result.status.isSuccess)
-                #expect(result.stderr.contains("parsing wendy.json"))
+                // The diagnostic names the file and says its JSON is invalid.
+                #expect(result.readableStderr.contains("wendy.json"))
+                #expect(result.readableStderr.contains("JSON"))
             }
 
             try await cli.sh(

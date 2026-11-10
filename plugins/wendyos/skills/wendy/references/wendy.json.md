@@ -334,15 +334,19 @@ Grants `CAP_SYS_ADMIN` and un-denies the `unshare` / `clone(CLONE_NEWUSER)` sysc
 
 ### Add Entitlements
 ```bash
-wendy project entitlements add network --mode host
-wendy project entitlements add network --mode none
+wendy project entitlements add network
 wendy project entitlements add gpu
 wendy project entitlements add video
 wendy project entitlements add audio
 wendy project entitlements add notifications
-wendy project entitlements add bluetooth --mode kernel
-wendy project entitlements add bluetooth --mode bluez
+wendy project entitlements add bluetooth
 ```
+
+There is no `--mode` flag, and `entitlements add` does not ask for a mode: it
+adds the entitlement without one. To set a mode, edit the entitlement in
+`wendy.json`, for example `{ "type": "network", "mode": "host" }` or
+`{ "type": "bluetooth", "mode": "kernel" }`; the Network and Bluetooth sections
+above list the modes.
 
 ### Remove Entitlements
 ```bash
