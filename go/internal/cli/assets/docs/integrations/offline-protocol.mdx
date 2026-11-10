@@ -1,0 +1,644 @@
+---
+title: Offline Protocol
+description: Connect WendyOS devices to each other and to nearby phones with end-to-end encrypted messaging, discovery, and store-and-forward delivery that need no server or internet connection.
+---
+
+[Offline Protocol](https://www.offlineprotocol.com) connects WendyOS devices to
+each other and to the phones around them. Every device gets its own identity,
+end-to-end encrypted messaging using MLS ([RFC 9420](https://www.rfc-editor.org/rfc/rfc9420)),
+and discovery of the devices around it. Messages for a device that is away wait
+until it returns, and a device in the middle relays messages between two
+devices that cannot reach each other. No server or internet connection is
+needed.
+
+WendyOS gets your app onto each board, runs it, and updates it. Offline
+Protocol lets the boards talk when the network won't.
+
+Watch [Three computers, no internet](https://www.youtube.com/watch?v=6Bbxldoz3w4)
+to see the quickstart below running on a Qualcomm Dragonwing IQ9, a Raspberry
+Pi 5, and an NVIDIA Jetson Orin Nano.
+
+## Why it matters
+
+Most machine-to-machine work happens on the same site, often in the same room,
+yet it usually travels through the cloud to get there. Offline Protocol keeps
+that work local.
+
+- **Faster coordination.** A call between two devices is a hop over the local
+  network or Bluetooth LE, answered in about a second, instead of a round trip
+  through a distant server.
+- **Lower connectivity costs.** Devices reach each other directly, so a site
+  needs one internet uplink, not a data plan per device, and nothing between
+  devices is billed as cloud traffic.
+- **Work that keeps moving.** When the uplink drops, devices keep calling each
+  other and keep their records. Anything addressed to a device that is away is
+  delivered the moment it returns.
+- **Phones that talk straight to the machines.** Field workers' phones reach a
+  device over Bluetooth LE, with no Wi-Fi, no pairing, and no account to set up.
+- **No networking code in your apps.** Every app that can make an HTTP request
+  is already integrated. Teams ship features instead of building and
+  maintaining a device mesh.
+
+## What you can build
+
+- **Apps that call each other across devices** with ordinary HTTP requests,
+  from any language.
+- **A site hub** that collects readings, orders, or check-ins from every device
+  around it and reconciles them with the cloud when the uplink is available.
+- **Field tools** where a technician's phone talks to the machine in front of
+  them over Bluetooth LE.
+- **A gateway** in which one box carries the internet connection for every
+  device on site.
+- **Fleets that coordinate locally**, discovering which device offers which
+  service and calling it, with no central server.
+
+## How it works
+
+Offline Protocol runs on WendyOS in one of two ways:
+
+- **Inside your app.** A Python app installs `offline-protocol-sdk` from PyPI
+  and runs the protocol in its own process. The [quickstart](#quickstart) takes
+  this path.
+- **As a service, one per device.** The published `offline-protocol-service`
+  image runs as its own Wendy app and owns the device's identity, its encrypted
+  sessions, the messages waiting for devices that are away, and every link the
+  device has. Your apps reach it on the device's loopback interface:
+  - **The HTTP front** on `127.0.0.1:8080`, for any app that speaks HTTP. A
+    provider registers a callback URL; a caller sends a normal request whose
+    `Host` header names the service and the device it lives on.
+  - **The local API**, JSON-RPC 2.0 over a WebSocket on a Unix socket, for
+    encrypted groups, file transfer, replicated documents, and messaging.
+
+```
+WendyOS device A                                   WendyOS device B
++------------------------+                         +------------------------+
+| Your app               |                         | Provider app           |
+| (any language, no SDK) |                         | (an HTTP server)       |
++-----------+------------+                         +-----------^------------+
+            | HTTP on loopback                                 | callback on loopback
++-----------v------------+   local network (TCP)   +-----------+------------+
+| Offline Protocol       |<----------------------->| Offline Protocol       |
+| service                |   Bluetooth LE          | service                |
+| HTTP front :8080       |<----------------------->| HTTP front :8080       |
+| identity, sessions,    |   any device between    | identity, sessions,    |
+| held messages          |<---------( hop )------->| held messages          |
++------------------------+                         +-----------+------------+
+                                                               | Bluetooth LE
+                                                   +-----------v------------+
+                                                   | Phone running an app   |
+                                                   | built on the SDK       |
+                                                   +------------------------+
+```
+
+Between devices, the protocol uses every link available to it at once: TCP
+peer streams on the local network (discovered over DNS-SD), Bluetooth LE,
+multi-hop delivery through other devices, and an internet relay for devices on
+other networks. Two devices that share no direct link still reach each other
+through any device in between. Every message is end-to-end encrypted with MLS,
+so a device that carries a message for others cannot read it.
+
+## Capabilities
+
+The same protocol runs on WendyOS devices, phones, servers, and desktops, so
+everything below works across all of them.
+
+| Capability | What it does |
+| --- | --- |
+| Every link from one service | Local network, Bluetooth LE, multi-hop through nearby devices, Wi-Fi Direct between Android phones, and an internet relay, all managed for you. |
+| End-to-end encryption | MLS (RFC 9420) for every session and group. Sessions form automatically between devices that meet, including through a device in between. |
+| Store, carry, and forward | Messages for a device that is away wait, travel with other devices, and are delivered when a path appears. |
+| Services over HTTP | Register any HTTP server as a service, discover providers across the mesh, and call them with a normal request. |
+| Encrypted groups | Group messaging across devices and phones, with membership managed by MLS. |
+| Replicated documents | Shared state (CRDTs) that every device edits locally and that merges cleanly after a network split. |
+| File transfer | Files and media sent device to device. |
+| Presence and delivery | Which devices are reachable now, and confirmation when each message is delivered. |
+| Device identity | A key generated on the device, sealed on disk under a store key you control. |
+| Every platform | Python, Rust, React Native, Swift, Kotlin, Java, Flutter, and C bindings over one engine. |
+
+## Proven on WendyOS
+
+The service runs on Raspberry Pi 4 boards running WendyOS, with a laptop and an
+Android phone as additional peers and no internet connection anywhere:
+
+| Scenario | Result |
+| --- | --- |
+| Call through a middle device (A to laptop to B) | 5 of 5 HTTP calls answered, in 0.7 to 1.4 s each |
+| Called device offline for 45 s | The call waited and was answered 64 s after it was sent, inside the caller's 90 s timeout |
+| Bluetooth LE only, no local network | Calls answered in about 1 s |
+| Encrypted group across every device | Every member sent and received, including the phone over Bluetooth LE |
+
+The quickstart below runs on a Qualcomm Dragonwing IQ9, a Raspberry Pi 5, and
+an NVIDIA Jetson Orin Nano with no internet connection: the boards discover
+each other, form encrypted sessions, hold messages for a board that is
+unplugged, and relay through a middle board.
+
+## Quickstart
+
+Build one Python app and deploy it to three boards. This is the walkthrough
+from [Three computers, no internet](https://wendy.dev/blog/offline-protocol-on-wendyos),
+also shown in the [video](https://www.youtube.com/watch?v=6Bbxldoz3w4).
+
+### Prerequisites
+
+- Boards running WendyOS on one local network. The walkthrough uses a small
+  router with no internet connection, with two boards on Ethernet and one on
+  Wi-Fi; the app works the same on either. All three boards are 64-bit Arm, so
+  one Dockerfile builds for every board. See the
+  [Raspberry Pi](/docs/installation/wendyos-raspberry-pi-5),
+  [Jetson Orin Nano](/docs/installation/wendyos-nvidia-jetson-orin-nano), and
+  [Qualcomm Dragonwing](/docs/installation/wendyos-qualcomm-dragonwing) guides.
+- The [Wendy CLI](/docs/installation/cli) on your laptop. The laptop builds the
+  app, so it keeps its own internet connection; the boards need none.
+
+Confirm the CLI can see your boards:
+
+```bash
+wendy discover
+```
+
+### Set the clocks
+
+With no internet, the boards have no time server, and encryption depends on the
+current time. If a board's clock is wrong, its keys look invalid and encrypted
+sessions won't form. Sync the clocks before you deploy:
+
+```bash
+wendy device sync-time
+```
+
+The laptop fetches a signed timestamp and multicasts it to every WendyOS board
+on the local network. Each board checks the signature itself, so none of them
+has to trust the laptop.
+
+### Create the app
+
+The app is three files in an empty folder: `wendy.json`, a `Dockerfile`, and
+`app.py` ([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=230s)).
+
+```bash
+mkdir table-talk
+cd table-talk
+```
+
+```json title="wendy.json"
+{
+  "appId": "sh.wendy.examples.table-talk",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "persist", "name": "table-talk-data", "path": "/data" }
+  ]
+}
+```
+
+The app needs two [entitlements](/docs/device/entitlements):
+
+- **Host network.** Offline Protocol finds neighbors using multicast DNS, and
+  multicast does not leave a container's private network, so the app shares
+  the board's own network.
+- **Persistent storage.** The SDK keeps this board's identity and its
+  undelivered messages on disk. Containers are replaced on every deploy; the
+  volume is not. Without it, the board gets a new address on every deploy.
+
+```dockerfile title="Dockerfile"
+# Debian on purpose: the SDK's Linux wheels need glibc 2.34 or newer, so Alpine won't work.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+
+RUN pip install --no-cache-dir 'offline-protocol-sdk[lan]==0.32.0'
+
+COPY app.py .
+
+CMD ["python", "app.py"]
+```
+
+Pin the SDK version. The `lan` extra adds local network discovery.
+`PYTHONUNBUFFERED` sends the app's output to your terminal as it happens.
+
+The same `app.py` runs on every board. Each board takes its name from the
+`BOARD_NAME` environment variable, finds the others, opens an encrypted session
+with each one, and sends every board it knows about a numbered message every
+five seconds. Each message carries the sender's name and the boards it knows,
+so boards learn about boards they cannot hear directly.
+
+```python title="app.py"
+"""Table Talk: three boards, Offline Protocol, no internet.
+
+The same program runs on every board. Each board finds the others, opens an
+encrypted session with each one, and sends a numbered message every few seconds.
+"""
+
+import asyncio
+import json
+import os
+import secrets
+import socket
+from collections import Counter
+from pathlib import Path
+
+from offline_protocol_sdk import ProtocolManager
+from offline_protocol_sdk.offline_protocol import OverflowPolicy, ProtocolConfig
+
+NAME = os.environ.get("BOARD_NAME") or socket.gethostname()
+DATA = Path(os.environ.get("DATA_DIR", "/data"))
+PORT = int(os.environ.get("LISTEN_PORT", "7878"))
+EVERY = float(os.environ.get("SEND_EVERY", "5"))
+
+# Comma-separated host:port list. Set it to turn off discovery and choose links by hand.
+FIXED_LINKS = [link for link in os.environ.get("TALK_ONLY_TO", "").split(",") if link]
+
+me = None  # this board's address, set once the identity is ready
+peers = set()  # every board we have heard of
+names = {}  # address -> board name, learned as boards introduce themselves
+sent = {}  # message id -> (address, sequence number)
+
+
+def say(text):
+    print(f"[{NAME}] {text}", flush=True)
+
+
+def label(address):
+    return names.get(address) or address[:12] + "..."
+
+
+def links():
+    """How this board is connected, read from its network interfaces."""
+    up = [n.name for n in Path("/sys/class/net").glob("*")
+          if (n / "operstate").read_text().strip() == "up"]
+    kinds = {"Wi-Fi" if n.startswith("wl") else "Ethernet"
+             for n in up if n.startswith(("wl", "en", "eth"))}
+    return " and ".join(sorted(kinds)) or "an unknown link"
+
+
+def on_event(event):
+    kind = event.get("type")
+
+    if kind == "neighbor_discovered":
+        peer = event["peer_id"]
+        if peer not in peers:
+            peers.add(peer)
+            say(f"found {label(peer)} over {event.get('transport')}")
+
+    elif kind == "secure_session_established":
+        say(f"encrypted session with {label(event['peer_id'])}")
+
+    elif kind == "message_received":
+        body = json.loads(event["content"])
+        names[event["sender"]] = body["from"]
+        peers.add(event["sender"])
+        for address, name in body["knows"].items():
+            if address != me:
+                peers.add(address)
+                names[address] = name
+        say(f"<- {body['from']} #{body['seq']}  hops: {event.get('hop_count', 0)}")
+
+    elif kind == "message_delivered":
+        if event["message_id"] in sent:
+            address, seq = sent.pop(event["message_id"])
+            say(f"ok {label(address)} has #{seq}  via {event.get('transport')}")
+
+    elif kind == "message_relayed":
+        say(f"carrying a message from {label(event['sender'])} to {label(event['recipient'])}")
+
+
+config = ProtocolConfig(
+    app_id="table-talk",
+    profile="gateway",
+    ble_enabled=False,
+    wifi_direct_enabled=True,  # the slot for peer streams over local IP
+    internet_enabled=False,
+    reticulum_enabled=False,
+    nostr_enabled=False,
+    prefer_online=False,
+    initial_ttl=8,
+    encryption_enabled=True,
+    require_encryption=True,
+    auto_key_exchange=True,
+    store_pending=True,
+    max_pending_per_peer=64,
+    max_pending_global=4096,
+    pending_ttl_ms=86_400_000,  # keep undelivered messages for a day
+    overflow_policy=OverflowPolicy.DROP_OLDEST,
+)
+
+
+def store_key():
+    """One key per board, made on first boot. Use a real secret store in production."""
+    path = DATA / "store.key"
+    if not path.exists():
+        DATA.mkdir(parents=True, exist_ok=True)
+        path.write_text(secrets.token_hex(32))
+        path.chmod(0o600)
+    return bytes.fromhex(path.read_text())
+
+
+async def main():
+    global me
+    async with ProtocolManager(
+        config,
+        event_handler=on_event,
+        store_key=store_key(),
+        mls_root=DATA / "keys",
+        state_root=DATA / "state",
+    ) as pm:
+        me = pm.local_address
+        names[me] = NAME
+        say(f"I am {me}")
+        say(f"on {links()}")
+
+        pm.peer_stream.configure(
+            listen_host="0.0.0.0",
+            listen_port=PORT,
+            advertise=not FIXED_LINKS,
+            discover=not FIXED_LINKS,
+            peers=FIXED_LINKS or None,
+        )
+        await pm.peer_stream.start()
+
+        seq = 0
+        while True:
+            await asyncio.sleep(EVERY)
+            seq += 1
+            roster = {a: n for a, n in names.items() if n}
+            body = json.dumps({"from": NAME, "seq": seq, "knows": roster})
+            for peer in list(peers):
+                sent[pm.send_message(peer, body)] = (peer, seq)
+
+            # Anything still in `sent` hasn't been acknowledged yet.
+            waiting = Counter(label(address) for address, _ in list(sent.values()))
+            for name, count in waiting.items():
+                if count > 2:
+                    say(f"holding {count} messages for {name}")
+
+
+asyncio.run(main())
+```
+
+Everything the SDK does arrives as an event in `on_event`:
+
+| Event | Meaning |
+| --- | --- |
+| `neighbor_discovered` | Another board was heard on the local network. |
+| `secure_session_established` | The two boards finished exchanging keys. |
+| `message_received` | A message arrived for this board, with its hop count. |
+| `message_delivered` | The receipt for a message this board sent. |
+| `message_relayed` | This board passed along a message for another board. |
+
+The config turns off the Bluetooth, internet, Reticulum, and Nostr transports
+so you can see exactly what carries the traffic. On Linux,
+`wifi_direct_enabled` is the SDK's slot for peer streams; here a peer stream is
+plain TCP on the local network, and the logs call it `WiFiDirect`.
+`require_encryption=True` makes a send fail rather than go out unencrypted.
+`store_pending=True` keeps messages for unreachable boards on disk: 64 per
+board for one day, after which the oldest are dropped.
+
+There is no account or API key. The SDK seals its keys on disk with a key you
+provide; `store_key()` has each board generate one on first boot and keep it
+on the persistent volume. In production, supply it from a secret store.
+
+### Deploy to the boards
+
+Deploy to each board with its own name, each in its own terminal
+([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=629s)). Replace
+the device names with your own:
+
+```bash
+wendy run --device wendyos-pi.local --env BOARD_NAME=pi
+wendy run --device wendyos-iq9.local --env BOARD_NAME=iq9
+wendy run --device wendyos-jetson.local --env BOARD_NAME=jetson
+```
+
+`wendy run` builds the container on your laptop, pushes it to the board, starts
+it, and streams the logs back. Each board first prints its address and how it
+is connected:
+
+```
+[pi] I am off1qx7ey8znppjclm2sc99728r4rn9xlfyvgs4fljah
+[pi] on Wi-Fi
+```
+
+The address comes from a key the board generated itself; yours will differ.
+Stop the app and run it again, and the address stays the same because it lives
+on the persistent volume.
+
+### Watch the boards find each other
+
+No board is told where the others are:
+
+```
+[pi] found off1qym97ysv... over WiFiDirect
+[pi] encrypted session with off1qym97ysv...
+[pi] <- iq9 #1  hops: 0
+[pi] ok iq9 has #1  via wifiDirect
+```
+
+`found` means the Pi heard the IQ9 on the local network. `encrypted session`
+means the two boards exchanged keys using MLS. The arrow is message 1 from the
+IQ9; zero hops means it came directly. `ok` is the receipt for the Pi's message.
+
+<Callout type="info">
+A receipt means the SDK on the other board received the message. For work
+orders or robot commands, have your app store the message first, then send
+its own acknowledgment back.
+</Callout>
+
+### Unplug a board
+
+Unplug the Jetson's network cable
+([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=792s)). The other
+boards keep sending to it, and its messages wait on disk on each board:
+
+```
+[pi] holding 3 messages for jetson
+[pi] holding 4 messages for jetson
+[pi] holding 5 messages for jetson
+```
+
+Plug it back in ([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=838s))
+and everything it missed is delivered, with no retry, queue, or reconnect code
+in the app:
+
+```
+[jetson] <- iq9 #4  hops: 0
+[jetson] <- iq9 #5  hops: 0
+[jetson] <- iq9 #6  hops: 0
+[jetson] <- pi #4  hops: 0
+[jetson] <- pi #5  hops: 0
+```
+
+Messages can arrive out of order, so number them when order matters, as this
+app does. The queue holds what the config allows: here, 64 messages per board
+for one day.
+
+### Relay through a middle board
+
+To make two boards unable to reach each other, set `TALK_ONLY_TO`
+([video chapter](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=899s)). A board
+with it set turns off discovery and connects only to the listed `host:port`
+addresses. Give the Pi and the Jetson only the IQ9's address:
+
+```bash
+wendy run --device wendyos-pi.local --env BOARD_NAME=pi --env TALK_ONLY_TO=<iq9-ip>:7878
+wendy run --device wendyos-jetson.local --env BOARD_NAME=jetson --env TALK_ONLY_TO=<iq9-ip>:7878
+```
+
+The IQ9 now carries messages between them:
+
+```
+[iq9] carrying a message from pi to jetson
+[jetson] <- pi #4  hops: 1
+```
+
+The message left the Pi over Wi-Fi and reached the Jetson over Ethernet. It is
+encrypted for the Jetson, so the IQ9 carries it but cannot read it.
+
+## Going further
+
+### Call services over HTTP
+
+Run the Offline Protocol service on each device, and any app that can make an
+HTTP request calls apps on other devices. Create a service app with two files:
+
+```dockerfile title="Dockerfile"
+FROM ghcr.io/offline-protocol/offline-protocol-service:0.32.0
+```
+
+```json title="wendy.json"
+{
+  "appId": "dev.offlineprotocol.service",
+  "version": "0.32.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "bluetooth", "mode": "bluez" },
+    { "type": "persist", "name": "offline-protocol-data", "path": "/var/lib/offline-protocol" }
+  ]
+}
+```
+
+Generate a store key for each device. It seals the device's identity and
+everything else the service keeps on disk; keep it in your secret store:
+
+```bash
+(umask 077; openssl rand -hex 32 > device-a.store-key)
+```
+
+Deploy the service to each device with its own key and its reserved LAN
+address:
+
+```bash
+wendy run --device <device-a> --detach --restart-unless-stopped \
+  --env "OFFLINE_PROTOCOL_STORE_KEY=$(cat device-a.store-key)" \
+  --env OP_CONFIG=/etc/offline-protocol/config-ble.json \
+  --env OP_LISTEN=<device-a-lan-address>:7878
+```
+
+Devices on the same network find each other and form encrypted sessions on
+their own. From any app on a device, `GET http://127.0.0.1:8080/health` returns
+the front's status and the device's `local_address`.
+
+On device B, register any HTTP server on loopback as a provider:
+
+```bash
+curl -X PUT http://127.0.0.1:8080/services/timeofday \
+  -H 'content-type: application/json' \
+  -d '{"callback": "http://127.0.0.1:9000", "version": "1"}'
+```
+
+On device A, call it with a normal request whose `Host` header names the
+service and device B's address:
+
+```bash
+curl http://127.0.0.1:8080/now \
+  -H 'Host: timeofday.<device-b-address>.offline.protocol.internal'
+```
+
+The request travels end-to-end encrypted over whichever link the two devices
+share and comes back as a normal HTTP response. If device B is away, the call
+waits for it; `X-Offline-Protocol-Timeout` sets the wait from 1 to 300 seconds
+(default 30). `GET /browse/<service>` streams every device that offers a
+service. The provider apps need the host network entitlement to share the
+device's loopback. Registrations are kept on the volume across restarts.
+
+The [service image guide](https://github.com/Offline-Protocol/offline-protocol-sdk/tree/main/bindings/python/docker)
+lists every variable, and the [HTTP front specification](https://github.com/Offline-Protocol/offline-protocol-sdk/blob/main/docs/spec/http-front.md)
+covers headers, limits, and error codes. The
+[http-front example](https://github.com/Offline-Protocol/offline-protocol-sdk/tree/main/examples/http-front)
+has a complete provider and caller in standard-library Python.
+
+### Bluetooth LE and phones
+
+With `config-ble.json` and the `bluetooth` entitlement in `bluez` mode, the
+service advertises its own GATT service and scans for and connects to peers
+through BlueZ. Two WendyOS devices talk with no network between them, and a
+phone running an app built on the SDK reaches a device in the field. There is
+no pairing: every link is authenticated and encrypted by MLS. The
+[demo app](https://github.com/Offline-Protocol/offline-protocol-sdk/tree/main/examples/demo-app)
+is the reference phone app.
+
+### Groups, files, and replicated documents
+
+Apps reach the rest of the SDK through the service's local API: JSON-RPC 2.0
+over a WebSocket on a Unix socket, `/run/offline-protocol/api.sock` by default.
+Each app declares itself with `hello` and then calls the engine's methods by
+name:
+
+- **Encrypted groups:** `create_group`, `invite_to_group`, `send_group_message`.
+- **File transfer:** `send_file`, with progress from `get_file_progress`.
+- **Replicated documents:** `data.create_doc`, `data.map_set`, `data.doc_json`.
+
+To share the socket with another app, set `OP_SOCKET` to a path on the
+service's persistent volume and mount the same volume in that app. The
+[local API guide](https://github.com/Offline-Protocol/offline-protocol-sdk/blob/main/docs/local-api.md)
+documents every method and event, and the
+[Python client example](https://github.com/Offline-Protocol/offline-protocol-sdk/blob/main/bindings/python/examples/local_api_client.py)
+shows a complete client.
+
+## Security
+
+- **End-to-end encryption.** Every session and group uses MLS (RFC 9420).
+  `require_encryption` refuses to send anything unencrypted, and a device that
+  relays a message cannot read it.
+- **Device identity.** Each device generates its own key. Its address is
+  derived from that key, and everything on disk is sealed under a store key you
+  control. Pass the store key as an environment variable and keep it off the
+  volume.
+- **Loopback only.** The HTTP front listens on `127.0.0.1` and refuses any
+  request that carries a browser `Origin` header. Where a browser runs on the
+  device, set `OP_HTTP_TOKEN_FILE` so every request must carry a per-launch
+  token.
+- **Caller authorization.** Every request a provider receives carries
+  `X-Offline-Protocol-Sender`, the caller's address, authenticated by the
+  encrypted session. Compare it with an allow list of known devices to serve
+  only those.
+- **Clock sync.** Encryption and request deadlines use the device clock. Run
+  `wendy device sync-time` on networks without a time server.
+
+## Licensing
+
+The Offline Protocol SDK is open source under AGPL-3.0. A commercial license is
+available from Offline Protocol for products that need other terms; see
+[pricing and licensing](https://www.offlineprotocol.com/pricing) or
+[contact the team](https://www.offlineprotocol.com/contact).
+
+## Resources
+
+- [Offline Protocol documentation](https://www.offlineprotocol.com/docs)
+- [Python and Linux guide](https://www.offlineprotocol.com/docs/mesh-sdk/python)
+- [Offline Protocol SDK on GitHub](https://github.com/Offline-Protocol/offline-protocol-sdk)
+- [`offline-protocol-sdk` on PyPI](https://pypi.org/project/offline-protocol-sdk/)
+- [Three computers, no internet](https://wendy.dev/blog/offline-protocol-on-wendyos):
+  the quickstart on the Wendy blog
+- [Video walkthrough](https://www.youtube.com/watch?v=6Bbxldoz3w4), with chapters:
+  [Offline Protocol and WendyOS](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=59s),
+  [one board, three files](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=230s),
+  [deploy to the Pi](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=629s),
+  [unplug the Jetson](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=792s),
+  [plug it back in](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=838s),
+  [relay through the middle board](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=899s),
+  and [Bluetooth, phones, and Wendy Net](https://www.youtube.com/watch?v=6Bbxldoz3w4&t=1003s)
+- [Wendy Net](/docs/guides/wendy-net): put the devices in your organization on
+  one private network
