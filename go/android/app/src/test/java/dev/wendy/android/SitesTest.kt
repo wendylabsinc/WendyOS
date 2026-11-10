@@ -98,4 +98,16 @@ class SitesTest {
         assertEquals(2.5f, hit[1], 1e-3f)
         assertNull(SiteRay.nearest(geometry, floatArrayOf(50f, 10f, 50f), floatArrayOf(0f, -1f, 0f)))
     }
+
+    @Test fun removedCapturesCanBeRestored() {
+        val store = SiteModelStore(temporary())
+        val saved = store.create("Lab", fixture("room.usdz"))
+        assertEquals(listOf("Lab"), store.list().map { it.site.name })
+        store.remove(saved.id)
+        assertTrue(store.list().isEmpty())
+        assertEquals(listOf(saved.id), store.removed().map { it.id })
+        store.restore(saved.id)
+        assertEquals(listOf(saved.id), store.list().map { it.id })
+        assertTrue(store.removed().isEmpty())
+    }
 }

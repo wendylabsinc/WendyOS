@@ -160,6 +160,17 @@ class SiteModelStore(private val directory: File) {
         val removed = File(directory, "Recently Removed").apply { mkdirs() }
         if (!folder(id).renameTo(File(removed, id.uppercase()))) throw SiteException("Could not remove the model.")
     }
+    /** Saved models by name; unreadable folders are skipped rather than failing the list. */
+    fun list(): List<StoredSite> = directory.listFiles().orEmpty().filter { it.isDirectory && validUUID(it.name) }
+        .mapNotNull { runCatching { load(it.name) }.getOrNull() }.sortedBy { it.site.name.lowercase() }
+    fun removed(): List<StoredSite> = File(directory, "Recently Removed").listFiles().orEmpty().filter { it.isDirectory && validUUID(it.name) }
+        .mapNotNull { runCatching { SiteModelStore(File(directory, "Recently Removed")).load(it.name) }.getOrNull() }.sortedBy { it.site.name.lowercase() }
+    fun restore(id: String): StoredSite {
+        val source = File(File(directory, "Recently Removed"), id.uppercase())
+        SiteModelStore(File(directory, "Recently Removed")).load(id)
+        if (folder(id).exists() || !source.renameTo(folder(id))) throw SiteException("Could not restore the model.")
+        return load(id)
+    }
     fun archive(id: String): SiteArchive { val saved = load(id); return SiteArchive(saved.site, saved.model.readBytes(), saved.visualMap?.readBytes()) }
     companion object {
         const val MAXIMUM_MODEL_BYTES = 128 * 1024 * 1024

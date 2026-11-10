@@ -797,7 +797,7 @@ private fun NotificationsPage(model: WendyModel) {
 // MARK: Pairing
 
 @Composable
-private fun PairingPage(model: WendyModel, deviceName: String) {
+fun PairingPage(model: WendyModel, deviceName: String) {
     var kind by remember { mutableStateOf("Wendy Lite") }
     Column(Modifier.fillMaxSize()) {
         ChoiceTabs(listOf("Wendy Lite", "IP cameras", "Robots"), kind, { kind = it }, Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
