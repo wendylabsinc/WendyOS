@@ -489,19 +489,21 @@ private fun SiteModelViewer(model: WendyModel, store: SitesStore, siteID: String
     val records = rememberSiteCameraRecords(model, saved != null, site?.assets.orEmpty())
     val statuses = rememberAutomaticAlignment(model, saved, records, enabled = saved != null)
     val coverage = saved?.let { records.geometry(model, it) }.orEmpty()
+    var showCoverage by remember { mutableStateOf(true) }
+    var showImagery by remember { mutableStateOf(true) }
+    val imagery = rememberSiteImagery(model, saved, coverage, showImagery)
+    var projection by remember { mutableStateOf(mapOf<String, String>()) }
     LaunchedEffect(saved != null) { page?.actions = { IconButton(onClick = { nav.push("Place Cameras") { SiteCamerasPage(model, store, siteID, link.id) } }, enabled = saved != null) { Icon(Icons.Outlined.PhotoCamera, "Cameras") } } }
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
             when {
                 geometry != null && saved != null -> {
-                    SiteSceneView(geometry, saved.site.cameras.mapNotNull { siteMarker(it, false, false, coverage[it.id]) }, false,
-                        onSelect = { id -> saved.site.cameras.firstOrNull { it.id == id }?.let { camera -> nav.push(camera.name) { SiteCameraLivePage(model, store, site, camera, saved) } } }, onPlace = {}, modifier = Modifier.fillMaxSize())
-                    Surface(Modifier.align(Alignment.BottomStart).padding(12.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = .92f)) {
-                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(coverageExplanation(saved, records, coverage), style = MaterialTheme.typography.bodySmall)
-                            if (coverage.isEmpty()) saved.site.cameras.forEach { camera -> statuses[camera.sourceID]?.let { Text("${camera.name}: $it", style = MaterialTheme.typography.bodySmall) } }
-                        }
-                    }
+                    fun open(camera: SiteCamera) = nav.push(camera.name) { SiteCameraLivePage(model, store, site, camera, saved) }
+                    SiteSceneView(geometry, saved.site.cameras.mapNotNull { siteMarker(it, false, false, coverage[it.id])?.let { m -> if (showCoverage) m else m.withoutCone() } }, false,
+                        onSelect = { id -> saved.site.cameras.firstOrNull { it.id == id }?.let(::open) }, onPlace = {}, modifier = Modifier.fillMaxSize(),
+                        projectors = if (showImagery) imagery.projectors else emptyList(), onProjection = { projection = it })
+                    SiteViewMenu(showCoverage, showImagery, { showCoverage = it }, { showImagery = it }, saved.site.cameras, ::open, Modifier.align(Alignment.TopEnd).padding(12.dp))
+                    if (showCoverage || showImagery) SiteCoverageNote(saved, records, coverage, statuses, if (showImagery) imagery else null, projection, Modifier.align(Alignment.BottomStart).padding(12.dp))
                 }
                 error != null -> EmptyMessage("Model unavailable", error, Icons.Outlined.ViewInAr)
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LensLoading("Loading model…") }

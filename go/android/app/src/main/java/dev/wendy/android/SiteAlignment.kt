@@ -575,3 +575,85 @@ fun PhoneLensCalibrationPage(model: WendyModel, feed: JSONObject, completion: (S
         }
     })
 }
+
+/** What the camera-imagery overlay shows for one camera (iOS colorStatus). */
+class SiteImagery(val projectors: List<SiteProjector>, val waiting: Map<String, String>)
+
+/**
+ * Plays each aligned camera of the connected gateway without a view and keeps its newest colour picture, for
+ * projecting onto the model (iOS SiteCameraColorCapture). Thermal cameras are never projected.
+ */
+@Composable
+fun rememberSiteImagery(model: WendyModel, site: StoredSite?, geometry: Map<String, SiteCameraGeometry>, enabled: Boolean): SiteImagery {
+    val sources = if (!enabled || site == null || !LocalPageVisible.current) emptyList() else site.site.cameras.filter { geometry[it.id] != null }.mapNotNull { camera ->
+        model.cameras.filter { it.text("stable_id") == camera.sourceID }.singleOrNull()?.takeIf { !it.has("thermal") }?.let { camera to it }
+    }
+    var frames by remember { mutableStateOf(mapOf<String, CameraColorFrame>()) }
+    var clock by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(sources.map { it.first.id to it.second.number("id") }, model.session) {
+        frames = emptyMap()
+        if (sources.isEmpty()) return@LaunchedEffect
+        kotlinx.coroutines.coroutineScope {
+            launch { while (isActive) { delay(1000); clock = System.currentTimeMillis() } }
+            for ((camera, feed) in sources) launch {
+                val stream = CalibrationStream(model, feed).also { it.frames.wantsColor = true }
+                try {
+                    stream.use { while (isActive) { stream.frames.latestColor?.let { f -> if (frames[camera.id]?.sequence != f.sequence) frames = frames + (camera.id to f) }; delay(250) } }
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { /* The camera stays uncoloured; its status says why. */ }
+            }
+        }
+    }
+    val projectors = ArrayList<SiteProjector>(); val waiting = HashMap<String, String>()
+    for ((camera, _) in sources) {
+        val g = geometry[camera.id] ?: continue; val lens = g.lens ?: continue
+        val frame = frames[camera.id]
+        when {
+            frame == null -> waiting[camera.id] = "Waiting for a color frame…"
+            frame.image.width != lens.width || frame.image.height != lens.height -> waiting[camera.id] = "Camera resolution changed. Recalibrate the lens."
+            !frame.matches(lens, clock) -> waiting[camera.id] = "Waiting for a fresh color frame…"
+            else -> projectors += SiteProjector(camera.id, g, frame.image, frame.received)
+        }
+    }
+    return SiteImagery(projectors, waiting)
+}
+
+/** The iOS "View" menu over a site's 3D view: camera coverage cones and live imagery. */
+@Composable
+fun SiteViewMenu(coverage: Boolean, imagery: Boolean, setCoverage: (Boolean) -> Unit, setImagery: (Boolean) -> Unit, cameras: List<SiteCamera>, open: (SiteCamera) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Surface(onClick = { expanded = true }, shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface.copy(alpha = .92f)) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Outlined.Visibility, null, Modifier.size(18.dp), tint = LensStyle.accent); Text("View", color = LensStyle.accent)
+            }
+        }
+        DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text("Camera coverage") }, onClick = { setCoverage(!coverage) }, trailingIcon = { Checkbox(coverage, { setCoverage(it) }) })
+            DropdownMenuItem(text = { Text("Live imagery") }, onClick = { setImagery(!imagery) }, trailingIcon = { Checkbox(imagery, { setImagery(it) }) })
+            if (cameras.isNotEmpty()) {
+                HorizontalDivider()
+                Text("Open camera", Modifier.padding(horizontal = 16.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                cameras.forEach { camera -> DropdownMenuItem(text = { Text(camera.name) }, onClick = { expanded = false; open(camera) }) }
+            }
+        }
+    }
+}
+
+/** The status lines under a site's 3D view (iOS MobileSiteCoverageScene overlay). */
+@Composable
+fun SiteCoverageNote(site: StoredSite, records: SiteCameraRecords, geometry: Map<String, SiteCameraGeometry>, alignment: Map<String, String>, imagery: SiteImagery?, projection: Map<String, String>, modifier: Modifier = Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = .92f)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val explanation = coverageExplanation(site, records, geometry)
+            Text(if (imagery != null && geometry.isNotEmpty() && imagery.projectors.isEmpty() && imagery.waiting.isEmpty()) "Live imagery needs a connected camera and a valid alignment. Lens calibration is optional." else explanation,
+                style = MaterialTheme.typography.bodySmall)
+            if (geometry.isEmpty()) site.site.cameras.forEach { camera -> alignment[camera.sourceID]?.let { Text("${camera.name}: $it", style = MaterialTheme.typography.bodySmall) } }
+            if (imagery != null) site.site.cameras.forEach { camera ->
+                (projection[camera.id] ?: imagery.waiting[camera.id])?.let { Text("${camera.name}: $it", style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+    }
+}
+
+/** Hides view cones when camera coverage is off. */
+fun SiteMarker.withoutCone() = SiteMarker(id, position, color, null)
