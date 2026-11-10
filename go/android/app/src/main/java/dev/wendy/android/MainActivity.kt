@@ -71,6 +71,7 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
     var activitySegment by mutableStateOf(ActivitySegment.Alerts)
     var chat by mutableStateOf(false)
     var address by mutableStateOf(false)
+    var recognizing by mutableStateOf(false)
     private var lensPage: Pair<Long, Lens>? = null
     private fun currentLens() = lensPage?.takeIf { (key, _) -> nav.stack.firstOrNull()?.key == key }?.second
 
@@ -103,7 +104,7 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
     @Composable private fun DevicesHomeActions() {
         IconButton(onClick = ::openActivity) { Icon(Icons.Outlined.Notifications, "Notifications") }
         OverflowMenu("Connect to a device", listOf(
-            MenuItem("Set up a device nearby", Icons.Outlined.Bluetooth) { openSetup() },
+            MenuItem("Recognize a device", Icons.Outlined.CenterFocusWeak) { recognizing = true },
             MenuItem("Connect by address", Icons.Outlined.Link) { address = true },
         ), icon = Icons.Outlined.Add, enabled = model.initialized)
     }
@@ -194,11 +195,12 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(external))) }.onFailure { model.error = it.message }
             }
         }
-        NearbySetupPrompt(model, active = model.initialized && model.inForeground && nav.stack.none { it.title == "Device setup" } && !settings && !routes.chat && !routes.address && model.appDeletion == null && model.appURL == null) { device ->
+        NearbySetupPrompt(model, active = model.initialized && model.inForeground && nav.stack.none { it.title == "Device setup" } && !settings && !routes.chat && !routes.address && !routes.recognizing && model.appDeletion == null && model.appURL == null) { device ->
             routes.openSetup(device)
         }
         if (settings) SettingsSheet(model) { settings = false }
         if (routes.chat) AskWendySheet(model, { routes.chat = false }) { routes.chat = false; routes.enter(Lens.Devices) }
+        if (routes.recognizing) DeviceViewfinder(model, { routes.recognizing = false }) { device -> routes.select(device) }
         if (routes.address) InputDialog("Connect to device", listOf(Field("address", "Hostname or IP address", "", "hostname:50051")), onDismiss = { routes.address = false }, submitLabel = "Connect") { values ->
             val host = values.getValue("address").trim()
             if (host.isNotBlank()) { routes.address = false; routes.select(Device(host, host, host, "LAN")) }

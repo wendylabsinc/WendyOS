@@ -81,7 +81,15 @@ run on a real phone against a real WendyOS device yet.
   sent to the device), remembered AI devices, suggestions and unread replies.
 - Nearby setup in the four iOS steps: Device, Connection, Organization and
   Enrollment.
-- Robots lens: the iOS four-tab "under construction" lens *emulator*.
+- Robots lens: the iOS four tabs, shown as under construction as on iOS.
+- Device recognition (Devices, "+", Recognize a device): a CameraX viewfinder
+  matches board appearances with OpenCV SIFT and a RANSAC homography (a port
+  of `VisualRecognition.cpp`, with the same bundled Seeed XIAO photos) and
+  reads printed device names with ML Kit text recognition. Tapping a match
+  lets you choose the device and connect; "Remember a device's appearance" saves up to 12 references on the
+  phone. OpenCV is pinned to 4.10: 4.11 and later bundle KleidiCV, whose SVE2
+  code crashes the Android emulator on Apple silicon, which reports SVE2 it
+  cannot run. Unlike iOS there is no ARKit, so outlines follow the 2D image.
 - Sites lens: local sites with devices and robots, a setup checklist, 3D
   models (USDZ or `.wendysite` import, rename, default, save to and load from
   a device through `SiteModels`), live cameras, missions and activity.
@@ -101,7 +109,6 @@ compilation does not establish that hardware-dependent workflows work.
 
 | iOS feature (PR #2715) | Android status |
 | --- | --- |
-| Device recognition viewfinder (appearance matching and label reading) | Not ported. iOS uses ARKit, Vision text recognition and OpenCV SIFT; Android would need CameraX, a text recogniser and OpenCV, which are new native dependencies. |
 | Sites: room scanning and photo reconstruction | Not available: iOS uses RoomPlan and Object Capture on LiDAR devices. Android imports models made on iOS. |
 | Sites: automatic camera alignment, lens calibration and reference capture | Not ported. iOS uses OpenCV localization (`SiteLocalization.cpp`) and ARKit; Android saves manual alignments. |
 | Sites: projected live video on the model and the RealityKit preview viewer | Not ported. Android draws the model, camera markers and view cones. |

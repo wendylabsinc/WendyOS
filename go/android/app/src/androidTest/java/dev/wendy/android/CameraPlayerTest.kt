@@ -54,7 +54,7 @@ class CameraPlayerTest {
             scenario.onActivity { activity ->
                 activity.setTurnScreenOn(true)
                 activity.setShowWhenLocked(true)
-                player = CameraPlayer(activity) { failure.set(it) }
+                player = CameraPlayer(activity, failed = { failure.set(it) })
                 player.holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: SurfaceHolder) { ready.countDown() }
                     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
