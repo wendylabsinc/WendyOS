@@ -81,7 +81,7 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
             Lens.Devices -> nav.push("Devices", actions = { if (devicesTab == DevicesTab.Home) DevicesHomeActions() }) {
                 DevicesLens(model, devicesTab, { devicesTab = it }, { openSetup() }, ::openActivity, { chat = true }, ::select, activitySegment, { activitySegment = it })
             }
-            Lens.Sites -> nav.push("Sites") { LensWithChat { SitesScreen(model) } }
+            Lens.Sites -> nav.push("Sites") { SitesLens(model) { chat = true } }
             Lens.Robots -> nav.push("Robots") { CompositionLocalProvider(LocalWendyModel provides model) { UnfinishedLensTabs(Lens.Robots) { chat = true } } }
         }
         lensPage = nav.stack.first().key to lens
