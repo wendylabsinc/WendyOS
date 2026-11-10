@@ -20,6 +20,10 @@ import (
 
 func siteModelTestClient(t *testing.T) pb.SiteModelServiceClient {
 	t.Helper()
+	return siteModelTestClientAt(t, t.TempDir())
+}
+func siteModelTestClientAt(t *testing.T, root string) pb.SiteModelServiceClient {
+	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "site-rpc-")
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +35,7 @@ func siteModelTestClient(t *testing.T) pb.SiteModelServiceClient {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer()
-	pb.RegisterSiteModelServiceServer(server, NewSiteModelService(t.TempDir()))
+	pb.RegisterSiteModelServiceServer(server, NewSiteModelService(root))
 	go server.Serve(listener)
 	t.Cleanup(server.Stop)
 	conn, err := grpc.NewClient("unix://"+socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -134,5 +138,30 @@ func TestSiteModelRejectsTraversalAndIncompleteUpload(t *testing.T) {
 	list, err := client.List(ctx, &pb.SiteModelListRequest{})
 	if err != nil || len(list.Models) != 0 {
 		t.Fatalf("incomplete upload visible: %v %v", list, err)
+	}
+}
+
+// An upload's temporary file outlives an agent that stops mid-transfer, and
+// the quota does not count it. The next upload clears what the last one left.
+func TestSiteModelUploadClearsInterruptedTransfers(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{".upload-123", ".index-456"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("partial"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := siteModelTestClientAt(t, root)
+	hash := sha256.Sum256([]byte("missing"))
+	upload, err := client.Upload(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload.Send(&pb.SiteModelUploadRequest{Info: &pb.SiteModelInfo{Id: hex.EncodeToString(hash[:]), Name: "Interrupted", Size: 100}})
+	if _, err = upload.CloseAndRecv(); status.Code(err) != codes.DataLoss {
+		t.Fatalf("incomplete upload accepted: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temporary files remain: %v %v", entries, err)
 	}
 }

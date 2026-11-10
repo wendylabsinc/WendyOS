@@ -103,6 +103,12 @@ func (s *SiteModelService) Upload(stream grpc.ClientStreamingServer[pb.SiteModel
 	}
 	var used int64
 	for _, entry := range entries {
+		// Only one upload runs at a time, so a temporary file found here was
+		// left by a transfer the agent did not outlive. The quota cannot see it.
+		if strings.HasPrefix(entry.Name(), ".upload-") || strings.HasPrefix(entry.Name(), ".index-") {
+			os.Remove(filepath.Join(s.root, entry.Name()))
+			continue
+		}
 		if strings.HasSuffix(entry.Name(), ".wendysite") && entry.Name() != info.Id+".wendysite" {
 			stat, e := entry.Info()
 			if e != nil {
