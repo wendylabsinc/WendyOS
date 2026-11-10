@@ -60,6 +60,9 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     val cameraEvents = mutableStateMapOf<Long, JSONObject>()
     val videoConsumers = mutableMapOf<Long, (JSONObject) -> Unit>()
 
+    /** The selected device's conversation; it survives switching panes. */
+    var deviceChat by mutableStateOf<DeviceChat?>(null); private set
+
     // Logs. One stream at a time, filtered by [logApp].
     var logApp by mutableStateOf("")
     var logs by mutableStateOf(emptyList<LogEntry>())
@@ -151,6 +154,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 val resolved = device.copy(lite = lite)
                 selected = resolved
                 session = result.number("session")
+                deviceChat = DeviceChat(this@WendyModel, session, viewModelScope)
                 recordExperience("Connected", "connected", resolved)
                 refreshDetails()
             } catch (e: CancellationException) { throw e }
@@ -184,6 +188,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     private fun clearDeviceState() {
         appURL = null; cameraEvents.clear(); apps = emptyList(); appsError = null; cameras = emptyList(); camerasError = null
         logs = emptyList(); logError = null; appActions = emptySet()
+        deviceChat?.stop(); deviceChat = null
     }
     private fun invalidateConnection() { connectionGeneration++; session = 0; connecting = false; clearDeviceState() }
     fun disconnect() { invalidateConnection(); selected = null; detailError = null; task { backend.call("Disconnect") } }
