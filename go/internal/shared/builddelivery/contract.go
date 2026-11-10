@@ -33,22 +33,37 @@ const (
 	MaxLifetime      = 24 * time.Hour
 )
 
+// Claims is the signed payload authorizing one target-bound build delivery.
 type Claims struct {
-	Version     int    `json:"v"`
-	JobID       string `json:"jti"`
-	Operator    string `json:"iss"`
-	Target      string `json:"aud"`
-	Builder     string `json:"builder"`
+	// Version is the contract schema version; currently 1.
+	Version int `json:"v"`
+	// JobID is the canonical job UUID used to reject conflicting authorizations and track replay.
+	JobID string `json:"jti"`
+	// Operator is the full SPIFFE operator principal whose certificate signs the grant.
+	Operator string `json:"iss"`
+	// Target is the full SPIFFE device principal of the target receiving the image.
+	Target string `json:"aud"`
+	// Builder is the full SPIFFE device principal of the build host authorized to deliver it.
+	Builder string `json:"builder"`
+	// BuilderSPKI is unpadded base64url SHA-256 of the builder's full DER SubjectPublicKeyInfo.
 	BuilderSPKI string `json:"builder_spki_sha256"`
-	Reference   string `json:"reference"`
+	// Reference is the exact local repository:tag authorized for publication, without a registry host.
+	Reference string `json:"reference"`
+	// InputSHA256 is unpadded base64url SHA-256 of the deterministic BuildSpec, excluding grants and session IDs.
 	InputSHA256 string `json:"input_sha256"`
-	// ExpectedDigest is empty only when the reference must not exist yet.
-	ExpectedDigest string   `json:"expected_digest"`
-	IssuedAt       int64    `json:"iat"`
-	AdmitBefore    int64    `json:"admit_before"`
-	ValidUntil     int64    `json:"exp"`
-	Operations     []string `json:"operations"`
-	MaxBytes       int64    `json:"max_bytes"`
+	// ExpectedDigest is the current sha256:<hex> image digest required at Reference; empty requires an absent tag.
+	ExpectedDigest string `json:"expected_digest"`
+	// IssuedAt is the Unix-second creation time and earliest permitted admission time.
+	IssuedAt int64 `json:"iat"`
+	// AdmitBefore is the exclusive Unix-second deadline for first durable admission by the target.
+	AdmitBefore int64 `json:"admit_before"`
+	// ValidUntil is the exclusive Unix-second delivery deadline for an admitted grant.
+	ValidUntil int64 `json:"exp"`
+	// Operations must currently contain exactly ["stage", "publish"], in that order.
+	// Staging uploads immutable content; publishing conditionally updates Reference.
+	Operations []string `json:"operations"`
+	// MaxBytes caps cumulative uploaded bytes, including retransmitted content.
+	MaxBytes int64 `json:"max_bytes"`
 }
 
 type header struct {
