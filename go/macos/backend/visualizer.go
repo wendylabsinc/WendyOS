@@ -57,23 +57,16 @@ type VisualVideo struct {
 }
 
 // VisualEpisodesAt reads a device's episode index without replacing the active
-// camera/playback session. The short-lived connection is always closed.
+// camera/playback session. The connection is reused by subsequent Gallery reads.
 func (b *Backend) VisualEpisodesAt(selector string) ([]*pb.DataEpisode, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	conn, lite, err := b.connectTarget(ctx, selector)
-	if lite != nil {
-		defer lite.Close()
-	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	conn, release, err := b.galleryAcquire(ctx, selector)
 	if err != nil {
 		return nil, err
 	}
-	if conn == nil {
-		return nil, errors.New("recordings require a WendyOS agent")
-	}
+	defer func() { release(err) }()
+
 	result, err := conn.DataService.Episodes(ctx, &pb.DataEpisodesRequest{}, grpc.MaxCallRecvMsgSize(64<<20))
 	if err != nil {
 		return nil, err
@@ -93,20 +86,14 @@ type VisualPreview struct {
 func (b *Backend) VisualPreviewAt(selector, episode string) (VisualPreview, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	conn, lite, err := b.connectTarget(ctx, selector)
-	if lite != nil {
-		defer lite.Close()
-	}
-	if conn != nil {
-		defer conn.Close()
-	}
+	conn, release, err := b.galleryAcquire(ctx, selector)
 	if err != nil {
 		return VisualPreview{}, err
 	}
-	if conn == nil {
-		return VisualPreview{}, errors.New("recordings require a WendyOS agent")
-	}
-	return readVisualPreview(ctx, conn.DataService, episode)
+	defer func() { release(err) }()
+
+	preview, err := readVisualPreview(ctx, conn.DataService, episode)
+	return preview, err
 }
 
 func readVisualPreview(ctx context.Context, client pb.DataServiceClient, episode string) (VisualPreview, error) {
@@ -215,6 +202,19 @@ func (b *Backend) VisualEpisode(session uint64, episode string) (*VisualSnapshot
 	b.mu.Unlock()
 	defer cancel()
 	return readVisualEpisode(ctx, client, episode)
+}
+
+// VisualEpisodeAt uses the same Gallery connection as indexes and previews.
+func (b *Backend) VisualEpisodeAt(selector, episode string) (*VisualSnapshot, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn, release, err := b.galleryAcquire(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := readVisualEpisode(ctx, conn.DataService, episode)
+	release(err)
+	return snapshot, err
 }
 
 func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode string) (*VisualSnapshot, error) {

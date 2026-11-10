@@ -18,7 +18,7 @@ type galleryCloseCounter struct{ count int }
 
 func (c *galleryCloseCounter) Close() error { c.count++; return nil }
 
-func TestGalleryIndexPreservesActiveSessionAndClosesTemporaryConnection(t *testing.T) {
+func TestGalleryIndexPreservesActiveSessionAndReusesConnection(t *testing.T) {
 	for _, dialFailure := range []bool{false, true} {
 		b := New()
 		active := &grpcclient.AgentConnection{}
@@ -39,13 +39,18 @@ func TestGalleryIndexPreservesActiveSessionAndClosesTemporaryConnection(t *testi
 			return target, nil, nil
 		}
 		rows, err := b.VisualEpisodesAt("target")
+		defer b.galleryReset(true)
 		if dialFailure && err == nil {
 			t.Fatal("missing error")
 		}
 		if !dialFailure && (err != nil || len(rows) != 2) {
 			t.Fatalf("%v %v", rows, err)
 		}
-		if closed.count != 1 {
+		expectedClosed := 0
+		if dialFailure {
+			expectedClosed = 1
+		}
+		if closed.count != expectedClosed {
 			t.Fatalf("temporary connection closed %d times", closed.count)
 		}
 		if b.conn != active || b.session != 42 || b.deviceSelector != "active" {
