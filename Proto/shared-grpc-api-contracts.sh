@@ -103,7 +103,7 @@ check_shared_grpc_api_contracts_ancestry() (
     git init --bare --quiet "$scratch" || return $?
     # Fetch complete master history, independently of the consumer's checkout.
     # Fetch the pin too so an existing branch-only commit is rejected by ancestry.
-    git -C "$scratch" fetch --quiet --no-tags --filter=blob:none \
+    git -C "$scratch" fetch --quiet --no-tags --no-auto-maintenance --filter=blob:none \
         https://github.com/wendylabsinc/service-protos.git \
         '+refs/heads/master:refs/heads/master' "$ref:refs/heads/contract-pin" || {
         echo "error: could not fetch service-protos master and pinned commit $ref" >&2
