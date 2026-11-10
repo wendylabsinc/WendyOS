@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/internal/cli/modelhub"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -139,6 +140,32 @@ func New() *Client {
 			ctx, cancel := cloudContext()
 			defer cancel()
 			return commands.DesktopDeleteAccess(ctx, account, org, id)
+		},
+		"DeviceAccess": func(account, org, device string) (any, error) {
+			ctx, cancel := cloudContext()
+			defer cancel()
+			return commands.DesktopDeviceAccess(ctx, account, org, device)
+		},
+		// Hugging Face lookups match the iOS bridge's timeouts. They read public
+		// metadata only; nothing is downloaded or executed on the phone.
+		"SearchModels": func(query string) ([]modelhub.Repository, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return modelhub.New().Search(ctx, query)
+		},
+		"ModelFiles": func(repo string) (modelhub.Details, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return modelhub.New().Details(ctx, repo)
+		},
+		"VisionModel": func(repo string, classification bool) (modelhub.VisionModel, error) {
+			task := "object-detection"
+			if classification {
+				task = "image-classification"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			return modelhub.New().VisionDetails(ctx, repo, task)
 		},
 	}
 	return c

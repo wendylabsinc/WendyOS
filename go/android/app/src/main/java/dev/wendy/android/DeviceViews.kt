@@ -120,8 +120,9 @@ fun AppsScreen(model: WendyModel) {
     var snapshot by remember(session) { mutableStateOf<ResourceSnapshot?>(null) }
     var error by remember(session) { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
-    LaunchedEffect(session, model.foregroundGeneration) {
-        while (true) {
+    val visible = LocalPageVisible.current
+    LaunchedEffect(session, model.foregroundGeneration, visible) {
+        while (visible) {
             try { snapshot = ResourceSnapshot(model.backend.call("Resources", session).obj()); error = null } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message }
             delay(1000)
         }
@@ -204,8 +205,9 @@ private fun TemperaturePage(model: WendyModel) {
     val session = model.session
     var snapshot by remember { mutableStateOf<ResourceSnapshot?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(session) {
-        while (true) {
+    val visible = LocalPageVisible.current
+    LaunchedEffect(session, visible) {
+        while (visible) {
             try { snapshot = ResourceSnapshot(model.backend.call("Resources", session).obj()); error = null } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message }
             delay(2000)
         }
@@ -248,7 +250,8 @@ private fun AppDetailPage(model: WendyModel, appName: String) {
         try { ports = model.backend.call("Ports", appName, session).items(); portError = null } catch (e: CancellationException) { throw e } catch (e: Exception) { portError = e.message }
         loadingPorts = false
     }
-    LaunchedEffect(session, appName) { while (true) { refresh(); delay(2000) } }
+    val visible = LocalPageVisible.current
+    LaunchedEffect(session, appName, visible) { while (visible) { refresh(); delay(2000) } }
     val app = model.apps.firstOrNull { it.name == appName }
     val resource = snapshot?.rows?.firstOrNull { !it.isService && it.app == appName }
     PullToRefreshBox(refreshing, onRefresh = { scope.launch { refreshing = true; model.refreshDetails(); refresh(); refreshing = false } }) {
@@ -318,7 +321,8 @@ fun DeviceLogsPage(model: WendyModel) {
     var follow by remember { mutableStateOf(true) }
     var inspected by remember { mutableStateOf<LogEntry?>(null) }
     var menu by remember { mutableStateOf(false) }
-    LaunchedEffect(model.session, model.logApp, model.foregroundGeneration) { model.observeLogs() }
+    val pageVisible = LocalPageVisible.current
+    LaunchedEffect(model.session, model.logApp, model.foregroundGeneration, pageVisible) { if (pageVisible) model.observeLogs() }
     val visible = model.logs.filter { (!problemsOnly || it.level.ordinal >= LogLevel.Warning.ordinal) && (search.isEmpty() || it.body.contains(search, true) || it.source.contains(search, true)) }
     val list = rememberLazyListState()
     LaunchedEffect(visible.lastOrNull()?.id, follow) { if (follow && visible.isNotEmpty()) list.scrollToItem(visible.lastIndex) }

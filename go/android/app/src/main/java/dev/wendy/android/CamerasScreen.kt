@@ -94,8 +94,9 @@ class ThermalOverlay(frame: JSONObject, private val receivedAt: Long) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(thermal != null) { while (thermal != null) { kotlinx.coroutines.delay(1000); now = System.currentTimeMillis() } }
     // A new stream ID per play keeps late frames from a paused stream out of the view.
-    LaunchedEffect(running, session, id) {
-        if (!running || session == 0L) return@LaunchedEffect
+    val visible = LocalPageVisible.current
+    LaunchedEffect(running, session, id, visible) {
+        if (!running || session == 0L || !visible) { stream = 0L; return@LaunchedEffect }
         val next = model.nextID()
         error = null; received = false
         stream = next
