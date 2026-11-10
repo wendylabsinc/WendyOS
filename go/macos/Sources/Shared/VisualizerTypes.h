@@ -40,5 +40,6 @@ WDVisualEpisodesResult *WDVisualEpisodes(uint64_t session);
 WDVisualEpisodesResult *WDVisualEpisodesAt(char *selector);
 void WDVisualEpisodesFree(WDVisualEpisodesResult *value);
 WDVisualSnapshotResult *WDVisualEpisodeLoad(uint64_t session, char *episode);
+WDVisualSnapshotResult *WDVisualEpisodeLoadAt(char *selector, char *episode);
 void WDVisualSnapshotFree(WDVisualSnapshotResult *value);
 #endif
