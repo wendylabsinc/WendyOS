@@ -81,7 +81,7 @@ public struct SiteCameraColorFrame: Sendable {
                 received = frame.received; sourceID = source.id
             } catch { color = nil; status = "Could not load the camera color frame."; return false }
         }
-        status = lens.measured ? "Live camera color" : "Live camera color · Estimated lens"
+        status = geometry.pose.provenance == "Manual visualization" ? "Live camera color · Manually aligned" : lens.measured ? "Live camera color" : "Live camera color · Estimated lens"
         if mountingWallOverlap { status += " · Mounting wall overlap" }
         return depth != nil && color != nil
     }
@@ -146,6 +146,8 @@ public struct SiteCameraColorFrame: Sendable {
         let renderer = SCNRenderer(device: device, options: nil)
         renderer.scene = scene; renderer.pointOfView = camera
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: 1024, height: 1024, mipmapped: false)
+        // Both textures are GPU-only. iOS depth targets cannot use shared storage.
+        descriptor.storageMode = .private
         descriptor.usage = [.renderTarget, .shaderRead]
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
         descriptor.pixelFormat = .depth32Float

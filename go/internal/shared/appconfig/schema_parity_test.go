@@ -2,6 +2,7 @@ package appconfig
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -35,9 +36,25 @@ func TestSchemaEntitlementKeyParity(t *testing.T) {
 			continue
 		}
 		if err := json.Unmarshal(raw, &typeConst); err != nil || typeConst.Const == "" {
-			continue
+			t.Fatalf("entitlement variant has no usable type constant: %s", raw)
+		}
+		if _, exists := variants[typeConst.Const]; exists {
+			t.Fatalf("duplicate schema variant for entitlement %q", typeConst.Const)
 		}
 		variants[typeConst.Const] = v.Properties
+	}
+	// Editors must not advertise keys or types that runtime validation rejects.
+	for entType, props := range variants {
+		keys, ok := allowedKeys[entType]
+		if !ok {
+			t.Errorf("schema advertises unsupported entitlement %q", entType)
+			continue
+		}
+		for key := range props {
+			if !slices.Contains(keys, key) {
+				t.Errorf("schema advertises unsupported key %q for entitlement %q", key, entType)
+			}
+		}
 	}
 
 	for entType, keys := range allowedKeys {

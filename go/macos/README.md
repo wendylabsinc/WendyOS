@@ -291,6 +291,11 @@ or depend on the old Companion app. It requires iOS 26 and an Apple Silicon Mac
 for simulator builds. Xcode builds the same Go backend as an iOS C archive and
 links it directly into the SwiftUI app; no CLI executable or subprocess is needed.
 
+Install XcodeGen, CMake and Ninja (`brew install xcodegen cmake ninja`), Python 3,
+and the Go version declared in the repository-root `go.mod`. From `go/macos`,
+run `xcodegen generate` before opening the project. Build phases compile Go and
+OpenCV automatically; the first build downloads OpenCV and takes longer.
+
 Open `WendyDesktop.xcodeproj`, select **WendyMobile**, and choose an iPhone or iPad
 simulator. To build from the repository root:
 
@@ -301,15 +306,16 @@ xcodebuild -project go/macos/WendyDesktop.xcodeproj \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES build
 ```
 
-For a physical device, select your Apple development team for `WendyMobile` in
-Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
+For a physical device, select your Apple development team for both `WendyMobile`
+and `WendyMobileNetwork` in Xcode, enable Developer Mode on the device, and use an
+iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
 The device build can also be compile-checked with
 `-destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`; that unsigned
 output cannot be installed on a phone.
 
 The mobile interface includes nearby/Cloud discovery, manual connections, accounts,
 Sites, organization management, apps, activity, logs, live cameras, pairing,
-campaigns and clips, device-local chat, and recorded data. Compact layouts use
+campaigns and clips, device/cloud chat, and recorded data. Compact layouts use
 stacked panes and touch controls. Recorded video, images, events and plots share
 the episode cursor; the timeline supports playback, seeking, ruler panning and
 pinch zoom, with a capped scrollable channel list.
@@ -317,8 +323,10 @@ pinch zoom, with a capped scrollable channel list.
 Accounts and device identity pins live in the app's Application Support directory,
 separate from the Mac CLI. Browser sign-in stays inside an in-app Safari sheet.
 Chat runs the Wendy MCP server in-process, with bundled skills, tool approvals,
-and context-scoped MCP request attribution. Models still run on the selected edge
-device, not on the phone. The iOS app does not expose host shell execution.
+and context-scoped MCP request attribution. Choose **On device** for inference on
+the selected edge device, or **Cloud** for OpenAI or Anthropic with your own API
+key. Neither mode runs model inference on the phone. The iOS app does not expose
+host shell execution.
 
 LAN, authenticated Cloud, and Wendy Net transports are supported. While the app
 is active, its Go backend hosts the same operator broker, full Babel router and
@@ -402,6 +410,56 @@ establish Bluetooth interoperability.
 
 The test scheme sets `WENDY_MOBILE_TEST_HOST=1`, keeping ordinary UI startup from
 competing with tests for backend lifecycle and account ownership.
+The Devices lens UI tests launch the normal app separately. They cover both
+inventory tiles, navigation history and returning from the background. To run
+the logs journey, set `TEST_RUNNER_WENDY_UI_DEVICE` to the displayed name of an
+authorized device that emits telemetry and `TEST_RUNNER_WENDY_UI_SOURCE` to
+`local` or `cloud` before running the command above. For the cloud path, sign
+in and select the device’s organization in the test iPhone first. Use
+`-parallel-testing-enabled NO` to run on that simulator with its saved account.
+The journey checks for an actual log record and returns to the filtered list.
+
+To check the iPhone sign-in presentation, run
+`testManageOrganizationPresentsSignInBrowser` on a signed-out debug simulator
+with `TEST_RUNNER_WENDY_UI_SIGNED_OUT_LOGIN=1`. It opens Accounts, selects
+Manage organization, and verifies that Sign in opens the browser sheet.
+
+For the app lifecycle UI test, start `go run ./go/macos/UITestSupport/appfixture`
+from the repository root and set `TEST_RUNNER_WENDY_UI_APPS_FIXTURE=1` for
+the test command. This loopback-only fixture advertises **Devices UI QA** to
+the simulator. The test starts its web app, opens its filtered logs, loads
+the actual HTTP dashboard, then stops the app and checks that Open is disabled.
+Its controls are restricted to the named fixture.
+
+To exercise connection recovery, start the same fixture with `-recovery`.
+Pass the printed loopback URL as `TEST_RUNNER_WENDY_UI_RECOVERY_URL` and run
+`testAppAndLogsRecoverAfterDeviceDisconnects` on an iOS simulator. The test
+disconnects the fixture on the app screen and again on the logs screen.
+It checks that stale controls disappear and new records arrive on the same
+screen when the fixture returns.
+
+For the hardware check, install the Node `simple-api` template as
+`test-node-simple-api` with an HTTP entitlement matching the server port.
+Deploy it stopped. Run `testInstalledSimpleAPILifecycleOverLAN` with
+`TEST_RUNNER_WENDY_UI_TEMPLATE_DEVICE` set to the board's displayed LAN name
+and `TEST_RUNNER_WENDY_UI_TEMPLATE_URL` set to its HTTP URL. The test starts
+only this idle template, sends a GET while its log viewer is subscribed, opens
+its JSON response in WendyMobile, and stops it. Allow local network access on
+the test iPhone if iOS prompts.
+
+For a read-only Cloud check, run `testRunningHelloPythonDashboardOverCloud`
+with `TEST_RUNNER_WENDY_UI_HELLO_DEVICE` set to a signed-in Cloud device
+already running `sh.wendy.examples.hellopython`. The test checks the actual
+page and the app's request log.
+
+Run `testSwitchingDevicesIsolatesControlsLogsAndWebTunnel` on a signed-in
+iOS simulator with `TEST_RUNNER_WENDY_UI_SWITCH_LAN` and
+`TEST_RUNNER_WENDY_UI_SWITCH_CLOUD` set to the displayed device names. Both
+boards need `test-node-simple-api`, running on LAN and stopped on Cloud. The
+Cloud board also needs a running Hello Python example. The check reads each
+app's controls and logs, switches back to the LAN app, and verifies that the
+previous Cloud tunnel refuses a new request.
+
 The optional `testLiveMeshDiscoveryManagementAndResume` uses the normal app's
 saved account, discovers a mesh target, connects and reads device info (and lists
 applications on WendyOS), then pauses/resumes the embedded participant and repeats
@@ -433,7 +491,8 @@ teams, profiles, credentials, or local entitlement overrides.
 - **Sites** is a fleet-wide sidebar destination. Select a saved account and organization to see all enrolled devices grouped by their Cloud site, including offline devices. Online state comes from broker presence; failed presence reads remain unknown. Filter by device, site, or hardware, and connect from a tile. Refresh uses the window toolbar.
 - **Pairing** on a connected device discovers Wendy Lite/SensorLink sources and ONVIF IP cameras on that device's network. Lite pairing reuses CLI tenant checks and stable device identities. Unenrolled sources are shown but cannot be paired. Older Agents may fall back to discovery on this Mac, with an explicit notice. IP camera credentials go to the selected Agent, and the password field clears after submission. Forgetting a pairing requires confirmation.
 - **Campaigns** provides a visual When / On / Then editor. Choose object detection, image classification, or an existing application event, any camera or one actual source, and notification plus recording or recording alone. Review the capture window, confidence, cooldown, and upload policy before deploying. Deployment immediately arms a new campaign and refuses to overwrite an existing name. Clips stay local by default. The default detector is DETR ResNet 50 with the person label; model revisions are pinned and the device downloads the runtime/model on first use. Wildcard cameras apply to the selected device, including cameras added later, not the entire fleet. Cloud notifications require a campaign grant from an owner/admin account. Native chat offers a separate approval prompt after notification-enabled creation. Deployment does not prove notification delivery or successful capture.
-- **Chat** uses Wendy Chat's model discovery and streaming provider with a transport fixed to the selected device. The picker discovers downloaded models across running managed Ollama runtimes and retains the selected model’s port. When Cloud does not yet offer the model TCP port, Chat streams HTTP through non-TTY exec in the selected device’s running managed Ollama container. This fallback uses the authenticated Agent connection, preserves request cancellation, and does not retry access denials. Custom servers still require Cloud port forwarding. If both routes fail, downloaded models remain visible with a warning beside the message box, a Retry connection button, and expandable technical details; chat stays disabled until an endpoint is reachable. Custom OpenAI-compatible server ports remain available in connection settings. Downloads show a progress bar with bytes and percentage for the current file, and an indeterminate bar during preparation and inference checks. Mesh/Cloud uses the authenticated tunnel; LAN uses the selected device's address and requires a reachable server port. Common ports are Ollama 11434, llama.cpp 8080, and LM Studio 1234. Environment API keys and hosted-provider settings are never inherited. Stop cancels the generation; changing devices cancels the request. Assistant replies render Markdown and hide model thinking blocks, including Qwen GGUF templates that omit the opening tag. Conversations are held in memory. Each device session starts the bundled Wendy MCP with all tool groups and bundled skills. Read-only tools run directly; changes require approval of the displayed function and arguments. Ollama uses a per-request 32,768-token context for the tool catalog.
+- **Chat — On device** uses Wendy Chat's model discovery and streaming provider with a transport fixed to the selected device. The picker discovers downloaded models across running managed Ollama runtimes and retains the selected model’s port. When Cloud does not yet offer the model TCP port, Chat streams HTTP through non-TTY exec in the selected device’s running managed Ollama container. This fallback uses the authenticated Agent connection, preserves request cancellation, and does not retry access denials. Custom servers still require Cloud port forwarding. If both routes fail, downloaded models remain visible with a warning beside the message box, a Retry connection button, and expandable technical details; chat stays disabled until an endpoint is reachable. Custom OpenAI-compatible server ports remain available in connection settings. Downloads show a progress bar with bytes and percentage for the current file, and an indeterminate bar during preparation and inference checks. Mesh/Cloud uses the authenticated tunnel; LAN uses the selected device's address and requires a reachable server port. Common ports are Ollama 11434, llama.cpp 8080, and LM Studio 1234. Environment API keys and hosted-provider settings are never inherited. Stop cancels the generation; changing devices cancels the request. Assistant replies render Markdown and hide model thinking blocks, including Qwen GGUF templates that omit the opening tag. Conversations are held in memory. Each device session starts the bundled Wendy MCP with all tool groups and bundled skills. Read-only tools run directly; changes require approval of the displayed function and arguments. Ollama uses a per-request 32,768-token context for the tool catalog.
+- **Chat — Cloud** uses the user's OpenAI or Anthropic API key and lists conversational models available to that account. Open **Ask Wendy → Cloud → Cloud models** to add, replace, or remove a key. Keys are stored in the app's non-synchronizing, device-only Keychain and sent only to the selected provider's fixed HTTPS endpoint; environment credentials, proxy settings, custom endpoints, and redirects are not inherited. The app sends messages and requested device context/tool results to that provider. API usage is billed by the provider. No local model is required, but this device chat still requires a connected selected device for its tools. The same action approvals, session ownership, and cancellation rules apply. Changing inference source or provider clears the conversation and draft; there is no automatic fallback. Credentials persist, while model/source choices are scoped to the current device chat session. Live paid-provider inference is not exercised by automated tests. Simulator Keychain tests require ad-hoc signing (`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`); unsigned test hosts cannot access Keychain.
 - **Data** opens recorded Wendy Data episodes with a shared cursor, a custom pannable and zoomable timestamp ruler, channel timeline, numerical plot, events, and sample inspector. Camera playback is available for checksummed sealed MP4 clips whose frame schedule matches the capture index; JPEG/PNG application frames also follow the cursor. Samples align on the episode's CLOCK_BOOTTIME timeline, including negative pre-roll. Unknown clocks, other boot IDs, unsupported payloads, and download limits are reported rather than assigned invented timestamps. The **Record** dialog selects actual camera, microphone, ROS 2 topic/domain, and telemetry sources for an immediate device-local capture; it also stops and seals the active recording. Campaigns offer these additional sources alongside camera selection. Audio and ROS 2 start at the trigger, without pre-roll.
 
   Recorded PCM WAV segments replay at 0.5–2× on the episode cursor with a peak-amplitude plot. ROS 2 SQLite and MCAP bags use their recorded host clock samples to align bag receipt times; missing mappings, clock jumps, and out-of-range timestamps are reported. LaserScan and PointCloud2 have an orbitable 3D preview in sensor coordinates, without TF transforms. IMU, GPS, vectors, twists, and basic numeric messages expose measurement channels; unsupported messages retain metadata and original export payloads. LiDAR previews retain at most 4,096 points per frame and 1,000,000 points per episode. Sensor downloads are capped at 512 MiB per file and 1 GiB total, with a shared 20,000-sample viewer limit.
@@ -800,8 +859,8 @@ later. A publisher must renew its evidence; clients hide expired poses. Visual
 localization records also require an inlier count and reprojection RMS.
 
 This API stores pose evidence; it does not derive it from a device appearance
-match. The viewfinder and RoomPlan scanning share the local appearance recognizer
-described below. Those matches do not establish enrolled identity or a calibrated
+match. The device viewfinder uses the local appearance recognizer described below.
+Those matches do not establish enrolled identity or a calibrated
 camera pose. Automatic alignment needs the separately captured visual reference
 map described under [Importing and viewing sites](#importing-and-viewing-sites);
 a geometry-only RoomPlan export is insufficient. Older gateways and cameras
@@ -843,9 +902,28 @@ provide lens calibration or automatic identity verification. Remove references
 through the stack icon. At most 12 references and 32 MiB are stored atomically in
 Application Support/WendyDeviceRecognition/references.json. No cloud sync occurs.
 
-Room scanning uses the same recognizer with RoomPlan's ARSession and shows a
-recognized appearance during capture. It does not place cameras or infer their
-viewing angles from an appearance-only reference. The native C++ layer supports
+Room scanning runs RoomPlan and visual-reference capture without the device
+appearance recognizer, reducing concurrent image-processing memory. Reference
+capture copies the image and depth data before background processing so it does
+not retain AR camera buffers across suspension. An iOS memory warning during
+scanning stops capture without starting reconstruction and reports that the scan
+was not saved. Retry over a smaller area and tap Finish sooner. Memory warnings
+are not guaranteed before iOS terminates an app; large-room capture still needs
+physical-device testing. SwiftUI retains the capture controller with StateObject,
+and Finish, Cancel, and view teardown share one session stop. RoomPlan owns the
+underlying AR session pause.
+
+`PhysicalRoomCaptureTests` provides an opt-in device startup stress test. Set
+`WENDY_ROOM_CAPTURE_REPRO=legacy` in the test target's `.xctestrun`
+`EnvironmentVariables` to exercise the original concurrent device recognition and
+AR reconfiguration, or `roomplan` to let RoomPlan manage startup. Run only this
+class on an unlocked LiDAR iPhone. Each mode opens ten three-second captures and
+reports camera/depth samples and reference counts. It does not save scans or
+modify the device-recognition library. A stationary-phone pass does not reproduce
+a walk through a large room; camera movement and the reported room remain manual
+qualification steps.
+
+The native C++ layer supports
 metric planar references and checked PnP poses, tested with a synthetic calibrated
 fixture, but bundled photographs and user captures have no measured physical
 plane and deliberately cannot produce a pose. That code is not evidence of
@@ -1173,6 +1251,32 @@ do not feed robot navigation or collision avoidance.
 Tracking uses the twin's calibrated RGB cameras and needs no additional model
 download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+
+### Personal device appearance on iOS
+
+Tap the device icon, or choose **More device tools → Customize appearance**.
+Choose a photo with the system Photos picker and crop it, choose an emoji, or
+choose a symbol and background color. Save applies the appearance to inventory,
+device details, connection status, and the Ask Wendy device context. Cancel
+leaves the saved appearance unchanged; Reset to default takes effect on Save.
+
+Appearance is local to the app and scoped to the selected account and organization.
+Enrolled LAN and Cloud routes share the existing canonical device identity;
+unenrolled devices use their discovery identity. No icon is uploaded or changed
+for other users, and cross-phone sync is not implemented. Photo imports are
+limited to 50 MB, decoded at up to 1024 pixels, then stored as a 512-pixel crop
+without original photo metadata. Image Playground and Memoji creation are not
+part of this first version.
+
+Appearance QA uses `WendyMobileTests/DeviceAppearanceTests` plus the opt-in
+`DeviceAppearanceUITests` against the loopback `UITestSupport/appfixture`.
+Set `TEST_RUNNER_WENDY_UI_APPEARANCE_FIXTURE=1` for emoji/color persistence/reset.
+For photo crop/save/reset, first seed
+`UITestSupport/Wendy-QA-Device-Avatar.png` as the newest simulator photo with
+`xcrun simctl addmedia <QA-simulator-UUID> UITestSupport/Wendy-QA-Device-Avatar.png`,
+then set `TEST_RUNNER_WENDY_UI_APPEARANCE_PHOTO_FIXTURE=1`. The test changes only
+the loopback fixture's appearance, then restores its default; it never signs out
+or changes the selected Wendy Cloud account/organization.
 
 ## Android companion
 

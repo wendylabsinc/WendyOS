@@ -1,9 +1,36 @@
 import Foundation
 
-struct WendyError: LocalizedError {
+// Explicit values match internal/shared/failure. Unknown future values are safe.
+enum FailureCode: Int32, Sendable {
+    case unknown = 0, authenticationRequired = 1, credentialsExpired = 2
+    case accountMismatch = 3, accessDenied = 4, identityMismatch = 5
+    case secureConnectionRejected = 6, networkUnavailable = 7, localNetworkDenied = 8
+    case agentUpdateRequired = 9, storageFull = 10, portInUse = 11, serviceBusy = 12, cancelled = 13
+}
+enum FailureRemedy: Int32, Sendable {
+    case none = 0, retry = 1, signIn = 2, chooseAccount = 3, openNetworkSettings = 4
+    case checkClock = 5, updateAgent = 6, reviewIdentity = 7, freeStorage = 8, choosePort = 9, wait = 10
+}
+struct WendyError: LocalizedError, Sendable, Equatable, ExpressibleByStringLiteral {
     let message: String
     var canForgetIdentity = false
+    var code: FailureCode = .unknown
+    var remedy: FailureRemedy = .none
     var errorDescription: String? { message }
+
+    init(message: String, canForgetIdentity: Bool = false, code: FailureCode = .unknown, remedy: FailureRemedy = .none) {
+        self.message = message; self.canForgetIdentity = canForgetIdentity
+        self.code = code; self.remedy = remedy
+    }
+    init(_ error: Error) {
+        self = error as? WendyError ?? WendyError(message: error.localizedDescription)
+    }
+    init(stringLiteral value: String) { self.init(message: value) }
+    init(message: String, code: Int32, remedy: Int32, canForgetIdentity: Bool = false) {
+        self.init(message: message, canForgetIdentity: canForgetIdentity,
+                  code: FailureCode(rawValue: code) ?? .unknown,
+                  remedy: FailureRemedy(rawValue: remedy) ?? .none)
+    }
 }
 
 // C calls stay off the UI thread. Every operation has a concrete signature;
@@ -20,7 +47,7 @@ final class GoClient: Sendable {
     }
     static func check(_ status: WDStatus) throws {
         if let message = status.message {
-            throw WendyError(message: String(cString: message), canForgetIdentity: status.can_forget_identity != 0)
+            throw WendyError(message: String(cString: message), code: status.error_code, remedy: status.remedy, canForgetIdentity: status.can_forget_identity != 0)
         }
     }
     static func finish(_ pointer: UnsafeMutablePointer<WDStatus>?) throws {
@@ -104,15 +131,23 @@ final class GoClient: Sendable {
     func initialize(cliPath: String) async throws {
         try await perform { try Self.withCString(cliPath) { try Self.finish(WDInitialize($0)) } }
     }
-    func nearby() async throws -> [Device] { try await perform { try Self.readDevices(WDNearby()) } }
+    func nearbyInventory() async throws -> (devices: [Device], warning: String?) {
+        try await perform {
+            guard let result = WDNearby() else { throw WendyError(message: "Missing devices result.") }
+            defer { WDDevicesFree(result) }
+            if result.pointee.count == 0 { try Self.check(result.pointee.status) }
+            return (Self.deviceRows(result), Self.optionalString(result.pointee.status.message))
+        }
+    }
+    func nearby() async throws -> [Device] { try await nearbyInventory().devices }
     func cloud() async throws -> [Device] { try await perform { try Self.readDevices(WDCloud()) } }
     func login(development: Bool) async throws { try await perform { try Self.finish(WDLogin(development ? 1 : 0)) } }
     func cancelLogin() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDCancelLogin()) } }
     func beginConnection() -> UInt64 { WDBeginConnection() }
-    func connect(selector: String, request: UInt64, forgetIdentity: Bool = false) async throws -> DeviceConnection {
+    func connect(selector: String, request: UInt64, forgetIdentity: Bool = false, requiresMTLS: Bool = false) async throws -> DeviceConnection {
         try await BlockingWork.run(on: connections) {
             try Self.withCString(selector) {
-                try Self.readConnection(forgetIdentity ? WDForgetIdentityAndReconnect($0, request) : WDConnect($0, request))
+                try Self.readConnection(forgetIdentity ? WDForgetIdentityAndReconnect($0, request, requiresMTLS ? 1 : 0) : WDConnect($0, request, requiresMTLS ? 1 : 0))
             }
         }
     }
@@ -142,10 +177,12 @@ final class GoClient: Sendable {
         try await perform { try Self.withCString(app) { try Self.finish(WDDeleteApp($0, session)) } }
     }
     func cameras() async throws -> [Camera] { try await perform { try Self.readCameras(WDCameras()) } }
-    func startLogs(app: String, stream: UInt64) async throws {
-        try await perform { try Self.withCString(app) { try Self.finish(WDStartLogs($0, stream)) } }
+    func startLogs(app: String, stream: UInt64, session: UInt64) async throws {
+        try await perform { try Self.withCString(app) { try Self.finish(WDStartLogs($0, stream, session)) } }
     }
-    func stopLogs() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopLogs()) } }
+    func stopLogs(stream: UInt64, session: UInt64) async throws {
+        try await perform(unlessCancelled: false) { try Self.finish(WDStopLogs(stream, session)) }
+    }
     func startCamera(id: UInt32, stream: UInt64, session: UInt64, stableID: String = "") async throws {
         try await perform { try Self.withCString(stableID) { try Self.finish(WDStartCamera(id, stream, session, $0)) } }
     }
@@ -199,9 +236,13 @@ final class GoClient: Sendable {
         guard let pointer else { throw WendyError(message: "Missing devices result.") }
         defer { WDDevicesFree(pointer) }
         try check(pointer.pointee.status)
-        return UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
+        return deviceRows(pointer)
+    }
+    private static func deviceRows(_ pointer: UnsafeMutablePointer<WDDevicesResult>) -> [Device] {
+        UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
             Device(id: string($0.id), name: string($0.name), selector: string($0.selector),
-                   transport: DeviceTransport($0.transport), address: string($0.address), lite: $0.lite != 0)
+                   transport: DeviceTransport($0.transport), address: string($0.address), lite: $0.lite != 0,
+                   requiresMTLS: $0.requires_mtls != 0)
         }
     }
     static func readApps(_ pointer: UnsafeMutablePointer<WDAppsResult>?) throws -> [DeviceApp] {
@@ -244,14 +285,14 @@ final class GoClient: Sendable {
             switch $0.kind {
             case WD_EVENT_LOGIN_URL: payload = .loginURL(string($0.text))
             case WD_EVENT_LOGIN_DONE: payload = .loginDone
-            case WD_EVENT_LOGIN_ERROR: payload = .loginError(string($0.text))
-            case WD_EVENT_VPN_ERROR: payload = .vpnError(string($0.text))
+            case WD_EVENT_LOGIN_ERROR: payload = .loginError(WendyError(message: string($0.text), code: $0.error_code, remedy: $0.remedy))
+            case WD_EVENT_VPN_ERROR: payload = .vpnError(WendyError(message: string($0.text), code: $0.error_code, remedy: $0.remedy))
             case WD_EVENT_LOG:
                 payload = .log(LogEntry(timestampNanoseconds: $0.log.timestamp_ns,
                                        level: LogLevel($0.log.level), body: string($0.log.body),
                                        app: string($0.log.app), service: string($0.log.service)))
-            case WD_EVENT_LOGS_ERROR: payload = .logsError(string($0.text))
-            case WD_EVENT_CAMERA_ERROR: payload = .cameraError(string($0.text))
+            case WD_EVENT_LOGS_ERROR: payload = .logsError(WendyError(message: string($0.text), code: $0.error_code, remedy: $0.remedy))
+            case WD_EVENT_CAMERA_ERROR: payload = .cameraError(WendyError(message: string($0.text), code: $0.error_code, remedy: $0.remedy))
             case WD_EVENT_VIDEO:
                 if $0.byte_count == 0 { payload = .video(Data()) }
                 else if let bytes = $0.bytes { payload = .video(Data(bytes: bytes, count: $0.byte_count)) }
@@ -270,10 +311,10 @@ final class GoClient: Sendable {
 
 struct BridgeEvent {
     enum Payload {
-        case loginURL(String), loginDone, loginError(String)
-        case log(LogEntry), logsError(String), video(Data), jpeg(Data), cameraError(String)
+        case loginURL(String), loginDone, loginError(WendyError)
+        case log(LogEntry), logsError(WendyError), video(Data), jpeg(Data), cameraError(WendyError)
         case thermal(ThermalCameraFrame)
-        case vpnError(String)
+        case vpnError(WendyError)
     }
     let session: UInt64
     let stream: UInt64
@@ -310,6 +351,7 @@ struct Device: Identifiable, Hashable {
     let transport: DeviceTransport
     let address: String
     var lite = false
+    var requiresMTLS = false
     var routable: Bool { !lite && (transport == .mesh || transport == .cloud) }
     var title: String { name.isEmpty ? selector : DeviceDisplayName.title(name) }
 }

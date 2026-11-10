@@ -148,6 +148,7 @@ struct MeshGraphView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(mesh.direct.count) direct · \(mesh.indirect.count) indirect · \(deviceName)").fontWeight(.medium)
                     Text("Solid: direct link · Dashed: route via peer, possibly multiple hops")
+                    Text("Device perspective · Radio strength is not reported")
                     if !mesh.unrouted.isEmpty { Text("Devices without a usable route: \(mesh.unrouted.count)") }
                     Text("Pinch to zoom · Tap a device for details")
                     if let captured = topology.captured { Text("Snapshot \(captured.formatted(date: .omitted, time: .standard))") }
@@ -234,6 +235,7 @@ struct MeshGraphView: View {
                         ForEach(topology.links.filter { $0.principal == selected }) { link in
                             VStack(alignment: .leading, spacing: 4) {
                                 LabeledContent(link.transport.isEmpty ? "Unknown transport" : link.transport, value: "Cost \(link.cost)")
+                                Text("Radio strength: not reported. Cost is a routing metric, not dBm.").font(.caption).foregroundStyle(.secondary)
                                 Text(link.address.isEmpty ? link.principal : link.address).font(.caption.monospaced()).textSelection(.enabled)
                             }
                         }

@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	"net/http"
 	"testing"
 	"time"
@@ -100,6 +101,8 @@ func TestRestoreRotatedAlwaysExchangesAndFailsClosed(t *testing.T) {
 	failed := &Session{Client: refuse, Store: store}
 	if p, err := failed.RestoreRotated(context.Background()); err == nil || p != nil || failed.tokens.Access != "" {
 		t.Fatal("rotated restore fell through to the saved token after a refused exchange")
+	} else if info := failure.Describe(err); info.Code != failure.AuthenticationRequired || info.Remedy != failure.SignIn {
+		t.Fatalf("revoked OAuth session lost its recovery metadata: %+v", info)
 	}
 }
 func TestSavedSignInRejectsMismatchedCertificate(t *testing.T) {

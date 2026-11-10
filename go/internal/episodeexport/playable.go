@@ -711,7 +711,11 @@ func spsDimensions(sps []byte) (int, int, error) {
 		r.skip(1)
 		r.se()
 		r.se()
-		for n := r.ue(); n > 0; n-- {
+		n := r.ue()
+		if n > 255 {
+			return 0, 0, errors.New("invalid picture order count cycle")
+		}
+		for ; n > 0; n-- {
 			r.se()
 		}
 	}

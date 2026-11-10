@@ -167,6 +167,11 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				}
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
+			// Map an alias first so driver lookup and the install checks see the device it stands for.
+			var aliasErr error
+			if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(cmd.Context(), deviceType, storageOverride, prNumber); aliasErr != nil {
+				return aliasErr
+			}
 			prepared, err := prepareOSInstallDrivers(cmd.Context(), deviceType, versionFlag, nightly, prNumber, drivers)
 			if err != nil {
 				return err
@@ -439,7 +444,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		return fmt.Errorf("--storage emmc is supported only for --device-type %s", orinDeviceType)
 	}
 	if rootfsOnly && storageOverride == "emmc" {
-		return fmt.Errorf("--storage emmc cannot be combined with --rootfs-only; eMMC is available only through full recovery")
+		return fmt.Errorf("--rootfs-only cannot write eMMC; eMMC is available only through full recovery")
 	}
 	if isT234RecoveryDevice(flagDeviceType) && !rootfsOnly {
 		if err := rejectRecoveryDriveFlags(flagDrive, noBmap, yesOverwriteInternal); err != nil {

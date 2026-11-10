@@ -7,6 +7,7 @@ import "C"
 
 import (
 	"errors"
+	"github.com/wendylabsinc/wendy/go/macos/backend"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"os"
 	"strings"
@@ -42,8 +43,11 @@ func WDVisualEpisodesFree(p *C.WDVisualEpisodesResult) {
 
 //export WDVisualEpisodeLoad
 func WDVisualEpisodeLoad(session C.uint64_t, episode *C.char) *C.WDVisualSnapshotResult {
+	return visualSnapshotResult(desktop.VisualEpisode(uint64(session), C.GoString(episode)))
+}
+
+func visualSnapshotResult(snapshot *backend.VisualSnapshot, err error) *C.WDVisualSnapshotResult {
 	p := alloc[C.WDVisualSnapshotResult](1)
-	snapshot, err := desktop.VisualEpisode(uint64(session), C.GoString(episode))
 	p.status = status(err)
 	if err != nil || snapshot == nil {
 		return p
@@ -181,6 +185,18 @@ func WDVisualRecording(session C.uint64_t, action C.WDVisualRecordingAction, nam
 		p.items = alloc[C.WDVisualEpisode](1)
 		p.count = 1
 		*p.items = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes())}
+	}
+	return p
+}
+
+//export WDHomeCampaign
+func WDHomeCampaign(session C.uint64_t, name *C.char, trigger C.int32_t) *C.WDVisualEpisodesResult {
+	p := alloc[C.WDVisualEpisodesResult](1)
+	rows, err := desktop.HomeCampaign(uint64(session), C.GoString(name), trigger != 0)
+	p.status = status(err)
+	p.items, p.count = alloc[C.WDVisualEpisode](len(rows)), C.size_t(len(rows))
+	for i, row := range rows {
+		unsafe.Slice(p.items, len(rows))[i] = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes())}
 	}
 	return p
 }

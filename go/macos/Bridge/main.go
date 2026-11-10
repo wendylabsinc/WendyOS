@@ -32,7 +32,8 @@ func status(err error) C.WDStatus {
 	if err == nil {
 		return C.WDStatus{}
 	}
-	s := C.WDStatus{message: C.CString(err.Error())}
+	info := commands.DesktopFailure(err)
+	s := C.WDStatus{message: C.CString(err.Error()), error_code: C.int32_t(info.Code), remedy: C.int32_t(info.Remedy)}
 	var recovery *backend.IdentityRecoveryError
 	if errors.As(err, &recovery) {
 		s.can_forget_identity = 1
@@ -60,12 +61,14 @@ func WDStopVPN() *C.WDStatus { return statusResult(stopPlatformVPN()) }
 func WDShutdown() *C.WDStatus { return statusResult(desktop.Shutdown()) }
 
 //export WDStartLogs
-func WDStartLogs(app *C.char, stream C.uint64_t) *C.WDStatus {
-	return statusResult(desktop.StartLogs(C.GoString(app), uint64(stream)))
+func WDStartLogs(app *C.char, stream, session C.uint64_t) *C.WDStatus {
+	return statusResult(desktop.StartLogs(C.GoString(app), uint64(stream), uint64(session)))
 }
 
 //export WDStopLogs
-func WDStopLogs() *C.WDStatus { return statusResult(desktop.StopLogs()) }
+func WDStopLogs(stream, session C.uint64_t) *C.WDStatus {
+	return statusResult(desktop.StopLogs(uint64(stream), uint64(session)))
+}
 
 //export WDStartCamera
 func WDStartCamera(camera C.uint32_t, stream, session C.uint64_t, stableID *C.char) *C.WDStatus {
@@ -82,8 +85,8 @@ func WDStopCameras(session C.uint64_t) *C.WDStatus {
 	return statusResult(desktop.StopCameras(uint64(session)))
 }
 
-func connect(selector *C.char, forget bool, request C.uint64_t) *C.WDConnectionResult {
-	session, err := desktop.ConnectRequest(C.GoString(selector), forget, uint64(request))
+func connect(selector *C.char, forget bool, request C.uint64_t, requiresMTLS C.int32_t) *C.WDConnectionResult {
+	session, err := desktop.ConnectTargetRequest(C.GoString(selector), forget, uint64(request), requiresMTLS != 0)
 	p := alloc[C.WDConnectionResult](1)
 	p.status, p.session = status(err), C.uint64_t(session)
 	p.lite = boolInt(desktop.IsLite(session))
@@ -91,13 +94,13 @@ func connect(selector *C.char, forget bool, request C.uint64_t) *C.WDConnectionR
 }
 
 //export WDConnect
-func WDConnect(selector *C.char, request C.uint64_t) *C.WDConnectionResult {
-	return connect(selector, false, request)
+func WDConnect(selector *C.char, request C.uint64_t, requiresMTLS C.int32_t) *C.WDConnectionResult {
+	return connect(selector, false, request, requiresMTLS)
 }
 
 //export WDForgetIdentityAndReconnect
-func WDForgetIdentityAndReconnect(selector *C.char, request C.uint64_t) *C.WDConnectionResult {
-	return connect(selector, true, request)
+func WDForgetIdentityAndReconnect(selector *C.char, request C.uint64_t, requiresMTLS C.int32_t) *C.WDConnectionResult {
+	return connect(selector, true, request, requiresMTLS)
 }
 
 func devices(items []commands.DesktopDevice, err error) *C.WDDevicesResult {
@@ -117,7 +120,7 @@ func devices(items []commands.DesktopDevice, err error) *C.WDDevicesResult {
 		}
 		unsafe.Slice(p.items, len(items))[i] = C.WDDevice{
 			id: C.CString(d.ID), name: C.CString(d.Name), selector: C.CString(d.Selector),
-			address: C.CString(d.Address), transport: transport, lite: boolInt(d.Lite),
+			address: C.CString(d.Address), transport: transport, lite: boolInt(d.Lite), requires_mtls: boolInt(d.RequiresMTLS),
 		}
 	}
 	return p
@@ -243,6 +246,12 @@ func events(items []backend.Event) *C.WDEvents {
 			}
 		} else if e.Kind != backend.EventLoginDone {
 			out.text = C.CString(e.Text)
+			if e.Err != nil {
+				free(out.text)
+				out.text = C.CString(e.Err.Error())
+				info := commands.DesktopFailure(e.Err)
+				out.error_code, out.remedy = C.int32_t(info.Code), C.int32_t(info.Remedy)
+			}
 		}
 	}
 	return p
