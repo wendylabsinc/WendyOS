@@ -8,14 +8,26 @@ options.json keys, all optional:
   "squeeze":  [[start, end, seconds], ...] play these waits in `seconds`
               (source time); output inside them is merged to about 12 updates a second
   "idle":     longest pause to keep, default 2 seconds
-  "replace":  [[old, new], ...] text replacements, for example a home folder
+  "replace":  [[old, new], ...] extra text replacements
+  "ignore":   [text, ...] findings of the personal-data check to accept
   "title":    title stored in the header
 
 Source time is the time written in the input file. The output has its final
 timing written in, so players need no idle limit.
+
+Recordings are published, so this script protects the person recording:
+  - their home folder is always replaced with /Users/you or /home/you
+  - nothing is written if their user name or computer name is still on screen;
+    add a "replace" rule, or list the text under "ignore" if it is not personal
+  - the header keeps only the size and title, not the shell or command line
+The docs test suite (scripts/casts.test.mjs) checks every committed recording
+again for home folders, email addresses and credentials.
 """
+import getpass
 import json
+import os
 import re
+import socket
 import sys
 
 src, dst, options_path = sys.argv[1:4]
@@ -23,7 +35,11 @@ options = json.load(open(options_path))
 idle = options.get('idle', 2.0)
 until = options.get('until')
 squeezes = sorted(options.get('squeeze', []))
-replacements = options.get('replace', [])
+home = os.path.expanduser('~')
+placeholder_home = '/Users/you' if home.startswith('/Users/') else '/home/you'
+# The home folder first, so it is gone even when no rule lists it.
+replacements = [[home, placeholder_home]] + options.get('replace', [])
+ignored = set(options.get('ignore', []))
 
 lines = [l for l in open(src, encoding='utf-8').read().split('\n') if l.strip()]
 header = json.loads(lines[0])
@@ -42,6 +58,24 @@ for event in events:
         text = text.replace(old, new)
     event[1] = text
 events = [e for e in events if e[1] != '']
+
+# Refuse to write a recording that still shows who made it. Screen updates split
+# text with escape codes, so look at the plain text of the whole recording.
+ESCAPES = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]')
+plain = ESCAPES.sub('', ''.join(data for _, data in events))
+host = socket.gethostname()
+personal = {'user name': getpass.getuser(), 'computer name': host, 'short computer name': host.split('.')[0]}
+found = []
+for label, value in personal.items():
+    if len(value) < 3 or value in ignored:
+        continue
+    match = re.search(r'(?<![A-Za-z0-9])' + re.escape(value) + r'(?![A-Za-z0-9])', plain, re.IGNORECASE)
+    if match:
+        context = plain[max(0, match.start() - 30):match.end() + 30].replace('\n', ' ').replace('\r', ' ')
+        found.append(f'  {label} "{value}": ...{context}...')
+if found:
+    sys.exit('Not written: the recording still shows personal details.\n' + '\n'.join(found)
+             + '\nAdd a "replace" rule for each, or list the text under "ignore" if it is not personal.')
 
 
 def warp(t: float) -> float:

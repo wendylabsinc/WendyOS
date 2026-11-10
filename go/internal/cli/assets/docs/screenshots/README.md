@@ -129,8 +129,7 @@ asciinema rec -f asciicast-v2 --window-size 88x24 -c "wendy tour --simulator" to
 {
   "title": "wendy tour --simulator",
   "idle": 6,
-  "squeeze": [[50.3, 121.9, 3.0]],
-  "replace": [["/Users/yourname", "/Users/you"]]
+  "squeeze": [[50.3, 121.9, 3.0]]
 }
 ```
 
@@ -142,6 +141,25 @@ file.
 ```mdx
 <Asciicast src="/casts/getting-started/robot-tour.cast" title="wendy tour --simulator" start={13} end={20} cols={88} rows={24} caption="Deploy, then start the route." />
 ```
+
+### Keep personal details out
+
+A recording captures everything that was on screen, and it is published. Two
+checks guard against that:
+
+- `tighten-cast.py` always replaces your home folder with `/Users/you` (or
+  `/home/you`), drops the shell and command line from the header, and writes
+  nothing if your user name or computer name is still on screen. Fix that with a
+  `"replace": [["old", "new"]]` rule in `options.json`. If the text is not
+  personal, list it under `"ignore"`.
+- `npm run test:docs` runs `scripts/casts.test.mjs` on every file in `../casts/`.
+  It fails on a home folder other than the placeholder, an email address, a
+  credential such as a token or private key, and on a file that has not been
+  through `tighten-cast.py`. CI runs the same test.
+
+Neither check knows what else is private to you. Before you record, sign out or
+use an empty `WENDY_CONFIG_DIR`, and do not print environment variables or
+config files. Afterwards, play the finished file once and read what it shows.
 
 Notes from recording the robot tour:
 
