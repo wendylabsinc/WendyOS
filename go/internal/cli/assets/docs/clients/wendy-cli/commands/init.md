@@ -1,6 +1,6 @@
 # `wendy init`
 
-Creates a new Wendy project: a [`wendy.json`](../../../apps/wendy.json.md), scaffolded source files, and optionally an AI assistant session.
+Creates a new Wendy project: a [`wendy.json`](/docs/reference/app-configuration), scaffolded source files, and optionally an AI assistant session.
 
 Run it with no arguments for an interactive wizard, or pass flags to script it end to end. Every prompt has a matching flag, so any wizard answer can be supplied up front.
 
@@ -27,12 +27,14 @@ wendy init \
 
 An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that name. With neither, the wizard offers to scaffold into the current directory instead. Pass `--here` to scaffold into the current directory directly instead of nesting a subdirectory — with an app ID it still writes that as `wendy.json`'s app ID; without one, it infers the app ID from the current directory's name.
 
+With a template, the destination must be a new or empty directory by default, including when using `--here`. A populated directory is rejected before scaffolding, even if it has no `wendy.json`. Use `--force` with `--template` to deliberately overlay an existing directory: template output files, including `wendy.json`, are replaced; unrelated files are retained. Scripts relying on the old implicit overlay behavior must add `--force`. Without it, files arriving during template download or prompts remain protected. A later failure can leave files already written; initialization does not provide whole-project rollback.
+
 ## What it produces
 
 1. Picks a **deployment group** within the Linux, Mac, or Microcontrollers tab. A concrete `--template <name>` resolves first instead: when the template supports exactly one target, the question is skipped and the target is inferred with a notice; when it supports several, the picker is narrowed to those.
 2. Shows the **projects** for that deployment group. Select a project template (`--template`), or choose **No template** to continue with manual setup.
 3. Picks the **language**. Skipped with a notice when the chosen template offers exactly one language.
-4. Collects **entitlements** — the capabilities the app needs. See [Entitlements](../../../apps/wendy.json.md#entitlements-1).
+4. Collects **entitlements** — the capabilities the app needs. See [Entitlements](/docs/reference/app-configuration#entitlements-1).
 5. Collects **framework** configuration — currently ROS 2. See [Frameworks](#frameworks).
 6. Writes `wendy.json` and scaffolds the project files, plus an `AGENTS.md` that gives coding agents the project's `wendy` commands and a docs index, and a `CLAUDE.md` containing `@AGENTS.md` so Claude Code loads it too. Neither replaces an existing file, and `CLAUDE.md` is only written alongside a new `AGENTS.md`.
 7. Optionally launches an AI assistant (`--assistant`).
@@ -75,6 +77,7 @@ For ESP32, regular native ESP-IDF projects are recommended. Create them with the
 |---|---|
 | `--template [<name>]` | Scaffold from a template. Passing it **without** a value opens a picker filtered by target, auto-selecting when only one template exists for the target. With a value, `--target` becomes optional: it is inferred when the template's metadata maps to exactly one target. |
 | `--branch <name>` | Branch of the templates repo to read templates from. |
+| `--force` | Allow template files to replace existing files in the destination. Requires `--template`. Unrelated files are retained. |
 | `--var KEY=VALUE` | Override a template variable. Repeatable. |
 
 ### Entitlement flags
@@ -113,7 +116,7 @@ See [Frameworks](#frameworks) below.
 
 ## Frameworks
 
-`wendy.json` has a top-level [`frameworks`](../../../apps/wendy.json.md#frameworks) key, separate from `entitlements`, for framework-level configuration. ROS 2 is the only framework today.
+`wendy.json` has a top-level [`frameworks`](/docs/reference/app-configuration#frameworks) key, separate from `entitlements`, for framework-level configuration. ROS 2 is the only framework today.
 
 `wendy init` fills it in three ways:
 
@@ -278,7 +281,7 @@ wendy init \
 
 ## Related
 
-- [`wendy.json`](../../../apps/wendy.json.md) — every field `wendy init` can write.
-- [`wendy project entitlements add`](project/entitlements/add.md) — add entitlements after init.
+- [`wendy.json`](/docs/reference/app-configuration) — every field `wendy init` can write.
+- [`wendy project entitlements add`](./project/entitlements/add.md) — add entitlements after init.
 - [Wendy for ROS 2](/docs/integrations/ros2) — inspect and debug the ROS 2 app you just scaffolded.
-- [`wendy run`](run.md) — build and deploy the new project to a device.
+- [`wendy run`](./run.md) — build and deploy the new project to a device.

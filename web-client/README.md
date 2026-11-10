@@ -207,7 +207,7 @@ same enrolled device share one report. A device learned through a neighbour
 remains visible even when this client cannot connect to it directly.
 
 On the desktop, **This computer's CLI router** shows the existing background CLI
-router. Enable it explicitly with `wendy device wendy-net connect`; opening
+router. Enable it explicitly with `wendy net connect`; opening
 Networks does not start it. Operator routers appear separately from enrolled
 devices and show their operator identity and installation UUID. The browser
 cannot read a desktop's private CLI router.
@@ -232,8 +232,8 @@ a SensorLink-only connection's permissions.
 The equivalent CLI read is:
 
 ```sh
-wendy --device SELECTOR --json device wendy-net topology
-wendy device wendy-net topology --local-cli
+wendy --device SELECTOR --json net topology
+wendy net topology --local-cli
 ```
 
 Use the selector from discovery. `--observation` adds a result envelope for

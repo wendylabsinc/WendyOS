@@ -232,10 +232,10 @@ func TestPickerEnrollmentTrustKeepsHighlightedDevice(t *testing.T) {
 	}
 }
 
-func TestEnrollmentTrustDialFailureRetainsSelectionAndGoverningAlias(t *testing.T) {
+func TestEnrollmentTrustDialFailureRetainsSelectionAndSavedKey(t *testing.T) {
 	const pinKey, alias = "highlighted.local", "highlighted.acme.mesh.wendy.internal"
 	setPinCache(t, discoverycache.Entry{ID: "device-42", Hostname: pinKey, MeshName: alias})
-	setPinConfig(t, map[string]config.DevicePin{alias: {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud}})
+	setPinConfig(t, map[string]config.DevicePin{"highlighted": {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud}})
 	candidates := []string{"192.0.2.20:50051", "[2001:db8::20]:50051"}
 	wantCandidates := append([]string(nil), candidates...)
 	target := newDialTargetCandidates(pinKey, candidates)
@@ -244,7 +244,7 @@ func TestEnrollmentTrustDialFailureRetainsSelectionAndGoverningAlias(t *testing.
 	if conn != nil || mtlsErr != nil || !errors.As(err, &failure) {
 		t.Fatalf("ladder result = (%v, %v, %v), want structured reachability failure", conn, mtlsErr, err)
 	}
-	if failure.pinKey != pinKey || failure.pinnedKey != alias || failure.certSeen {
+	if failure.pinKey != pinKey || failure.pinnedKey != pinKey || failure.certSeen {
 		t.Fatalf("failure selection = %q, governing pin = %q, certificate seen = %v", failure.pinKey, failure.pinnedKey, failure.certSeen)
 	}
 	candidates[0] = "192.0.2.99:50051"

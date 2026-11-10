@@ -51,7 +51,7 @@ With `--json`:
 MODE_30W (2)
 ```
 
-With `--json` it prints `{"current": {"id": 2, "name": "MODE_30W"}}`. The current mode also appears in [`wendy device info`](info.md).
+With `--json` it prints `{"current": {"id": 2, "name": "MODE_30W"}}`. The current mode also appears in [`wendy device info`](./info.md).
 
 ## Set a mode
 
@@ -88,4 +88,4 @@ Devices that are not an NVIDIA Jetson report that power modes are not supported.
 
 ## Related
 
-- [`wendy device info`](info.md) — includes the current power mode
+- [`wendy device info`](./info.md) — includes the current power mode

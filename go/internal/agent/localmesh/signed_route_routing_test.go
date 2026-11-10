@@ -106,7 +106,7 @@ func TestSignedRouteSequenceProofAheadOfUpdateConverges(t *testing.T) {
 	for _, index := range []int{1, 2} {
 		n.accept(index, proof)
 		n.step(index, babel.Tick{})
-		n.assertForwarded(index, false, 0)
+		n.assertForwarded(index, true, 0)
 	}
 	n.deliver()
 	n.advance(2200 * time.Millisecond)
@@ -153,11 +153,11 @@ func TestSignedRouteSequenceUpdateAheadOfProofRecovers(t *testing.T) {
 	for _, index := range []int{1, 2} {
 		n.accept(index, proof)
 		n.step(index, babel.Tick{})
-		n.assertForwarded(index, false, 0)
+		n.assertForwarded(index, true, 0)
 	}
-	// Neither leaf has advertised this route onward, so it has no feasibility
-	// history from which to solicit a sequence. The periodic origin update
-	// must repair the lost opportunity without weakening proof admission.
+	// The independently signed old tuple remains usable while this standalone
+	// routing fixture waits for a real new advertisement. Node-level tests also
+	// exercise the immediate prefix request and atomic old-proof retirement.
 	n.deliver()
 	n.advance(5 * time.Second)
 	for _, index := range []int{1, 2} {

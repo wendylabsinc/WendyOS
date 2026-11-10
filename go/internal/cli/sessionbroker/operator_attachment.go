@@ -11,13 +11,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type operatorAttachmentState struct {
 	session *operatormesh.Session
-	recipe  OperatorSpec
 	result  <-chan error
 }
 
@@ -50,7 +47,7 @@ func configuredOperatorCertificate(spec Spec) (config.CertificateInfo, error) {
 	return config.CertificateInfo{}, errOperatorCredentialsChanged
 }
 
-func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*operatorAttachmentState, error) {
+func (a *operatorAttachment) open(ctx context.Context) (*operatorAttachmentState, error) {
 	if err := operatorRecipeCurrent(a.spec); err != nil {
 		return nil, err
 	}
@@ -60,27 +57,8 @@ func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*op
 	}
 	// Open reloads the profile trust/pin state and persists a new revision before
 	// dialing. Neither an older key snapshot nor an old proof is reused.
-	options := operatormesh.Options{Automatic: recipe.Automatic, StateDirectory: a.directory, Certificate: certificate, RouterAddress: recipe.RouterAddress, RouterUUID: recipe.RouterUUID, Transport: recipe.Transport, BLEPSM: recipe.BLEPSM}
-	if a.spec.Operator.Automatic {
-		options.Discover = func(ctx context.Context) ([]operatormesh.Options, error) {
-			operator, _ := operatorPrincipal(certificate)
-			found, err := discoverOperatorLAN(ctx, operator)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]operatormesh.Options, 0, len(found))
-			for _, candidate := range found {
-				next := options
-				next.Discover = nil
-				next.RouterAddress = candidate.RouterAddress
-				next.RouterUUID = candidate.RouterUUID
-				next.Transport = candidate.Transport
-				next.BLEPSM = candidate.BLEPSM
-				out = append(out, next)
-			}
-			return out, nil
-		}
-	}
+	options := operatormesh.Options{StateDirectory: a.directory, Certificate: certificate}
+	options.ReportCarrierFailure = operatorCarrierReporter(ctx)
 	session, err := openOperatorSession(ctx, options)
 	if err != nil {
 		return nil, err
@@ -97,14 +75,14 @@ func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*op
 		session.Close()
 		return nil, err
 	}
-	return &operatorAttachmentState{session: session, recipe: recipe, result: result}, nil
+	return &operatorAttachmentState{session: session, result: result}, nil
 }
 
 func (a *operatorAttachment) snapshot() (*operatorAttachmentState, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.current == nil {
-		return nil, status.Error(codes.Unavailable, "operator mesh attachment is reconnecting")
+		return nil, operatorUnavailable(operatorReconnecting, "this computer is reconnecting to Wendy Net; retry shortly")
 	}
 	return a.current, nil
 }
@@ -124,7 +102,7 @@ func (a *operatorAttachment) adjacent() (*grpc.ClientConn, meshid.Device, error)
 	}
 	peer, live := current.session.AdjacentPeer()
 	if !live {
-		return nil, meshid.Device{}, status.Error(codes.Unavailable, "adjacent carrier is reconnecting")
+		return nil, meshid.Device{}, operatorUnavailable(operatorNoPeers, "this computer has no authenticated connections to nearby Wendy Net routers; automatic discovery is reconnecting")
 	}
 	for _, manifest := range current.session.Snapshot().Devices {
 		owner, parseErr := manifest.Peer(peer.Tenant())
@@ -187,30 +165,12 @@ func (a *operatorAttachment) run(ctx context.Context) error {
 				return ctx.Err()
 			case <-timer.C:
 			}
-			// Explicit first-hop intent stays pinned to that recipe. Automatic
-			// recipes may rediscover a changed address or a replacement router.
-			candidates := []OperatorSpec{current.recipe}
-			if a.spec.Operator.Automatic {
-				operator, _ := operatorPrincipal(a.certificate)
-				found, browseErr := discoverOperatorLAN(ctx, operator)
-				if browseErr != nil && ctx.Err() != nil {
-					return ctx.Err()
-				}
-				for _, candidate := range found {
-					if candidate.RouterUUID != current.recipe.RouterUUID || candidate.RouterAddress != current.recipe.RouterAddress {
-						candidates = append(candidates, candidate)
-					}
-				}
+			next, openErr := a.open(ctx)
+			if openErr == nil {
+				a.replace(next)
 			}
-			for _, candidate := range candidates {
-				next, openErr := a.open(ctx, candidate)
-				if openErr == nil {
-					a.replace(next)
-					break
-				}
-				if ctx.Err() != nil || errors.Is(openErr, errOperatorCredentialsChanged) {
-					return openErr
-				}
+			if ctx.Err() != nil || errors.Is(openErr, errOperatorCredentialsChanged) {
+				return openErr
 			}
 			if _, err := a.snapshot(); err == nil {
 				break

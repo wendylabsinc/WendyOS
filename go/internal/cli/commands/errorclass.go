@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"google.golang.org/grpc/codes"
@@ -43,6 +44,16 @@ func ExecutionErrorClass(err error) string {
 	// device did not answer (device_unreachable), not a slow operation.
 	if class := DeviceDialErrorClass(err); class != "" {
 		return class
+	}
+	// These errors are produced before an operation reaches a device. Retrying
+	// route preparation is safe even when its local join deadline elapsed.
+	if retryable, _ := sessionbroker.OperatorRecovery(err); retryable {
+		return "device_unreachable"
+	}
+	// A failed reconnect can wrap its own deadline. An explicit device
+	// reachability verdict still describes the failure better than that timer.
+	if errors.Is(err, errDeviceUnreachable) || errors.Is(err, errDeviceOffline) {
+		return ErrorClass(err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "context_deadline"

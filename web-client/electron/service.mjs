@@ -403,6 +403,9 @@ export class DesktopService {
     const warnings = [];
     let retainPrevious = sources.some(source => source.status === "rejected");
     const identities = new Map();
+    const cloudNames = new Map();
+    let cloudNameSnapshot;
+    const invalidCloudBindings = new Set();
     const canonicalUUID = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) && id !== "00000000-0000-0000-0000-000000000000" ? id.toLowerCase() : undefined;
     const add = (target, name, deviceType, platform, key, deviceUUID, tenantUUID) => {
       target = deviceTarget(target);
@@ -487,24 +490,45 @@ export class DesktopService {
       if (invalidAddress) warnings.push("Local discovery omitted devices with invalid addresses.");
     } else warnings.push("Local discovery: " + sources[0].reason.message);
     if (sources[1].status === "fulfilled") {
-      if (!Array.isArray(sources[1].value)) warnings.push("Cloud discovery returned an invalid inventory.");
-      else {
+      if (!Array.isArray(sources[1].value)) {
+        retainPrevious = true;
+        warnings.push("Cloud discovery returned an invalid inventory.");
+      } else {
+        cloudNameSnapshot = { complete: true, entries: [] };
         let invalidSelector = false;
         for (const device of sources[1].value) {
           // The CLI supplies the complete selector from its authenticated
           // session. An asset ID alone cannot identify a Cloud login.
           const selector = cloudDiscoverySelector(device);
-          if (!selector) { invalidSelector = true; continue; }
+          if (!selector) { invalidSelector = true; cloudNameSnapshot.complete = false; continue; }
           const parts = new URL(selector).pathname.split("/");
           const tenant = parts[1] === "tenant" ? canonicalUUID(parts[2]) : undefined;
           const asset = canonicalUUID(device.id);
-          // v2 asset IDs carry device UUIDs. Match a known physical/signed
-          // identity before treating it as an alias; Cloud-only contexts keep
-          // their complete independent endpoint/tenant selectors.
-          const known = canonicalUUID(device.pkiDeviceName) || (tenant && asset && [...identities.values()].some(identity => identity.uuid === asset && (!identity.tenant || identity.tenant === tenant)) ? asset : undefined);
+          // Older rows use the asset ID only when it matches a known
+          // physical/signed identity. An explicit PKI binding takes priority,
+          // even when this client cannot interpret it as a device UUID.
+          const hasBinding = device.pkiDeviceName != null && device.pkiDeviceName !== "";
+          const binding = canonicalUUID(device.pkiDeviceName);
+          if (hasBinding && !binding) invalidCloudBindings.add(selector);
+          const known = hasBinding ? binding : (tenant && asset && [...identities.values()].some(identity => identity.uuid === asset && (!identity.tenant || identity.tenant === tenant)) ? asset : undefined);
           add(selector, device.name, device.type, device.osType || (/lite/i.test(device.type || "") ? "wendy-lite" : undefined), undefined, known, tenant);
+          // Cloud inventory can supply a preferred label even when its relay
+          // is offline. This is not an authenticated topology observation or
+          // permission to group a local advertisement by its claimed UUID.
+          const namedDevice = hasBinding ? binding : asset;
+          const entry = { source: selector };
+          if (tenant && namedDevice && typeof device.name === "string" && device.name.trim()) {
+            const label = { cloudName: device.name, cloudNamePrincipal: `spiffe://wendy.sh/tenant/${tenant}/device/${namedDevice}`, cloudNameSource: selector };
+            Object.assign(entry, { name: label.cloudName, principal: label.cloudNamePrincipal });
+            cloudNames.set(`device:${tenant}/${namedDevice}`, label);
+            Object.assign(devices.get(selector), label);
+          }
+          cloudNameSnapshot.entries.push(entry);
         }
-        if (invalidSelector) warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
+        if (invalidSelector) {
+          retainPrevious = true;
+          warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
+        }
       }
     } else warnings.push("Cloud discovery: " + sources[1].reason.message);
     // A physical USB row may know its enrolled UUID before its tenant. Join
@@ -523,6 +547,9 @@ export class DesktopService {
     // a previous alias disappeared, including while a read is in flight.
     this.meshReporterKeys = retainPrevious
       ? new Map([...this.meshReporterKeys, ...reporterKeys]) : reporterKeys;
+    // A failed local scan may retain unobserved aliases, but cannot retain a
+    // Cloud alias whose current explicit identity binding is unsupported.
+    for (const target of invalidCloudBindings) this.meshReporterKeys.delete(target);
     this.meshReporterTargets = new Map();
     for (const [target, key] of this.meshReporterKeys) {
       if (!this.meshReporterTargets.has(key)) this.meshReporterTargets.set(key, []);
@@ -533,9 +560,13 @@ export class DesktopService {
       const key = this.meshReporterKeys.get(target);
       if (key && seen.has(key)) continue;
       if (key) { seen.add(key); device.reporterKey = key; }
+      // A physical/signed Lite selector can win alias admission while still
+      // retaining the Cloud label for that exact enrolled reporter.
+      if (key && cloudNames.has(key)) Object.assign(device, cloudNames.get(key));
       reporters.push(device);
     }
-    return { devices: reporters, warnings, ...(retainPrevious ? { retainPrevious: true } : {}) };
+    return { devices: reporters, warnings, ...(retainPrevious ? { retainPrevious: true } : {}),
+      ...(cloudNameSnapshot ? { cloudNames: cloudNameSnapshot } : {}) };
   }
 
   deviceLogsSnapshot(id) {

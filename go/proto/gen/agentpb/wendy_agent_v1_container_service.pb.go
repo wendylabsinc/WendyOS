@@ -717,7 +717,7 @@ type RunContainerLayersRequest struct {
 	Cmd string `protobuf:"bytes,3,opt,name=cmd,proto3" json:"cmd,omitempty"`
 	// The layers that will be uploaded to the agent.
 	Layers []*RunContainerLayerHeader `protobuf:"bytes,4,rep,name=layers,proto3" json:"layers,omitempty"`
-	// / The `wendy.json` file as found in the project
+	/// The `wendy.json` file as found in the project
 	AppConfig []byte `protobuf:"bytes,5,opt,name=app_config,json=appConfig,proto3" json:"app_config,omitempty"`
 	// Optional restart policy override for Docker runtime.
 	RestartPolicy *RestartPolicy `protobuf:"bytes,6,opt,name=restart_policy,json=restartPolicy,proto3,oneof" json:"restart_policy,omitempty"`
@@ -3414,9 +3414,9 @@ var File_wendy_agent_services_v1_wendy_agent_v1_container_service_proto protoref
 const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDesc = "" +
 	"\n" +
 	">wendy/agent/services/v1/wendy_agent_v1_container_service.proto\x12\x17wendy.agent.services.v1\x1a$wendy/agent/services/v1/shared.proto\"\x17\n" +
-	"\x15ListContainersRequest\"E\n" +
-	"\x16ListContainersResponse\x12+\n" +
-	"\tcontainer\x18\x01 \x01(\v2\r.AppContainerR\tcontainer\"\x13\n" +
+	"\x15ListContainersRequest\"]\n" +
+	"\x16ListContainersResponse\x12C\n" +
+	"\tcontainer\x18\x01 \x01(\v2%.wendy.agent.services.v1.AppContainerR\tcontainer\"\x13\n" +
 	"\x11ListLayersRequest\"?\n" +
 	"\x11WriteLayerRequest\x12\x16\n" +
 	"\x06digest\x18\x01 \x01(\tR\x06digest\x12\x12\n" +
@@ -3439,7 +3439,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\x04size\x18\x02 \x01(\x03R\x04size\"9\n" +
 	"\vLayerHeader\x12\x16\n" +
 	"\x06digest\x18\x01 \x01(\tR\x06digest\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\"\xee\x03\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\"\x86\x04\n" +
 	"\x19RunContainerLayersRequest\x12\x1d\n" +
 	"\n" +
 	"image_name\x18\x01 \x01(\tR\timageName\x12\x19\n" +
@@ -3447,8 +3447,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\x03cmd\x18\x03 \x01(\tR\x03cmd\x12H\n" +
 	"\x06layers\x18\x04 \x03(\v20.wendy.agent.services.v1.RunContainerLayerHeaderR\x06layers\x12\x1d\n" +
 	"\n" +
-	"app_config\x18\x05 \x01(\fR\tappConfig\x12:\n" +
-	"\x0erestart_policy\x18\x06 \x01(\v2\x0e.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01\x12\x1f\n" +
+	"app_config\x18\x05 \x01(\fR\tappConfig\x12R\n" +
+	"\x0erestart_policy\x18\x06 \x01(\v2&.wendy.agent.services.v1.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01\x12\x1f\n" +
 	"\vworking_dir\x18\a \x01(\tR\n" +
 	"workingDir\x12\x1b\n" +
 	"\tuser_args\x18\b \x03(\tR\buserArgs\x12!\n" +
@@ -3459,7 +3459,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\n" +
 	"release_id\x18\f \x01(\tH\x01R\treleaseId\x88\x01\x01B\x11\n" +
 	"\x0f_restart_policyB\r\n" +
-	"\v_release_id\"\xd5\x02\n" +
+	"\v_release_id\"\xed\x02\n" +
 	"\x16CreateContainerRequest\x12\x1d\n" +
 	"\n" +
 	"image_name\x18\x01 \x01(\tR\timageName\x12\x19\n" +
@@ -3468,8 +3468,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\n" +
 	"app_config\x18\x04 \x01(\fR\tappConfig\x12\x1f\n" +
 	"\vworking_dir\x18\x05 \x01(\tR\n" +
-	"workingDir\x12:\n" +
-	"\x0erestart_policy\x18\x06 \x01(\v2\x0e.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01\x12\x1b\n" +
+	"workingDir\x12R\n" +
+	"\x0erestart_policy\x18\x06 \x01(\v2&.wendy.agent.services.v1.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01\x12\x1b\n" +
 	"\tuser_args\x18\a \x03(\tR\buserArgs\x12\x10\n" +
 	"\x03env\x18\b \x03(\tR\x03env\x12\"\n" +
 	"\n" +
@@ -3497,10 +3497,10 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\x1fCreateContainerProgressResponse\x12N\n" +
 	"\bprogress\x18\x01 \x01(\v20.wendy.agent.services.v1.CreateContainerProgressH\x00R\bprogress\x12P\n" +
 	"\tcompleted\x18\x02 \x01(\v20.wendy.agent.services.v1.CreateContainerResponseH\x00R\tcompletedB\x0f\n" +
-	"\rresponse_type\"\x81\x01\n" +
+	"\rresponse_type\"\x99\x01\n" +
 	"\x15StartContainerRequest\x12\x19\n" +
-	"\bapp_name\x18\x01 \x01(\tR\aappName\x12:\n" +
-	"\x0erestart_policy\x18\x02 \x01(\v2\x0e.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01B\x11\n" +
+	"\bapp_name\x18\x01 \x01(\tR\aappName\x12R\n" +
+	"\x0erestart_policy\x18\x02 \x01(\v2&.wendy.agent.services.v1.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01B\x11\n" +
 	"\x0f_restart_policy\"f\n" +
 	"\x16AttachContainerRequest\x12\x1b\n" +
 	"\bapp_name\x18\x01 \x01(\tH\x00R\aappName\x12\x1f\n" +
@@ -3585,7 +3585,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\x04host\x18\x01 \x01(\v2\".wendy.agent.services.v1.HostStatsR\x04host\x12O\n" +
 	"\n" +
 	"containers\x18\x02 \x03(\v2/.wendy.agent.services.v1.ResourceContainerStatsR\n" +
-	"containers\"\xd3\x03\n" +
+	"containers\"\xeb\x03\n" +
 	"\tHostStats\x12*\n" +
 	"\x11cpu_total_jiffies\x18\x01 \x01(\x04R\x0fcpuTotalJiffies\x12(\n" +
 	"\x10cpu_idle_jiffies\x18\x02 \x01(\x04R\x0ecpuIdleJiffies\x12\x1b\n" +
@@ -3593,8 +3593,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\x0fmem_total_bytes\x18\x04 \x01(\x03R\rmemTotalBytes\x12.\n" +
 	"\x13mem_available_bytes\x18\x05 \x01(\x03R\x11memAvailableBytes\x125\n" +
 	"\x04gpus\x18\x06 \x03(\v2!.wendy.agent.services.v1.GpuStatsR\x04gpus\x12I\n" +
-	"\rthermal_zones\x18\a \x03(\v2$.wendy.agent.services.v1.ThermalZoneR\fthermalZones\x12,\n" +
-	"\abattery\x18\b \x01(\v2\r.BatteryStatsH\x00R\abattery\x88\x01\x01\x12?\n" +
+	"\rthermal_zones\x18\a \x03(\v2$.wendy.agent.services.v1.ThermalZoneR\fthermalZones\x12D\n" +
+	"\abattery\x18\b \x01(\v2%.wendy.agent.services.v1.BatteryStatsH\x00R\abattery\x88\x01\x01\x12?\n" +
 	"\anetwork\x18\t \x01(\v2%.wendy.agent.services.v1.NetworkStatsR\anetworkB\n" +
 	"\n" +
 	"\b_battery\"\x18\n" +
@@ -3675,7 +3675,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\vWriteChunks\x12+.wendy.agent.services.v1.WriteChunksRequest\x1a,.wendy.agent.services.v1.WriteChunksResponse(\x01\x12h\n" +
 	"\vQueryLayers\x12+.wendy.agent.services.v1.QueryLayersRequest\x1a,.wendy.agent.services.v1.QueryLayersResponse\x12q\n" +
 	"\fPrepareImage\x122.wendy.agent.services.v1.RunContainerLayersRequest\x1a-.wendy.agent.services.v1.PrepareImageResponse\x12x\n" +
-	"\x11ValidateContainer\x12/.wendy.agent.services.v1.CreateContainerRequest\x1a2.wendy.agent.services.v1.ValidateContainerResponseb\x06proto3"
+	"\x11ValidateContainer\x12/.wendy.agent.services.v1.CreateContainerRequest\x1a2.wendy.agent.services.v1.ValidateContainerResponseB7Z5github.com/wendylabsinc/cloud/services/internal/protob\x06proto3"
 
 var (
 	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDescOnce sync.Once
@@ -3750,20 +3750,20 @@ var file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_goTypes 
 	(*ExecContainerRequest_ExecStart)(nil),           // 55: wendy.agent.services.v1.ExecContainerRequest.ExecStart
 	(*RunContainerLayersResponse_Started)(nil),       // 56: wendy.agent.services.v1.RunContainerLayersResponse.Started
 	(*RunContainerLayersResponse_ConsoleOutput)(nil), // 57: wendy.agent.services.v1.RunContainerLayersResponse.ConsoleOutput
-	(*AppContainer)(nil),                             // 58: AppContainer
-	(*RestartPolicy)(nil),                            // 59: RestartPolicy
-	(*BatteryStats)(nil),                             // 60: BatteryStats
+	(*AppContainer)(nil),                             // 58: wendy.agent.services.v1.AppContainer
+	(*RestartPolicy)(nil),                            // 59: wendy.agent.services.v1.RestartPolicy
+	(*BatteryStats)(nil),                             // 60: wendy.agent.services.v1.BatteryStats
 }
 var file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_depIdxs = []int32{
-	58, // 0: wendy.agent.services.v1.ListContainersResponse.container:type_name -> AppContainer
+	58, // 0: wendy.agent.services.v1.ListContainersResponse.container:type_name -> wendy.agent.services.v1.AppContainer
 	13, // 1: wendy.agent.services.v1.QueryLayersResponse.present:type_name -> wendy.agent.services.v1.PresentLayer
 	26, // 2: wendy.agent.services.v1.RunContainerLayersRequest.layers:type_name -> wendy.agent.services.v1.RunContainerLayerHeader
-	59, // 3: wendy.agent.services.v1.RunContainerLayersRequest.restart_policy:type_name -> RestartPolicy
-	59, // 4: wendy.agent.services.v1.CreateContainerRequest.restart_policy:type_name -> RestartPolicy
+	59, // 3: wendy.agent.services.v1.RunContainerLayersRequest.restart_policy:type_name -> wendy.agent.services.v1.RestartPolicy
+	59, // 4: wendy.agent.services.v1.CreateContainerRequest.restart_policy:type_name -> wendy.agent.services.v1.RestartPolicy
 	0,  // 5: wendy.agent.services.v1.CreateContainerProgress.phase:type_name -> wendy.agent.services.v1.CreateContainerProgress.Phase
 	19, // 6: wendy.agent.services.v1.CreateContainerProgressResponse.progress:type_name -> wendy.agent.services.v1.CreateContainerProgress
 	17, // 7: wendy.agent.services.v1.CreateContainerProgressResponse.completed:type_name -> wendy.agent.services.v1.CreateContainerResponse
-	59, // 8: wendy.agent.services.v1.StartContainerRequest.restart_policy:type_name -> RestartPolicy
+	59, // 8: wendy.agent.services.v1.StartContainerRequest.restart_policy:type_name -> wendy.agent.services.v1.RestartPolicy
 	55, // 9: wendy.agent.services.v1.ExecContainerRequest.start:type_name -> wendy.agent.services.v1.ExecContainerRequest.ExecStart
 	23, // 10: wendy.agent.services.v1.ExecContainerRequest.resize:type_name -> wendy.agent.services.v1.WindowSize
 	1,  // 11: wendy.agent.services.v1.RunContainerLayerHeader.compression:type_name -> wendy.agent.services.v1.RunContainerLayerHeader.CompressionType
@@ -3776,7 +3776,7 @@ var file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_depIdxs 
 	49, // 18: wendy.agent.services.v1.GetResourceStatsResponse.containers:type_name -> wendy.agent.services.v1.ResourceContainerStats
 	48, // 19: wendy.agent.services.v1.HostStats.gpus:type_name -> wendy.agent.services.v1.GpuStats
 	47, // 20: wendy.agent.services.v1.HostStats.thermal_zones:type_name -> wendy.agent.services.v1.ThermalZone
-	60, // 21: wendy.agent.services.v1.HostStats.battery:type_name -> BatteryStats
+	60, // 21: wendy.agent.services.v1.HostStats.battery:type_name -> wendy.agent.services.v1.BatteryStats
 	44, // 22: wendy.agent.services.v1.HostStats.network:type_name -> wendy.agent.services.v1.NetworkStats
 	45, // 23: wendy.agent.services.v1.NetworkStats.interfaces:type_name -> wendy.agent.services.v1.NetworkInterfaceStats
 	46, // 24: wendy.agent.services.v1.NetworkStats.agent:type_name -> wendy.agent.services.v1.AgentNetworkStats

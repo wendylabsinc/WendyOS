@@ -20,6 +20,7 @@ type NodeSnapshot struct {
 	// ForwardingRoutes contains the selected routes installed in the kernel.
 	ForwardingRoutes    []babel.Route
 	RouteAuthorizations map[RouteOrigin]bool
+	RouteProofs         map[RouteOrigin]RouteProof // Exact current/compact-handoff receiver lease metadata.
 }
 
 // PeerLink identifies an authenticated direct carrier and its Babel cost.
@@ -29,6 +30,13 @@ type PeerLink struct {
 	Device    meshid.Device
 	Cost      uint16
 	Transport string
+	// ForwardingReady is local runtime evidence, never a discovery claim. The
+	// authenticated neighbour is Babel-reachable and its current authorized /128
+	// is selected and installed through this exact carrier. Only such a link may
+	// make a useful slower carrier redundant.
+	ForwardingReady bool
+	// Retiring marks a terminal local incarnation awaiting owned cleanup.
+	Retiring bool
 	// CarrierIP reports router QUIC enqueue/capability diagnostics.
 	CarrierIP *CarrierIPStats
 	carrier   *carrierIPSender
@@ -74,9 +82,69 @@ type ipQueueSnapshotter interface{ snapshot() IPQueueStats }
 
 func (s NodeSnapshot) HasCheaperLink(device meshid.Device, cost uint16) bool {
 	for _, link := range s.Links {
-		if link.Device == device && link.Cost < cost {
+		if link.Device == device && link.Cost < cost && link.ForwardingReady && !link.Retiring {
 			return true
 		}
 	}
 	return false
+}
+
+// HasInstalledRouteOnLink conservatively protects every currently installed
+// finite route on an incarnation, including transit prefixes whose replacement
+// carrier may not yet be primed. A cheaper direct peer /128 alone is insufficient.
+func (s NodeSnapshot) HasInstalledRouteOnLink(link babel.LinkID) bool {
+	for _, route := range s.ForwardingRoutes {
+		if route.Link == link && !route.Local && !route.Unreachable && route.Metric != babel.Infinity {
+			return true
+		}
+	}
+	return false
+}
+
+// HasOtherForwardingLink proves another exact authenticated direct carrier is
+// already forwarding this peer. Configured cost is not path health: a stale
+// low-cost carrier may be unused while a higher-cost carrier actually forwards.
+func (s NodeSnapshot) HasOtherForwardingLink(peer meshid.Device, excluded babel.LinkID) bool {
+	for _, link := range s.Links {
+		if link.ID != excluded && link.Device == peer && link.ForwardingReady && !link.Retiring {
+			return true
+		}
+	}
+	return false
+}
+
+// markForwardingReady joins actor-owned routing and forwarding state. Attached
+// TLS presence alone survives a silent blackhole; a cached or uninstalled route
+// likewise cannot justify retiring the carrier that still forwards traffic.
+func markForwardingReady(links []PeerLink, routing babel.Snapshot, installed []babel.Route, origins map[RouteOrigin]bool) {
+	reachable := make(map[babel.LinkID]bool, len(routing.Neighbours))
+	for _, neighbour := range routing.Neighbours {
+		reachable[neighbour.Link] = neighbour.Reachable
+	}
+	peers := make(map[babel.LinkID]int, len(links))
+	for i := range links {
+		links[i].ForwardingReady = false
+		peers[links[i].ID] = i
+	}
+	// Retain only direct peer routes here, rather than copying the whole mesh
+	// FIB into another map on each routing refresh.
+	selected := make(map[babel.LinkID]babel.Route, len(links))
+	for _, route := range routing.Routes {
+		i, attached := peers[route.Link]
+		if !attached || !reachable[route.Link] || route.Local || route.Unreachable || route.Metric == babel.Infinity {
+			continue
+		}
+		peer := links[i].Device
+		if !peer.IsValid() || route.Prefix.Bits() != 128 || route.Prefix.Addr() != peer.MeshAddress() {
+			continue
+		}
+		if origins[RouteOrigin{Prefix: route.Prefix, RouterID: route.RouterID, Seqno: route.Seqno}] {
+			selected[route.Link] = route
+		}
+	}
+	for _, route := range installed {
+		if current, ok := selected[route.Link]; ok && current == route {
+			links[peers[route.Link]].ForwardingReady = true
+		}
+	}
 }

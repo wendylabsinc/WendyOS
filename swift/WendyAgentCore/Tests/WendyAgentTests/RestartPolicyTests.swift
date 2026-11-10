@@ -8,7 +8,7 @@ import WendyAgentGRPC
 struct RestartPolicyTests {
     @Test("proto DEFAULT maps to unless-stopped")
     func protoDefaultMapsToUnlessStopped() {
-        var proto = RestartPolicy()
+        var proto = Wendy_Agent_Services_V1_RestartPolicy()
         proto.mode = .default
 
         let persisted = PersistedRestartPolicy(from: proto)
@@ -19,7 +19,7 @@ struct RestartPolicyTests {
 
     @Test("proto UNLESS_STOPPED maps to unless-stopped")
     func protoUnlessStoppedMapsToUnlessStopped() {
-        var proto = RestartPolicy()
+        var proto = Wendy_Agent_Services_V1_RestartPolicy()
         proto.mode = .unlessStopped
 
         let persisted = PersistedRestartPolicy(from: proto)
@@ -30,7 +30,7 @@ struct RestartPolicyTests {
 
     @Test("proto NO maps to no")
     func protoNoMapsToNo() {
-        var proto = RestartPolicy()
+        var proto = Wendy_Agent_Services_V1_RestartPolicy()
         proto.mode = .no
 
         let persisted = PersistedRestartPolicy(from: proto)
@@ -41,7 +41,7 @@ struct RestartPolicyTests {
 
     @Test("proto ON_FAILURE maps to onFailure carrying maxRetries")
     func protoOnFailureMapsToOnFailureWithMaxRetries() {
-        var proto = RestartPolicy()
+        var proto = Wendy_Agent_Services_V1_RestartPolicy()
         proto.mode = .onFailure
         proto.onFailureMaxRetries = 5
 
@@ -53,7 +53,7 @@ struct RestartPolicyTests {
 
     @Test("proto UNRECOGNIZED maps to unless-stopped")
     func protoUnrecognizedMapsToUnlessStopped() {
-        var proto = RestartPolicy()
+        var proto = Wendy_Agent_Services_V1_RestartPolicy()
         proto.mode = .UNRECOGNIZED(99)
 
         let persisted = PersistedRestartPolicy(from: proto)

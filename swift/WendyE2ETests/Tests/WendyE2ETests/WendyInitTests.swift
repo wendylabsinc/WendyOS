@@ -23,6 +23,7 @@ struct `'wendy init'` {
                 #expect(stdout.contains("Usage:"))
                 #expect(stdout.contains("wendy init [app-id] [flags]"))
                 #expect(stdout.contains("--app-id"))
+                #expect(stdout.contains("--force"))
                 #expect(stdout.contains("--target"))
                 #expect(stdout.contains("--language"))
                 #expect(stdout.contains("--entitlement"))
@@ -108,6 +109,93 @@ struct `'wendy init'` {
                         as? [String: Any]
                 )
                 #expect(json["appId"] as? String == "pre-existing")
+            }
+        }
+    }
+
+    /**
+     A template must not overlay an existing populated destination, even when
+     it has no `wendy.json`. Refusal preserves every existing byte and writes
+     no template files. This exercises the real CLI and public simple-api
+     template, including download, extraction, and rendering on the baseline.
+     */
+    @Test
+    func `refuses a template overlay without changing existing files`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                posix: """
+                    mkdir sapi
+                    printf 'valuable original package\\n' > sapi/Package.swift
+                    printf 'PRECIOUS\\n' > sapi/IMPORTANT.txt
+                    """,
+                power: """
+                    New-Item -ItemType Directory -Path 'sapi' | Out-Null
+                    [IO.File]::WriteAllText((Join-Path $PWD 'sapi/Package.swift'), "valuable original package`n")
+                    [IO.File]::WriteAllText((Join-Path $PWD 'sapi/IMPORTANT.txt'), "PRECIOUS`n")
+                    """
+            )
+
+            try await cli.sh(
+                "wendy init --app-id sapi --target wendyos --language swift"
+                    + " --template simple-api --assistant skip --git-init no"
+            ) { result in
+                #expect(!result.status.isSuccess)
+                #expect(result.stderr.contains("not empty"))
+                #expect(result.stderr.contains("--force"))
+                #expect(!result.stderr.contains("Your project is ready!"))
+            }
+
+            try await cli.sh(
+                posix: "cat sapi/Package.swift",
+                power:
+                    "[IO.File]::ReadAllText((Join-Path $PWD 'sapi/Package.swift')) | Write-Host -NoNewline"
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "valuable original package\n")
+            }
+            try await cli.sh(
+                posix: "cat sapi/IMPORTANT.txt",
+                power:
+                    "[IO.File]::ReadAllText((Join-Path $PWD 'sapi/IMPORTANT.txt')) | Write-Host -NoNewline"
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "PRECIOUS\n")
+            }
+            try await cli.sh(
+                posix: "find sapi -mindepth 1 -maxdepth 1 -exec basename {} \\; | sort",
+                power:
+                    "Get-ChildItem -LiteralPath 'sapi' -Force | Sort-Object Name | ForEach-Object { $_.Name }"
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(
+                    result.stdout.replacingOccurrences(of: "\r\n", with: "\n")
+                        == "IMPORTANT.txt\nPackage.swift\n"
+                )
+            }
+        }
+    }
+
+    /**
+     `--force` is scoped to template initialization. Using it with the manual
+     scaffold fails before creating any project files.
+     */
+    @Test
+    func `requires a template for force initialization`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                "wendy init --app-id sapi --target wendyos --language swift"
+                    + " --force --assistant skip --git-init no"
+            ) { result in
+                #expect(!result.status.isSuccess)
+                #expect(result.stderr.contains("--force requires --template"))
+                #expect(!result.stderr.contains("Your project is ready!"))
+            }
+            try await cli.sh(
+                posix: "find . -mindepth 1 -maxdepth 1 -print",
+                power: "Get-ChildItem -LiteralPath '.' -Force | ForEach-Object { $_.Name }"
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "")
             }
         }
     }

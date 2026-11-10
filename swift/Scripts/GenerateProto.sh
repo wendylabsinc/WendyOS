@@ -15,47 +15,59 @@ esac
 LOCAL_PROTO_DIR="$(cd "$SWIFT_DIR/../Proto" && pwd)"
 source "$LOCAL_PROTO_DIR/shared-grpc-api-contracts.sh"
 
-# Reject maintained copies before export or any change to committed outputs.
 PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}" "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
-  if [ -e "$LOCAL_PROTO_DIR/$proto" ] || [ -L "$LOCAL_PROTO_DIR/$proto" ]; then
-    echo "error: remove Proto/$proto; it is generated from service-protos" >&2
-    exit 1
-  fi
   PATH_ARGS+=(--path "$proto")
-done
-for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
-  if [ -e "$LOCAL_PROTO_DIR/cloud/$proto" ] || [ -L "$LOCAL_PROTO_DIR/cloud/$proto" ]; then
-    echo "error: remove Proto/cloud/$proto; it is generated from service-protos" >&2
-    exit 1
-  fi
 done
 if [ "$(buf --version)" != "1.75.0" ] || [ "$(protoc --version)" != "libprotoc 34.0" ]; then
   echo "error: install buf 1.75.0 and protoc 34.0 (same versions as Go generation)" >&2
   exit 1
 fi
 TEMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TEMP_DIR"' EXIT
+trap 'finish_shared_grpc_api_contracts "$?" "$TEMP_DIR"' EXIT
+buf export "$SHARED_GRPC_API_CONTRACTS_INPUT" --output "$TEMP_DIR/catalogue"
+check_shared_grpc_api_contracts_sources "$LOCAL_PROTO_DIR" "$TEMP_DIR/catalogue"
 buf export \
-  "https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF" \
+  "$SHARED_GRPC_API_CONTRACTS_INPUT" \
   "${PATH_ARGS[@]}" --output "$TEMP_DIR/shared"
+for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}" "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
+  if [ ! -f "$TEMP_DIR/shared/$proto" ]; then
+    echo "error: selected shared proto missing from export: $proto" >&2
+    exit 1
+  fi
+done
 
 # Keep existing proto names, local imports and module layout in temporary staging.
 PROTO_DIR="$TEMP_DIR/Proto"
 mkdir -p "$PROTO_DIR"
-cp -R "$LOCAL_PROTO_DIR/." "$PROTO_DIR/"
 cp -R "$TEMP_DIR/shared/." "$PROTO_DIR/"
+# Unmigrated imports (including OpenTelemetry) retain their local source behavior.
+cp -R "$LOCAL_PROTO_DIR/." "$PROTO_DIR/"
 for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
   mv "$PROTO_DIR/$proto" "$PROTO_DIR/cloud/$proto"
 done
 OUT_DIR="$TEMP_DIR/generated"
 mkdir -p "$OUT_DIR/WendyAgentGRPC"
-SHARED_SWIFT_PROTOS=()
-for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"; do
-  case "$proto" in
-    wendy/agent/services/v1/*) SHARED_SWIFT_PROTOS+=("$PROTO_DIR/$proto") ;;
-  esac
-done
+SHARED_SWIFT_PROTOS=(
+  "$PROTO_DIR/wendy/agent/services/v1/shared.proto"
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_container_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_audio_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto"
+  "$PROTO_DIR/wendy/agent/services/v2/sensor_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v2/provisioning_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v2/robot_arm_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v2/bluetooth_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v2/local_mesh_admin_service.proto"
+  "$PROTO_DIR/wendylite/v1/sensorlink.proto"
+)
+SHARED_SWIFT_MESSAGE_PROTOS=(
+  "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
+  "$PROTO_DIR/wendy/agent/services/v2/device_info_service.proto"
+)
 
 generate_grpc() {
   swift package --package-path "$SCRIPT_DIR/ProtoGeneration" \
@@ -71,10 +83,22 @@ publicize_generated_imports() {
   '
 }
 
-# Check the migrated Agent v1 services and Cloud v1 APIs in their existing modules.
+echo "Generating Wendy Agent gRPC code..."
+generate_grpc --access-level public --output-path "$OUT_DIR/WendyAgentGRPC" \
+  --import-path "$PROTO_DIR" -- "${SHARED_SWIFT_PROTOS[@]}"
+generate_grpc --no-clients --no-servers --access-level public \
+  --output-path "$OUT_DIR/WendyAgentGRPC" --import-path "$PROTO_DIR" \
+  -- "${SHARED_SWIFT_MESSAGE_PROTOS[@]}"
+
 if [ -n "${1:-}" ]; then
-  generate_grpc --access-level public --output-path "$OUT_DIR/WendyAgentGRPC" \
-    --import-path "$PROTO_DIR" -- "${SHARED_SWIFT_PROTOS[@]}"
+  if [ "$1" = --check-shared-grpc-api-contracts ]; then
+    for suffix in pb.swift grpc.swift; do
+      if [ -e "Sources/WendyAgentGRPC/Proto/wendy/lite/sensorlink.$suffix" ]; then
+        echo "error: stale generated sensorlink output at the old path" >&2
+        exit 1
+      fi
+    done
+  fi
   CLOUD_V1_SHARED_INPUTS=()
   for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
     CLOUD_V1_SHARED_INPUTS+=("$PROTO_DIR/cloud/$proto")
@@ -83,13 +107,23 @@ if [ -n "${1:-}" ]; then
   generate_grpc --access-level public --output-path "$OUT_DIR/WendyCloudGRPC" \
     --import-path "$PROTO_DIR" -- "${CLOUD_V1_SHARED_INPUTS[@]}"
   publicize_generated_imports "$OUT_DIR/WendyAgentGRPC" "$OUT_DIR/WendyCloudGRPC"
-  for input in "${SHARED_SWIFT_PROTOS[@]}" "${CLOUD_V1_SHARED_INPUTS[@]}"; do
+  for input in "${SHARED_SWIFT_PROTOS[@]}" "${SHARED_SWIFT_MESSAGE_PROTOS[@]}" "${CLOUD_V1_SHARED_INPUTS[@]}"; do
     proto="${input#"$PROTO_DIR/"}"
     case "$proto" in
       cloud/*) module="WendyCloudGRPC" ;;
       *) module="WendyAgentGRPC" ;;
     esac
-    for suffix in pb.swift grpc.swift; do
+    suffixes=(pb.swift grpc.swift)
+    for message in "${SHARED_SWIFT_MESSAGE_PROTOS[@]}"; do
+      if [ "$input" = "$message" ]; then
+        suffixes=(pb.swift)
+        if [ "$1" = --check-shared-grpc-api-contracts ] && [ -e "Sources/$module/Proto/${proto%.proto}.grpc.swift" ]; then
+          echo "error: stale gRPC output for message-only $proto" >&2
+          exit 1
+        fi
+      fi
+    done
+    for suffix in "${suffixes[@]}"; do
       file="${proto%.proto}.$suffix"
       committed="Sources/$module/Proto/$file"
       generated="$OUT_DIR/$module/$file"
@@ -103,39 +137,6 @@ if [ -n "${1:-}" ]; then
   done
   exit 0
 fi
-
-echo "Generating Wendy Agent gRPC code..."
-mkdir -p "$OUT_DIR/WendyAgentGRPC"
-generate_grpc \
-    --access-level public \
-    --output-path "$OUT_DIR/WendyAgentGRPC" \
-    --import-path "$PROTO_DIR" \
-    -- \
-    "${SHARED_SWIFT_PROTOS[@]}" \
-    "$PROTO_DIR/wendy/agent/services/v1/shared.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_container_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto" \
-    "$PROTO_DIR/wendy/lite/sensorlink.proto" \
-    "$PROTO_DIR/wendy/agent/services/v2/sensor_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v2/provisioning_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v2/robot_arm_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v2/bluetooth_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v2/local_mesh_admin_service.proto"
-
-# The Mac agent is the video server; it doesn't need generated client or
-# multi-layer service adapters for this protocol.
-echo "Generating Wendy Agent video messages..."
-generate_grpc \
-    --no-clients \
-    --no-servers \
-    --access-level public \
-    --output-path "$OUT_DIR/WendyAgentGRPC" \
-    --import-path "$PROTO_DIR" \
-    -- \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
 
 echo "Generating OpenTelemetry gRPC code..."
 mkdir -p "$OUT_DIR/OpenTelemetryGRPC"

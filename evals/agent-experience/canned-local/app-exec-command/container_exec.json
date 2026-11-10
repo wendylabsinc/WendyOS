@@ -1,0 +1,24 @@
+{
+  "tool": "container_exec",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"exit_code\": 0, \"stderr\": \"\", \"stdout\": \"Python 3.12.16\\n\", \"truncated\": false}"
+        }
+      ],
+      "structuredContent": {
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "Python 3.12.16\n",
+        "truncated": false
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "895e0203ec308ff4b5710ddcc46a99fde5315f3f77f200da11c8a70a4c61bbb0",
+    "device_kind": "local"
+  }
+}

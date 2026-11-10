@@ -19,16 +19,16 @@ Swift and other WebAssembly apps remain available through the optional Wendy Lit
   **Supported targets:** ESP32-C5, ESP32-C6, ESP32-C61, ESP32-P4, and ESP32-S3. When the installer offers multiple firmware variants, choose one labeled **native app support**. ESP32-P4 support is available for the boards listed by the installer.
 </Callout>
 
-## What You'll Need
+## What you'll need
 
 - A supported ESP32 development board
 - A USB data cable
-- The Wendy CLI ([install it](/docs/#1-install-the-wendy-cli))
+- The Wendy CLI ([install it](/docs/installation/cli))
 - An existing ESP-IDF project, or a new project created with the standard ESP-IDF tooling
 
 Wendy uses the [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/dl/eim/) to run ESP-IDF 6.0.3. If `eim` is missing, `wendy run` offers to install it with Homebrew (`brew install espressif/eim/eim`); without Homebrew, install it yourself. If ESP-IDF 6.0.3 is not installed, the first `wendy run` installs it for you.
 
-## Install the Wendy Firmware
+## Install the Wendy firmware
 
 <Steps>
   <Step>
@@ -95,7 +95,7 @@ Projects without this file continue to use the EIM toolchain. Native app uploads
 require an existing compatible partition layout; use `wendy install` for the
 first installation.
 
-## Use a Regular ESP-IDF Project
+## Use a regular ESP-IDF project
 
 Wendy recognizes the standard ESP-IDF project markers: a top-level `CMakeLists.txt` that includes `project.cmake`, or an `sdkconfig`/`sdkconfig.defaults` file. Keep the normal ESP-IDF layout and add a small `wendy.json` manifest:
 
@@ -166,7 +166,7 @@ void app_main(void)
 
 `wendy_core` is what makes the device manageable by the Wendy CLI and reachable through Wendy Cloud. Apart from that, your app code uses normal ESP-IDF components and APIs — no other custom SDK or wrapper is required. See [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for the full walkthrough, including which peripherals (USB, Wi-Fi, BLE) Wendy Lite owns and your app must not configure itself.
 
-### Start from a Template
+### Start from a template
 
 The quickest way to start is from a template instead of building this by hand:
 
@@ -201,11 +201,11 @@ For remote access, connect the board over USB, configure its Wi-Fi, and
 guide walks through sign-in, board selection, and checking that it comes online.
 You can keep developing locally without Cloud enrollment.
 
-## Optional WASM Apps
+## Optional WASM apps
 
 Wendy Lite can also run Swift and other WebAssembly guests on firmware variants with WASM support. This path is useful when application portability is more important than direct access to the complete ESP-IDF API. See the [Wendy Lite reference](/docs/advanced/wendy-lite) for the WASM SDK, host API, and deployment details.
 
-## Next Steps
+## Next steps
 
 - Read [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for more details
 - Read the [`wendy run` reference](/docs/advanced/clients/wendy-cli/commands/run)

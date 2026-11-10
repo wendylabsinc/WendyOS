@@ -49,7 +49,12 @@ func Topology(self meshid.Device, snapshot localmesh.NodeSnapshot, now time.Time
 		if err != nil {
 			continue
 		}
-		announcement := &pb.LocalMeshAnnouncement{Principal: device.Principal(), DeviceId: device.UUID().String(), Name: manifest.Name, IssuedAtUnixMs: manifest.Issued, ExpiresAtUnixMs: manifest.Expires, Revision: manifest.Revision, TrustState: "verified-at-snapshot", AgentPort: uint32(manifest.AgentPort), AgentTransport: manifest.AgentTransport, Platform: manifest.Platform, Caps: append([]string(nil), manifest.Caps...)}
+		// Export the receiver's remaining lease on the observation wall clock.
+		// Sub uses the monotonic deadline when available, including across a
+		// wall-clock correction since capture. Signed dates remain immutable;
+		// this public hint and its matching route binding are local observations.
+		expires := now.Add(manifest.LeaseDeadline().Sub(now)).UnixMilli()
+		announcement := &pb.LocalMeshAnnouncement{Principal: device.Principal(), DeviceId: device.UUID().String(), Name: manifest.Name, IssuedAtUnixMs: manifest.Issued, ExpiresAtUnixMs: expires, Revision: manifest.Revision, TrustState: "verified-at-snapshot", AgentPort: uint32(manifest.AgentPort), AgentTransport: manifest.AgentTransport, Platform: manifest.Platform, Caps: append([]string(nil), manifest.Caps...)}
 		if origin := manifest.Route; origin != nil && manifest.Version == localmesh.ManifestVersionRoute {
 			if origin.Prefix != netip.PrefixFrom(device.MeshAddress(), 128) {
 				continue
@@ -90,6 +95,10 @@ func Topology(self meshid.Device, snapshot localmesh.NodeSnapshot, now time.Time
 			entry.SignedRouteExpiresAtUnixMs = announcement.ExpiresAtUnixMs
 			entry.OriginAuthorized = snapshot.RouteAuthorizations[origin] && announcement.ExpiresAtUnixMs > now.UnixMilli()
 		}
+		if proof, ok := snapshot.RouteProofs[origin]; ok && proof.Principal == principal {
+			entry.SignedRouteExpiresAtUnixMs = now.Add(proof.Deadline.Sub(now)).UnixMilli()
+			entry.OriginAuthorized = snapshot.RouteAuthorizations[origin] && proof.Deadline.After(now)
+		}
 		out.Routes = append(out.Routes, entry)
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Prefix < out.Routes[j].Prefix })
@@ -103,13 +112,13 @@ func Topology(self meshid.Device, snapshot localmesh.NodeSnapshot, now time.Time
 }
 
 // Service descriptions are opt-in so regular Nearby polling carries only the
-// compact device directory. Each service inherits the complete manifest lease;
-// no second service gossip/cache or independently refreshed expiry is created.
+// compact device directory. Services require both the current manifest and its
+// independently authorized route; no separate service gossip/cache is created.
 func projectLocalMeshServices(out *pb.LocalMeshTopology, snapshot localmesh.NodeSnapshot, now time.Time) {
 	out.ServicesIncluded = true
 	manifests := make(map[string]localmesh.Manifest)
 	for _, manifest := range snapshot.Devices {
-		if !manifest.Withdraw && manifest.Expires > now.UnixMilli() {
+		if !manifest.Withdraw && manifest.LeaseDeadline().After(now) {
 			manifests[manifest.Device.String()] = manifest
 		}
 	}
@@ -117,7 +126,7 @@ func projectLocalMeshServices(out *pb.LocalMeshTopology, snapshot localmesh.Node
 	for _, announcement := range out.Announcements {
 		available := false
 		for _, route := range out.Routes {
-			if route.OriginPrincipal == announcement.Principal && route.Prefix == announcement.Prefix && route.OriginRouterId == announcement.OriginRouterId && route.SequenceNumber == announcement.SequenceNumber && route.SignedRouteExpiresAtUnixMs == announcement.ExpiresAtUnixMs && route.OriginAuthorized && !route.Unreachable {
+			if _, live := AnnouncementRouteDeadline(route, announcement, now); live {
 				available = true
 				break
 			}

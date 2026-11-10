@@ -187,6 +187,10 @@ func TestDialLadderFindsTheDeviceTenantsExpiredLogin(t *testing.T) {
 		_ = tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{keyPair}, NextProtos: []string{"h2"}}).Handshake()
 	})
 	cfg, _ := meshReportConfig(t, "default")
+	cfg.SetDevicePin("mesh-1.local", 0, "api.wendy.dev:443", "mesh-1", principal.String())
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
 	setPinCache(t)
 	withTempCertOrderCache(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
