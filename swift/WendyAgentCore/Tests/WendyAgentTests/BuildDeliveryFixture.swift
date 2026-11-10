@@ -23,8 +23,8 @@ struct BuildDeliveryFixture: Sendable {
     let time: Int64
     init(
         operatorLifetime: TimeInterval = 300,
-        rights: [String]? = nil,
-        signingKey: TestPKI.MLDSAKey? = nil
+        signingKey: TestPKI.MLDSAKey? = nil,
+        signingPrincipal: String = BuildDeliveryFixture.issuer
     ) throws {
         time = Int64(Date().timeIntervalSince1970)
         root = try TestPKI.makeCA()
@@ -41,15 +41,7 @@ struct BuildDeliveryFixture: Sendable {
             uris: [Self.issuer]
         )
         operatorKey = try signingKey ?? TestPKI.MLDSAKey(variant: .mldsa65(MLDSA65.PrivateKey()))
-        let name = try DistinguishedName { CommonName("synthetic entitled operator") }
-        var serializer = DER.Serializer()
-        try serializer.appendConstructedNode(identifier: .sequence) { coder in
-            for right in rights ?? [
-                "entitlement:deployment:create:device:22222222-2222-4222-8222-222222222222:allow"
-            ] {
-                try coder.serialize(ASN1UTF8String(contentBytes: ArraySlice(right.utf8)))
-            }
-        }
+        let name = try DistinguishedName { CommonName("synthetic management identity") }
         operatorCertificate = try Certificate(
             version: .v3,
             serialNumber: Certificate.SerialNumber(),
@@ -63,12 +55,8 @@ struct BuildDeliveryFixture: Sendable {
                 Critical(BasicConstraints.notCertificateAuthority)
                 Critical(KeyUsage(digitalSignature: true))
                 try ExtendedKeyUsage([.clientAuth])
-                SubjectAlternativeNames([.uniformResourceIdentifier(Self.issuer)])
-                Certificate.Extension(
-                    oid: BuildDeliveryContract.entitlementOID,
-                    critical: false,
-                    value: ArraySlice(serializer.serializedBytes)
-                )
+                SubjectAlternativeNames([.uniformResourceIdentifier(signingPrincipal)])
+
             },
             issuerPrivateKey: root.privateKey
         )

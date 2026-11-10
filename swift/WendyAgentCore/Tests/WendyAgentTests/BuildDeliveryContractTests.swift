@@ -118,7 +118,9 @@ struct BuildDeliveryContractTests {
             }
         }
     }
-    @Test("native signed artifacts reject wrong targets, signatures and deployment denies")
+    @Test(
+        "existing operator certificates authorize delivery; wrong targets, signatures and device certificates fail"
+    )
     func nativeSignatures() async throws {
         guard #available(macOS 26.0, *) else { return }
         let fixture = try BuildDeliveryFixture()
@@ -151,28 +153,22 @@ struct BuildDeliveryContractTests {
                 at: fixture.time
             )
         }
-        let denied = try BuildDeliveryFixture(rights: [
-            "entitlement:deployment:*:allow",
-            "entitlement:deployment:create:tag:unknown-membership:deny",
-        ])
-        let denial = try denied.sign(denied.claims())
-        await #expect(throws: (any Error).self) {
-            try await BuildDeliveryContract.verify(
-                denial,
-                roots: [denied.root.certificate],
-                target: BuildDeliveryFixture.target,
-                at: denied.time
-            )
-        }
-        let malformed = try BuildDeliveryFixture(rights: ["entitlement:deployment:create::allow"])
-        let malformedGrant = try malformed.sign(malformed.claims())
-        await #expect(throws: (any Error).self) {
-            try await BuildDeliveryContract.verify(
-                malformedGrant,
-                roots: [malformed.root.certificate],
-                target: BuildDeliveryFixture.target,
-                at: malformed.time
-            )
+        // A trusted certificate with a device or signer identity cannot issue
+        // an operator grant, even when the JWS is correctly signed by its key.
+        for principal in [
+            BuildDeliveryFixture.builder,
+            "spiffe://wendy.sh/tenant/\(BuildDeliveryFixture.tenant)/signer/release",
+        ] {
+            let device = try BuildDeliveryFixture(signingPrincipal: principal)
+            let forged = try device.sign(device.claims())
+            await #expect(throws: (any Error).self) {
+                try await BuildDeliveryContract.verify(
+                    forged,
+                    roots: [device.root.certificate],
+                    target: BuildDeliveryFixture.target,
+                    at: device.time
+                )
+            }
         }
         if let path = ProcessInfo.processInfo.environment["WENDY_BUILD_DELIVERY_SWIFT_OUTPUT"] {
             let output: [String: Any] = [

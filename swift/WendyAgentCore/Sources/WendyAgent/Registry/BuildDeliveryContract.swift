@@ -7,7 +7,6 @@ import SwiftASN1
 /// It authorizes one delivery; it is independent of image artifact signatures.
 enum BuildDeliveryContract {
     static let maxBytes = 192 * 1024
-    static let entitlementOID: ASN1ObjectIdentifier = [1, 3, 6, 1, 4, 1, 65441, 1]
     struct Failure: Error, CustomStringConvertible, Sendable {
         let description: String
         init(_ message: String) { self.description = message }
@@ -204,7 +203,6 @@ enum BuildDeliveryContract {
             let expiry = path.map(\.notValidAfter).min(),
             Double(c.admit_before) <= expiry.timeIntervalSince1970
         else { throw Failure("operator PKI path or admission deadline invalid") }
-        try entitlements(leaf, device: destination.subject)
         let signature = try decodeURL(parts[2])
         guard
             leaf.publicKey.isValidSignature(
@@ -216,32 +214,6 @@ enum BuildDeliveryContract {
         return Verified(claims: c, compact: compact, admittedAt: time)
     }
 
-    private static func entitlements(_ leaf: Certificate, device: String) throws {
-        try authorizeDeployment(CertificateEntitlement.fromCertificate(leaf), device: device)
-    }
-
-    // Unsigned site/tag membership can narrow authority through a deny, never
-    // expand it through an allow. All input rules have already been decoded.
-    static func authorizeDeployment(_ rules: [CertificateEntitlement], device: String) throws {
-        var allowed = false
-        for rule in rules {
-            guard rule.category == "deployment",
-                rule.permission == "create" || rule.permission == "*"
-            else {
-                continue
-            }
-            let matches = rule.target.matchesDevice(device)
-            switch rule.effect {
-            case .deny:
-                if matches || rule.target.requiresMembership {
-                    throw Failure("operator deployment denied")
-                }
-            case .allow:
-                allowed = allowed || matches
-            }
-        }
-        guard allowed else { throw Failure("operator lacks deployment:create for target") }
-    }
 }
 
 /// RFC5280Policy deliberately does not police key usage or EKU. Match the
