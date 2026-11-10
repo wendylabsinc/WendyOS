@@ -18,8 +18,20 @@ data class ExperienceEvent(val id: Long, val deviceID: String, val deviceName: S
 class WendyModel(app: Application) : AndroidViewModel(app) {
     val backend = (app as WendyApplication).backend
     var initialized by mutableStateOf(false); private set
-    var devices by mutableStateOf(emptyList<Device>()); private set
-    var discoveryError by mutableStateOf<String?>(null); private set
+    // Nearby (LAN, mesh, USB) and Cloud devices are separate lists, as on iOS.
+    var nearbyDevices by mutableStateOf(emptyList<Device>()); private set
+    var cloudDevices by mutableStateOf(emptyList<Device>()); private set
+    var nearbyError by mutableStateOf<String?>(null); private set
+    var cloudError by mutableStateOf<String?>(null); private set
+    var nearbyLoaded by mutableStateOf(false); private set
+    var cloudLoaded by mutableStateOf(false); private set
+    var nearbyLoading by mutableStateOf(false); private set
+    var cloudLoading by mutableStateOf(false); private set
+    /** Cloud presence for the selected organization, with when it was read; stale after a minute. */
+    var presence by mutableStateOf<List<FleetDevice>?>(null); private set
+    var presenceError by mutableStateOf(""); private set
+    var presenceAt by mutableLongStateOf(0L); private set
+    val devices get() = (nearbyDevices + cloudDevices).distinctBy { it.selector }
     var selected by mutableStateOf<Device?>(null); private set
     var session by mutableLongStateOf(0); private set
     var lite by mutableStateOf(false); private set
@@ -27,7 +39,6 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     /** The last connection failure for [selected]. The device page shows it instead of an alert. */
     var detailError by mutableStateOf<String?>(null); private set
     var canForgetIdentity by mutableStateOf(false); private set
-    var source by mutableStateOf("Nearby")
     var error by mutableStateOf<String?>(null)
     var busy by mutableIntStateOf(0); private set
     var account by mutableStateOf(""); private set
@@ -40,6 +51,9 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     var linkRequest by mutableStateOf<String?>(null)
     var loginPending by mutableStateOf(false); private set
     var requestNearbySetup by mutableStateOf(false)
+    /** Home asks the root to present Settings or Ask Wendy, as iOS presents them as sheets. */
+    var requestSettings by mutableStateOf(false)
+    var requestChat by mutableStateOf(false)
     /** Increments each time the app returns to the foreground, so pages can refresh. */
     var foregroundGeneration by mutableIntStateOf(0); private set
     var experienceEvents by mutableStateOf(emptyList<ExperienceEvent>()); private set
@@ -78,6 +92,12 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     private var maintainJob: Job? = null
     private val preferences = app.getSharedPreferences("selection", 0)
     private val appPreferences = app.getSharedPreferences("apps", 0)
+    /** The lens Home is built around; chosen on first launch and in Settings (iOS wendy.primaryLens). */
+    var primaryLens by mutableStateOf(Lens.of(preferences.getString("primaryLens", null))); private set
+    fun choosePrimaryLens(lens: Lens) { primaryLens = lens; preferences.edit().putString("primaryLens", lens.name).apply() }
+    /** System, Light or Dark (iOS wendy.appearance). */
+    var appearance by mutableStateOf(preferences.getString("appearance", "System") ?: "System"); private set
+    fun chooseAppearance(value: String) { appearance = value; preferences.edit().putString("appearance", value).apply() }
 
     init {
         hiddenApps = appPreferences.all.mapNotNull { (key, value) -> (value as? String)?.let { key to JSONArray(it).let { a -> (0 until a.length()).map(a::optString).toSet() } } }.toMap()
@@ -126,18 +146,41 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     fun chooseAccount(id: String, org: String = "") = task {
         check(!WendyVpnService.engaged) { "Disconnect the Wendy VPN before changing accounts or organizations." }
         invalidateConnection()
+        cloudDevices = emptyList(); cloudLoaded = false; cloudError = null; presence = null
         account = id; organization = org
         preferences.edit().putString("account", id).putString("organization", org).apply()
         refreshAccounts()
         backend.call("SetMobileState", inForeground, account, organization)
         refresh()
     }
-    suspend fun refresh() {
-        val requestedSource = source
+    suspend fun refresh() { refreshNearby(); if (organization.isNotEmpty()) refreshCloud() }
+    suspend fun refreshNearby() {
+        nearbyLoading = true
+        try { nearbyDevices = backend.call("Nearby").items().map(Device::parse); nearbyError = null; nearbyLoaded = true }
+        catch (e: CancellationException) { throw e } catch (e: Exception) { nearbyError = e.message } finally { nearbyLoading = false }
+    }
+    suspend fun refreshCloud() {
+        val account = account; val org = organization
+        if (org.isEmpty()) { cloudDevices = emptyList(); cloudLoaded = false; presence = null; return }
+        cloudLoading = true
         try {
-            val values = backend.call(if (requestedSource == "Cloud") "Cloud" else "Nearby").items().map(Device::parse)
-            if (source == requestedSource) { devices = values; discoveryError = null }
-        } catch (e: CancellationException) { throw e } catch (e: Exception) { if (source == requestedSource) discoveryError = e.message }
+            val values = backend.call("Cloud").items().map(Device::parse)
+            if (account == this.account && org == organization) { cloudDevices = values; cloudError = null; cloudLoaded = true }
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { if (org == organization) cloudError = e.message } finally { cloudLoading = false }
+        try {
+            val fleet = backend.call("Fleet", account, org).obj()
+            if (account == this.account && org == organization) {
+                presence = fleet.list("Devices").map { FleetDevice(it.text("ID"), it.text("Name"), it.text("Selector"), it.text("SiteID"), it.text("Site"), it.text("Hardware"), it.text("Address"), it.flag("Online")) }
+                presenceError = fleet.text("PresenceError"); presenceAt = System.currentTimeMillis()
+            }
+        } catch (e: CancellationException) { throw e } catch (_: Exception) { presence = null }
+    }
+    /** Whether Cloud presence is fresh enough to call a device offline (iOS: under a minute old, no presence error). */
+    fun isOffline(device: Device): Boolean {
+        if (!device.selector.startsWith("cloud://") || selected?.selector == device.selector && session != 0L) return false
+        val rows = presence ?: return false
+        if (cloudError != null || presenceError.isNotEmpty() || System.currentTimeMillis() - presenceAt > 60_000) return false
+        return rows.firstOrNull { it.selector == device.selector }?.online == false
     }
     /** Finds a device in the current list, then in Cloud and nearby discovery, without changing the visible list. */
     suspend fun lookupDevice(match: (Device) -> Boolean): Device? {
@@ -148,7 +191,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         }
         return null
     }
-    fun changeSource(value: String) { source = value; devices = emptyList(); discoveryError = null; task { refresh() } }
+
 
     fun connect(device: Device, forget: Boolean = false) {
         val epoch = ++connectionGeneration
@@ -184,7 +227,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
             try {
                 val refreshed = backend.call("Nearby").items().map(Device::parse)
                 if (epoch != connectionGeneration) return@launch
-                if (source == "Nearby") devices = refreshed
+                nearbyDevices = refreshed
                 val current = refreshed.firstOrNull { it.id == device.id } ?: device
                 session = 0
                 connect(current, false)
@@ -240,6 +283,19 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
             } finally { appActions = appActions - app }
         }
     }
+    /** Stops then starts an app on the same session (iOS restartApp). */
+    fun restartApp(app: String) {
+        if (app in appActions) return
+        val captured = session
+        appActions = appActions + app
+        task {
+            try {
+                backend.call("StopApp", app, captured)
+                if (session == captured) backend.call("StartApp", app, captured)
+                if (session == captured) refreshDetails()
+            } finally { appActions = appActions - app }
+        }
+    }
     fun requestAppDeletion(app: String) { appDeletion = app }
     fun deleteApp(app: String) {
         val captured = session
@@ -250,6 +306,14 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
                 record("Removed $app")
                 if (session == captured) refreshDetails()
             } finally { appActions = appActions - app }
+        }
+    }
+    /** Opens [app] once the connection [connect] just started is ready (iOS widget portals). */
+    fun openAppWhenReady(app: String) {
+        val epoch = connectionGeneration
+        viewModelScope.launch {
+            withTimeoutOrNull(70_000) { snapshotFlow { Triple(session, connecting, detailError) }.first { (s, c, e) -> epoch != connectionGeneration || s != 0L || (!c && e != null) } }
+            if (epoch == connectionGeneration && session != 0L && !lite) openApp(app)
         }
     }
     fun openApp(app: String) = task {

@@ -243,7 +243,7 @@ private fun EnrollmentPage(model: WendyModel, session: Long, deviceName: String,
 // MARK: Device info and agent updates
 
 @Composable
-private fun DeviceInfoPage(model: WendyModel, deviceName: String) {
+fun DeviceInfoPage(model: WendyModel, deviceName: String) {
     val session = model.session
     val scope = rememberCoroutineScope()
     var info by remember { mutableStateOf<JSONObject?>(null) }

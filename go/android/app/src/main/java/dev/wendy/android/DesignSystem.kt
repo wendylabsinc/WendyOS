@@ -33,8 +33,8 @@ val WendyLime = Color(0xFFD3F58B)
 val WendyMint = Color(0xFFB6DCCF)
 
 @Composable
-fun WendyTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun WendyTheme(appearance: String = "System", content: @Composable () -> Unit) {
+    val dark = when (appearance) { "Light" -> false; "Dark" -> true; else -> isSystemInDarkTheme() }
     val colors = if (dark) darkColorScheme(
         primary = WendyLime, onPrimary = WendyInk, primaryContainer = Color(0xFF24483D), onPrimaryContainer = WendyLime,
         secondary = WendyMint, onSecondary = WendyInk, secondaryContainer = Color(0xFF263C34), onSecondaryContainer = Color(0xFFDDEBE2),

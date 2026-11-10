@@ -55,7 +55,7 @@ fun SitesScreen(model: WendyModel) {
     val groups = visible.groupBy { it.siteKey }.map { (key, values) -> Triple(key, values.first().site.ifEmpty { "No site reported" }, values) }.sortedBy { it.second.lowercase() }
     PullToRefreshBox(refreshing, onRefresh = { scope.launch { refreshing = true; refresh(); refreshing = false } }) {
         PageColumn {
-            item { PageTitle("Sites", "Your fleet, across every site in your organization.") }
+            item { SecondaryText("Your fleet, across every site in your organization.") }
             if (model.accounts.isEmpty()) {
                 item { EmptyMessage("Sign in to view your fleet", "Your organization's devices appear here, grouped by site.", Icons.Outlined.Business) }
                 item { Button(onClick = { model.signIn() }, Modifier.fillMaxWidth(), enabled = !model.loginPending) { Text("Sign in") } }

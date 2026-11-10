@@ -34,68 +34,61 @@ macOS or Linux.
 
 ## Implemented workflows
 
-Screens follow the iOS `WendyMobile` app on `main`, drawn with this app's design
-system. "Verified" below means compiled and unit tested; items marked
-*emulator* were also run on an Android 16 emulator. Nothing here has been run on
-a real phone against a real device yet.
+Screens follow the lens-based iOS app from PR #2715 (`cn/mobile-app`), drawn
+with Material 3. "Verified" below means compiled and unit tested; items marked
+*emulator* were also opened on an Android 16 emulator. Nothing here has been
+run on a real phone against a real WendyOS device yet.
 
-- Devices: nearby (Android NSD) and Cloud lists, search, pull to refresh,
-  connect by address, connected and connecting state, readable names.
-- Device: Overview (first app's webpage, live camera previews, apps,
-  shortcuts), Cameras and Apps, with Digital Twin, Campaigns and Chat in the
-  overflow menu and Settings behind a gear, as on iOS. Pages use a back stack;
-  covered pages keep their state and pause polling and streams. Connection
-  failures stay on the device page and retryable ones reconnect on their own.
-- Apps: device resources, temperature and power, hidden apps, app details with
-  usage, GPU, ports, services, start, stop, logs and removal.
-- Logs: app picker, warning filter, search, follow, copy and reconnection.
-- Cameras: H.264, JPEG and thermal streams with play and pause, status, error
-  details, and thermal minimum and maximum markers.
-- Settings: enrollment (Cloud name rules, Wi-Fi check, no second credential),
-  device info with agent updates, Wi-Fi (saved networks, security, hidden
-  networks, traffic), Wendy Mesh (all seven settings, saved together, and the
-  mesh graph), Bluetooth, audio defaults, campaign notification permissions,
-  pairing (Wendy Lite, IP cameras, Unitree robots) and logs.
-- Wendy Lite boards: cameras, SensorLink temperature, console logs, Wi-Fi and
-  enrollment.
-- Campaigns: list with clip counts, campaign pages with recordings and
-  settings, the iOS editor with Hugging Face model and category pickers that
-  pin the model revision, and the toolbar event log with unread markers.
-- Recordings: episode and channel pickers, synced video, images, numeric
-  charts, recorded audio, ROS point clouds (rotate, zoom), the iOS timeline
-  (zoom, fit, drag to pan, pinch, seek) *emulator*, ZIP export, and manual
-  recordings.
-- Chat: per-device conversation, Markdown replies, device cards, approvals,
-  connection settings, and the model library with capacity checks and
-  automatic accelerator choice.
-- Nearby setup over Bluetooth GATT, following the iOS flow, with a one-time
-  invitation when a strong setup advertisement is nearby.
-- Accounts and organization: saved accounts, organization picker, sign-in,
-  teammates and roles, direct device access rules, invite links (copy or
-  share) and invitation revocation.
-- Sites: the organization's fleet by site, with counts, online-only filter and
-  search *emulator*.
-- Activity: connections and app state changes per device.
-- One mesh VPN switch, matching iOS. All mesh devices join automatically; the
-  shared controller switches to a mesh uplink when normal internet fails.
+- First launch: choose a primary lens (Devices, Robots, Sites) *emulator*.
+- General Home: lens tiles, the organization button that opens Settings, the
+  notifications bell, the floating Ask Wendy button, and the widget deck
+  (favorite devices, camera feed, campaign recording, data gallery, app web
+  portal, needs you, happening now, quick actions) with add, configure,
+  resize, reorder and delete. Layouts are saved per account and organization
+  *emulator* (quick actions only).
+- Settings sheet: organization list, primary lens, organization management,
+  connection settings, System/Light/Dark appearance, accounts and add account
+  (Wendy Cloud or Development Cloud) *emulator*.
+- Devices lens: Home (device count with presence bar, Local and Cloud
+  inventories, setup, needs attention, recent data), Data and Activity tabs,
+  with Ask Wendy above the tab bar *emulator*.
+- Data: every device's saved recordings, read without changing the connected
+  device, with kind filters, per-device cards with trigger labels, an episode
+  picker grouped by day, export and playback *emulator* (empty state only).
+- Device page: Apps, Cameras, Data, Location and Settings segments; More
+  device tools (appearance, logs, device info and update progress, app
+  activity, Digital Twin, campaigns, device management); custom device
+  appearances (symbol, emoji or photo on a color).
+- App page: start and stop, open, logs, ports, version and restart; deploy
+  instructions with the device selector.
+- Device management: rename, remove from Cloud, reset local enrollment and OS
+  update through the shared Go backend.
+- Ask Wendy sheet: the connected device's chat, or a device chooser *emulator*.
+- Robots lens: the iOS "under construction" page *emulator*.
+- Apps, logs, cameras, settings, Wendy Lite boards, campaigns, recordings,
+  chat and the model library, nearby setup over Bluetooth GATT, organization
+  management and the mesh VPN with Android Always-on VPN carry over from the
+  earlier parity work (PR #2801).
 
 Device and Cloud operations call the shared Go backend. Successful
 compilation does not establish that hardware-dependent workflows work.
 
 ## Parity still required
 
-| iOS feature | Android status |
+| iOS feature (PR #2715) | Android status |
 | --- | --- |
-| Sites and digital twin: local 3D site documents, USDZ import and sharing, RoomPlan capture, photo reconstruction, recognition viewfinder, lens calibration, site reference capture | Not implemented. Needs a 3D stack decision (see the parity PR). The Digital Twin pane explains this. |
-| Robot localization, navigation and motion in the twin | Not implemented. On iOS these live only in the twin and need the site's floor geometry. Robot pairing is available. |
-| Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. Campaign permissions can still be changed. |
-| Always-on VPN | Not implemented. The service declares `SUPPORTS_ALWAYS_ON=false`; the VPN needs the app's account to start. |
+| Activity lens: Alerts, Events and Archived, swipe to archive, read receipts | Not ported. Android shows the earlier connection and app-state Activity list. |
+| Ask Wendy with Cloud models, remembered AI devices and model suggestions | Not ported. The sheet uses the connected device's chat; the bridge already exposes `StartHostedChat`. |
+| Camera settings (exposure, focus and other controls) | Not ported. The bridge exposes `CameraControls`. |
+| Sites lens: 3D site models, RealityKit view, coverage, site cameras, robot panel, calibration and reference capture | Not ported. The Sites lens shows the fleet by site. 3D viewing waits on the TinyUSDZ build and a RoomPlan sample. |
+| Device recognition viewfinder | Not ported. Android offers Bluetooth setup and connect by address. |
+| Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. |
 | USB flashing and host simulator management | Desktop workflows, also absent from the iOS app. |
 
 Physical-device checks are still required for BLE GATT/L2CAP, cloud sign-in,
-camera decoding, VPN traffic, campaigns, model downloads and destructive device
-operations. No deployment, app deletion, firmware update or robot movement is
-part of the tests.
+camera decoding, VPN traffic, campaigns, recordings, model downloads and
+destructive device operations. No deployment, app deletion, firmware update or
+robot movement is part of the tests.
 
 ## Architecture and lifecycle
 
