@@ -131,6 +131,16 @@ class LensTest {
         assertEquals("sel", widgetDeviceID(Device("", "pi", "sel", "LAN")))
     }
 
+    @Test fun cameraControlsValidateLikeTheDevice() {
+        val control = CameraControl.parse(JSONObject("""{"name":"white_balance_temperature","value":4600,"minimum":2800,"maximum":6500,"step":100,"mutable":true}"""))
+        assertEquals("White Balance Temperature", control.title)
+        assertTrue(control.adjustable)
+        assertTrue(control.accepts(5000)); assertFalse(control.accepts(5050)); assertFalse(control.accepts(7000))
+        // Omitted protobuf fields read as zero, and a zero step counts as one.
+        val fixed = CameraControl.parse(JSONObject("""{"name":"exposure","value":3}"""))
+        assertFalse(fixed.adjustable); assertTrue(fixed.copy(maximum = 5, mutable = true).accepts(4))
+    }
+
     @Test fun homeLayoutKeysSeparateAccountsAndOrganizations() {
         val key = HomeWidgetStore.storageKey("a", "b")
         assertTrue(key.startsWith("wendy.home.widgets.v1."))
