@@ -46,6 +46,8 @@ fun JSONObject.flag(vararg names: String): Boolean = names.firstOrNull { has(it)
 internal fun json(vararg entries: Pair<String, Any?>): JSONObject = JSONObject().apply { entries.forEach { (k,v) -> put(k,v) } }
 
 data class Device(val id: String, val name: String, val selector: String, val transport: String, val lite: Boolean = false) {
+    /** The readable name shown in the interface; [name] and [selector] stay the address. */
+    val title: String get() = DeviceDisplayName.title(name.ifBlank { selector })
     companion object {
         fun parse(value: JSONObject) = Device(value.text("id", "ID"), value.text("name", "Name"), value.text("selector", "Selector"), value.text("transport", "Transport"), value.flag("lite", "Lite"))
     }

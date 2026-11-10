@@ -183,17 +183,21 @@ fun ChoiceTabs(choices: List<String>, selected: String, onSelect: (String) -> Un
 }
 
 @Composable
-fun DeviceCard(device: Device, onClick: () -> Unit) {
+fun DeviceCard(device: Device, connected: Boolean = false, connecting: Boolean = false, onClick: () -> Unit) {
     Surface(onClick = onClick, color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(23.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconTile(if (device.lite) Icons.Outlined.Sensors else Icons.Outlined.Memory)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(device.name.ifBlank { device.selector }, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(if (device.lite) "Wendy Lite" else "Wendy device", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(device.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(if (connected) "Connected" else if (device.lite) "Wendy Lite" else "Wendy device", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Icon(Icons.Outlined.NorthEast, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
+                when {
+                    connecting -> CircularProgressIndicator(Modifier.size(21.dp), strokeWidth = 2.dp)
+                    connected -> Icon(Icons.Outlined.CheckCircle, "Connected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
+                    else -> Icon(Icons.Outlined.NorthEast, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
+                }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
