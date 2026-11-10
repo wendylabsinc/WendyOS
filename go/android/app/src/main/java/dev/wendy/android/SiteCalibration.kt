@@ -167,7 +167,7 @@ class CameraCalibrationFrame(val gray: ByteArray, val width: Int, val height: In
     fun isFresh(now: Long) = now - received in 0..3000
 }
 
-class SiteLocalizationResult(val lens: SiteCameraLens, val pose: SiteCameraPose, val inliers: Int, val residual: Double, val fittedLens: Boolean)
+data class SiteLocalizationResult(val lens: SiteCameraLens, val pose: SiteCameraPose, val inliers: Int, val residual: Double, val fittedLens: Boolean)
 
 /** iOS SiteLocalizationError, with the same wording. */
 class SiteLocalizationException(val kind: Kind, val reason: Int = 0, val matches: Int = 0, val inliers: Int = 0) : Exception() {

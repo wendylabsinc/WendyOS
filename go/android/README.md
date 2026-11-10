@@ -95,7 +95,18 @@ run on a real phone against a real WendyOS device yet.
   a device through `SiteModels`), live cameras, missions and activity.
   Models are read by a Kotlin USD reader (usda and usdc crate layers) and
   drawn with OpenGL ES. Fixed cameras are added by gateway identity, placed
-  by tapping the model, previewed and aligned manually.
+  by tapping the model, previewed and aligned.
+- Camera alignment (Sites and Digital Twin, "Align camera"): live video is
+  matched to the scan's reference map and the lens and position are saved
+  on the gateway (`SaveCameraAlignment`), as on iOS. `SiteLocalization.kt`
+  is a Kotlin port of `SiteLocalization.cpp` on OpenCV's Java API, with the
+  same thresholds, validation folds and two-frame check. The lens can be
+  measured with this phone's screen or a saved checkerboard
+  (`SaveCameraLens`), or the camera adjusted manually. Unplaced cameras are
+  aligned in the background while their site is open, and every camera
+  aligned on the gateway (by either phone) shows its view cone.
+  Calibration frames come from H.264 keyframes decoded by a separate
+  MediaCodec, or from JPEG frames.
 - Digital Twin (device tool): saved captures with import, share, remove and
   restore, and the gateway's cameras placed, previewed and aligned.
 - Apps, logs, settings, Wendy Lite boards, campaigns, chat and the model
@@ -110,7 +121,7 @@ compilation does not establish that hardware-dependent workflows work.
 | iOS feature (PR #2715) | Android status |
 | --- | --- |
 | Sites: room scanning and photo reconstruction | Not available: iOS uses RoomPlan and Object Capture on LiDAR devices. Android imports models made on iOS. |
-| Sites: automatic camera alignment, lens calibration and reference capture | Not ported. iOS uses OpenCV localization (`SiteLocalization.cpp`) and ARKit; Android saves manual alignments. |
+| Sites: scan reference capture (the visual map) | Not available: iOS records it with ARKit LiDAR depth during the room scan, in the scan's coordinates. Android uses maps made on iOS, carried in `.wendysite` files. |
 | Sites: projected live video on the model and the RealityKit preview viewer | Not ported. Android draws the model, camera markers and view cones. |
 | Digital Twin robot map, localization, people tracking and Go2 controls | Not ported. These move a physical robot and need a robot to test against. |
 | Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. |
