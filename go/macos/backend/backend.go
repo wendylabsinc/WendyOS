@@ -41,6 +41,8 @@ type Event struct {
 }
 type Backend struct {
 	gallery                 galleryConnections
+	discovery               nearbyDiscovery
+	discoverNearby          func(context.Context) ([]commands.DesktopDevice, error)
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
@@ -210,11 +212,6 @@ func (b *Backend) Initialize(cli string) error {
 	_, done := b.begin()
 	defer done()
 	return commands.InitializeDesktop(cli)
-}
-func (b *Backend) Nearby() ([]commands.DesktopDevice, error) {
-	ctx, done := b.begin()
-	defer done()
-	return commands.DesktopNearby(ctx)
 }
 func (b *Backend) Cloud() ([]commands.DesktopDevice, error) {
 	ctx, done := b.begin()
@@ -462,6 +459,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.resetNearbyDiscovery(true)
 	b.galleryReset(true)
 	b.cancelOperation()
 	b.ReserveConnection()

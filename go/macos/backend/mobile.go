@@ -19,6 +19,7 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if !active || changed {
+		b.resetNearbyDiscovery(true)
 		b.galleryReset(true)
 		b.cancelOperation()
 		b.ReserveConnection()
@@ -42,6 +43,9 @@ func (b *Backend) SetMobileState(active bool, account, organization string) erro
 		b.gallery.mu.Lock()
 		b.gallery.blocked = false
 		b.gallery.mu.Unlock()
+	}
+	if err == nil && active {
+		b.allowNearbyDiscovery()
 	}
 	return err
 }
