@@ -82,7 +82,7 @@ func fetchCloudAssetsV2(ctx context.Context, auth *config.AuthConfig, onlineOnly
 }
 
 // cloudDiscoveryDevice preserves each API's identity while sharing the display,
-// clipboard, version-probe and update paths across both generations.
+// clipboard and update paths across both generations.
 type cloudDiscoveryDevice struct {
 	cloudAssetMetadata
 	legacy *cloudpb.Asset
