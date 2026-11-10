@@ -367,3 +367,19 @@ func TestTenantDeviceRegistersWithCloudV2(t *testing.T) {
 		t.Fatalf("GetApp organization = %q", cloud.gets[1].GetOrganizationId())
 	}
 }
+
+// Over the local agent socket the verified device identity is unavailable, so
+// registration is skipped instead of failing every deploy on an enrolled device.
+func TestRegisterCloudAppsSkipsOverTheAgentSocket(t *testing.T) {
+	conn := &grpcclient.AgentConnection{Host: "unix:/run/wendy/agent.sock"}
+	if err := registerCloudApps(context.Background(), conn, []string{"app"}, false); err != nil {
+		t.Fatalf("registration over the agent socket must be skipped: %v", err)
+	}
+}
+
+func TestRegisterCloudAppsStillAttemptsOverOtherConnections(t *testing.T) {
+	conn := &grpcclient.AgentConnection{Host: "robot.local"}
+	if err := registerCloudApps(context.Background(), conn, []string{"app"}, false); err == nil {
+		t.Fatal("registration over a network connection must still be attempted")
+	}
+}

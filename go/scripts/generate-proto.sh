@@ -71,6 +71,9 @@ MODULE="github.com/wendylabsinc/wendy"
 # Migrated gRPC APIs share one source pin with embedded Swift.
 source "$PROTO_DIR/shared-grpc-api-contracts.sh"
 SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS=(
+    "wendycloud/v2/apns.proto"
+    "wendycloud/v2/device_access.proto"
+    "wendycloud/v2/roles.proto"
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/users.proto"
     "wendycloud/v2/tunnel.proto"
@@ -109,28 +112,30 @@ done
 SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
     "${PKI_PROTOS[@]}"
+    "wendyauth/v1/envelope.proto"
+    "${SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS[@]}"
     "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"
 )
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
-    if [ -e "$PROTO_DIR/$proto" ] || [ -L "$PROTO_DIR/$proto" ]; then
-        echo "error: remove Proto/$proto; it is generated from service-protos" >&2
-        exit 1
-    fi
     SHARED_GRPC_API_CONTRACTS_PATH_ARGS+=(--path "$proto")
 done
-for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
-    if [ -e "$PROTO_DIR/cloud/$proto" ] || [ -L "$PROTO_DIR/cloud/$proto" ]; then
-        echo "error: remove Proto/cloud/$proto; it is generated from service-protos" >&2
+SHARED_GRPC_API_CONTRACTS_SCRATCH="$(mktemp -d)"
+trap 'finish_shared_grpc_api_contracts "$?" "$SHARED_GRPC_API_CONTRACTS_SCRATCH"' EXIT
+# Catalogue inspection is separate from generation's selected import tree.
+buf export "$SHARED_GRPC_API_CONTRACTS_INPUT" --output "$SHARED_GRPC_API_CONTRACTS_SCRATCH/catalogue"
+check_shared_grpc_api_contracts_sources "$PROTO_DIR" "$SHARED_GRPC_API_CONTRACTS_SCRATCH/catalogue"
+SHARED_GRPC_API_CONTRACTS_DIR="$SHARED_GRPC_API_CONTRACTS_SCRATCH/selected"
+buf export \
+    "$SHARED_GRPC_API_CONTRACTS_INPUT" \
+    "${SHARED_GRPC_API_CONTRACTS_PATH_ARGS[@]}" --output "$SHARED_GRPC_API_CONTRACTS_DIR"
+for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
+    if [ ! -f "$SHARED_GRPC_API_CONTRACTS_DIR/$proto" ]; then
+        echo "error: selected shared proto missing from export: $proto" >&2
         exit 1
     fi
 done
-SHARED_GRPC_API_CONTRACTS_DIR="$(mktemp -d)"
-trap 'rm -rf "$SHARED_GRPC_API_CONTRACTS_DIR"' EXIT
-buf export \
-    "https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF" \
-    "${SHARED_GRPC_API_CONTRACTS_PATH_ARGS[@]}" --output "$SHARED_GRPC_API_CONTRACTS_DIR"
 mkdir -p "$SHARED_GRPC_API_CONTRACTS_DIR/cloud"
 for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
     mv "$SHARED_GRPC_API_CONTRACTS_DIR/$proto" "$SHARED_GRPC_API_CONTRACTS_DIR/cloud/$proto"
@@ -139,56 +144,19 @@ done
 # ---- Wendy Agent protos ----
 AGENT_PKG="$MODULE/go/proto/gen/agentpb"
 
-AGENT_PROTOS=(
-    "wendy/agent/services/v1/shared.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_service.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_container_service.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_shell_service.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_audio_service.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto"
-    "wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
-)
+AGENT_PROTOS=("${SHARED_GRPC_API_CONTRACTS_AGENT_V1_PROTOS[@]}")
 
 # Build M options for agent protos
 AGENT_M_OPTS=""
 for p in "${AGENT_PROTOS[@]}"; do
-    AGENT_M_OPTS="$AGENT_M_OPTS --go_opt=M${p}=${AGENT_PKG}"
-    AGENT_M_OPTS="$AGENT_M_OPTS --go-grpc_opt=M${p}=${AGENT_PKG}"
+    AGENT_M_OPTS="$AGENT_M_OPTS --go_opt=M${p}=${AGENT_PKG};agentpb"
+    AGENT_M_OPTS="$AGENT_M_OPTS --go-grpc_opt=M${p}=${AGENT_PKG};agentpb"
 done
 
 # ---- Wendy Agent v2 protos ----
 V2_AGENT_PKG="$MODULE/go/proto/gen/agentpb/v2"
 
-V2_AGENT_PROTOS=(
-    "wendy/agent/services/v2/shared.proto"
-    "wendy/agent/services/v2/device_info_service.proto"
-    "wendy/agent/services/v2/agent_update_service.proto"
-    "wendy/agent/services/v2/os_update_service.proto"
-    "wendy/agent/services/v2/driver_service.proto"
-    "wendy/agent/services/v2/wifi_service.proto"
-    "wendy/agent/services/v2/bluetooth_service.proto"
-    "wendy/agent/services/v2/container_service.proto"
-    "wendy/agent/services/v2/provisioning_service.proto"
-    "wendy/agent/services/v2/audio_service.proto"
-    "wendy/agent/services/v2/telemetry_service.proto"
-    "wendy/agent/services/v2/file_sync_service.proto"
-    "wendy/agent/services/v2/mesh_service.proto"
-    "wendy/agent/services/v2/local_mesh_admin_service.proto"
-    "wendy/agent/services/v2/ros2_service.proto"
-    "wendy/agent/services/v2/timesync_service.proto"
-    "wendy/agent/services/v2/build_service.proto"
-    "wendy/agent/services/v2/calibrated_frame_service.proto"
-    "wendy/agent/services/v2/robot_arm_service.proto"
-    "wendy/agent/services/v2/sensor_pairing_service.proto"
-    "wendy/agent/services/v2/unitree_service.proto"
-    "wendy/agent/services/v2/unitree_robot_service.proto"
-    "wendy/agent/services/v2/sensor_service.proto"
-    "wendy/agent/services/v2/tunnel_service.proto"
-    "wendy/agent/services/v2/data_service.proto"
-)
+V2_AGENT_PROTOS=("${SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS[@]}")
 
 V2_AGENT_M_OPTS=""
 for p in "${V2_AGENT_PROTOS[@]}"; do
@@ -202,12 +170,12 @@ done
 # file is mapped by AGENT_M_OPTS (folded into ALL_M_OPTS below), so the
 # generated v2 package imports agentpb rather than re-declaring the message.
 
-# sensor_service.proto (v2) imports wendy/lite/sensorlink.proto; map that
+# sensor_service.proto (v2) imports wendylite/v1/sensorlink.proto; map that
 # import to the existing sensorlinkpb package so the v2 service reuses the
 # shared SensorManifest/SensorData types instead of duplicating them.
 SENSORLINK_PKG="$MODULE/go/proto/gen/sensorlinkpb"
-V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"
-V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"
+V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=Mwendylite/v1/sensorlink.proto=${SENSORLINK_PKG}"
+V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=Mwendylite/v1/sensorlink.proto=${SENSORLINK_PKG}"
 
 # ---- OpenTelemetry protos ----
 #
@@ -263,17 +231,9 @@ for p in "${CLOUD_PROTOS[@]}"; do
 done
 
 # ---- Cloud v2 protos ----
-# Except for the Shared gRPC API contracts above, wendycloud.v2 is vendored beside v1.
-# Shared wendy/options.proto (the signed_request method option) generates into
-# cloudpbv2 too, so the option and SignedRequest live in one Go package.
+# Cloud v2 and its signed_request method option share the same pinned inputs.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
-# APNS registration is vendored from service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
-CLOUD_V2_PROTOS=(
-    "wendycloud/v2/apns.proto"
-    "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
-    "wendycloud/v2/roles.proto"
-    "wendycloud/v2/device_access.proto"
-)
+CLOUD_V2_PROTOS=("${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}")
 
 # The import path ends in "/v2", which would name the Go package "v2"; the
 # ";cloudpbv2" suffix pins a usable name without editing the vendored protos.
@@ -283,6 +243,30 @@ for p in "${CLOUD_V2_PROTOS[@]}"; do
     CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go-grpc_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
 done
 
+# ---- Cloud-authorized relay protos ----
+RELAY_PKG="$MODULE/go/proto/gen/relaypb"
+WCOMRELAY_PKG="$MODULE/go/proto/gen/wcomrelaypb"
+RELAY_M_OPTS="--go_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG} --go-grpc_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG}"
+for entry in "wendycloud/tunnel/v2/tunnel.proto=$RELAY_PKG" "wendycloud/tunnel/lite/v1/relay.proto=$WCOMRELAY_PKG"; do
+    RELAY_M_OPTS="$RELAY_M_OPTS --go_opt=M$entry --go-grpc_opt=M$entry"
+done
+
+# ---- Wendy System API protos ----
+SYSTEM_PKG="$MODULE/go/proto/gen/systempb"
+SYSTEM_PROTOS=(
+    "wendy/system/v1/notifications.proto"
+)
+
+SYSTEM_M_OPTS=""
+for p in "${SYSTEM_PROTOS[@]}"; do
+    SYSTEM_M_OPTS="$SYSTEM_M_OPTS --go_opt=M${p}=${SYSTEM_PKG}"
+    SYSTEM_M_OPTS="$SYSTEM_M_OPTS --go-grpc_opt=M${p}=${SYSTEM_PKG}"
+done
+
+RECORDING_PKG="$MODULE/go/proto/gen/recordingpb"
+RECORDING_M_OPTS="--go_opt=Mwendy/agent/apps/v1/recording.proto=$RECORDING_PKG --go-grpc_opt=Mwendy/agent/apps/v1/recording.proto=$RECORDING_PKG"
+ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_M_OPTS $PKI_M_OPTS $SYSTEM_M_OPTS $RECORDING_M_OPTS"
+
 # CI regenerates the migrated gRPC APIs temporarily and compares their outputs.
 if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-shared-grpc-api-contracts ]; then
     SHARED_GRPC_API_CONTRACTS_OUT="$SHARED_GRPC_API_CONTRACTS_DIR/generated"
@@ -291,6 +275,13 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
         --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
         --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
         $CLOUD_V2_M_OPTS $PKI_M_OPTS "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
+    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
+        --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
+        $RELAY_M_OPTS "${SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS[@]}"
+    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
+        --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" wendyauth/v1/envelope.proto
     # Cloud is the client transport. PKI supplies messages, not direct clients.
     protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
         --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
@@ -298,7 +289,15 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
     protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
         --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
         --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
-        $AGENT_M_OPTS $V2_AGENT_M_OPTS "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
+        --proto_path="$PROTO_DIR" \
+        $ALL_M_OPTS "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
+    # The local Lite envelope imports sensorlink; check that generated edge too.
+    LITE_PKG="$MODULE/go/proto/gen/litepb"
+    protoc --proto_path="$PROTO_DIR/wendy/lite" --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
+        --go_opt=Mwendy_com_msg.proto="$LITE_PKG" --go_opt=Mwendy_conf.proto="$LITE_PKG" \
+        --go_opt=Mwendylite/v1/sensorlink.proto="$SENSORLINK_PKG" \
+        wendy_com_msg.proto wendy_conf.proto
     CLOUD_V1_SHARED_INPUTS=()
     for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
         CLOUD_V1_SHARED_INPUTS+=("cloud/$proto")
@@ -308,11 +307,20 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
         --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
         $CLOUD_M_OPTS "${CLOUD_V1_SHARED_INPUTS[@]}"
     if [ "$1" = --check-shared-grpc-api-contracts ]; then
+        for file in wendy_com_msg.pb.go wendy_conf.pb.go; do
+            diff -u "$GEN_DIR/litepb/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/litepb/$file"
+        done
         for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
             case "$proto" in
                 wendy/agent/services/v1/*) package="agentpb" ;;
                 wendy/agent/services/v2/*) package="agentpb/v2" ;;
+                wendy/agent/apps/*) package="recordingpb" ;;
+                wendy/system/*) package="systempb" ;;
+                wendylite/*) package="sensorlinkpb" ;;
                 pkicore/*) package="pkicorepb" ;;
+                wendyauth/*) package="wendyauthpb" ;;
+                wendycloud/tunnel/v2/*) package="relaypb" ;;
+                wendycloud/tunnel/lite/v1/*) package="wcomrelaypb" ;;
                 */*) package="cloudpb/v2" ;;
                 *) package="cloudpb" ;;
             esac
@@ -331,21 +339,6 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
     fi
     exit 0
 fi
-
-# ---- Wendy System API protos ----
-SYSTEM_PKG="$MODULE/go/proto/gen/systempb"
-SYSTEM_PROTOS=(
-    "wendy/system/v1/notifications.proto"
-)
-
-SYSTEM_M_OPTS=""
-for p in "${SYSTEM_PROTOS[@]}"; do
-    SYSTEM_M_OPTS="$SYSTEM_M_OPTS --go_opt=M${p}=${SYSTEM_PKG}"
-    SYSTEM_M_OPTS="$SYSTEM_M_OPTS --go-grpc_opt=M${p}=${SYSTEM_PKG}"
-done
-
-# All M opts combined for cross-package imports
-ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_M_OPTS $PKI_M_OPTS $SYSTEM_M_OPTS"
 
 # Generate completely before replacing committed output, including on failure.
 COMMITTED_GEN_DIR="$GEN_DIR"
@@ -415,6 +408,7 @@ echo "Generating Wendy System API protos..."
 mkdir -p "$GEN_DIR/systempb"
 protoc \
     --proto_path="$PROTO_DIR" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
     --go_out="$GEN_DIR/systempb" \
     --go_opt=module="$SYSTEM_PKG" \
     $ALL_M_OPTS \
@@ -422,25 +416,18 @@ protoc \
     --go-grpc_opt=module="$SYSTEM_PKG" \
     ${SYSTEM_PROTOS[@]}
 
-# wendy_com_msg.proto imports sensorlink.proto by bare filename, for the same
-# reason the relay protos do: in the wendy-lite project the two sit side by
-# side in one directory, and the file is shared with that project verbatim. So
-# proto_path points inside wendy/lite here too. sensorlink.proto is an input
-# only -- its Go code comes from the sensorlinkpb generation further down,
-# which the agent's v2 sensor service shares. The wendy-lite project generates
-# it into a sensorlinkpb package of its own under the same import path, so the
-# client code shared with that project names these types identically on both
-# sides.
+# The local Lite envelope retains its existing fields and imports canonical sensorlink.
 echo "Generating Wendy Lite protos..."
 LITE_PKG="$MODULE/go/proto/gen/litepb"
 mkdir -p "$GEN_DIR/litepb"
 protoc \
     --proto_path="$PROTO_DIR/wendy/lite" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
     --go_out="$GEN_DIR/litepb" \
     --go_opt=module="$LITE_PKG" \
     --go_opt=Mwendy_com_msg.proto="$LITE_PKG" \
     --go_opt=Mwendy_conf.proto="$LITE_PKG" \
-    --go_opt=Msensorlink.proto="$SENSORLINK_PKG" \
+    --go_opt=Mwendylite/v1/sensorlink.proto="$SENSORLINK_PKG" \
     wendy_com_msg.proto \
     wendy_conf.proto
 
@@ -451,42 +438,26 @@ protoc \
     --proto_path="$PROTO_DIR" \
     --go_out="$GEN_DIR/sensorlinkpb" \
     --go_opt=module="$SENSORLINK_PKG" \
-    --go_opt=Mwendy/lite/sensorlink.proto="$SENSORLINK_PKG" \
-    "$PROTO_DIR/wendy/lite/sensorlink.proto"
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+    --go_opt=Mwendylite/v1/sensorlink.proto="$SENSORLINK_PKG" \
+    wendylite/v1/sensorlink.proto
 
-# Cloud-authorized relay contract (service-protos fe42be2). Crypto domain
-# separators remain v1; the RPC package and UUID asset identifiers are v2.
-RELAY_PKG="$MODULE/go/proto/gen/relaypb"
-AUTH_PKG="$MODULE/go/proto/gen/wendyauthpb"
-protoc --proto_path="$PROTO_DIR" \
-    --go_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go_opt=module="$MODULE/go" \
-    --go_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go-grpc_opt=module="$MODULE/go" \
-    --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    wendycloud/tunnel/v2/tunnel.proto wendyauth/v1/envelope.proto
-
-# Packaged Lite relay contract from service-protos.
-WCOMRELAY_PKG="$MODULE/go/proto/gen/wcomrelaypb"
-protoc --proto_path="$PROTO_DIR" \
-    --go_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go_opt=module="$MODULE/go" \
-    --go_opt=Mwendycloud/tunnel/lite/v1/relay.proto="$WCOMRELAY_PKG" \
-    --go_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go-grpc_opt=module="$MODULE/go" \
-    --go-grpc_opt=Mwendycloud/tunnel/lite/v1/relay.proto="$WCOMRELAY_PKG" \
-    --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
-    --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
-    wendycloud/tunnel/lite/v1/relay.proto
+# Preserve the existing relay packages and RPC names using the shared pin.
+protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+    --go_out="$GEN_DIR" --go_opt=module="$MODULE/go/proto/gen" \
+    --go-grpc_out="$GEN_DIR" --go-grpc_opt=module="$MODULE/go/proto/gen" \
+    $RELAY_M_OPTS "${SHARED_GRPC_API_CONTRACTS_RELAY_PROTOS[@]}"
+# Preserve the existing auth package from the identical shared envelope.
+protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+    --go_out="$GEN_DIR" --go_opt=module="$MODULE/go/proto/gen" \
+    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" wendyauth/v1/envelope.proto
 
 # App recording envelopes (no generated SDK is needed for lightweight streams).
-protoc --proto_path="$PROTO_DIR" --go_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go_opt=module="$MODULE/go" \
-    wendy/agent/apps/v1/recording.proto
+protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" --go_out="$SHARED_GRPC_API_CONTRACTS_DIR" --go_opt=module="$MODULE/go" \
+    --go_opt=Mwendy/agent/apps/v1/recording.proto="$RECORDING_PKG" wendy/agent/apps/v1/recording.proto
 
 # Cloud-owned invite contract from cloud d840731bfb4a59bd6585efb359d67745d295a28d.
-# UUID identifiers despite its v1 package. roles/device_access above are from
-# service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
+# UUID identifiers and SignedRequest differ from the deferred shared v1 API.
 mkdir -p "$GEN_DIR/cloudinvitepb"
 protoc --proto_path="$PROTO_DIR" \
     --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \

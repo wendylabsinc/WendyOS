@@ -28,6 +28,12 @@ type appHTTPClient struct {
 }
 
 func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, closeProxy func()) (*appHTTPClient, error) {
+	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
+		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
+	return newAppHTTPClientWithSDK(lifetimeCtx, initCtx, endpoint, closeProxy, client)
+}
+
+func newAppHTTPClientWithSDK(lifetimeCtx, initCtx context.Context, endpoint string, closeProxy func(), client *sdk.Client) (*appHTTPClient, error) {
 	ctx, cancel := context.WithCancel(lifetimeCtx)
 	initCtx, cancelInit := context.WithCancel(initCtx)
 	stop := context.AfterFunc(ctx, cancelInit)
@@ -38,18 +44,34 @@ func newAppHTTPClient(lifetimeCtx, initCtx context.Context, endpoint string, clo
 	}
 	// App responses must never redirect requests outside the local TCP proxy.
 	transport := &http.Transport{IdleConnTimeout: appHTTPIdleConnTimeout}
-	client := sdk.NewClient(&sdk.Implementation{Name: "wendy-app-proxy", Version: "1"},
-		&sdk.ClientOptions{Capabilities: &sdk.ClientCapabilities{}})
+	closeProxy = sync.OnceFunc(closeProxy)
+	// A canceled initialize can leave the SDK waiting for its best-effort
+	// cancellation notification during graceful session cleanup. Close the
+	// proxy on cancellation, before Connect must return, so that notification
+	// cannot hold cleanup open. Stop this before our deferred cancelInit on a
+	// successful handshake; initialization no longer owns the live session.
+	stopClosingProxy := context.AfterFunc(initCtx, closeProxy)
+	defer stopClosingProxy()
+	// Keep the app proxy on the session-based protocol: cancellation and
+	// shutdown depend on initialize and session termination.
 	session, err := client.Connect(initCtx, &sdk.StreamableClientTransport{
 		Endpoint:             endpoint,
 		DisableStandaloneSSE: true,
 		HTTPClient: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
-	}, &sdk.ClientSessionOptions{ProtocolVersion: mcpgo.LATEST_PROTOCOL_VERSION})
+	}, &sdk.ClientSessionOptions{ProtocolVersion: mcpgo.ProtocolVersion20251125})
+	// Transfer ownership only if initialization cancellation has not already
+	// started closing the proxy, even if the SDK just completed its handshake.
+	if !stopClosingProxy() && err == nil {
+		err = initCtx.Err()
+	}
 	if err != nil {
 		cancel()
 		closeProxy()
+		if session != nil {
+			_ = session.Close()
+		}
 		transport.CloseIdleConnections()
 		return nil, err
 	}

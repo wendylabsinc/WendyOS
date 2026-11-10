@@ -2,12 +2,11 @@ package commands
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"testing"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
@@ -32,6 +31,9 @@ func (*cloudIdentityVersionServer) GetAgentVersion(ctx context.Context, _ *agent
 // A successful RPC must expose its verified reporter, including when TLS resumes;
 // constructing a connection or rejecting the peer must never manufacture proof.
 func TestCloudTLSObservedReporterIdentity(t *testing.T) {
+	if !isolatedCloudTLSProcess(t) {
+		return
+	}
 	const org = 123
 	auth, serverTLS := legacyLiteTestPKI(t, org, certs.AssetURN(org, 42))
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)))
@@ -42,7 +44,8 @@ func TestCloudTLSObservedReporterIdentity(t *testing.T) {
 	}
 	go server.Serve(listener)
 	t.Cleanup(server.Stop)
-	cache := tls.NewLRUClientSessionCache(4)
+	t.Setenv("WENDY_TLS_SESSION_STORE", "file")
+	t.Setenv("HOME", t.TempDir())
 	for _, tc := range []struct {
 		name        string
 		asset       string
@@ -53,18 +56,13 @@ func TestCloudTLSObservedReporterIdentity(t *testing.T) {
 		{"rejected identity", "43", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var observed grpcclient.VerifiedServerIdentity
 			expected := certs.WendyIdentity{OrgID: org, EntityType: certs.EntityAsset, EntityID: tc.asset}
-			tlsCfg, err := cloudAgentTLSConfig(auth.Certificates[0], expected, &observed)
+			agent, err := connectCloudAgentTransport(context.Background(), auth.Certificates[0], expected, clouddefaults.TunnelDialer(func(ctx context.Context) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			tlsCfg.ClientSessionCache = cache
-			conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			agent := grpcclient.NewFromConnWithVerifiedIdentity(conn, &observed)
 			defer agent.Close()
 			if got, ok := agent.ObservedServerIdentity(); ok {
 				t.Fatalf("lazy connection already claims a verified identity: %+v", got)
@@ -129,16 +127,12 @@ func TestCloudTLSTenantReporterIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var observer grpcclient.VerifiedServerIdentity
-			tlsCfg, err := cloudAgentTLSConfig(client, expected, &observer)
+			agent, err := connectCloudAgentTransport(context.Background(), client, expected, clouddefaults.TunnelDialer(func(ctx context.Context) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			agent := grpcclient.NewFromConnWithVerifiedIdentity(conn, &observer)
 			defer agent.Close()
 			if identity, ok := agent.ObservedServerIdentity(); ok {
 				t.Fatalf("unverified identity: %+v", identity)

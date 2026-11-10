@@ -14,7 +14,7 @@ Headless Mac turns any Apple Silicon Mac into a Wendy target: install Wendy Agen
 ## Requirements
 
 - An Apple Silicon Mac target running macOS 15 or later
-- Wendy CLI on a Mac development machine ([install it](/docs/#1-install-the-wendy-cli)) — it builds the app locally before syncing to the target
+- Wendy CLI on a Mac development machine ([install it](/docs/installation/cli)) — it builds the app locally before syncing to the target
 - A Swift toolchain on the development Mac
 
 If one Mac is both development machine and target, install both the CLI and Wendy Agent on it.
@@ -90,7 +90,7 @@ open --env WENDY_AGENT_HOST=127.0.0.1 --env WENDY_AGENT_PORT=50061 /Applications
 wendy --device 127.0.0.1:50061 device info --json
 ```
 
-## Headless Mac Setup
+## Headless Mac setup
 
 For any Mac that will run without a monitor, set it up once with a keyboard, mouse, and display attached before putting it on the shelf. Use a virtual display dongle or HDMI dummy plug for the final headless setup.
 
@@ -108,7 +108,7 @@ For any Mac that will run without a monitor, set it up once with a keyboard, mou
 
 7. When Wendy Agent first opens, leave **Open Wendy Agent at login and restart it if it stops** enabled.
 
-## Verify the Installation
+## Verify the installation
 
 On the Mac running Wendy Agent, check that the CLI can reach the local target:
 
@@ -148,7 +148,7 @@ If you set the Mac as your default device, omit `--device`:
 wendy run
 ```
 
-## Local Build Service (optional)
+## Local build service (optional)
 
 Wendy Agent for Mac includes an optional **Local Build Service** that runs
 BuildKit in a lightweight Linux VM using Virtualization.framework. It is off by
@@ -221,7 +221,7 @@ uses Swift string storage, which cannot be reliably zeroed after use.
   versions so macOS can replace an older installed extension.
 </Callout>
 
-## What Works
+## What works
 
 - Apple Silicon Mac targets running macOS 15 or later
 - Enrolling the Mac in Wendy Cloud on **macOS 26 or later**. Sign in with `wendy cloud login`, then run `wendy device enroll`. On macOS 15 you can run local apps, but must update macOS before enrolling.
@@ -233,7 +233,7 @@ uses Swift string storage, which cannot be reliably zeroed after use.
 - Starting the optional BuildKit-based Local Build Service from the menu bar
 - Opt-in Wendy Mesh VPN for legacy numeric Cloud contexts (beta)
 
-## Not Supported
+## Not supported
 
 - Intel Macs
 - Linux containers as the Mac application runtime — the Local Build Service builds images but does not run Wendy apps
@@ -259,3 +259,8 @@ If Wendy Mesh cannot connect:
 2. If the error reports a UUID organization or tenant, the active context is Cloud v2 and is not supported by the current Mac Mesh relay.
 3. If approval is pending, use the menu link to open System Settings and approve the Wendy Network Extension, or cancel the request from the menu.
 4. Use a signed and notarized build when validating extension installation on an end-user Mac.
+
+## Next steps
+
+- [Managing apps](/docs/device/managing-apps) covers listing, stopping and removing the apps you deploy.
+- [App configuration](/docs/reference/app-configuration) describes the `wendy.json` settings for Mac targets.

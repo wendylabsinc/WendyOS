@@ -2,7 +2,7 @@
 
 Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over USB, flashes Wendy Lite firmware onto an ESP32, or prints `agent.sh` install instructions for an existing Linux machine or Mac.
 
-`wendy install` is the surfaced, top-level alias for [`wendy os install`](os/install.md). It is the recommended entry point: the underlying `wendy os` group is hidden from the main help, but the install flow is the most common first step when bringing up a device, so it is promoted to a first-class command.
+`wendy install` is the surfaced, top-level alias for [`wendy os install`](./os/install.md). It is the recommended entry point: the underlying `wendy os` group is hidden from the main help, but the install flow is the most common first step when bringing up a device, so it is promoted to a first-class command.
 
 The two commands are the **same command** — they accept identical flags and arguments and behave identically. `wendy os install` remains available for backward compatibility and for discoverability under the `wendy os` group.
 
@@ -39,7 +39,7 @@ wendy install --device-type linux-desktop --pre-enroll
 
 ## Reference
 
-See [`wendy os install`](os/install.md) for the complete reference: the ESP32 (Wendy Lite) flash path, the Linux (WendyOS) write path, WiFi pre-configuration, pre-enrollment, exit-code semantics, and the full flags table.
+See [`wendy os install`](./os/install.md) for the complete reference: the ESP32 (Wendy Lite) flash path, the Linux (WendyOS) write path, WiFi pre-configuration, pre-enrollment, exit-code semantics, and the full flags table.
 
 ## Linux Desktop / Headless Mac
 
@@ -47,6 +47,6 @@ Selecting **Linux Desktop** or **Headless Mac** in the interactive picker (or pa
 
 ## Related
 
-- [`wendy os install`](os/install.md) — full installation reference (same command)
-- [`wendy os download`](os/download.md) — pre-download a WendyOS image into the cache
-- [`wendy device setup`](device/setup.md) — provision a device after first boot
+- [`wendy os install`](./os/install.md) — full installation reference (same command)
+- [`wendy os download`](./os/download.md) — pre-download a WendyOS image into the cache
+- [`wendy device setup`](./device/setup.md) — provision a device after first boot

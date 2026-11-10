@@ -1,0 +1,27 @@
+{
+  "tool": "container_stats",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"stats\": [{\"app_name\": \"sensor-dashboard_web\", \"memory_bytes\": 15233024, \"storage_bytes\": 21423636}]}"
+        }
+      ],
+      "structuredContent": {
+        "stats": [
+          {
+            "app_name": "sensor-dashboard_web",
+            "memory_bytes": 15233024,
+            "storage_bytes": 21423636
+          }
+        ]
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  }
+}

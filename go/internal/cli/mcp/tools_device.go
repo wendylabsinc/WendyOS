@@ -16,7 +16,7 @@ import (
 )
 
 func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
-	listDesc := "List configured devices, local simulators (vm:NAME; device_connect boots a stopped one) and online cloud devices, plus fresh routed devices from an already connected operator context; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud and simulator failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
+	listDesc := "List configured devices, local simulators (vm:NAME; device_connect boots a stopped one) and online cloud devices, plus mesh devices reachable through an already connected local Wendy Net router; scan=true adds ordinary LAN discovery without enabling Wendy Net. Pass a returned device selector to device_connect or run. Cloud and simulator failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
 	if s.relay {
 		listDesc = "List configured and online cloud devices; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
 	}
@@ -31,15 +31,15 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("device_list", listOpts...), s.handleDeviceList)
 
 	connectOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Connect to a LAN, simulator, or cloud device using its discovery selector."),
-		mcpgo.WithString("device", mcpgo.Required(), mcpgo.Description("device from device_list, a host:port, or vm:name")),
+		mcpgo.WithDescription("Connect to a WendyOS device over LAN, Wendy Net, a simulator, or Cloud using its discovery selector. Mesh selectors choose the destination; nearby mesh routers are discovered automatically."),
+		mcpgo.WithString("device", mcpgo.Required(), mcpgo.Description("device from device_list, a host:port, mesh://TENANT_UUID/DEVICE_UUID, vm:name, or cloud:// selector")),
 	}
 	connectOpts = append(connectOpts, mutating()...)
 	connectOpts = append(connectOpts, idempotent()...)
 	connectOpts = append(connectOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("device_connect", connectOpts...), s.handleDeviceConnect)
 
-	disconnectOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Disconnect from the currently connected device")}
+	disconnectOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Disconnect MCP from the selected device; this does not stop the local Wendy Net background router")}
 	disconnectOpts = append(disconnectOpts, mutating()...)
 	disconnectOpts = append(disconnectOpts, idempotent()...)
 	disconnectOpts = append(disconnectOpts, localOnly()...)
@@ -86,6 +86,15 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 			"address": s.cfg.DefaultDevice,
 			"type":    "default",
 			"source":  "config",
+		})
+	}
+
+	if inDeviceContainer() && !s.relay {
+		devices = append(devices, map[string]any{
+			"device":  localDeviceSelector,
+			"address": localDeviceSelector,
+			"type":    "local",
+			"source":  "agent-socket",
 		})
 	}
 
@@ -242,6 +251,9 @@ func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolR
 	}
 	if strings.TrimSpace(address) == "" {
 		return errResult(errCodeInvalidArgument, "device is required (legacy address is also accepted)"), nil
+	}
+	if inDeviceContainer() && !isLocalSelector(address) {
+		return errResultf(errCodeUnsupported, "inside a device container only the local device is reachable (the agent socket overrides %q); connect to %q", address, localDeviceSelector), nil
 	}
 	if err := s.ConnectTo(ctx, address); err != nil {
 		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", address, err.Error()), nil

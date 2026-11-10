@@ -1,15 +1,15 @@
 ---
-title: Build Once, Deploy to Several Devices
+title: Build once, deploy to several devices
 description: Use a Wendy build host to build one container image, deploy it to two devices, and check the app on each device.
 ---
 
 This tutorial deploys the same small HTTP service to two WendyOS devices. A third device builds the image and delivers it to both targets. You then request the service from each target to confirm that both are running the expected revision.
 
-For several cooperating services on one device, follow [Multi-App Deployments](/docs/guides/multi-app-deployments).
+For several cooperating services on one device, follow [Multi-app deployments](/docs/guides/multi-app-deployments).
 
 ## Prerequisites
 
-- The [Wendy CLI](/docs/#1-install-the-wendy-cli) on your development machine.
+- The [Wendy CLI](/docs/installation/cli) on your development machine.
 - Two Linux devices with the same CPU architecture, such as two `linux/arm64` devices.
 - A Linux build host running the Wendy agent and BuildKit, with support for the target platform and at least 8 GiB free on its BuildKit cache filesystem.
 - All three devices enrolled in the same [Wendy Cloud organization](https://cloud.wendy.dev/login), with working connections between the build host and the targets.

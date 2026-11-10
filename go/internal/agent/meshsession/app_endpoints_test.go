@@ -93,3 +93,35 @@ func TestNativeAgentMTLSRequiresExactSignedPortAndForwarding(t *testing.T) {
 		t.Fatal(native, err)
 	}
 }
+
+func TestEndpointResolutionUsesAdmittedLeaseAndExactCurrentService(t *testing.T) {
+	now := time.Now()
+	peer := fixtureDevice(t, fixtureDeviceB)
+	for _, skew := range []time.Duration{-24 * time.Hour, 24 * time.Hour} {
+		t.Run(skew.String(), func(t *testing.T) {
+			issued := now.Add(skew)
+			snapshot := localmesh.NodeSnapshot{Routes: []babel.Route{{Prefix: netip.PrefixFrom(peer.MeshAddress(), 128), Link: 1}}, Devices: []localmesh.Manifest{{Device: peer.UUID(), Issued: issued.UnixMilli(), Expires: issued.Add(time.Minute).UnixMilli(), AdmittedUntil: now.Add(time.Minute), AgentPort: 5054, AgentTransport: localmesh.AgentMTLS, AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppTLS, Port: TLSPort}}}}}
+			if endpoint, err := ResolveApp(snapshot, peer); err != nil || endpoint.Address.Port() != TLSPort {
+				t.Fatal(endpoint, err)
+			}
+			if _, native, err := ResolveAgentMTLS(snapshot, peer, 5054); !native || err != nil {
+				t.Fatal(native, err)
+			}
+			if _, native, _ := ResolveAgentMTLS(snapshot, peer, 50051); native {
+				t.Fatal("admitted lease authorized arbitrary port")
+			}
+			snapshot.Devices[0].AdmittedUntil = now.Add(-time.Second)
+			if _, err := ResolveApp(snapshot, peer); !errors.Is(err, ErrNoRoute) {
+				t.Fatalf("expired app admission: %v", err)
+			}
+			if _, native, err := ResolveAgentMTLS(snapshot, peer, 5054); !native || !errors.Is(err, ErrNoRoute) {
+				t.Fatal(native, err)
+			}
+			snapshot.Devices[0].AdmittedUntil = now.Add(time.Minute)
+			snapshot.Routes = nil
+			if _, err := ResolveApp(snapshot, peer); !errors.Is(err, ErrNoRoute) {
+				t.Fatalf("admission bypassed route requirement: %v", err)
+			}
+		})
+	}
+}

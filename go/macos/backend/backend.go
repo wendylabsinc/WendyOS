@@ -40,6 +40,7 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	gallery                 galleryConnections
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
@@ -461,6 +462,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.galleryReset(true)
 	b.cancelOperation()
 	b.ReserveConnection()
 	b.NearbyClose(0)
@@ -612,6 +614,13 @@ func (b *Backend) StartLogs(app string, streamID uint64) error {
 	}()
 	return nil
 }
+
+// vp8CameraMessage explains a camera whose agent chose VP8, which the app
+// cannot play. Older agents fall back to VP8 whenever the device lacks
+// h264parse (gstreamer1.0-plugins-bad); newer ones only when it also lacks
+// x264enc. PresentedFailure matches "sends VP8 video", so keep that phrase.
+const vp8CameraMessage = "This device sends VP8 video, which the Wendy app cannot play yet. Update the device’s Wendy agent, or install gstreamer1.0-plugins-bad on it."
+
 func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expectedStableID ...string) error {
 	_, done := b.begin()
 	defer done()
@@ -685,7 +694,11 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 			}
 			firstFrame.Stop()
 			if v.GetCodec() != pb.VideoCodec_VIDEO_CODEC_H264 {
-				b.emitText(streamCtx, EventCameraError, session, streamID, "This camera did not provide H.264 video.")
+				message := "This camera did not provide H.264 video."
+				if v.GetCodec() == pb.VideoCodec_VIDEO_CODEC_VP8 {
+					message = vp8CameraMessage
+				}
+				b.emitText(streamCtx, EventCameraError, session, streamID, message)
 				return
 			}
 			if len(v.Data) > 16<<20 {

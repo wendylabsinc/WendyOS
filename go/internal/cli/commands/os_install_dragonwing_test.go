@@ -972,7 +972,7 @@ func TestReportDragonwingFailureCoversCancellation(t *testing.T) {
 }
 
 func TestDragonwingEDLInstructionsMatchTheBoard(t *testing.T) {
-	for _, tc := range []struct{ board, pole string }{{"dragonwing-iq-8275", "S2-8"}, {"dragonwing-iq-9075", "SW2-3"}} {
+	for _, tc := range []struct{ board, pole string }{{"dragonwing-iq-8275", "S2-8"}, {"dragonwing-iq-9075", "MODE switch 3"}} {
 		board, _ := dragonwingBoardFor(tc.board)
 		guide := board.guide()
 		for label, value := range map[string]string{"entry": strings.Join(guide.entry, "\n"), "ready": guide.ready, "done": strings.Join(guide.done, "\n"), "retry": guide.retry, "reenter": strings.Join(guide.reenter, "\n")} {

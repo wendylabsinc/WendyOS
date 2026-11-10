@@ -59,7 +59,7 @@ const (
 	maxParentLease = 30 * time.Minute
 )
 
-var ErrUnavailable = errors.New("session broker unavailable")
+var ErrUnavailable = errors.New("the local Wendy connection service is unavailable")
 
 type Spec struct {
 	Operator        *OperatorSpec       `json:"operator,omitempty"`
@@ -69,6 +69,9 @@ type Spec struct {
 	CertFingerprint string              `json:"certFingerprint"`
 	Expected        certs.WendyIdentity `json:"expected"`
 	ParentPID       int                 `json:"parentPid,omitempty"`
+	// DiagnosticGeneration binds an optional failure record to this launch,
+	// independently of the durable operator identity and recipe.
+	DiagnosticGeneration string `json:"diagnosticGeneration,omitempty"`
 }
 
 type stateFile struct {
@@ -335,7 +338,23 @@ func Run(ctx context.Context, encoded string, idleTTL time.Duration, parentLease
 		_ = lock.Close()
 	}()
 	if spec.Operator != nil {
-		return runOperator(ctx, dir, spec, idleTTL)
+		diagnostics := newOperatorDiagnostics(dir, spec)
+		if diagnostics == nil {
+			return runOperator(ctx, dir, spec, idleTTL)
+		}
+		exit := &operatorExit{}
+		owner := context.WithValue(context.WithValue(ctx, operatorDiagnosticsKey{}, diagnostics), operatorExitKey{}, exit)
+		err := runOperator(owner, dir, spec, idleTTL)
+		cause := exit.first.Load()
+		if cause == nil {
+			reason := "server_ended"
+			if err != nil {
+				reason = "startup_failed"
+			}
+			cause = &operatorExitCause{reason: reason, err: err}
+		}
+		diagnostics.recordExit(cause)
+		return err
 	}
 	certInfo, err := findCertificate(spec.CertFingerprint, spec.Expected.OrgID)
 	if err != nil {
@@ -924,9 +943,11 @@ func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *gr
 		for {
 			select {
 			case <-serveCtx.Done():
+				noteOperatorExit(ctx, "context_done", context.Cause(ctx))
 				server.Stop()
 				return
 			case <-activity.upstreamBad:
+				noteOperatorExit(ctx, "upstream_unavailable", nil)
 				// A broker whose retained transport has failed — an RPC-observed
 				// drop, a departure from Ready seen by watchUpstreamState, or a
 				// streak of unanswered RPCs over a transport that still claims
@@ -945,6 +966,7 @@ func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *gr
 				// or idle grace. Stop, not GracefulStop: an open channel would
 				// otherwise keep the session alive past the user's decision.
 				if _, statErr := os.Lstat(statePath); statErr != nil {
+					noteOperatorExit(ctx, "state_unavailable", statErr)
 					server.Stop()
 					return
 				}
@@ -958,6 +980,7 @@ func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *gr
 				}
 				last := time.Unix(0, activity.last.Load())
 				if activity.connections.Load() == 0 && activity.activeRPCs.Load() == 0 && time.Since(last) >= idleTTL {
+					noteOperatorExit(ctx, "idle", nil)
 					drainThenStop(serveCtx, server, activity, socketPath, statePath, func() {
 						if localIPCRequiresListenerClose {
 							localDraining.Store(true)
@@ -970,6 +993,9 @@ func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *gr
 		}
 	}()
 	err = server.Serve(lis)
+	if !errors.Is(err, grpc.ErrServerStopped) && !localDraining.Load() {
+		noteOperatorExit(ctx, "listener_failed", err)
+	}
 	if localDraining.Load() {
 		<-done
 		cancelServe()

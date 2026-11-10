@@ -27,7 +27,7 @@ func ResolveApp(snapshot localmesh.NodeSnapshot, target meshid.Device) (AppEndpo
 		if device.Device != target.UUID() {
 			continue
 		}
-		if device.Withdraw || device.Expires <= time.Now().UnixMilli() {
+		if device.Withdraw || device.LeaseRemaining(time.Now()) <= 0 {
 			return AppEndpoint{}, ErrNoRoute
 		}
 		for _, transport := range []string{localmesh.AppQUIC, localmesh.AppTLS} {
@@ -50,7 +50,7 @@ func ResolveAgentMTLS(snapshot localmesh.NodeSnapshot, target meshid.Device, por
 		if device.Device != target.UUID() || device.AgentTransport != localmesh.AgentMTLS || device.AgentPort != port {
 			continue
 		}
-		if device.Withdraw || device.Expires <= time.Now().UnixMilli() {
+		if device.Withdraw || device.LeaseRemaining(time.Now()) <= 0 {
 			return netip.AddrPort{}, true, ErrNoRoute
 		}
 		address, err := Resolve(snapshot, target)

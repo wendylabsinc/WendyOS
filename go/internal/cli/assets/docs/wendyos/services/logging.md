@@ -133,7 +133,7 @@ journalctl --vacuum-size=200M
 
 By default, WendyOS configures two kernel consoles:
 
-- `console=serial0,115200` — hardware UART (see [uart.md](uart.md))
+- `console=serial0,115200` — hardware UART (see [uart.md](./uart.md))
 - `console=tty1` — HDMI framebuffer
 
 Kernel messages and early boot output appear on both. Systemd redirects unit output to the journal after early boot.

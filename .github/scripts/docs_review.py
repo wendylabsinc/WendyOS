@@ -52,7 +52,7 @@ class ReviewError(RuntimeError):
 
 SYSTEM_PROMPT = SOURCE_ONLY_RULE + "\n\n" + (
     'You are a technical writer for WendyOS.\n'
-    'Given a PR diff and the current documentation, identify the minimal doc changes needed to keep docs accurate — added behaviour, removed behaviour, or changed behaviour.\n'
+    'Given a PR diff and the current documentation, review accuracy and the complete reader journey affected by the change. Follow the entry page, prerequisites, task steps, success check, and next step across the supplied pages.\n'
     '\n'
     'Return a valid JSON object with this shape and no markdown fence:\n'
     '{\n'
@@ -70,14 +70,16 @@ SYSTEM_PROMPT = SOURCE_ONLY_RULE + "\n\n" + (
     '\n'
     'Severity guidance:\n'
     '- blocker: docs are directly wrong or missing for behaviour changed by the diff.\n'
-    '- concern: likely docs gap or unclear existing docs caused by the diff.\n'
+    '- concern: an evidenced obstacle in the affected reader journey, including existing duplication, conflicting prerequisites, confusing navigation, or a next step that repeats the same task.\n'
     '- info: nice-to-have clarification, cleanup, or low-risk suggestion.\n'
     '\n'
     'Rules:\n'
     '- Return at most 8 findings.\n'
-    '- Only flag content that is directly wrong or missing as a result of the diff.\n'
+    '- Review the affected journey as well as changed lines. Existing obstacles in that journey may be concerns; unrelated site-wide cleanup is out of scope.\n'
+    '- Check that each tutorial has one outcome, prerequisites match its commands, success is observable, and the next tutorial teaches a distinct capability. Check navigation places required concepts and configuration where beginners can find them.\n'
+    '- Prefer consolidating duplicate instructions or linking to their canonical page over appending another explanation. Do not require every platform exception on introductory pages.\n'
     '- Write in timeless present tense ("X does Y").\n'
-    '- Suggest new files only for features that are completely undocumented.\n'
+    '- Suggest new pages when a missing task or a split of competing journeys needs one. Identify which existing instructions should move or link there, so the change does not add another duplicate.\n'
     '- Do not invent features absent from the diff.\n'
     '- Missing or omitted source evidence is unknown, never proof of a documentation error. Do not report speculative contradictions (for example, "if the constants differ") as blockers.\n'
     '- A blocker requires a concrete contradiction or missing changed behavior demonstrated by the supplied source and current documentation. Cite the source and documentation paths and the exact conflicting behavior.\n'
@@ -121,7 +123,8 @@ def load_documents(repo: pathlib.Path, revision: str, changed_paths: list[str]) 
             continue
         mode, kind, _ = metadata.decode("ascii").split()
         item = pathlib.PurePosixPath(path)
-        if item.suffix not in {".md", ".mdx"} or item.name in PROTECTED:
+        is_navigation = path.startswith(DOCS_PREFIX) and item.name == "meta.json"
+        if (item.suffix not in {".md", ".mdx"} and not is_navigation) or item.name in PROTECTED:
             continue
         if path not in changed and not path.startswith(DOCS_PREFIX):
             continue
@@ -143,7 +146,20 @@ def documentation_context(documents: dict[str, str], changed_paths: list[str], t
     changed = set(changed_paths)
     keywords = _keywords(title) | _keywords(diff)
     mandatory = sorted(path for path in documents if path in changed)
+    # Give entry points, navigation, and adjacent tutorials priority over keyword
+    # matches so review can assess a path through the docs, not isolated pages.
+    journey_roots = {DOCS_PREFIX + name for name in (
+        "index.mdx", "meta.json", "concepts/index.mdx", "reference/index.mdx",
+        "guides/tutorials/index.mdx", "getting-started/app.mdx",
+        "getting-started/robot.mdx", "installation/cli.mdx", "installation/index.mdx",
+    )}
+    changed_dirs = {str(pathlib.PurePosixPath(path).parent) for path in changed
+                    if path.startswith(DOCS_PREFIX)}
     optional = sorted((path for path in documents if path not in changed), key=lambda path: (
+        0 if path in journey_roots else 1 if any(
+            str(pathlib.PurePosixPath(path).parent) == directory
+            or (path.endswith("/meta.json") and directory.startswith(path.rsplit("/", 1)[0] + "/"))
+            for directory in changed_dirs) else 2,
         -(3 * len(_keywords(path) & keywords)
           + len(_keywords(documents[path][:1500]) & keywords)), path))
     included = list(mandatory)

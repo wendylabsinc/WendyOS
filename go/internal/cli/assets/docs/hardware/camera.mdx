@@ -1,5 +1,5 @@
 ---
-title: Camera Access
+title: Camera access
 description: Use USB, CSI, IP, and ROS 2 cameras from WendyOS apps
 ---
 
@@ -20,6 +20,8 @@ For complete examples, follow these tutorials:
 - [Adjust a camera's exposure](/docs/guides/camera-exposure)
 - [Read a robot camera with OpenCV](/docs/guides/tutorials/python/robot-camera-opencv)
 - [Process raw camera frames](/docs/guides/tutorials/python/raw-camera-frames)
+
+A live stream can still contain stale or poor-quality observations. Check capture timestamps, exposure, motion blur, and calibration at the resolution your app uses. The [sensor fidelity exercise](/docs/integrations/sensor-fidelity) helps compare ideal simulated input with hardware.
 
 ## Inspect Cameras on a Device
 
@@ -227,7 +229,7 @@ Cameras are picked up automatically as the agent's periodic discovery runs. To f
 wendy device camera list --refresh
 ```
 
-Paired network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `offline` or `ready`. The table ends with the number of cameras it hid for having no login. To pair one, use the **IP Cameras** tab of [`wendy device pair`](/docs/clients/wendy-cli/commands/device/pair), or find its ID with:
+Paired network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `offline` or `ready`. The table ends with the number of cameras it hid for having no login. To pair one, use the **IP Cameras** tab of [`wendy device pair`](/docs/advanced/clients/wendy-cli/commands/device/pair), or find its ID with:
 
 ```bash
 wendy device camera list --all
@@ -259,7 +261,7 @@ wendy device camera test <id>
 
 `test` dials the camera's RTSP port directly and reports one of three outcomes: the credentials were accepted, the camera rejected them (with a `wendy device camera login <id>` hint), or the camera was unreachable. One nuance worth knowing: a camera that never actually challenged for a login — no authentication required, or just a bad stream path — is still reported as success, with a detail like *"did not request authentication; the stream path returned RTSP 404 and may be wrong"* rather than claiming the credentials were verified.
 
-`wendy device camera view --id <id>` works the same way for network cameras as for local ones. If no credentials are stored yet, it reads `user`/`password` from a `camera` entitlement in `wendy.json` if present, or prompts once interactively, before retrying the stream — see the [`camera` entitlement fields](/docs/advanced/apps/wendy.json#camera) for the wendy.json-based option and its plaintext-storage caveat.
+`wendy device camera view --id <id>` works the same way for network cameras as for local ones. If no credentials are stored yet, it reads `user`/`password` from a `camera` entitlement in `wendy.json` if present, or prompts once interactively, before retrying the stream — see the [`camera` entitlement fields](/docs/reference/app-configuration#camera) for the wendy.json-based option and its plaintext-storage caveat.
 
 ### Container Access
 

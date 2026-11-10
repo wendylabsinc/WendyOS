@@ -30,8 +30,9 @@ type IdentityVerifier func(chain [][]byte, now time.Time) (Identity, error)
 // Identity is a verified device principal with the earliest expiry in the chain
 // that produced it.
 type Identity struct {
-	Device   meshid.Device
-	NotAfter time.Time
+	Device    meshid.Device
+	NotBefore time.Time
+	NotAfter  time.Time
 }
 
 type CacheLimits struct {

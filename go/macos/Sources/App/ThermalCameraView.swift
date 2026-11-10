@@ -127,8 +127,8 @@ struct ThermalCameraDisplay: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .opacity(fresh ? 1 : 0.35)
                     if fresh {
-                        marker(coldest, other: hottest, label: "MIN", color: .cyan, size: geometry.size)
-                        marker(hottest, other: coldest, label: "MAX", color: .orange, size: geometry.size)
+                        marker(coldest, other: hottest, label: "MIN", color: .blue, size: geometry.size)
+                        marker(hottest, other: coldest, label: "MAX", color: .red, size: geometry.size)
                     }
                     HStack(spacing: 5) {
                         Image(systemName: "thermometer.medium")

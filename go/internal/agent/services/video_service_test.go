@@ -278,10 +278,42 @@ func TestBuildGStreamerArgs_WithoutH264Parse(t *testing.T) {
 	if strings.Contains(joined, "h264parse") {
 		t.Errorf("pipeline must not use h264parse when unavailable: %v", args)
 	}
-	// No extra caps suffix: hardware encoders output byte-stream natively; x264enc
-	// AVC output is an acceptable trade-off when h264parse is absent.
-	if strings.Contains(joined, "stream-format") {
-		t.Errorf("pipeline must not add stream-format caps when h264parse is unavailable: %v", args)
+	// With nothing to convert its output, x264enc itself must emit Annex B:
+	// left to negotiate against fdsink it picks stream-format=avc, which loses
+	// SPS/PPS over the raw pipe.
+	want := fmt.Sprintf("x264enc tune=zerolatency key-int-max=%d bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au ! fdsink fd=1", keyframeIntervalFrames(0))
+	if !strings.Contains(joined, want) {
+		t.Errorf("x264enc without h264parse must pin Annex B byte-stream caps\nwant substring: %s\ngot: %s", want, joined)
+	}
+}
+
+// The byte-stream caps are x264enc's: hardware encoders keep their own caps,
+// and with h264parse present the parser does the conversion as before.
+func TestEncoderSegment_ByteStreamCapsOnlyForX264WithoutH264Parse(t *testing.T) {
+	for _, tc := range []struct {
+		encoder      string
+		hasH264Parse bool
+		want         string
+	}{
+		{"x264enc", false, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high,stream-format=byte-stream,alignment=au"},
+		{"x264enc", true, "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency key-int-max=30 bframes=0 ! video/x-h264,profile=high" + h264ByteStream},
+		{"v4l2h264enc", false, "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc extra-controls=\"controls,h264_i_frame_period=30\" ! video/x-h264,profile=baseline,level=(string)4"},
+		{"vaapih264enc", false, "videoconvert ! video/x-raw,format=I420 ! vaapih264enc"},
+	} {
+		if got := encoderSegment(tc.encoder, tc.hasH264Parse, 30); got != tc.want {
+			t.Errorf("encoderSegment(%q, h264parse=%v)\n got: %s\nwant: %s", tc.encoder, tc.hasH264Parse, got, tc.want)
+		}
+	}
+}
+
+func TestBuildArgusGStreamerArgs_X264WithoutH264ParsePinsByteStream(t *testing.T) {
+	args := buildArgusGStreamerArgs("gst", &agentpb.StreamVideoRequest{}, 0, "x264enc", false, nil)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "h264parse") {
+		t.Errorf("must not add h264parse when unavailable: %v", args)
+	}
+	if !strings.Contains(joined, "video/x-h264,profile=high,stream-format=byte-stream,alignment=au ! fdsink fd=1") {
+		t.Errorf("x264enc without h264parse must pin Annex B byte-stream caps: %v", args)
 	}
 }
 
@@ -617,7 +649,7 @@ func TestFindGStreamerEncoder_PrefersNVV4L2OverOtherH264Encoders(t *testing.T) {
 	stubV4L2NodeUsable(t, true) // no NVENC node on the build host
 	tmpDir := t.TempDir()
 	script := tmpDir + "/gst-inspect-1.0"
-	listing := "x264:  x264enc: H264 video encoder\nvideo4linux2:  v4l2h264enc: V4L2 H264 encoder\nnvvideo4linux2:  nvv4l2h264enc: NVIDIA V4L2 H264 encoder\n"
+	listing := "x264:  x264enc: H264 video encoder\nvideo4linux2:  v4l2h264enc: V4L2 H264 encoder\nnvvideo4linux2:  nvv4l2h264enc: NVIDIA V4L2 H264 encoder\nvideoparsersbad:  h264parse: H.264 parser\n"
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+listing+"'\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -633,23 +665,72 @@ func TestFindGStreamerEncoder_PrefersNVV4L2OverOtherH264Encoders(t *testing.T) {
 	}
 }
 
-func TestFindGStreamerEncoder_PrefersVP8WhenH264ParseAbsent(t *testing.T) {
-	tmpDir := t.TempDir()
-	script := tmpDir + "/gst-inspect-1.0"
-	// x264enc present but h264parse absent; vp8enc+webmmux also present
-	listing := "x264:  x264enc: H264 video encoder\nvpx:  vp8enc: VP8 encoder\nmatroska:  webmmux: WebM muxer\n"
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '"+listing+"'\n"), 0755); err != nil {
-		t.Fatal(err)
+// SER9's element set (Ubuntu 24.04 without gstreamer1.0-plugins-bad): no
+// h264parse, but x264enc, vaapih264enc and vp8enc+webmmux. The Wendy apps play
+// only H.264, so x264enc must win over VP8 here.
+func TestFindGStreamerEncoder_PrefersX264OverVP8WhenH264ParseAbsent(t *testing.T) {
+	available := map[string]bool{
+		"x264enc": true, "vaapih264enc": true, "vp8enc": true, "webmmux": true,
 	}
-	result, err := findGStreamerEncoder(script)
+	result, err := findGStreamerEncoderFromSet(available)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.element != "vp8enc" {
-		t.Errorf("expected vp8enc when h264parse absent but webmmux available, got %q", result.element)
+	if result.element != "x264enc" || result.codec != agentpb.VideoCodec_VIDEO_CODEC_H264 {
+		t.Errorf("got %q (%v), want x264enc (H264)", result.element, result.codec)
 	}
-	if result.codec != agentpb.VideoCodec_VIDEO_CODEC_VP8 {
-		t.Errorf("expected VP8 codec, got %v", result.codec)
+	if result.hasH264Parse {
+		t.Error("hasH264Parse must stay false: the pipeline must not reference h264parse")
+	}
+}
+
+// Without h264parse, x264enc wins even over a working hardware encoder: its
+// pinned byte-stream output repeats SPS/PPS at every IDR, which a late viewer
+// needs and which the hardware encoders are not known to do without h264parse.
+func TestFindGStreamerEncoder_X264BeatsHardwareWhenH264ParseAbsent(t *testing.T) {
+	stubV4L2NodeUsable(t, true)
+	available := map[string]bool{"nvv4l2h264enc": true, "v4l2h264enc": true, "x264enc": true}
+	result, err := findGStreamerEncoderFromSet(available)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.element != "x264enc" {
+		t.Errorf("got %q, want x264enc", result.element)
+	}
+	// With no x264enc and no VP8, the hardware encoder is still the last resort.
+	delete(available, "x264enc")
+	if result, err = findGStreamerEncoderFromSet(available); err != nil || result.element != "nvv4l2h264enc" {
+		t.Errorf("last resort: got %q (%v), want nvv4l2h264enc", result.element, err)
+	}
+}
+
+// Only x264enc is known to emit byte-stream with per-key-frame SPS/PPS on its
+// own; any other H.264 encoder without h264parse still loses to VP8.
+func TestFindGStreamerEncoder_PrefersVP8OverOtherH264EncodersWhenH264ParseAbsent(t *testing.T) {
+	available := map[string]bool{
+		"v4l2h264enc": true, "vaapih264enc": true, "openh264enc": true, "vp8enc": true, "webmmux": true,
+	}
+	result, err := findGStreamerEncoderFromSet(available)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.element != "vp8enc" || result.codec != agentpb.VideoCodec_VIDEO_CODEC_VP8 {
+		t.Errorf("got %q (%v), want vp8enc (VP8)", result.element, result.codec)
+	}
+}
+
+// With h264parse present, nothing changes: the first H.264 encoder in
+// preference order still wins and is normalized by h264parse.
+func TestFindGStreamerEncoder_H264ParseKeepsHardwarePreference(t *testing.T) {
+	available := map[string]bool{
+		"v4l2h264enc": true, "x264enc": true, "h264parse": true, "vp8enc": true, "webmmux": true,
+	}
+	result, err := findGStreamerEncoderFromSet(available)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.element != "v4l2h264enc" || !result.hasH264Parse {
+		t.Errorf("got %q (h264parse=%v), want v4l2h264enc with h264parse", result.element, result.hasH264Parse)
 	}
 }
 

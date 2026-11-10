@@ -159,7 +159,7 @@ jobs:
               return text[:limit].rstrip() + '…'
 
           _UNSAFE_URI_RE = re.compile(r'(?i)\b(?:javascript|data|vbscript)\s*(?::|%3a)')
-          _DOC_PATH_RE = re.compile(r'(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.mdx?')
+          _DOC_PATH_RE = re.compile(r'(?:[A-Za-z0-9_-]+/)*(?:[A-Za-z0-9_.-]+\.mdx?|meta\.json)')
           _RESPONSE_ROLE_RE = re.compile(r'^\s*(?:human|assistant|system|developer|user)\s*:', re.IGNORECASE | re.MULTILINE)
 
           def _neutralize_uri_scheme(match):

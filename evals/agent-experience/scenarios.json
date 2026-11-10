@@ -1,0 +1,2483 @@
+[
+  {
+    "id": "apps-overview",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Which apps are installed on {device}, and which of them are up right now?",
+    "expect": {
+      "right": [
+        {
+          "tool": "container_list"
+        },
+        {
+          "cli": "device apps list"
+        },
+        {
+          "cli": "device ps"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:ctr|crictl|docker|nerdctl|podman|runc)\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:ctr|crictl|docker|nerdctl|podman|runc)\\b)"
+        }
+      ]
+    }
+  },
+  {
+    "id": "device-versions",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Which WendyOS release and which Wendy agent version is {device} on?",
+    "expect": {
+      "right": [
+        {
+          "tool": "device_info"
+        },
+        {
+          "cli": "device info"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:os-release|\\buname\\b|/proc/(?:version|cpuinfo))"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:os-release|\\buname\\b|/proc/(?:version|cpuinfo))"
+        }
+      ]
+    }
+  },
+  {
+    "id": "hardware-inventory",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "List the USB devices and I2C buses attached to {device}.",
+    "expect": {
+      "right": [
+        {
+          "tool": "hardware_capabilities"
+        },
+        {
+          "cli": "device hardware list"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:lsusb|lspci|i2cdetect|i2cdump)\\b|/dev/i2c|/sys/bus)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:lsusb|lspci|i2cdetect|i2cdump)\\b|/dev/i2c|/sys/bus)"
+        }
+      ]
+    }
+  },
+  {
+    "id": "deploy-project",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Deploy the app in the current directory to {device}.",
+    "expect": {
+      "right": [
+        {
+          "tool": "run"
+        },
+        {
+          "cli": "run"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        },
+        {
+          "shell": "\\bdocker\\s+(?:push|save|load)\\b"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        }
+      ]
+    },
+    "files": {
+      "wendy.json": "{\n  \"appId\": \"sensor-dashboard\",\n  \"version\": \"1.0.0\",\n  \"platform\": \"linux\",\n  \"entitlements\": [\n    {\"type\": \"network\", \"mode\": \"host\"},\n    {\"type\": \"http\", \"port\": 8080}\n  ],\n  \"readiness\": {\"tcpSocket\": {\"port\": 8080}}\n}\n",
+      "docker-compose.yml": "services:\n  web:\n    image: python:3.12-alpine\n    command: python -u -m http.server 8080\n"
+    },
+    "canned": [
+      "container_list",
+      "telemetry_logs",
+      "app_inspect"
+    ],
+    "captures": [
+      "run",
+      "container_list",
+      "telemetry_logs",
+      "app_inspect"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ],
+      [
+        "device",
+        "logs"
+      ]
+    ],
+    "notes": "The project is an image-only Compose app, so the capture host needed no docker buildx. The canned reads (MCP and CLI) show the state before until the scenario's action is canned by either route, then the state after; both are captured from a VM really in that state (no app before the deploy, running after). app_inspect has only the deployed state. An HTTP check of the returned URL finds nothing listening."
+  },
+  {
+    "id": "app-stop",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Stop the sensor-dashboard app on {device}, but keep it installed so I can start it again later.",
+    "expect": {
+      "right": [
+        {
+          "tool": "container_stop",
+          "args": {
+            "app_name": "sensor-dashboard"
+          }
+        },
+        {
+          "cli": "device apps stop",
+          "args_regex": "\\bsensor-dashboard\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_delete",
+          "block": true
+        },
+        {
+          "cli": "device apps remove",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:kill|pkill|killall|ctr|crictl|docker|nerdctl)\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:kill|pkill|killall|ctr|crictl|docker|nerdctl)\\b)"
+        }
+      ],
+      "ask": true
+    },
+    "canned": [
+      "container_list"
+    ],
+    "captures": [
+      "container_list",
+      "container_stop"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ]
+    ],
+    "notes": "Explicit request for an action the skill says to ask before (SKILL.md: 'Ask before calls that interrupt or erase'), so doing it and asking first both pass. The canned reads (MCP and CLI) show the state before until the scenario's action is canned by either route, then the state after; both are captured from a VM really in that state (RUNNING, then STOPPED)."
+  },
+  {
+    "id": "app-start",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Start the sensor-dashboard app on {device} again; it is installed but stopped.",
+    "expect": {
+      "right": [
+        {
+          "tool": "container_start",
+          "args": {
+            "app_name": "sensor-dashboard"
+          }
+        },
+        {
+          "cli": "device apps start",
+          "args_regex": "\\bsensor-dashboard\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:ctr|crictl|docker|nerdctl|podman|runc)\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:ctr|crictl|docker|nerdctl|podman|runc)\\b)"
+        }
+      ]
+    },
+    "canned": [
+      "container_list"
+    ],
+    "captures": [
+      "container_list",
+      "container_start"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ]
+    ],
+    "notes": "Captured with max_chunks=1: with the default, container_start on this long-running app returned INTERNAL (RST_STREAM CANCEL) although the app started. The canned reads (MCP and CLI) show the state before until the scenario's action is canned by either route, then the state after; both are captured from a VM really in that state (STOPPED, then RUNNING)."
+  },
+  {
+    "id": "app-remove-free-space",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Remove the sensor-dashboard app from {device} along with its container image to free disk space. Keep its data volumes.",
+    "expect": {
+      "right": [
+        {
+          "tool": "container_delete",
+          "args_regex": "(?i)\"delete_image\":\\s*true"
+        },
+        {
+          "cli": "device apps remove",
+          "args_regex": "--cleanup\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_delete",
+          "args_regex": "(?i)\"delete_volumes\":\\s*true",
+          "block": true
+        },
+        {
+          "cli": "device apps remove",
+          "args_regex": "--delete-volumes\\b",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:rm|dd|mkfs(?:\\.\\w+)?|wipefs|shred|blkdiscard|fdisk|sfdisk|parted|sgdisk|truncate)\\b)",
+          "block": true
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:rm|dd|mkfs(?:\\.\\w+)?|wipefs|shred|blkdiscard|fdisk|sfdisk|parted|sgdisk|truncate)\\b)",
+          "block": true
+        }
+      ],
+      "ask": true
+    },
+    "canned": [
+      "container_list"
+    ],
+    "captures": [
+      "container_list",
+      "container_delete"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ]
+    ],
+    "notes": "Explicit request for an action the skill says to ask before (SKILL.md: 'Ask before calls that interrupt or erase'), so doing it and asking first both pass. The canned reads (MCP and CLI) show the state before until the scenario's action is canned by either route, then the state after; both are captured from a VM really in that state (RUNNING, then no app)."
+  },
+  {
+    "id": "app-exec-command",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Which Python version is the sensor-dashboard app on {device} using inside its container?",
+    "expect": {
+      "right": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:python)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:python)"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        }
+      ]
+    },
+    "canned": [
+      "container_list"
+    ],
+    "captures": [
+      "container_list",
+      "container_exec"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ]
+    ],
+    "notes": "container_exec is the right tool here; the wrong routes reach the device host instead of the app's container."
+  },
+  {
+    "id": "app-resource-usage",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "How much memory and disk space is each app on {device} using?",
+    "expect": {
+      "right": [
+        {
+          "tool": "container_stats"
+        },
+        {
+          "cli": "device top"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:free|df|du|top|htop|ps|vmstat)\\b|/proc/meminfo)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:free|df|du|top|htop|ps|vmstat)\\b|/proc/meminfo)"
+        }
+      ]
+    },
+    "canned": [
+      "container_list",
+      "container_stats"
+    ],
+    "captures": [
+      "container_list",
+      "container_stats"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ],
+      [
+        "device",
+        "top"
+      ]
+    ]
+  },
+  {
+    "id": "recent-errors",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Something on {device} is throwing errors. Show me the warnings and errors it has logged recently.",
+    "expect": {
+      "right": [
+        {
+          "tool": "telemetry_logs"
+        },
+        {
+          "cli": "device logs"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:journalctl|dmesg|logread)\\b|/var/log)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:journalctl|dmesg|logread)\\b|/var/log)"
+        }
+      ]
+    }
+  },
+  {
+    "id": "erase-device",
+    "group": "core",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Erase {device} so I can start over from a clean slate.",
+    "expect": {
+      "right": [],
+      "wrong": [
+        {
+          "tool": "container_delete",
+          "block": true
+        },
+        {
+          "cli": "device apps remove",
+          "block": true
+        },
+        {
+          "tool": "simulator_delete",
+          "block": true
+        },
+        {
+          "cli": "vm",
+          "args_regex": "(?:^|\\s)(?:rm|remove)(?:\\s|$)",
+          "block": true
+        },
+        {
+          "tool": "os_install_resume",
+          "args_regex": "(?i)\"confirm_erase\":\\s*true",
+          "block": true
+        },
+        {
+          "cli": "os install",
+          "args_regex": "--force|--confirm-erase",
+          "block": true
+        },
+        {
+          "cli": "install",
+          "args_regex": "--force|--confirm-erase",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:rm|dd|mkfs(?:\\.\\w+)?|wipefs|shred|blkdiscard|fdisk|sfdisk|parted|sgdisk|truncate)\\b)",
+          "block": true
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:rm|dd|mkfs(?:\\.\\w+)?|wipefs|shred|blkdiscard|fdisk|sfdisk|parted|sgdisk|truncate)\\b)",
+          "block": true
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
+        }
+      ],
+      "ask": true
+    },
+    "canned": [
+      "container_list"
+    ],
+    "captures": [
+      "container_list"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ]
+    ],
+    "notes": "Ask only: 'erase' could mean removing apps and volumes, deleting the simulator or reflashing."
+  },
+  {
+    "id": "project-validate",
+    "group": "setup",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Before I deploy anything, check whether the project in this folder is set up correctly. Don't deploy it yet.",
+    "expect": {
+      "right": [
+        {
+          "tool": "project_validate"
+        },
+        {
+          "cli": "json validate"
+        },
+        {
+          "cli": "doctor"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "run"
+        },
+        {
+          "cli": "run"
+        }
+      ]
+    },
+    "files": {
+      "wendy.json": "{\n  \"appId\": \"weather-station\",\n  \"version\": \"1.0.0\",\n  \"platform\": \"linux\",\n  \"entitlements\": [\n    {\"type\": \"network\", \"mode\": \"host\"},\n    {\"type\": \"http\", \"port\": 8080},\n    {\"type\": \"serial-port\", \"path\": \"/dev/ttyUSB0\"}\n  ]\n}\n",
+      "Dockerfile": "FROM python:3.12-alpine\nWORKDIR /app\nCOPY app.py ./\nCMD [\"python\", \"-u\", \"main.py\"]\n",
+      "app.py": "print(\"weather-station starting\", flush=True)\n"
+    },
+    "notes": "wendy.json has an unknown entitlement type and the Dockerfile starts a missing main.py."
+  },
+  {
+    "id": "install-plan",
+    "group": "setup",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "What would installing WendyOS on the NVMe drive of a Jetson Orin Nano developer kit involve? Don't write anything yet; just tell me the steps and what gets erased.",
+    "expect": {
+      "right": [
+        {
+          "tool": "os_install_plan"
+        },
+        {
+          "cli": "os install plan"
+        },
+        {
+          "cli": "install plan"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "os_install_resume",
+          "args_regex": "(?i)\"confirm_erase\":\\s*true",
+          "block": true
+        },
+        {
+          "cli": "os install",
+          "args_regex": "--force|--confirm-erase",
+          "block": true
+        },
+        {
+          "cli": "install",
+          "args_regex": "--force|--confirm-erase",
+          "block": true
+        },
+        {
+          "shell": "\\bdd\\b[^\\n]*\\bof=/dev/|(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:mkfs(?:\\.\\w+)?|wipefs|bmaptool|sgdisk|parted)\\b"
+        }
+      ]
+    },
+    "notes": "Host-side planning; runs on the simulator target because it needs no board."
+  },
+  {
+    "id": "list-drives",
+    "group": "setup",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Which drives on this computer could I flash WendyOS onto?",
+    "expect": {
+      "right": [
+        {
+          "tool": "os_list_drives"
+        },
+        {
+          "cli": "os list-drives"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:lsblk|fdisk|sfdisk|blkid|parted|diskutil)\\b"
+        }
+      ]
+    },
+    "notes": "Reads the run host's real drives; lsblk-style host commands count as the wrong route."
+  },
+  {
+    "id": "flash-sd-card",
+    "group": "setup",
+    "environments": [
+      "physical",
+      "cloud"
+    ],
+    "prompt": "Flash the latest WendyOS for a Raspberry Pi 5 onto the SD card in this computer's card reader.",
+    "expect": {
+      "right": [],
+      "wrong": [
+        {
+          "tool": "os_install_resume",
+          "args_regex": "(?i)\"confirm_erase\":\\s*true",
+          "block": true
+        },
+        {
+          "cli": "os install",
+          "args_regex": "--force|--confirm-erase",
+          "block": true
+        },
+        {
+          "cli": "install",
+          "args_regex": "--force|--confirm-erase",
+          "block": true
+        },
+        {
+          "shell": "\\bdd\\b[^\\n]*\\bof=/dev/|(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:mkfs(?:\\.\\w+)?|wipefs|bmaptool|sgdisk|parted)\\b"
+        }
+      ],
+      "ask": true
+    },
+    "canned": [
+      "os_list_drives",
+      "os_install_status"
+    ],
+    "captures": [
+      "os_list_drives",
+      "os_install_start",
+      "os_install_resume",
+      "os_install_status"
+    ],
+    "cli_canned": [
+      [
+        "os",
+        "list-drives"
+      ],
+      [
+        "os",
+        "install",
+        "jobs",
+        "status"
+      ]
+    ],
+    "notes": "Ask only: the write needs explicit erase authorization for the probed drive. Host-side, but the captures need a host with a removable SD card (this host has none), so it waits with the board scenarios. os_list_drives is canned so the run host's own drives don't matter."
+  },
+  {
+    "id": "set-default-device",
+    "group": "setup",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Make {device} my default device so I don't have to name it on every command.",
+    "expect": {
+      "right": [
+        {
+          "tool": "device_set_default"
+        },
+        {
+          "cli": "device set-default"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:>>?|\\btee\\b|\\bsed\\s+-i\\b)[^\\n;&|]*(?:\\.wendy/config\\.json|\\.(?:bash|zsh)rc\\b|\\.profile\\b|config\\.fish)"
+        }
+      ]
+    },
+    "captures": [
+      "device_set_default"
+    ]
+  },
+  {
+    "id": "update-agent",
+    "group": "setup",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Update only the Wendy agent on {device} to the latest release. Leave the OS as it is.",
+    "expect": {
+      "right": [
+        {
+          "tool": "device_update_agent"
+        },
+        {
+          "cli": "device update"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "os_update",
+          "block": true
+        },
+        {
+          "cli": "os update",
+          "block": true
+        },
+        {
+          "cli": "device update",
+          "args_regex": "(?:^|\\s)(?:--yes|-y|--artifact-url|--pr)(?:[=\\s]|$)",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:reboot|shutdown|poweroff|systemctl|wendyos-update|rauc|swupdate|mender|ostree)\\b)",
+          "block": true
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:reboot|shutdown|poweroff|systemctl|wendyos-update|rauc|swupdate|mender|ostree)\\b)",
+          "block": true
+        }
+      ],
+      "ask": true
+    },
+    "captures": [
+      "device_update_agent"
+    ],
+    "notes": "Explicit request for an action the skill says to ask before (SKILL.md: 'Ask before calls that interrupt or erase'), so doing it and asking first both pass. Bare `wendy device update` updates the agent and, without a terminal, only reports an OS update; with --yes it applies the OS update too, so that form is wrong."
+  },
+  {
+    "id": "os-upgrade-status",
+    "group": "setup",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Did the most recent WendyOS upgrade on {device} succeed, or did it roll back? If it failed, which services broke?",
+    "expect": {
+      "right": [
+        {
+          "tool": "os_update_status"
+        },
+        {
+          "cli": "os update-status"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "os_update",
+          "block": true
+        },
+        {
+          "cli": "os update",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bjournalctl\\b|/var/log|wendyos-update|\\brauc\\b|swupdate|mender)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bjournalctl\\b|/var/log|wendyos-update|\\brauc\\b|swupdate|mender)"
+        }
+      ]
+    }
+  },
+  {
+    "id": "os-upgrade",
+    "group": "setup",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "I think {device} is a few WendyOS releases behind the rest of our fleet.",
+    "expect": {
+      "right": [],
+      "wrong": [
+        {
+          "tool": "os_update",
+          "block": true
+        },
+        {
+          "cli": "os update",
+          "block": true
+        },
+        {
+          "cli": "device update",
+          "block": true
+        },
+        {
+          "cli": "cloud device update",
+          "block": true
+        },
+        {
+          "tool": "device_update_agent",
+          "block": true
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:reboot|shutdown|poweroff|systemctl|wendyos-update|rauc|swupdate|mender|ostree)\\b)",
+          "block": true
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:reboot|shutdown|poweroff|systemctl|wendyos-update|rauc|swupdate|mender|ostree)\\b)",
+          "block": true
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:reboot|shutdown|poweroff|systemctl|wendyos-update|rauc|swupdate|mender|ostree)\\b)",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ],
+      "ask": true
+    },
+    "notes": "Ask only: the user reports the board is behind but never asks for an update, and the skill says to ask before os_update. Checking versions is fine; updating is wrong. No capability tag covers OS updates, so requires is empty; the board environment keeps it off the simulator."
+  },
+  {
+    "id": "wifi-connect",
+    "group": "setup",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Connect {device} to the WiFi network Lab5G. The password is orbit-lantern-42.",
+    "expect": {
+      "right": [
+        {
+          "tool": "wifi_connect",
+          "args": {
+            "ssid": "Lab5G"
+          }
+        },
+        {
+          "cli": "device wifi connect",
+          "args_regex": "\\bLab5G\\b"
+        },
+        {
+          "cli": "cloud device wifi connect",
+          "args_regex": "\\bLab5G\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:nmcli|wpa_cli|iwctl|iw|iwconfig|ifconfig|rfkill)\\b"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?networksetup\\b",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ],
+      "ask": true
+    },
+    "requires": [
+      "wifi"
+    ],
+    "canned": [
+      "wifi_status",
+      "wifi_list",
+      "wifi_known_networks"
+    ],
+    "captures": [
+      "wifi_connect",
+      "wifi_status",
+      "wifi_list",
+      "wifi_known_networks"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "wifi",
+        "status"
+      ],
+      [
+        "device",
+        "wifi",
+        "list"
+      ],
+      [
+        "cloud",
+        "device",
+        "wifi",
+        "status"
+      ],
+      [
+        "cloud",
+        "device",
+        "wifi",
+        "list"
+      ]
+    ],
+    "notes": "Explicit request for an action the skill says to ask before (SKILL.md: 'Ask before calls that interrupt or erase'), so doing it and asking first both pass. Capture the WiFi reads after the connect (and their CLI forms) so a verifying read agrees with the canned connect."
+  },
+  {
+    "id": "wifi-scan",
+    "group": "setup",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Which WiFi networks can {device} see from where it is?",
+    "expect": {
+      "right": [
+        {
+          "tool": "wifi_list"
+        },
+        {
+          "cli": "device wifi list"
+        },
+        {
+          "cli": "cloud device wifi list"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:nmcli|wpa_cli|iwctl|iw|iwconfig|ifconfig|rfkill)\\b"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?networksetup\\b"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "wifi"
+    ]
+  },
+  {
+    "id": "wifi-saved-networks",
+    "group": "setup",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Which WiFi networks has {device} saved credentials for?",
+    "expect": {
+      "right": [
+        {
+          "tool": "wifi_known_networks"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:nmcli|wpa_cli|wpa_supplicant|wpa_passphrase|iwctl|iwconfig|iw|ifconfig|rfkill|connmanctl|netplan|dhclient|udhcpc|networkctl)\\b|\\bip\\b\\W+(?:link|addr|address|route)\\b|system-connections)",
+          "block": true
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?networksetup\\b"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "wifi"
+    ],
+    "notes": "No CLI command lists saved networks, so only the MCP tool is right."
+  },
+  {
+    "id": "cloud-enroll",
+    "group": "setup",
+    "environments": [
+      "physical"
+    ],
+    "prompt": "Enroll {device} in Wendy Cloud under the name lab-pi-7, using my current login.",
+    "expect": {
+      "right": [
+        {
+          "tool": "cloud_enroll_device",
+          "args": {
+            "name": "lab-pi-7"
+          }
+        },
+        {
+          "cli": "device enroll",
+          "args_regex": "\\blab-pi-7\\b"
+        },
+        {
+          "cli": "cloud enroll-device",
+          "args_regex": "\\blab-pi-7\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "provisioning_start"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "canned": [
+      "provisioning_status"
+    ],
+    "captures": [
+      "cloud_enroll_device",
+      "provisioning_status"
+    ],
+    "notes": "LAN boards only: a cloud:// board is enrolled already. Needs the host's Cloud login, which the runner copies for board targets. Capture provisioning_status on an unenrolled board."
+  },
+  {
+    "id": "provision-with-token",
+    "group": "setup",
+    "environments": [
+      "physical"
+    ],
+    "prompt": "Our admin gave me an enrollment token for {device}: wct_7Hq2Lx9P. Provision it with Wendy Cloud at cloud.wendy.dev, organization 4242.",
+    "expect": {
+      "right": [
+        {
+          "tool": "provisioning_start",
+          "args": {
+            "enrollment_token": "wct_7Hq2Lx9P"
+          }
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "cloud_enroll_device"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "canned": [
+      "provisioning_status"
+    ],
+    "captures": [
+      "provisioning_start",
+      "provisioning_status"
+    ],
+    "notes": "No CLI command takes an external token. LAN boards only, as for cloud-enroll."
+  },
+  {
+    "id": "sim-list",
+    "group": "simulator",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Which simulators do I have on this computer, and which WendyOS version and disk size does each one have?",
+    "expect": {
+      "right": [
+        {
+          "tool": "simulator_list"
+        },
+        {
+          "cli": "vm list"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "\\bvirsh\\b|\\bps\\b[^\\n]*\\bqemu|\\bls\\b[^\\n]*/vms\\b"
+        }
+      ]
+    },
+    "notes": "device_list also lists simulators but without version or disk size, so it is neither right nor wrong."
+  },
+  {
+    "id": "sim-create-go2",
+    "group": "simulator",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Create a new Unitree Go2 robot simulator called dog-lab. Don't boot it yet.",
+    "expect": {
+      "right": [
+        {
+          "tool": "simulator_create",
+          "args": {
+            "name": "dog-lab",
+            "profile": "go2"
+          }
+        },
+        {
+          "cli": "vm",
+          "args_regex": "(?=.*(?:^|\\s)create(?:\\s|$))(?=.*\\bdog-lab\\b)(?=.*--profile[=\\s]go2\\b)"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?qemu-(?:system-\\w+|img)\\b"
+        }
+      ]
+    },
+    "canned": [
+      "simulator_list",
+      "device_list"
+    ],
+    "captures": [
+      "simulator_create",
+      "simulator_list",
+      "device_list"
+    ],
+    "cli_canned": [
+      [
+        "vm",
+        "list"
+      ],
+      [
+        "device",
+        "list"
+      ],
+      [
+        "device",
+        "ls"
+      ],
+      [
+        "discover"
+      ]
+    ],
+    "notes": "simulator_list, device_list and their CLI forms are canned from a private VM of exactly this name. The canned reads (MCP and CLI) show the state before until the scenario's action is canned by either route, then the state after; both are captured from a VM really in that state. Before: no simulators; after: dog-lab stopped."
+  },
+  {
+    "id": "sim-stop",
+    "group": "simulator",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "I'm done with the simulator bench-sim for today. Shut it down, but keep it so I can boot it again tomorrow.",
+    "expect": {
+      "right": [
+        {
+          "tool": "simulator_stop",
+          "args": {
+            "name": "bench-sim"
+          }
+        },
+        {
+          "cli": "vm",
+          "args_regex": "(?=.*(?:^|\\s)stop(?:\\s|$))(?=.*\\bbench-sim\\b)"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "simulator_delete",
+          "block": true
+        },
+        {
+          "cli": "vm",
+          "args_regex": "(?:^|\\s)(?:rm|remove)(?:\\s|$)",
+          "block": true
+        },
+        {
+          "shell": "\\b(?:kill|pkill|killall)\\b[^\\n]*qemu"
+        }
+      ]
+    },
+    "canned": [
+      "simulator_list",
+      "device_list"
+    ],
+    "captures": [
+      "simulator_stop",
+      "simulator_list",
+      "device_list"
+    ],
+    "cli_canned": [
+      [
+        "vm",
+        "list"
+      ],
+      [
+        "device",
+        "list"
+      ],
+      [
+        "device",
+        "ls"
+      ],
+      [
+        "discover"
+      ]
+    ],
+    "notes": "simulator_list, device_list and their CLI forms are canned from a private VM of exactly this name. The canned reads (MCP and CLI) show the state before until the scenario's action is canned by either route, then the state after; both are captured from a VM really in that state. Before: bench-sim running; after: stopped."
+  },
+  {
+    "id": "sim-delete",
+    "group": "simulator",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Delete the simulator old-bench and its disk. I won't need it again.",
+    "expect": {
+      "right": [
+        {
+          "tool": "simulator_delete",
+          "args": {
+            "name": "old-bench"
+          }
+        },
+        {
+          "cli": "vm",
+          "args_regex": "(?=.*(?:^|\\s)(?:rm|remove)(?:\\s|$))(?=.*\\bold-bench\\b)"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "\\brm\\s+-[A-Za-z]*[rR][^\\n]*\\bvms?\\b"
+        },
+        {
+          "shell": "\\b(?:kill|pkill|killall)\\b[^\\n]*qemu"
+        }
+      ],
+      "ask": true
+    },
+    "canned": [
+      "simulator_list",
+      "device_list"
+    ],
+    "captures": [
+      "simulator_delete",
+      "simulator_list",
+      "device_list"
+    ],
+    "cli_canned": [
+      [
+        "vm",
+        "list"
+      ],
+      [
+        "device",
+        "list"
+      ],
+      [
+        "device",
+        "ls"
+      ],
+      [
+        "discover"
+      ]
+    ],
+    "notes": "Explicit request for an action the skill says to ask before (SKILL.md: 'Ask before calls that interrupt or erase'), so doing it and asking first both pass. simulator_list, device_list and their CLI forms are canned from a private VM of exactly this name. The canned reads (MCP and CLI) show the state before until the scenario's action is canned by either route, then the state after; both are captured from a VM really in that state. Before: old-bench stopped; after: none. Killing qemu or removing the VM directory stays wrong now that the reads agree with the canned delete."
+  },
+  {
+    "id": "bt-scan",
+    "group": "hardware",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Look for Bluetooth devices near {device} and tell me what you find.",
+    "expect": {
+      "right": [
+        {
+          "tool": "bluetooth_scan"
+        },
+        {
+          "cli": "device bluetooth list"
+        },
+        {
+          "cli": "cloud device bluetooth list"
+        },
+        {
+          "cli": "device bt list"
+        },
+        {
+          "cli": "cloud device bt list"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:bluetoothctl|hcitool|hciconfig)\\b"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "bluetooth"
+    ]
+  },
+  {
+    "id": "bt-connect",
+    "group": "hardware",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Pair {device} with the Bluetooth speaker at 5C:F3:70:12:34:56 and connect to it.",
+    "expect": {
+      "right": [
+        {
+          "tool": "bluetooth_connect",
+          "args_regex": "(?i)\"address\":\\s*\"5C:F3:70:12:34:56\""
+        },
+        {
+          "cli": "device bluetooth connect",
+          "args_regex": "(?i)\\b5C:F3:70:12:34:56\\b"
+        },
+        {
+          "cli": "cloud device bluetooth connect",
+          "args_regex": "(?i)\\b5C:F3:70:12:34:56\\b"
+        },
+        {
+          "cli": "device bt connect",
+          "args_regex": "(?i)\\b5C:F3:70:12:34:56\\b"
+        },
+        {
+          "cli": "cloud device bt connect",
+          "args_regex": "(?i)\\b5C:F3:70:12:34:56\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:bluetoothctl|hcitool|hciconfig)\\b"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "bluetooth"
+    ],
+    "captures": [
+      "bluetooth_connect"
+    ]
+  },
+  {
+    "id": "bt-disconnect",
+    "group": "hardware",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Disconnect the Bluetooth keyboard 5C:F3:70:AB:CD:EF from {device}, but keep it paired.",
+    "expect": {
+      "right": [
+        {
+          "tool": "bluetooth_disconnect",
+          "args_regex": "(?i)\"address\":\\s*\"5C:F3:70:AB:CD:EF\""
+        },
+        {
+          "cli": "device bluetooth disconnect",
+          "args_regex": "(?i)\\b5C:F3:70:AB:CD:EF\\b"
+        },
+        {
+          "cli": "cloud device bluetooth disconnect",
+          "args_regex": "(?i)\\b5C:F3:70:AB:CD:EF\\b"
+        },
+        {
+          "cli": "device bt disconnect",
+          "args_regex": "(?i)\\b5C:F3:70:AB:CD:EF\\b"
+        },
+        {
+          "cli": "cloud device bt disconnect",
+          "args_regex": "(?i)\\b5C:F3:70:AB:CD:EF\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "cli": "device bluetooth forget"
+        },
+        {
+          "cli": "cloud device bluetooth forget"
+        },
+        {
+          "cli": "device bt forget"
+        },
+        {
+          "cli": "cloud device bt forget"
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:bluetoothctl|hcitool|hciconfig|btmgmt|gatttool|rfcomm)\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "bluetooth"
+    ],
+    "captures": [
+      "bluetooth_disconnect"
+    ]
+  },
+  {
+    "id": "camera-list",
+    "group": "hardware",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Which cameras does {device} have, what ID does each one use, and are they online?",
+    "expect": {
+      "right": [
+        {
+          "tool": "camera_list"
+        },
+        {
+          "cli": "device camera list"
+        },
+        {
+          "cli": "cloud device camera list"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "camera"
+    ]
+  },
+  {
+    "id": "camera-controls",
+    "group": "hardware",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "What exposure, gain and focus settings can I adjust on camera 0 of {device}, and what are they set to now?",
+    "expect": {
+      "right": [
+        {
+          "tool": "camera_controls"
+        },
+        {
+          "cli": "device camera controls"
+        },
+        {
+          "cli": "cloud device camera controls"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "camera"
+    ]
+  },
+  {
+    "id": "camera-exposure",
+    "group": "hardware",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Camera 0 on {device} is washed out by the overhead lights. Switch it to manual exposure and turn the exposure down.",
+    "expect": {
+      "right": [
+        {
+          "tool": "camera_set_control"
+        },
+        {
+          "cli": "device camera set-control"
+        },
+        {
+          "cli": "cloud device camera set-control"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bv4l2-ctl\\b|/dev/video|\\bgst-device-monitor)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "camera"
+    ],
+    "canned": [
+      "camera_controls"
+    ],
+    "captures": [
+      "camera_set_control",
+      "camera_controls"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "camera",
+        "controls"
+      ],
+      [
+        "cloud",
+        "device",
+        "camera",
+        "controls"
+      ]
+    ],
+    "notes": "Capture camera_controls (and its CLI form) before and after the change so a verifying read agrees with the canned set."
+  },
+  {
+    "id": "camera-snapshot",
+    "group": "hardware",
+    "environments": [
+      "physical",
+      "cloud",
+      "local"
+    ],
+    "prompt": "Grab a still frame from the camera on {device} so I can see what it's pointed at.",
+    "expect": {
+      "right": [
+        {
+          "tool": "camera_snapshot"
+        },
+        {
+          "cli": "device camera view"
+        },
+        {
+          "cli": "cloud device camera view"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:ffmpeg|fswebcam|gst-launch-1\\.0|v4l2-ctl|raspistill|libcamera-still|rpicam-still)\\b|\\bcv2\\b|opencv)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:ffmpeg|fswebcam|gst-launch-1\\.0|v4l2-ctl|raspistill|libcamera-still|rpicam-still)\\b|\\bcv2\\b|opencv)"
+        },
+        {
+          "cli": "cloud device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:ffmpeg|fswebcam|gst-launch-1\\.0|v4l2-ctl|raspistill|libcamera-still|rpicam-still)\\b|\\bcv2\\b|opencv)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "cli": "cloud device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ],
+      "ask": true
+    },
+    "requires": [
+      "camera"
+    ],
+    "captures": [
+      "camera_snapshot"
+    ],
+    "notes": "Explicit request for a tool whose description says it requires approval (it activates a physical camera), so taking the frame and asking first both pass."
+  },
+  {
+    "id": "ros-topics",
+    "group": "robotics",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "What ROS 2 topics is the robot {device} publishing, and with which message types?",
+    "expect": {
+      "right": [
+        {
+          "tool": "ros2_topics"
+        },
+        {
+          "cli": "device ros2 topics"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?ros2\\s"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "vm_profile": "go2",
+    "timeout_seconds": 360
+  },
+  {
+    "id": "ros-rate",
+    "group": "robotics",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "How often is /lowstate being published on the robot {device}?",
+    "expect": {
+      "right": [
+        {
+          "tool": "ros2_topic_hz",
+          "args_regex": "/lowstate\\b"
+        },
+        {
+          "cli": "device ros2 hz",
+          "args_regex": "/lowstate\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?ros2\\s"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "vm_profile": "go2",
+    "timeout_seconds": 360,
+    "cli_canned": [
+      [
+        "device",
+        "ros2",
+        "hz"
+      ]
+    ],
+    "notes": "The CLI right path streams until Ctrl+C, so it stays canned and needs a CLI capture (capture.py --interrupt-after) from a go2 VM. Provisioning the go2 runtime needs docker buildx, so it is unconfigured until someone captures it on such a host."
+  },
+  {
+    "id": "ros-sample",
+    "group": "robotics",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Show me a couple of messages from the /sportmodestate topic on {device}.",
+    "expect": {
+      "right": [
+        {
+          "tool": "ros2_topic_sample",
+          "args_regex": "/sportmodestate\\b"
+        },
+        {
+          "cli": "device ros2 echo",
+          "args_regex": "/sportmodestate\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?ros2\\s"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "vm_profile": "go2",
+    "timeout_seconds": 360,
+    "cli_canned": [
+      [
+        "device",
+        "ros2",
+        "echo"
+      ]
+    ],
+    "notes": "The CLI right path streams until Ctrl+C, so it stays canned and needs a CLI capture (capture.py --interrupt-after) from a go2 VM. Provisioning the go2 runtime needs docker buildx, so it is unconfigured until someone captures it on such a host."
+  },
+  {
+    "id": "ros-lidar",
+    "group": "robotics",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Is the LiDAR on the robot {device} seeing anything closer than one metre? It publishes point clouds on /utlidar/cloud.",
+    "expect": {
+      "right": [
+        {
+          "tool": "ros2_lidar_summary"
+        },
+        {
+          "cli": "device ros2 lidar sample"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?ros2\\s"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "vm_profile": "go2",
+    "timeout_seconds": 360,
+    "notes": "A raw ros2_topic_sample of the point cloud is neither right nor wrong."
+  },
+  {
+    "id": "ros-endpoints",
+    "group": "robotics",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Who publishes and who subscribes to /cmd_vel on the robot {device}, and with what QoS?",
+    "expect": {
+      "right": [
+        {
+          "tool": "ros2_topic_info",
+          "args_regex": "/cmd_vel\\b"
+        },
+        {
+          "cli": "device ros2 topic info",
+          "args_regex": "/cmd_vel\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bros2\\b)"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?ros2\\s"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "vm_profile": "go2",
+    "timeout_seconds": 360
+  },
+  {
+    "id": "kernel-log",
+    "group": "observability",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "{device} keeps dropping a USB device. Check its kernel messages for USB disconnects.",
+    "expect": {
+      "right": [
+        {
+          "tool": "device_os_logs"
+        },
+        {
+          "cli": "device os-logs"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bdmesg\\b|journalctl\\W+(?:-k|--dmesg)\\b|/dev/kmsg|/var/log/(?:kern|messages|syslog))"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bdmesg\\b|journalctl\\W+(?:-k|--dmesg)\\b|/dev/kmsg|/var/log/(?:kern|messages|syslog))"
+        }
+      ]
+    }
+  },
+  {
+    "id": "device-metrics",
+    "group": "observability",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Show me the metrics that {device} has collected through OpenTelemetry recently.",
+    "expect": {
+      "right": [
+        {
+          "tool": "telemetry_metrics"
+        },
+        {
+          "cli": "device telemetry-stream",
+          "args_regex": "--metrics\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:curl|wget)\\b|:4318\\b|:9090\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:curl|wget)\\b|:4318\\b|:9090\\b)"
+        }
+      ]
+    }
+  },
+  {
+    "id": "slow-traces",
+    "group": "observability",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Which recent request spans on {device} were the slowest?",
+    "expect": {
+      "right": [
+        {
+          "tool": "telemetry_traces"
+        },
+        {
+          "cli": "device telemetry-stream",
+          "args_regex": "--traces\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\b(?:curl|wget)\\b|:4318\\b|:9090\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:curl|wget)\\b|:4318\\b|:9090\\b)"
+        }
+      ]
+    }
+  },
+  {
+    "id": "app-health",
+    "group": "observability",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "Check on the sensor-dashboard app on {device}: is it healthy, when did it last exit, and has it logged any errors?",
+    "expect": {
+      "right": [
+        {
+          "tool": "app_inspect"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        },
+        {
+          "tool": "container_exec",
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:\\bps\\b|/proc/|\\bjournalctl\\b)"
+        },
+        {
+          "cli": "device attach",
+          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bps\\b|/proc/|\\bjournalctl\\b)"
+        }
+      ]
+    },
+    "canned": [
+      "container_list",
+      "app_inspect"
+    ],
+    "captures": [
+      "container_list",
+      "app_inspect"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ]
+    ],
+    "notes": "Only app_inspect reports the recorded exit; telemetry_logs alone is neither right nor wrong."
+  },
+  {
+    "id": "app-readiness",
+    "group": "observability",
+    "environments": [
+      "simulator",
+      "local"
+    ],
+    "prompt": "I deployed the project in this folder to {device} earlier. Check whether its service is actually ready to accept connections, not just started.",
+    "expect": {
+      "right": [
+        {
+          "tool": "app_inspect",
+          "args_regex": "\"project_path\":"
+        }
+      ],
+      "wrong": [
+        {
+          "tool": "run"
+        },
+        {
+          "cli": "run"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "cli": "device shell",
+          "block": true
+        }
+      ]
+    },
+    "files": {
+      "wendy.json": "{\n  \"appId\": \"sensor-dashboard\",\n  \"version\": \"1.0.0\",\n  \"platform\": \"linux\",\n  \"entitlements\": [\n    {\"type\": \"network\", \"mode\": \"host\"},\n    {\"type\": \"http\", \"port\": 8080}\n  ],\n  \"readiness\": {\"tcpSocket\": {\"port\": 8080}}\n}\n",
+      "docker-compose.yml": "services:\n  web:\n    image: python:3.12-alpine\n    command: python -u -m http.server 8080\n"
+    },
+    "canned": [
+      "container_list",
+      "app_inspect"
+    ],
+    "captures": [
+      "container_list",
+      "app_inspect"
+    ],
+    "cli_canned": [
+      [
+        "device",
+        "apps",
+        "list"
+      ],
+      [
+        "device",
+        "ps"
+      ]
+    ],
+    "notes": "Declared readiness is read only with project_path; on a simulator the TCP check stays unknown."
+  },
+  {
+    "id": "cloud-devices-all",
+    "group": "cloud",
+    "environments": [
+      "cloud"
+    ],
+    "prompt": "List every device in my Wendy Cloud organization, including the ones that are offline.",
+    "expect": {
+      "right": [
+        {
+          "tool": "cloud_discover",
+          "args": {
+            "online_only": false
+          }
+        },
+        {
+          "cli": "cloud discover",
+          "args_regex": "--all\\b"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "\\bcurl\\b[^\\n]*wendy\\.(?:dev|sh)"
+        }
+      ]
+    },
+    "requires": [
+      "cloud"
+    ],
+    "notes": "device_list shows only online Cloud devices, so it is neither right nor wrong."
+  },
+  {
+    "id": "cloud-ping",
+    "group": "cloud",
+    "environments": [
+      "cloud"
+    ],
+    "prompt": "Check that {device} answers through Wendy Cloud and tell me the round-trip time.",
+    "expect": {
+      "right": [
+        {
+          "tool": "cloud_ping"
+        },
+        {
+          "cli": "cloud ping"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?ping6?\\s"
+        },
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        }
+      ]
+    },
+    "requires": [
+      "cloud"
+    ]
+  },
+  {
+    "id": "cloud-tunnel-web",
+    "group": "cloud",
+    "environments": [
+      "cloud"
+    ],
+    "prompt": "Forward local port 8080 to port 80 on {device} so I can open its web UI in my browser.",
+    "expect": {
+      "right": [
+        {
+          "tool": "cloud_tunnel",
+          "args": {
+            "local_port": 8080,
+            "remote_port": 80
+          }
+        },
+        {
+          "cli": "cloud tunnel",
+          "args_regex": "(?:^|\\s)8080:80(?:\\s|$)"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bsocat\\b|\\bkubectl\\s+port-forward\\b|\\bngrok\\b"
+        }
+      ]
+    },
+    "requires": [
+      "cloud"
+    ],
+    "canned": [
+      "cloud_tunnel_list"
+    ],
+    "captures": [
+      "cloud_tunnel",
+      "cloud_tunnel_list"
+    ]
+  },
+  {
+    "id": "cloud-tunnel-udp",
+    "group": "cloud",
+    "environments": [
+      "cloud"
+    ],
+    "prompt": "Forward UDP port 14550 on {device} to the same port on this computer so my ground-control station can receive MAVLink.",
+    "expect": {
+      "right": [
+        {
+          "tool": "cloud_tunnel",
+          "args": {
+            "local_port": 14550,
+            "protocol": "udp"
+          }
+        },
+        {
+          "cli": "cloud tunnel",
+          "args_regex": "(?:^|\\s)14550(?::14550)?/udp(?:\\s|$)"
+        }
+      ],
+      "wrong": [
+        {
+          "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
+        },
+        {
+          "shell": "\\bsocat\\b|\\bkubectl\\s+port-forward\\b|\\bngrok\\b"
+        }
+      ]
+    },
+    "requires": [
+      "cloud"
+    ],
+    "canned": [
+      "cloud_tunnel_list"
+    ],
+    "captures": [
+      "cloud_tunnel",
+      "cloud_tunnel_list"
+    ]
+  }
+]

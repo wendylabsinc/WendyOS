@@ -1,0 +1,20 @@
+version: 1
+stages:
+  - name: app
+    from: python:3.12-slim
+    workdir: /app
+    env:
+      PYTHONUNBUFFERED: "1"
+    install:
+      pip:
+        - requirements: requirements.txt
+    copy:
+      - from: local
+        paths: [app.py]
+    healthcheck:
+      exec: [python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 3s
+      startPeriod: 5s
+      retries: 3
+    cmd: [python, app.py]

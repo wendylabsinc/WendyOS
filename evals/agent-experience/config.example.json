@@ -3,6 +3,7 @@
   "port": 18765,
   "budget_usd": 100,
   "trial_reserve_usd": 15,
+  "scenario_reserve_usd": 0.5,
   "context_policy": "Fresh transcript and workspace; configured host settings; supplied Wendy skills. Use a dedicated OS account for controlled comparisons.",
   "agents": {
     "codex": {
@@ -26,6 +27,8 @@
         "{wendy_build_cache}",
         "--add-dir",
         "{docker_buildx_cache}",
+        "--add-dir",
+        "{wendy_vm_home}",
         "-c",
         "sandbox_workspace_write.network_access=true",
         "-c",
@@ -38,6 +41,8 @@
         "mcp_servers.wendy.env.WENDY_CONFIG_DIR=\"{wendy_home}\"",
         "-c",
         "mcp_servers.wendy.env.WENDY_SECRET_STORE=\"file\"",
+        "-c",
+        "mcp_servers.wendy.env.WENDY_EVAL_SCENARIO=\"{scenario_config}\"",
         "--model",
         "{model}",
         "{prompt}"
@@ -60,7 +65,7 @@
         "--allowedTools",
         "Bash,Read,Edit,Write,Glob,Grep,mcp__wendy__*",
         "--plugin-dir",
-        "{root}/plugins/wendy-agentic-coding",
+        "{plugin_dir}",
         "--strict-mcp-config",
         "--mcp-config",
         "{workspace}/mcp.json",

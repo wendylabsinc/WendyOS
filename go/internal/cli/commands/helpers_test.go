@@ -483,14 +483,14 @@ func TestLANAddressProbeBudgetScalesWithOrgCount(t *testing.T) {
 	}
 }
 
-// setTempConfig points HOME at a temp dir and writes cfg via config.Save so
-// the test uses the same serialisation path as production code. t.Setenv
-// automatically restores the original HOME when the test finishes.
+// setTempConfig isolates both home-derived paths and the explicit config
+// override, then writes cfg through the production serialisation path.
 func setTempConfig(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// config.Save calls ConfigDir() which creates ~/.wendy and writes config.json.
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("WENDY_CONFIG_DIR", filepath.Join(tmp, ".wendy"))
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -773,7 +773,7 @@ func TestConnectResolvedAgent_NoAuthProvisionedAgentRequiresLogin(t *testing.T) 
 	}
 }
 
-func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
+func TestConnectResolvedAgent_ExpectedDevicePreservesMTLSError(t *testing.T) {
 	origInteractive := isInteractiveTerminalFn
 	origJSON := jsonOutput
 	defer func() {
@@ -784,6 +784,7 @@ func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
 	isInteractiveTerminalFn = func() bool { return false }
 	jsonOutput = false
 	setTempConfig(t, &config.Config{
+		DevicePins: map[string]config.DevicePin{"127.0.0.1": {OrgID: 7, AssetID: "42"}},
 		Auth: []config.AuthConfig{
 			{
 				Certificates: []config.CertificateInfo{
@@ -807,13 +808,10 @@ func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
 		conn.Close()
 		t.Fatal("connectResolvedAgent() returned a connection for an auth-only agent")
 	}
-	if !errors.Is(err, errProvisionedAgentUnauthorized) {
-		t.Fatalf("connectResolvedAgent() error = %v, want %v", err, errProvisionedAgentUnauthorized)
+	if !errors.Is(err, errNoAuthenticatedEndpoint) {
+		t.Fatalf("connectResolvedAgent() error = %v, want authenticated endpoint failure", err)
 	}
-	if errors.Unwrap(err) == nil {
-		t.Fatalf("connectResolvedAgent() error = %v, want wrapped mTLS cause", err)
-	}
-	if !strings.Contains(err.Error(), "Last mTLS error:") || !strings.Contains(err.Error(), "loading TLS cert") {
+	if !strings.Contains(err.Error(), "loading TLS cert") {
 		t.Fatalf("connectResolvedAgent() message = %q, want mTLS diagnostic", err.Error())
 	}
 }

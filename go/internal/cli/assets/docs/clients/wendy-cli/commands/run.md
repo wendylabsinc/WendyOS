@@ -2,7 +2,7 @@ Runs your app on a Wendy-enabled device:
 
 1. [Selects a device](../device-selection.md)
 2. [Queries the platform and architecture](./device/version.md) of this device
-3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](../../../debugging/) if needed
+3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](/docs/advanced/debugging) if needed
 4. Uploads the artifact(s) for Linux (via the container registry) or macOS
 5. [Starts the app](./device/apps/start.md). Attached runs, and any run with `--wait-ready`, then wait for readiness and print the reachable URL; other detached agent deployments report configured HTTP endpoints as described in [Detached output](#detached-output).
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
@@ -116,7 +116,7 @@ Verify the HTTP response separately. In text mode, URLs appear as
 and prints its outcome instead of this result; see
 [Waiting for readiness](#waiting-for-readiness---wait-ready).
 
-URLs come from [`http` entitlements](../../../apps/wendy.json.md#http) and
+URLs come from [`http` entitlements](/docs/reference/app-configuration#http) and
 HTTP(S) `hooks.postStart.openURL` values that contain `WENDY_HOSTNAME`.
 `endpoints` contains distinct reported URLs, each with its app or service
 identifier; a service may have several URLs. `url` is the first entry
@@ -124,7 +124,7 @@ and is omitted when `endpoints` is empty, including when routing cannot be
 determined. A TCP readiness probe alone does not declare an HTTP endpoint.
 
 For user-networked VMs, URLs use the connected VM's live forwarding on host
-loopback. See [VM HTTP verification](../../../installation/wendyos-virtual-machine.mdx#reaching-an-app-you-deployed).
+loopback. See [VM HTTP verification](/docs/installation/simulator-management#reaching-an-app-you-deployed).
 Multi-service and Compose runs emit one group result after the selected services
 start. A partial deployment returns non-zero without a whole-group success
 result. Fleet runs, `--deploy`, watch mode, and local container providers do not
@@ -392,7 +392,7 @@ in the CLI config. The flag always wins over the default. This is a
 per-developer setting rather than a project one, because the right build host
 depends on which network you are on.
 
-For a complete example, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+For a complete example, follow [Build once, deploy to several devices](/docs/guides/fleet-deployment).
 
 ### Requirements
 
@@ -401,7 +401,7 @@ For a complete example, follow [Build Once, Deploy to Several Devices](/docs/gui
 - A user certificate in the build host's organisation.
 - A provisioned target device reachable from the build host over the mesh.
 
-See [`wendy device build-host`](device/build-host.md) for setup, access rules,
+See [`wendy device build-host`](./device/build-host.md) for setup, access rules,
 cache-space requirements, and how shared builds use the host.
 
 If a requirement is missing, `wendy run` fails and names the host. It does not
@@ -479,11 +479,11 @@ an app that reads stdin.
 
 ## Deploy path: `--chunking`
 
-`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push when it fails (`auto`, the default). Use `--chunking` to override this:
+`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push where supported when it fails (`auto`, the default). Use `--chunking` to override this:
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Try chunk-diff; fall back to a registry push on failure. |
+| `auto` (default) | Try chunk-diff. Missing chunk capabilities on old Agents keep the registry fallback, including over Cloud v2. LAN and legacy Cloud retain their broader fallback; an unrecovered Cloud v2 transport drop exits 5. |
 | `force` | Use chunk-diff only. If chunk-diff fails the error is returned and no registry-push fallback is attempted. Cancellation still exits cleanly. |
 | `off` | Skip chunk-diff entirely; go straight to the registry push. |
 
@@ -495,12 +495,39 @@ an app that reads stdin.
 > route for every device, as build hosts delivered before chunked delivery
 > existed.
 
-> **Note:** When `--deploy` is also passed, `--chunking force` and `--chunking off` are no-ops — `--deploy` always uses the registry path because it must create the container without starting it.
+> **Note:** For single-service runs, `--deploy` uses the registry path because it must create the container without starting it; `--chunking force` and `--chunking off` do not change that path. This registry alternative does not apply to Compose or multi-service runs.
 
 > **Note:** The `postStart` hook fires on both the chunk-diff and registry-push
 > paths. The deploy path does not affect hook execution.
 
 Any value other than `auto`, `force`, or `off` is rejected with an error before the build starts.
+
+### Uploads over Cloud v2
+
+After a real Cloud v2 connection drop, automatic registry fallback is off for
+that failed deployment. The CLI reports the device (or its Cloud ID if unnamed)
+and bytes sent across resume attempts against the largest upload plan. Check
+that the device is online with `wendy cloud discover`, then retry. A single-service
+upload gets up to three attempts and skips chunks already staged on the device.
+An unrecovered connection loss during upload, a failed upload reconnect (including
+its deadline), or a disconnect while waiting for the app's start acknowledgement
+is `device_unreachable`: exit status 5, with `retryable: true` in JSON mode.
+
+In `auto` mode, an old Agent missing the required chunk RPCs still takes the
+existing authorized registry route. Image preparation refusals and other
+non-transport failures are reported separately. `force` keeps registry fallback
+off, including for missing capabilities; update the Agent to use that mode.
+
+The Compose and multi-service **chunk-upload path** supports `--builder docker` and `--builder buildkit`.
+Apple Container keeps its existing direct registry route in `auto`; existing
+Apple Container setups can also select it explicitly with
+`--builder apple-container --chunking=off`. This does not add BuildKit Compose
+registry support.
+
+`--chunking=off` explicitly uploads through the registry, subject to the usual
+registry authentication and Cloud authorization. Single-service `--deploy` is
+another registry alternative; it is not a Compose alternative. Set
+`WENDY_TLS_DEBUG=1` to log underlying upload and reconnect diagnostics.
 
 ## Environment variables
 
@@ -707,4 +734,4 @@ single-container app and one WendyOS device enrolled with Wendy Cloud, checked
 before anything is built. It does not combine with `--watch`,
 `--skip-cloud-registration`, several devices in one run, Compose projects or
 provider targets such as `--device docker`. To record a release without
-deploying, use [`wendy app release`](app/release.md).
+deploying, use [`wendy app release`](./app/release.md).
