@@ -100,6 +100,7 @@ type cloudDiscoverModel struct {
 	selectedV2     *cloudpbv2.Asset
 	windowWidth    int
 	windowHeight   int
+	terminalHeight int // before the banner rows are subtracted
 	err            error
 	hasResults     bool
 	defaultDevice  string
@@ -171,7 +172,8 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
-		msg.Height = max(1, msg.Height-strings.Count(m.purpose.header(msg.Width), "\n"))
+		m.terminalHeight = msg.Height
+		msg.Height = max(1, msg.Height-strings.Count(m.purpose.fittedHeader(msg.Width, msg.Height, 0), "\n"))
 		m.windowHeight = msg.Height
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -329,7 +331,7 @@ func (m cloudDiscoverModel) View() string {
 	var sb strings.Builder
 
 	if m.pickerMode {
-		sb.WriteString(m.purpose.header(m.windowWidth))
+		sb.WriteString(m.purpose.fittedHeader(m.windowWidth, m.terminalHeight, 0))
 		sb.WriteString(m.viewLine(scanStyle.Render("⟳ Fetching cloud devices...")) + "\n")
 		hint := "  ↑/↓ navigate, enter select, d toggle default, u update, q quit"
 		if m.table.CanScroll() {

@@ -222,7 +222,7 @@ func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
 		m.windowHeight = msg.Height
-		msg.Height = max(1, msg.Height-strings.Count(m.purpose.header(msg.Width), "\n")-2)
+		msg.Height = max(1, msg.Height-strings.Count(m.header(), "\n")-2)
 		var cmds []tea.Cmd
 		local, localCmd := m.updateLocal(msg)
 		m = local
@@ -312,12 +312,13 @@ func (m devicePickerModel) View() string {
 			view = strings.TrimRight(m.viewContent(), "\n")
 		}
 	}
-	view = tui.CropANSIView(view, 0, m.windowWidth)
-	lines := strings.Split(view, "\n")
-	if m.windowHeight > 0 && len(lines) > m.windowHeight {
-		view = strings.Join(lines[:m.windowHeight], "\n")
-	}
-	return view
+	return tui.FitView(tui.CropANSIView(view, 0, m.windowWidth), m.windowHeight)
+}
+
+// header is the purpose banner, collapsed when it would crowd out the table.
+// The 2 rows are the tab strip and the blank line under it.
+func (m devicePickerModel) header() string {
+	return m.purpose.fittedHeader(m.windowWidth, m.windowHeight, 2)
 }
 
 func (m devicePickerModel) viewContent() string {
@@ -325,7 +326,7 @@ func (m devicePickerModel) viewContent() string {
 		return ""
 	}
 
-	header := m.purpose.header(m.windowWidth) + deviceTabsHeader(m.active, m.tabOrder(), m.windowWidth)
+	header := m.header() + deviceTabsHeader(m.active, m.tabOrder(), m.windowWidth)
 
 	switch m.active {
 	case devicePickerLocalTab:

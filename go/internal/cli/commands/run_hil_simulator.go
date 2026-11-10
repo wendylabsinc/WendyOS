@@ -67,14 +67,15 @@ type hilSimulatorPickerModel struct {
 	picker  tui.PickerModel
 	purpose devicePickerPurpose
 	width   int
+	height  int
 }
 
 func (m hilSimulatorPickerModel) Init() tea.Cmd { return m.picker.Init() }
 
 func (m hilSimulatorPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
-		m.width = size.Width
-		size.Height = max(1, size.Height-strings.Count(m.purpose.header(size.Width), "\n"))
+		m.width, m.height = size.Width, size.Height
+		size.Height = max(1, size.Height-strings.Count(m.purpose.fittedHeader(size.Width, size.Height, 0), "\n"))
 		msg = size
 	}
 	updated, cmd := m.picker.Update(msg)
@@ -86,5 +87,5 @@ func (m hilSimulatorPickerModel) View() string {
 	if m.picker.Selected() != nil || m.picker.Cancelled() {
 		return ""
 	}
-	return m.purpose.header(m.width) + m.picker.View()
+	return m.purpose.fittedHeader(m.width, m.height, 0) + m.picker.View()
 }

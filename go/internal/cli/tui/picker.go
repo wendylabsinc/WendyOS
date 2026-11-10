@@ -753,12 +753,8 @@ func (m PickerModel) View() string {
 			m.table.SetHeight(max(2, m.table.Height()-excess))
 			view = strings.TrimRight(m.viewContent(), "\n")
 		}
-		lines := strings.Split(view, "\n")
-		if len(lines) > m.height {
-			view = strings.Join(lines[:m.height], "\n")
-		}
 	}
-	return view
+	return FitView(view, m.height)
 }
 
 func (m PickerModel) viewContent() string {

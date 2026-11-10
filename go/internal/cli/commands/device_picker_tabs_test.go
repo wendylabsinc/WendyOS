@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -70,6 +71,38 @@ func TestDevicePickerLastRowVisibleAndInterruptClearsFrame(t *testing.T) {
 		next, cmd := m.Update(tui.InterruptFilter(m, tea.InterruptMsg{}))
 		if cmd == nil || next.View() != "" {
 			t.Fatalf("tab=%d: interrupt left a frame: %q", tab, next.View())
+		}
+	}
+}
+
+func TestDevicePickerShortTerminalKeepsTheSelectionUnderTheBanner(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{{Width: 100, Height: 9}, {Width: 60, Height: 10}, {Width: 30, Height: 12}, {Width: 100, Height: 14}, {Width: 100, Height: 24}} {
+		for _, tab := range []devicePickerTab{devicePickerLocalTab, devicePickerCloudTab} {
+			m := newDevicePickerModel(withDevicePickerPurpose(context.Background(), mainDevicePicker), tui.NewPicker(), pickerAuth(7), 0, true, tab)
+			var items []tui.PickerItem
+			var assets []*cloudpb.Asset
+			for i := range 30 {
+				name := fmt.Sprintf("device-%02d", i)
+				items = append(items, tui.PickerItem{Name: name})
+				assets = append(assets, &cloudpb.Asset{Id: int32(i + 1), Name: name})
+			}
+			for _, msg := range []tea.Msg{devicePickerLocalMsg{tui.PickerAddMsg{Items: items}}, devicePickerCloudMsg{cloudScanMsg{assets: assets}}, size} {
+				next, _ := m.Update(msg)
+				m = next.(devicePickerModel)
+			}
+			for i := range 30 {
+				view := ansi.Strip(m.View())
+				if !strings.Contains(view, fmt.Sprintf("device-%02d", i)) || lipgloss.Height(view) > size.Height {
+					t.Fatalf("tab=%d size=%dx%d cursor=%d: selected row hidden or frame too tall:\n%s", tab, size.Width, size.Height, i, view)
+				}
+				// At 9 rows the cloud tab's organization line leaves no room, and
+				// the clip drops the banner before the selected row.
+				if size.Height >= 10 && !strings.Contains(view, "MAIN DEVICE") {
+					t.Fatalf("tab=%d size=%dx%d: banner title lost:\n%s", tab, size.Width, size.Height, view)
+				}
+				next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+				m = next.(devicePickerModel)
+			}
 		}
 	}
 }
