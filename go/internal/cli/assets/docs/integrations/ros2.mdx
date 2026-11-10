@@ -49,7 +49,7 @@ to a robot or sensor attached to the device, `"network"` for a bridge or tool
 that needs the device's wider ROS 2 graph, `"app"` for an app that must stay to
 itself. `device`, `peripherals` and `network` apps that share a bus set the
 same `domainId`; all three scopes need the host network. See
-[`frameworks.ros2`](/docs/apps/wendy.json#frameworksros2).
+[`frameworks.ros2`](/docs/reference/app-configuration#frameworksros2).
 
 <Callout type="info">
 No SSH, no `source /opt/ros/<distro>/setup.bash`, and no extra ports. If a device
@@ -81,7 +81,7 @@ whether the app uses ROS 2, then walks through middleware, scope, and domain ID
 
 Existing projects need no scaffolding — add the `frameworks.ros2` key to
 `wendy.json` by hand and `wendy run` picks it up on the next deploy. See
-[`wendy.json`](/docs/apps/wendy.json#frameworks) for every field.
+[`wendy.json`](/docs/reference/app-configuration#frameworks) for every field.
 
 ## Prerequisites
 

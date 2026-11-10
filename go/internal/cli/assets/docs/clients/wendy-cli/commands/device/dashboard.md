@@ -15,5 +15,5 @@ q/Ctrl+C exit | ↑/↓ scroll | ←/→ pan logs | G/g end/start
 ```
 
 > Looking for the app-count status line (`3 apps  ● 2 running  ○ 1 stopped`)?
-> That belongs to the interactive app list, [`wendy device apps list`](apps/list.md),
+> That belongs to the interactive app list, [`wendy device apps list`](./apps/list.md),
 > not to this dashboard.

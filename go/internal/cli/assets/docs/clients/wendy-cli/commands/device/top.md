@@ -50,7 +50,7 @@ The meters keep showing the last successful sample, since there is nothing newer
 
 Only transport-level failures raise the banner. An error the agent itself returns means the device answered and is therefore still reachable, so it appears as the normal status flash at the bottom of the screen — and it clears the banner if one was up. The banner also clears on the next successful poll.
 
-Apps are grouped the same way as [`wendy device dashboard`](dashboard.md): multi-service apps show a group header with one subrow per service. Running apps (`●`), stopped apps (`○`), and crash-looping apps (`↻`) have distinct row styling and are counted separately. Resource columns show unavailable values for stopped and crash-looping rows instead of presenting them as active zero-usage workloads. A side panel shows the listening ports of the currently selected running app.
+Apps are grouped the same way as [`wendy device dashboard`](./dashboard.md): multi-service apps show a group header with one subrow per service. Running apps (`●`), stopped apps (`○`), and crash-looping apps (`↻`) have distinct row styling and are counted separately. Resource columns show unavailable values for stopped and crash-looping rows instead of presenting them as active zero-usage workloads. A side panel shows the listening ports of the currently selected running app.
 
 Press `Enter` to open the selected app's recent and live logs. Use the arrow keys or Page Up/Page Down to scroll, `End` to resume following, and `Esc` to return to the monitor. Press `s` to start the selected app.
 
@@ -58,7 +58,7 @@ The disk meter shows the filesystem holding container storage, which is `/data` 
 
 Press `x` to stop the selected app. For a multi-service app, this stops the whole app even when the cursor is on one of its service rows. Stop uses Wendy's normal graceful shutdown behavior and may escalate to a force kill when the app does not exit within its grace period.
 
-> **Note:** This command requires a recent device agent. Against an agent that's too old to report resource stats, the command reports that the agent doesn't support resource stats and suggests updating it with [`wendy device update`](update.md).
+> **Note:** This command requires a recent device agent. Against an agent that's too old to report resource stats, the command reports that the agent doesn't support resource stats and suggests updating it with [`wendy device update`](./update.md).
 
 ### Keyboard shortcuts
 
@@ -143,6 +143,6 @@ charge/discharge rate.
 
 ## Related
 
-- [`wendy device dashboard`](dashboard.md) — full-screen app/service status dashboard
-- [`wendy device info`](info.md) — one-shot device hardware and GPU metadata
-- [`wendy device apps`](apps/) — list and manage deployed apps
+- [`wendy device dashboard`](./dashboard.md) — full-screen app/service status dashboard
+- [`wendy device info`](./info.md) — one-shot device hardware and GPU metadata
+- [`wendy device apps`](./apps/list.md) — list and manage deployed apps

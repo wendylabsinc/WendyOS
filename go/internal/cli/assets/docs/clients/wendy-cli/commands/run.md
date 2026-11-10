@@ -2,7 +2,7 @@ Runs your app on a Wendy-enabled device:
 
 1. [Selects a device](../device-selection.md)
 2. [Queries the platform and architecture](./device/version.md) of this device
-3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](../../../debugging/) if needed
+3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](/docs/advanced/debugging) if needed
 4. Uploads the artifact(s) for Linux (via the container registry) or macOS
 5. [Starts the app](./device/apps/start.md). Attached runs, and any run with `--wait-ready`, then wait for readiness and print the reachable URL; other detached agent deployments report configured HTTP endpoints as described in [Detached output](#detached-output).
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
@@ -116,7 +116,7 @@ Verify the HTTP response separately. In text mode, URLs appear as
 and prints its outcome instead of this result; see
 [Waiting for readiness](#waiting-for-readiness---wait-ready).
 
-URLs come from [`http` entitlements](../../../apps/wendy.json.md#http) and
+URLs come from [`http` entitlements](/docs/reference/app-configuration#http) and
 HTTP(S) `hooks.postStart.openURL` values that contain `WENDY_HOSTNAME`.
 `endpoints` contains distinct reported URLs, each with its app or service
 identifier; a service may have several URLs. `url` is the first entry
@@ -401,7 +401,7 @@ For a complete example, follow [Build once, deploy to several devices](/docs/gui
 - A user certificate in the build host's organisation.
 - A provisioned target device reachable from the build host over the mesh.
 
-See [`wendy device build-host`](device/build-host.md) for setup, access rules,
+See [`wendy device build-host`](./device/build-host.md) for setup, access rules,
 cache-space requirements, and how shared builds use the host.
 
 If a requirement is missing, `wendy run` fails and names the host. It does not
@@ -734,4 +734,4 @@ single-container app and one WendyOS device enrolled with Wendy Cloud, checked
 before anything is built. It does not combine with `--watch`,
 `--skip-cloud-registration`, several devices in one run, Compose projects or
 provider targets such as `--device docker`. To record a release without
-deploying, use [`wendy app release`](app/release.md).
+deploying, use [`wendy app release`](./app/release.md).

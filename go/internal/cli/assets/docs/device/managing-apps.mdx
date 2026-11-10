@@ -16,7 +16,7 @@ The Wendy CLI can help you manage apps on your WendyOS device. This works over U
 
 ## Running Apps
 
-All WendyOS apps are container-based and need a build descriptor in your project directory: a `build.stagefile.yaml` (a Stagefile — see [`wendy build`](/clients/wendy-cli/commands/build)), a `Dockerfile`/`Containerfile`, or a compose file. When you run `wendy run`, the CLI automatically prepares the local build environment, builds your container image for the ARM64 architecture, and ships it directly to your WendyOS device.
+All WendyOS apps are container-based and need a build descriptor in your project directory: a `build.stagefile.yaml` (a Stagefile — see [`wendy build`](/docs/advanced/clients/wendy-cli/commands/build)), a `Dockerfile`/`Containerfile`, or a compose file. When you run `wendy run`, the CLI automatically prepares the local build environment, builds your container image for the ARM64 architecture, and ships it directly to your WendyOS device.
 
 Most projects under [`Examples/`](https://github.com/wendylabsinc/wendyos/tree/main/Examples) use a Stagefile and are worth reading as reference.
 
