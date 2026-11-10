@@ -26,8 +26,8 @@ The 64 GB minimum applies to removable NVME and SD card installations. On Jetson
 | Jetson AGX Thor | Flashpack-managed internal partitions | N/A | Flashed over USB recovery; no external SD/NVME target |
 
 See the device-specific pages for full partition layouts:
-- [WendyOS on Raspberry Pi](pi/README.md)
-- [WendyOS on Jetson](jetson/README.md)
+- [WendyOS on Raspberry Pi](/docs/advanced/wendyos/pi)
+- [WendyOS on Jetson](/docs/advanced/wendyos/jetson)
 
 ## Supported devices
 

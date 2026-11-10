@@ -42,7 +42,7 @@ Before you start, you need:
   missing, `wendy run` offers to install it with Homebrew.
 - a device already flashed with Wendy Lite.
 
-[Getting Started with Wendy Lite](getting-started.md) walks through
+[Getting Started with Wendy Lite](./getting-started.md) walks through
 installing the CLI and flashing a device.
 
 When you install Wendy Lite on your device, ensure you pick the variant

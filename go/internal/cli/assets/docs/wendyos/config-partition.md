@@ -61,12 +61,12 @@ Both destination files use mode `0600`; the destination JSON excludes the
 handoff's embedded `keyPem` field. On the same boot, the agent replaces
 `/etc/wendyos/device-uuid` with the device UUID in the handed-off certificate
 and rewrites the mDNS `id=` TXT record to match; see
-[Configuration files](services/configuration-files.md).
+[Configuration files](./services/configuration-files.md).
 
 After both writes succeed, the agent removes the handoff file. A persistence
 failure leaves it available for retry on a later boot, and retrying preserves
 destination files whose contents and permissions already match. Malformed or
-incomplete handoffs are logged and removed. See [Credential persistence](../pki/README.md#credential-persistence)
+incomplete handoffs are logged and removed. See [Credential persistence](/docs/advanced/pki#credential-persistence)
 for the stored file layout and legacy-file handling.
 
 This UUID/mDNS alignment also runs after live re-enrollment. The
