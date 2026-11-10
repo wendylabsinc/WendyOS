@@ -1,4 +1,8 @@
 // Package terminaloutput defers background diagnostics while a TUI owns the terminal.
+//
+// Deferred writes live in memory until the last view exits. A process that
+// ends while a view is active (os.Exit, or an unrecovered panic in another
+// goroutine) loses them, so fatal paths should release the view first.
 package terminaloutput
 
 import (
@@ -13,10 +17,11 @@ const maxPendingBytes = 64 << 10
 
 var output struct {
 	sync.Mutex
-	owners  int
-	bytes   int
-	dropped int
-	pending []write
+	owners       int
+	bytes        int
+	droppedBytes int
+	dropped      int
+	pending      []write
 }
 
 var lifecycle sync.Mutex
@@ -49,10 +54,17 @@ func (w writer) Write(p []byte) (int, error) {
 	if output.owners == 0 {
 		return w.dst.Write(p)
 	}
-	if len(p) <= maxPendingBytes-output.bytes {
-		output.pending = append(output.pending, write{w.dst, append([]byte(nil), p...)})
-		output.bytes += len(p)
-	} else {
+	// Keep the newest writes: the ones just before the view exits usually
+	// explain its outcome, and evicting from the front keeps the replay free
+	// of gaps.
+	output.pending = append(output.pending, write{w.dst, append([]byte(nil), p...)})
+	output.bytes += len(p)
+	for output.bytes > maxPendingBytes {
+		evicted := output.pending[0]
+		output.pending[0] = write{}
+		output.pending = output.pending[1:]
+		output.bytes -= len(evicted.data)
+		output.droppedBytes += len(evicted.data)
 		output.dropped++
 	}
 	return len(p), nil
@@ -88,14 +100,14 @@ func Suspend() func() {
 			output.owners--
 			last := output.owners == 0
 			if last {
+				if output.dropped > 0 {
+					_, _ = fmt.Fprintf(os.Stderr, "wendy: omitted %d earlier background diagnostic writes (%d bytes) while the TUI was active\n", output.dropped, output.droppedBytes)
+				}
 				for _, entry := range output.pending {
 					_, _ = entry.dst.Write(entry.data)
 				}
-				if output.dropped > 0 {
-					_, _ = fmt.Fprintf(os.Stderr, "wendy: omitted %d background diagnostic writes while the TUI was active\n", output.dropped)
-				}
 				output.pending = nil
-				output.bytes, output.dropped = 0, 0
+				output.bytes, output.dropped, output.droppedBytes = 0, 0, 0
 			}
 			output.Unlock()
 			if last {

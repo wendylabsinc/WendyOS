@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -72,5 +73,50 @@ func TestConcurrentDiagnosticsAreBounded(t *testing.T) {
 	release()
 	if dst.Len() > maxPendingBytes {
 		t.Fatal("replayed more than the bounded queue")
+	}
+}
+
+func TestBoundedQueueKeepsTheNewestWritesWithoutGaps(t *testing.T) {
+	var dst bytes.Buffer
+	previous := os.Stderr
+	notice, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = notice
+	t.Cleanup(func() { os.Stderr = previous })
+
+	release := Suspend()
+	t.Cleanup(release)
+	w := Writer(&dst)
+	chunk := strings.Repeat("x", 1023)
+	for i := range 80 {
+		fmt.Fprintf(w, "%02d%s\n", i, chunk[2:])
+	}
+	_, _ = w.Write(bytes.Repeat([]byte("y"), maxPendingBytes+1)) // evicts everything, itself included
+	fmt.Fprintln(w, "final")
+	release()
+
+	if dst.String() != "final\n" {
+		t.Fatalf("replayed %d bytes, want only the write after the oversized one", dst.Len())
+	}
+	dst.Reset()
+	release = Suspend()
+	for i := range 80 {
+		fmt.Fprintf(w, "%02d%s\n", i, chunk[2:])
+	}
+	release()
+	replayed := dst.String()
+	if dst.Len() > maxPendingBytes || !strings.HasPrefix(replayed, "16") || !strings.Contains(replayed, "\n79") {
+		t.Fatalf("want a contiguous tail 16..79, got %d bytes starting %q", dst.Len(), replayed[:2])
+	}
+	got, err := os.ReadFile(notice.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"omitted 81 earlier background diagnostic writes", "omitted 16 earlier background diagnostic writes (16384 bytes)"} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("notice %q missing from %q", want, got)
+		}
 	}
 }
