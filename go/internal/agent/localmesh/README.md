@@ -105,6 +105,8 @@ firmware events do not select an arbitrary path for teardown.
 A cheaper LAN link still replaces a slower link only to the same principal;
 LAN does not consume radio capacity. The shared carrier preference can retain
 NAN when shedding duplicate BLE links, independently of connection limits.
+`HasCheaperLink` requires `PeerLink.ForwardingReady`: a Babel-reachable neighbour
+with its authorized /128 selected and installed through that carrier.
 Only a fresh candidate for BLE can displace a redundant BLE link; NAN-only
 presence cannot use the freed Bluetooth slot. Failed or expired candidates and
 devices already reached on another carrier do not displace the fallback.
@@ -276,6 +278,19 @@ that identity. Cloud's `asset_id` carries the same certificate device UUID.
 Authenticate its full principal and tenant before using it as a network
 identity; a database field alone grants no authority.
 
+Mesh certificate validation uses the later of wall time and a progressing local
+boot anchor from the provisioned leaf, validated config clock floor or systemd
+saved-clock stamp. While boot time is uncertain, only leaf NotBefore receives up
+to 24 hours of grace beyond that base; direct signed-time recovery clears it.
+The anchors require trusted local administrators and do not prove current UTC.
+Peer announcements cannot change them. Issuer trust, signatures and path expiry
+still apply. This policy does not change OS time or LAN/Cloud validation defaults.
+
+Mesh-native agent ingress uses an in-process handoff with independent inner mTLS
+and the ordinary server's tenant and RPC-role checks. During boot uncertainty,
+authenticated operators retain management access; device credentials still
+cannot invoke HostShell or either tunnel RPC.
+
 Each wendy net verifier may reuse successful certificate-path signature verification
 for up to one minute of monotonic time, within 256 entries and 8 MiB of certificate
 bytes. The key includes every presented DER entry, including unused issuers.
@@ -296,7 +311,7 @@ restart; it is not a certificate identity.
 
 ## Route admission
 
-Every finite remote route requires a current version-4 manifest signed by the
+Every finite remote route requires a live version-4 authorization signed by the
 destination device. The manifest binds its full certificate principal to its exact
 Wendy Net /128, Babel origin router ID, and origin sequence number. An authenticated
 neighbour can relay that proof unchanged, but cannot sign for another device,
@@ -311,29 +326,39 @@ Binding the complete principal prevents a proof being relabeled into another
 tenant even when both tenants trust the same key and device UUID. The CBOR body
 is not reserialized for verification.
 
-Nodes publish a 15-minute lease every five minutes, capped at the identity's
-certificate expiry. Receivers reject leases longer than 15 minutes and issue
-times more than five seconds in the future. The origin's persistent revision
-prevents rollback to an older announcement. A Babel sequence change is persisted
-and signed before its updates are sent. Proofs travel over the existing reliable
-control stream; Babel datagrams remain unchanged. If a datagram arrives first,
-it is dropped and periodic Babel updates repair the ordering.
+Nodes publish a lease of at most 15 minutes every five minutes, capped at the
+verified certificate path's expiry. Certificate trust is checked first. Signed
+`Issued` and `Expires` must fit the signing leaf's validity window, `Expires`
+cannot outlive the selected path, and their positive difference is the lease
+duration. The version-4 signed bytes are unchanged; receiver UTC is not a
+manifest freshness gate. The origin's persistent revision orders announcements.
+A Babel sequence change is persisted and signed before its updates are sent.
+Proofs travel over the existing reliable control stream; Babel datagrams remain
+unchanged. A datagram that arrives before its proof is dropped. On a newly
+verified tuple, the receiver requests the current prefix advertisement using
+Babel's existing Route Request; periodic updates remain a fallback.
 
-Admission checks both new updates and retained route candidates. Expiry,
-withdrawal, or loss of certificate trust removes eligibility; the one-second
-maintenance tick bounds expiry reconciliation while the event loop is running.
-An accepted lease has an in-process monotonic deadline, and observed expiry
-cannot be undone by replay. Timestamp validation when first receiving a proof
-and after process restart still requires reliable wall time. Conflicting address
-claims by different principals fail closed.
-Router IDs alone confer no authority over another device's address.
+For a pure sequence advance, the receiver can retain the preceding verified
+authorization until the matching finite Babel candidate is usable. It retains
+no old payload and neither exports nor persists that authority. The original
+receiver deadline, original certificate-path cap and current entry's certificate
+deadline bound it. Changes to other advertised fields, withdrawal or invalidation
+of either proof clear it immediately. Once the replacement candidate is usable,
+`CompleteRouteHandoff` atomically retires the old authorization without an
+intermediate unreachable route. The proof alone does not establish a route.
 
-These proofs authenticate the origin's address and recent authorization. They
-do not prove an honest path metric, current reachability, forwarding, or payload
-source authenticity. A relay can still drop traffic or replay a proof within its
-valid lease. Hop-local Babel retractions remain unchanged: they only remove that
-neighbour's candidate. Babel feasibility, split horizon, loop prevention, and
-end-to-end application authentication still apply.
+Receivers expire payloads by the signed duration using monotonic time and retain
+revision/hash watermarks, including withdrawals, in RAM for ten durations from
+first admission. Only a higher verified revision renews these periods. The
+one-second maintenance tick removes expired records, queued gossip and route and
+service projections. Withdrawal or loss of certificate trust removes eligibility.
+Conflicting address claims fail closed; router IDs grant no address authority.
+
+After watermark expiry or restart, a delayed record can receive one local lease.
+These proofs do not establish origin age, honest metrics, reachability,
+forwarding or payload source authenticity. Babel feasibility, split horizon,
+loop prevention and end-to-end authentication still apply. Hop-local retractions
+remove only that neighbour's candidate.
 
 Router QUIC links require hello version 2, ALPN `wendy-net-router/3` and the
 authenticated IP carrier capability described below. BLE TLS uses hello version 1
@@ -341,10 +366,10 @@ and `wendy-local-mesh-ble/2` without router IP capabilities. Both router carrier
 include the complete signed route/service manifest, certificate exchange and
 HAVE/WANT dissemination. Services share their parent manifest revision and lease.
 Every carrier requires the binary wire format and current signed manifest schema.
-No automatic downgrade is attempted;
-upgrade each connected Wendy Net network together.
-This changes the internal Wendy Net wire
-contract, not public gRPC messages or application-session ALPNs.
+No automatic schema downgrade is attempted. Older version-4 peers keep their
+UTC lease checks and may not bootstrap a stale node until its clock corrects;
+this receiver-local policy adds no new signed format or control message.
+Public gRPC messages and application-session ALPNs are unchanged.
 
 Manifest projection, route authorization and synchronization require the exact
 currently admitted wire signature to verify under the principal's current cached
@@ -360,8 +385,9 @@ advertised replacement chain. Only that active same-neighbour exchange can
 defer a signature failure for a different leaf, or a manifest lifetime beyond
 a different exact cached chain (including renewed issuers behind the same
 leaf). The bounded pending wire keeps the exact descriptor and its first
-deadline, retaining the original monotonic fetch allowance independently of the
-signed absolute expiry. Replacement or timeout discards it,
+deadline, retaining only the original bounded local monotonic fetch allowance;
+raw signed absolute expiry does not extend pending-resource retention.
+Replacement or timeout discards it,
 and successful chain completion still requires normal signature, lease and
 replay verification. Invalid signatures and overlong certificate lifetimes
 outside that transition, or after replacement verification, remain fatal.
@@ -452,7 +478,7 @@ identity caches still persist verified full chains with their own 1,024-entry,
 are never persisted.
 
 Certificate exchange uses raw DER on the existing reliable control stream.
-TLS handshake certificates and their verification remain unchanged. Unknown
+TLS uses the same provisioned identities and trust anchors. Unknown
 optional control kinds and gossip operations are consumed within their frame;
 unknown optional manifest fields remain in the exact signed body. Unsupported
 manifest versions and required extensions do not advance replay state.
@@ -474,8 +500,9 @@ the latest complete state. Five quiet minutes after a successful publication
 trigger refresh. Reconciliation runs every five minutes, with bounded repair
 continuation on the one-second maintenance tick. These intervals are separate
 from Babel's one-second datagram Hello and 16-second Update intervals;
-reliable stream links can use a longer per-link Hello interval. Durable revisions
-and bounded replay receipts prevent restart from resurrecting superseded state.
+reliable stream links can use a longer per-link Hello interval. Origin revisions
+remain durable; receiver payloads and ten-duration watermarks are RAM state, so
+restart can first-learn a delayed record for one local lease.
 
 The payload path is IPv6 through peer TUNs and the selected Babel next hop. A
 1320-byte logical packet uses the negotiated whole form when current capacity
@@ -556,10 +583,12 @@ for every chunk. A poll emits at most eight chunks and four new requests.
 The shared pool bounds known receipts to 4,096, pending objects to 128, suppliers
 per object to 64, active downloads/uploads to 16 each, and active transfers per
 session to four. Envelopes are at most 40 KiB and cached payloads at most 8 MiB.
-Evicting payload bytes retains the verified receipt until signed expiry, so a
-new HAVE does not redownload an already admitted object. A serving router can
-recover evicted bytes with a keyed authoritative-store lookup retained in its
-bounded verified receipt. Unknown requests never scan the directory.
+Evicting payload bytes retains the pool's bounded verified receipt only until
+its receiver-local deadline. The separate compact origin watermark suppresses
+same or lower revisions for ten signed durations without retaining full bodies.
+A serving router can recover evicted bytes only through a keyed lookup of the
+currently admitted authoritative record. Expired records and queued transfers
+are removed during idle maintenance. Unknown requests never scan the directory.
 Authenticated stale bodies receive short suppression receipts; expired or
 unverified certificate-wait bodies release their claim without a shared receipt. Advertised
 hints expire after two minutes. No cache is seeded from durable generation
@@ -614,6 +643,50 @@ The WendyOS manifest advertises the application listeners that actually started:
 QUIC and, when available, TCP with TLS. Lite can use the TLS endpoint without
 QUIC. These signed destination endpoints are independent of the carrier used
 by any particular hop; clients still authenticate the destination end to end.
+
+## Shared application QUIC sessions
+
+The application client retains at most one live outgoing QUIC connection per
+destination principal. Concurrent TCP and UDP dials share its pinned TLS
+handshake. A healthy connection with active flows remains reusable beyond the
+ten-minute idle-session age limit. A temporary route outage cancels UDP flows
+but retains the connection and its TCP streams; new flows require a fresh signed
+route check and reuse that connection after recovery. Missing, withdrawn or
+expired destination manifests, endpoint changes, credential expiry, and stale
+session failures close the old connection before any replacement handshake.
+This also ends its active TCP streams. A warm port request has a twenty-second
+ACK bound for detecting stale sessions after a remote restart. Waiting for
+stream credit or receiving a per-stream refusal does not retire the shared
+connection; the attempted flow returns its bounded setup error while existing
+flows continue. There is no
+old-session draining overlap. This pool is separate from hop-by-hop carrier
+connections and the native TLS application transport.
+
+ALPN `wendy-app-mesh/2` permits reliable `WAS1` TCP streams and multiplexed UDP
+flows in the same connection. Each UDP flow opens a reliable `WAU4` control
+stream naming an authorized destination port and negotiating message/chunk
+capacity; `WUA4` acknowledges admission. That control stream remains open for
+the flow's lifetime. Each QUIC DATAGRAM starts with the control stream ID as an
+8-byte big-endian integer, followed by the existing version-2 UDP message
+fragment. Stream IDs are never reused within a connection. Unknown or closed
+IDs are dropped, and closing or revoking one flow does not close other flows.
+
+The maximum framed chunk remains 1,000 bytes: the flow prefix leaves 992 bytes
+for the UDP message fragment, including its 20-byte fragment header. A lower
+QUIC DATAGRAM capacity subtracts the 8-byte prefix before the message scheduler
+reduces its chunk size. Complete application UDP messages still support 65,507
+bytes and are delivered only after complete reassembly. DATAGRAM fragments
+remain unreliable; they are not repaired through a reliable stream. Existing
+per-flow, peer and node message/socket budgets and fragment scheduling continue
+to apply. A session admits at most eight active TCP streams and 32 UDP flows,
+subject to those resource budgets, so UDP controls do not consume TCP capacity.
+
+Servers also accept ALPN `wendy-app-mesh/1` for older clients, retaining its
+single-UDP-flow connection ownership and wire framing. Updated clients offer
+both protocols during the authenticated handshake. TCP can use negotiated v1;
+shared UDP requires v2 and returns an unsupported-protocol error for a v1 peer,
+which must be upgraded. There is no second connection or downgrade retry after
+an authentication failure. Native TLS UDP retains its separate framing.
 
 ## Application service discovery
 

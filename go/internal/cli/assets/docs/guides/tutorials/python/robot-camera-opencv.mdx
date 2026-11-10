@@ -1,5 +1,5 @@
 ---
-title: Read a Robot Camera with OpenCV
+title: Read a robot camera with OpenCV
 description: Read a Go2 or ROS 2 camera through WendyOS and process its frames in a Python container
 language: python
 ---
@@ -179,3 +179,7 @@ wendy device apps remove robot-camera-opencv --cleanup
 | Capture never receives a first frame | Check the publisher and wired connection. A device node may exist while the publisher is silent. |
 
 For another camera source, see [IP camera container access](/docs/hardware/camera#container-access). IP cameras need stored credentials and use IDs from 200 through 255; their loopback nodes carry the selected sub-stream.
+
+## Next steps
+
+Continue with [Analyze raw camera frames](/docs/guides/tutorials/python/raw-camera-frames) to read uncompressed frames and inspect their pixel values.

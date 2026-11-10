@@ -1,5 +1,5 @@
 > **Deprecated.** `wendy device version` is a hidden alias for
-> [`wendy device info`](info.md) and prints a deprecation warning. Use
+> [`wendy device info`](./info.md) and prints a deprecation warning. Use
 > `wendy device info` instead. (`wendy cloud device version` is deprecated the
 > same way, in favour of `wendy cloud device info`.)
 

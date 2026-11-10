@@ -13,4 +13,4 @@ wendy project add i2c --bus i2c-1
 
 Use `--dry-run` to preview without saving, or `--service <name>` for a service's
 settings. See the [project editor](../index.md) and
-[entitlement reference](../../../../../apps/wendy.json.md#entitlements-1).
+[entitlement reference](/docs/reference/app-configuration#entitlements-1).

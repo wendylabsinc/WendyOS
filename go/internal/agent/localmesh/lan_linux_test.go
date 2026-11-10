@@ -481,6 +481,8 @@ func TestLANWorkerFailureClosesPendingConnections(t *testing.T) {
 	for _, failure := range []string{"responder", "socket", "cancel"} {
 		t.Run(failure, func(t *testing.T) {
 			a, b := testCredentials(t)
+			node := newActorTestNode(t, b, &handoffActorNetwork{})
+			t.Cleanup(func() { node.cancel(); _ = node.Stop() })
 			socket, err := net.ListenPacket("udp4", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
@@ -497,7 +499,7 @@ func TestLANWorkerFailureClosesPendingConnections(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
 				selected := lanInterface{iface: net.Interface{Name: "no-such-lan"}, ip: net.IPv4(127, 0, 0, 1), net: &net.IPNet{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)}, cost: EthernetLinkCost}
-				done <- serveLANInterface(ctx, LANConfig{Credentials: b}, selected, lanTestClaims(b), socket, mdnsConn, nil)
+				done <- serveLANInterface(ctx, LANConfig{Credentials: b, Node: node}, selected, lanTestClaims(b), socket, mdnsConn, nil)
 			}()
 			tlsConfig, err := a.PeerTLS(b.Device)
 			if err != nil {

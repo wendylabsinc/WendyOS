@@ -70,6 +70,11 @@ type Link struct {
 // Event is a closed set. Time is supplied separately as elapsed monotonic time.
 type Event interface{ babelEvent() }
 type Tick struct{}
+
+// RefreshRoute solicits a current advertisement for one prefix using the
+// standard Babel Route Request. It grants no origin authority and does not
+// advance any origin sequence. Repeated requests are briefly coalesced.
+type RefreshRoute struct{ Prefix netip.Prefix }
 type AddLink struct{ Link Link }
 type RemoveLink struct{ ID LinkID }
 type SetCost struct {
@@ -88,13 +93,14 @@ type Originate struct {
 }
 type Withdraw struct{ Prefix netip.Prefix }
 
-func (Tick) babelEvent()       {}
-func (AddLink) babelEvent()    {}
-func (RemoveLink) babelEvent() {}
-func (SetCost) babelEvent()    {}
-func (Receive) babelEvent()    {}
-func (Originate) babelEvent()  {}
-func (Withdraw) babelEvent()   {}
+func (Tick) babelEvent()         {}
+func (RefreshRoute) babelEvent() {}
+func (AddLink) babelEvent()      {}
+func (RemoveLink) babelEvent()   {}
+func (SetCost) babelEvent()      {}
+func (Receive) babelEvent()      {}
+func (Originate) babelEvent()    {}
+func (Withdraw) babelEvent()     {}
 
 type Route struct {
 	Prefix        netip.Prefix
@@ -121,6 +127,10 @@ type Neighbour struct {
 	Link      LinkID
 	Cost      uint16
 	Reachable bool
+	// LivenessExpired reports an elapsed Hello or IHU hold. It is local
+	// snapshot metadata, independent of route authorization and a peer's
+	// explicit Infinity IHU. New, unconfirmed links may also have expired holds.
+	LivenessExpired bool
 }
 type Snapshot struct {
 	Now                                  time.Duration

@@ -32,7 +32,7 @@ func TestMacLLMTemplateScaffold(t *testing.T) {
 		}
 	}
 	destination := t.TempDir()
-	if err := renderAndWriteTemplate(files, destination, "sh.wendy.NativeChat", "mac-llm", map[string]interface{}{"APP_ID": "sh.wendy.NativeChat", "PORT": 8080, "MAX_MODEL": "HuggingFaceTB/SmolLM2-135M-Instruct"}); err != nil {
+	if err := renderAndWriteTemplate(files, destination, "sh.wendy.NativeChat", "mac-llm", map[string]interface{}{"APP_ID": "sh.wendy.NativeChat", "PORT": 8080, "MAX_MODEL": "HuggingFaceTB/SmolLM2-135M-Instruct"}, false); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := appconfig.LoadFromFile(filepath.Join(destination, "wendy.json"))

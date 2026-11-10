@@ -1,5 +1,5 @@
 ---
-title: Camera Access
+title: Camera access
 description: Use USB, CSI, IP, and ROS 2 cameras from WendyOS apps
 ---
 
@@ -229,7 +229,7 @@ Cameras are picked up automatically as the agent's periodic discovery runs. To f
 wendy device camera list --refresh
 ```
 
-Paired network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `offline` or `ready`. The table ends with the number of cameras it hid for having no login. To pair one, use the **IP Cameras** tab of [`wendy device pair`](/docs/clients/wendy-cli/commands/device/pair), or find its ID with:
+Paired network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `offline` or `ready`. The table ends with the number of cameras it hid for having no login. To pair one, use the **IP Cameras** tab of [`wendy device pair`](/docs/advanced/clients/wendy-cli/commands/device/pair), or find its ID with:
 
 ```bash
 wendy device camera list --all

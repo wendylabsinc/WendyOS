@@ -6,6 +6,8 @@ description: Watch a Go2 walk, edit a Python patrol app, and deploy your own rou
 You'll run a simulated Go2 on your computer, then change its patrol route in Python.
 You do not need a physical robot, a Cloud account, or Python installed locally.
 
+<Figure src="/images/get-started/simulated-go2.webp" alt="A simulated Unitree Go2 walking across a grid floor in the browser 3D viewer, with lidar rings drawn around it" caption="The simulated Go2 in the browser viewer. By the end of this page it walks a route you wrote." />
+
 ## Before you start
 
 Use macOS or Linux with enough memory to give the VM 4 GiB and four virtual CPUs.
@@ -22,7 +24,7 @@ Windows users can follow the [app tutorial in WSL2](/docs/getting-started/app).
 
 ## 1. Install Wendy
 
-Run these commands in a terminal on your computer:
+Run these commands in a terminal on your computer, or skip this step if `wendy --version` already works:
 
 ```bash
 curl -fsSL https://install.wendy.dev/cli.sh | bash
@@ -85,6 +87,8 @@ wendy tour --simulator
 
 Choose **Build a robot app** and **Waypoint patrol** again to reopen your saved project.
 
-Next, try **Obstacle-aware roaming** in the same guide to make the robot react to
-lidar readings. The [tour reference](/docs/advanced/clients/wendy-cli/commands/tour)
-explains the other projects and movement settings.
+## Next steps
+
+- Try **Obstacle-aware roaming** in the same guide to make the robot react to lidar readings. The [tour reference](/docs/advanced/clients/wendy-cli/commands/tour) explains the other projects and movement settings.
+- [Deploy your first app](/docs/getting-started/app) to use the same edit-and-deploy loop with a web server.
+- When you have a robot, follow [sim to real](/docs/integrations/sim-to-real) to move your app onto hardware.

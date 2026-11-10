@@ -19,7 +19,7 @@ curl -fsSL https://install.wendy.dev/cli.sh | bash
 ```
 
 or follow the
-[CLI installation guide](https://docs.wendy.dev/latest/#1-install-the-wendy-cli).
+[CLI installation guide](https://docs.wendy.dev/latest/#install-the-wendy-cli).
 
 Wendy builds applications with EIM, the ESP-IDF Installation Manager, and picks
 the right ESP-IDF version for you. If EIM is missing, `wendy run` offers to

@@ -100,12 +100,15 @@ func scanTLSLANWithQuery(ctx context.Context, cfg LANConfig, selected lanInterfa
 			}
 			byKey[key] = entry
 		}
-		for _, key := range claims.candidates.Order(keys, time.Now()) {
+		for _, key := range claims.candidates.OrderPreferred(keys, time.Now(), cfg.Node.Snapshot(), func(key string) (meshid.Device, uint16) {
+			peer, _, _, _ := parseTLSLANEntry(byKey[key], cfg.Credentials.Device)
+			return peer, selected.cost
+		}) {
 			peer, ip, role, ok := parseTLSLANEntry(byKey[key], cfg.Credentials.Device)
-			if !ok || !shouldDialTLSLAN(byKey[key], role) || !cfg.allow(peer, selected.cost) || cfg.Node.HasCheaperLink(peer, selected.cost) {
+			if !ok || !shouldDialTLSLAN(byKey[key], role) || !cfg.allow(peer, selected.cost) {
 				continue
 			}
-			lease := claims.policy.ReserveGroup(peer.Principal()+"/"+strconv.Itoa(int(selected.cost)), peer, true, strconv.Itoa(int(selected.cost)))
+			lease := claims.policy.ReservePreferred(peer.Principal()+"/"+strconv.Itoa(int(selected.cost)), peer, true, strconv.Itoa(int(selected.cost)), claims.candidates.ReclaimEligible(key, time.Now()))
 			if lease == nil {
 				continue
 			}

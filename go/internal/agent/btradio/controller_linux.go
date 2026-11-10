@@ -295,6 +295,18 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 		if err != nil {
 			return err
 		}
+		if mode == "normal" {
+			// A normal-only remote can reject Set PHY even when this exact
+			// connection is already using the requested 1M PHYs. Observe the
+			// owned handle first; an unchanged normal link needs no procedure.
+			tx, rx, err := readMeshLinkPHY(ctx, io, handle)
+			if err != nil {
+				return fmt.Errorf("checking Bluetooth radio mode on %s (handle %d): %w", adapter, handle, err)
+			}
+			if tx == 1 && rx == 1 {
+				return nil
+			}
+		}
 		phy := byte(1)
 		options := uint16(0)
 		if mode != "normal" {
@@ -306,7 +318,7 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 		}
 		p := []byte{byte(handle), byte(handle >> 8), 0, phy, phy, byte(options), byte(options >> 8)}
 		if _, err := hciCommand(ctx, io, 0x2032, p); err != nil {
-			return err
+			return fmt.Errorf("setting Bluetooth radio mode to %s on %s (handle %d): %w", mode, adapter, handle, err)
 		}
 		// An accepted Set PHY is asynchronous. Require observed TX/RX PHY, rather
 		// than claiming success merely from Command Status. HCI does not report S2/S8.
@@ -315,25 +327,33 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 			want = 3
 		}
 		for {
-			result, err := hciCommand(ctx, io, 0x2030, []byte{byte(handle), byte(handle >> 8)})
+			tx, rx, err := readMeshLinkPHY(ctx, io, handle)
 			if err != nil {
-				return err
+				return fmt.Errorf("checking Bluetooth radio mode on %s (handle %d): %w", adapter, handle, err)
 			}
-			if len(result) != 4 || binary.LittleEndian.Uint16(result) != handle {
-				return fmt.Errorf("invalid PHY readback")
-			}
-			if result[2] == want && result[3] == want {
+			if tx == want && rx == want {
 				return nil
 			}
 			timer := time.NewTimer(100 * time.Millisecond)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return fmt.Errorf("selected PHY not observed: %w", ctx.Err())
+				return fmt.Errorf("Bluetooth connection did not reach the requested %s radio mode on %s (handle %d): %w", mode, adapter, handle, ctx.Err())
 			case <-timer.C:
 			}
 		}
 	})
+}
+
+func readMeshLinkPHY(ctx context.Context, io *controllerIO, handle uint16) (byte, byte, error) {
+	result, err := hciCommand(ctx, io, 0x2030, []byte{byte(handle), byte(handle >> 8)})
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(result) != 4 || binary.LittleEndian.Uint16(result) != handle {
+		return 0, 0, fmt.Errorf("invalid PHY readback for handle %d", handle)
+	}
+	return result[2], result[3], nil
 }
 
 var linksMu sync.Mutex

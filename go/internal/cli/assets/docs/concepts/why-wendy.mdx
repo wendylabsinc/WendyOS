@@ -8,6 +8,8 @@ edge device. It builds for the target, transfers the result, starts the app,
 and brings logs back to your computer. Hardware permissions, ROS 2 inspection,
 and coding-agent access use the same device connection.
 
+<Figure src="/images/get-started/go2-live-feed.webp" alt="A Unitree Go2 robot walking across an office floor next to a laptop that shows the robot's live camera feed" caption="A Go2 driven from a laptop by an app deployed with Wendy. The browser shows the robot's live camera feed." />
+
 ## What work does Wendy take over?
 
 For a camera app on a Jetson, packaging Python dependencies is only the beginning.
@@ -22,7 +24,7 @@ each change.
 | Run multiple services | Use a supported Compose project and inspect each service's output. | [Compose support](/docs/advanced/apps/compose) |
 | Inspect a robot | Inspect ROS 2 nodes and topics and connect a Foxglove bridge. | [ROS 2](/docs/integrations/ros2) |
 | Work through a coding agent | MCP tools expose deployment and device inspection to your coding assistant. | [Coding-agent setup](/docs/guides/llm-integration) |
-| Try the workflow without a board | Run a local simulated robot. Validate physical peripherals separately on hardware. | [Robot quickstart](/docs/getting-started/robot) |
+| Try the workflow without a board | Run a local simulated robot. Validate physical peripherals separately on hardware. | [Program a simulated robot](/docs/getting-started/robot) |
 
 A successful transfer or a running container does not prove that your app works.
 Check its logs and actual output, such as an HTTP response, camera frame, or ROS 2 topic.

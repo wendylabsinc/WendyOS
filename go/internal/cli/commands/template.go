@@ -692,7 +692,7 @@ func validateVariable(v templateVariable, val interface{}) error {
 // renderAndWriteTemplate takes the raw file map, evaluates each text file as a
 // Go text/template (so {{.VAR}}, {{if}}, {{range}}, etc. all work), and writes
 // to destDir. It renames directories named after the template to the app ID.
-func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateName string, vals map[string]interface{}) error {
+func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateName string, vals map[string]interface{}, force bool) error {
 	for relPath, content := range files {
 		// Rename template-named directories to app ID.
 		relPath = renameTemplatePath(relPath, templateName, appID)
@@ -713,8 +713,21 @@ func renderAndWriteTemplate(files map[string][]byte, destDir, appID, templateNam
 			output = rendered
 		}
 
-		if err := os.WriteFile(destPath, output, 0o644); err != nil {
+		if force {
+			// Match the original overlay writer: retain existing modes and
+			// let the process umask restrict permissions on new files.
+			if err := os.WriteFile(destPath, output, 0o644); err != nil {
+				return fmt.Errorf("writing %s: %w", destPath, err)
+			}
+			continue
+		}
+
+		created, err := createFileIfAbsent(destPath, output)
+		if err != nil {
 			return fmt.Errorf("writing %s: %w", destPath, err)
+		}
+		if !created {
+			return fmt.Errorf("refusing to overwrite %s: %w (use --force to overwrite template files)", destPath, os.ErrExist)
 		}
 	}
 

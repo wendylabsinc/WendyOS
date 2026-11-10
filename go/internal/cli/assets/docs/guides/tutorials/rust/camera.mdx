@@ -1,10 +1,10 @@
 ---
-title: Camera Feed in Rust
+title: Camera feed in Rust
 description: Start a live camera feed app using the Rust camera template
 language: rust
 ---
 
-## Live Camera Feed with Rust
+## Live camera feed with Rust
 
 Use the Wendy camera template when you want a browser-viewable camera stream without wiring the project from scratch. The template includes `wendy.json` (with camera entitlements), a Dockerfile, the Rust backend, and the browser UI. The backend captures MJPEG frames from a V4L2 camera with GStreamer and streams them to the browser over a WebSocket.
 
@@ -14,11 +14,11 @@ Use the Wendy camera template when you want a browser-viewable camera stream wit
 - Rust 1.85 or later installed
 - A WendyOS device with a USB camera connected
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     ```bash
     wendy init rust-camera --target wendyos --language rust --template camera-feed --var APP_ID=rust-camera --var PORT=4003 --assistant skip --git-init no
@@ -43,7 +43,21 @@ Use the Wendy camera template when you want a browser-viewable camera stream wit
   </Step>
 </Steps>
 
-## Project Structure
+## View the stream
+
+Your browser opens automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, open the app URL from the `wendy run` output, or navigate to:
+
+```
+http://wendyos-true-probe.local:4003
+```
+
+<Callout type="warning">
+  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
+</Callout>
+
+Use the camera dropdown in the top-right to switch between connected cameras.
+
+## Project structure
 
 The generated project contains the Rust backend, the browser UI, and a small assets directory:
 
@@ -59,11 +73,11 @@ rust-camera/
     └── main.rs        # Axum server + GStreamer pipeline
 ```
 
-## Code Breakdown
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Generated Package Dependencies
+    ### Generated package dependencies
 
     The generated `Cargo.toml` adds GStreamer and `tower-http` (for serving the `assets/` directory) on top of the usual Axum stack:
 
@@ -85,7 +99,7 @@ rust-camera/
   </Step>
 
   <Step>
-    ### Generated Server
+    ### Generated server
 
     The generated `src/main.rs` initializes GStreamer, builds an MJPEG capture pipeline (`v4l2src ! image/jpeg ! jpegdec ! jpegenc ! appsink`), and exposes four routes — the UI at `/`, the static `assets`, a `/cameras` list, and a `/stream` WebSocket that broadcasts JPEG frames to connected clients:
 
@@ -129,7 +143,7 @@ rust-camera/
   </Step>
 
   <Step>
-    ### Generated Browser UI
+    ### Generated browser UI
 
     The UI is a single `index.html` (styled with the Tailwind browser CDN) that is baked into the binary with `include_str!` and served at `/`. It opens a WebSocket to `/stream`, renders incoming JPEG frames into an `<img>` element, shows a connection-status indicator and FPS counter, and lets you pick a camera from a dropdown populated by the `/cameras` route.
   </Step>
@@ -216,21 +230,12 @@ rust-camera/
   </Step>
 </Steps>
 
-## View the Stream
+## Next steps
 
-Your browser opens automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, open the app URL from the `wendy run` output, or navigate to:
+- Read [hardware access](/docs/hardware) to give an app cameras, microphones, speakers, Bluetooth, or a GPU.
+- Try the [tutorials in other languages](/docs/guides/tutorials).
 
-```
-http://wendyos-true-probe.local:4003
-```
-
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
-</Callout>
-
-Use the camera dropdown in the top-right to switch between connected cameras.
-
-## Next Steps
+More ideas for this app:
 
 - Adjust the GStreamer pipeline in `src/main.rs` (resolution, JPEG quality, framerate)
 - Customize the browser UI in `index.html`

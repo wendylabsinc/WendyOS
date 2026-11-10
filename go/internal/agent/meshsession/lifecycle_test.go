@@ -156,7 +156,7 @@ func TestPooledAppTeardownRevokesOnlyItsStreams(t *testing.T) {
 	}
 }
 
-func TestRetiredActivePoolSessionRevokedOnCloseAndInvalidation(t *testing.T) {
+func TestAgedActivePoolSessionReusedAndRevokedOnCloseAndInvalidation(t *testing.T) {
 	for _, action := range []string{"close", "invalidate"} {
 		t.Run(action, func(t *testing.T) {
 			a, b := fixtureCredentials(t)
@@ -168,8 +168,8 @@ func TestRetiredActivePoolSessionRevokedOnCloseAndInvalidation(t *testing.T) {
 			client.peers[b.Device].born = time.Now().Add(-2 * clientAgeLimit)
 			client.mu.Unlock()
 			fresh := lifecycleDial(t, client, b.Device, endpoint, port)
-			if old.conn == fresh.conn {
-				t.Fatal("age did not retire old session")
+			if old.conn != fresh.conn {
+				t.Fatal("age replaced a healthy active session")
 			}
 			lifecycleExchange(t, old)
 			lifecycleExchange(t, fresh)
@@ -219,7 +219,7 @@ func TestAppSessionExpiryEnforcedAtBothEnds(t *testing.T) {
 					}
 					lifecycleExchange(t, warm)
 					// A carrier interruption must not extend either certificate
-					// path's lifetime after its active transport leaves the cache.
+					// path's lifetime while its active transport remains cached.
 					client.WithdrawRoute(b.Device)
 					if conn.Context().Err() != nil {
 						t.Fatal("route retirement closed the active stream before expiry")
@@ -265,6 +265,13 @@ func TestClosingPoolDuringSuccessfulDialClosesLateConnection(t *testing.T) {
 	dial := client.dial
 	established := make(chan *quic.Conn, 1)
 	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
 	client.dial = func(ctx context.Context, address netip.AddrPort, cfg *tls.Config, qcfg *quic.Config) (*quic.Conn, error) {
 		conn, err := dial(ctx, address, cfg, qcfg)
 		if err != nil {
@@ -290,8 +297,17 @@ func TestClosingPoolDuringSuccessfulDialClosesLateConnection(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("dial did not connect")
 	}
-	client.Close()
+	closed := make(chan error, 1)
+	go func() { closed <- client.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned before the pending dial owner released its connection")
+	case <-time.After(20 * time.Millisecond):
+	}
 	close(release)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
 	if err := <-done; !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("late dial was accepted: %v", err)
 	}
@@ -334,5 +350,43 @@ func TestRegistryWrappedTCPPreservesHalfClose(t *testing.T) {
 	body, err := io.ReadAll(flow)
 	if err != nil || string(body) != "reply:body" {
 		t.Fatalf("half-close response=%q err=%v", body, err)
+	}
+}
+
+func TestInactivePoolLimitsCloseBeforeReplacement(t *testing.T) {
+	for _, limit := range []string{"idle", "age"} {
+		t.Run(limit, func(t *testing.T) {
+			a, b := fixtureCredentials(t)
+			port := lifecycleEcho(t)
+			endpoint := lifecycleServer(t, b, allowPort(func(p uint16) bool { return p == port }), true)
+			client := lifecycleClient(t, a)
+			first := lifecycleDial(t, client, b.Device, endpoint, port)
+			lifecycleExchange(t, first)
+			first.Close()
+			client.mu.Lock()
+			entry := client.peers[b.Device]
+			if entry.active != 0 {
+				client.mu.Unlock()
+				t.Fatal("closed flow retained its pool reference")
+			}
+			if limit == "idle" {
+				entry.used = time.Now().Add(-2 * clientIdleLimit)
+			} else {
+				entry.born = time.Now().Add(-2 * clientAgeLimit)
+			}
+			client.mu.Unlock()
+			dial := client.dial
+			client.dial = func(ctx context.Context, address netip.AddrPort, cfg *tls.Config, qc *quic.Config) (*quic.Conn, error) {
+				if first.conn.Context().Err() == nil {
+					t.Error("replacement handshake overlapped old inactive connection")
+				}
+				return dial(ctx, address, cfg, qc)
+			}
+			fresh := lifecycleDial(t, client, b.Device, endpoint, port)
+			if fresh.conn == first.conn {
+				t.Fatal("inactive expired pool entry was reused")
+			}
+			lifecycleExchange(t, fresh)
+		})
 	}
 }
