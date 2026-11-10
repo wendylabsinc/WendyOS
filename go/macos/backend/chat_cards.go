@@ -16,6 +16,7 @@ import (
 
 type ChatCard struct {
 	Kind, Title string
+	Episode     string
 	Camera      uint32
 }
 type deviceCardTools struct {

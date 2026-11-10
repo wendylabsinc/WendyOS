@@ -63,7 +63,7 @@ func WDPollChat(session, turn C.uint64_t) *C.WDChatResult {
 	p.status = status(err)
 	p.cards, p.card_count = alloc[C.WDChatCard](len(r.Cards)), C.size_t(len(r.Cards))
 	for i, card := range r.Cards {
-		unsafe.Slice(p.cards, len(r.Cards))[i] = C.WDChatCard{kind: C.CString(card.Kind), title: C.CString(card.Title), camera: C.uint32_t(card.Camera)}
+		unsafe.Slice(p.cards, len(r.Cards))[i] = C.WDChatCard{kind: C.CString(card.Kind), title: C.CString(card.Title), episode: C.CString(card.Episode), camera: C.uint32_t(card.Camera)}
 	}
 	p.text, p.error, p.done = C.CString(r.Text), C.CString(r.Error), boolInt(r.Done)
 	p.activity, p.trace = C.CString(r.Activity), C.CString(r.Trace)
@@ -80,6 +80,7 @@ func WDChatFree(p *C.WDChatResult) {
 	for _, card := range unsafe.Slice(p.cards, int(p.card_count)) {
 		free(card.kind)
 		free(card.title)
+		free(card.episode)
 	}
 	free(p.cards)
 	free(p.activity)
