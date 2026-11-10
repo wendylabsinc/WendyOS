@@ -66,10 +66,10 @@ struct PairingView: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         if busy == item.id { ProgressView() }
                         else if item.paired {
-                            Menu {
+                            OverflowMenu {
                                 if kind == .camera { Button("Edit login", systemImage: "key") { login = item } }
                                 Button("Forget pairing", systemImage: "trash", role: .destructive) { forgetting = item }
-                            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                            }
                                 .accessibilityLabel("Options for \(item.name)")
                                 .disabled(busy != nil || loading)
                         } else if item.canPair {
@@ -146,8 +146,9 @@ struct PairingView: View {
                                             }.disabled(busy != nil || loading)
                                         }
                                         if item.paired {
-                                            Menu { Button("Forget pairing", role: .destructive) { forgetting = item } } label: { Image(systemName: "ellipsis") }
-                                                .menuStyle(.automatic).fixedSize().disabled(busy != nil || loading)
+                                            OverflowMenu { Button("Forget pairing", role: .destructive) { forgetting = item } }
+                                                .disabled(busy != nil || loading)
+                                                .accessibilityLabel("Options for \(item.name)")
                                         }
                                     }.desktopActionWidth(128)
                                 }.padding(.horizontal, 16).frame(minHeight: 76)

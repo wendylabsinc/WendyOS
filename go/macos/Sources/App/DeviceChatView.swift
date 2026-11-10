@@ -320,11 +320,11 @@ struct DeviceChatView: View {
                 }.frame(maxWidth: 260).disabled(chat.streaming || chat.loading)
                 Button("Browse models") { showingLibrary = true }.disabled(chat.streaming)
                 Button { chat.clear() } label: { Label("New chat", systemImage: "square.and.pencil") }.help("New chat")
-                Menu {
+                OverflowMenu {
                     Button("Connection settings") { showingConnection = true }
                     Button("Refresh models") { actions.submit { await chat.discover() } }
-                } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.borderlessButton).fixedSize().help("Chat options").disabled(chat.streaming)
+                }
+                    .help("Chat options").disabled(chat.streaming)
                     .accessibilityLabel("Chat options")
                     .popover(isPresented: $showingConnection, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
                         VStack(alignment: .leading, spacing: 12) {

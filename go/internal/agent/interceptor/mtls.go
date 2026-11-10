@@ -123,6 +123,12 @@ func CheckMTLS(ctx context.Context, logger *zap.Logger, expected certs.Scope, mo
 		return status.Errorf(codes.Unauthenticated, "client certificate not verified")
 	}
 	leaf := tlsInfo.State.PeerCertificates[0]
+	if leaf.IsCA {
+		logger.Warn("rejected CA certificate used as client credential",
+			zap.String("remote", peerAddr(ctx)),
+			zap.String("serial", leaf.SerialNumber.String()))
+		return status.Error(codes.Unauthenticated, "CA certificate is not valid for client authentication")
+	}
 	// Defence-in-depth EKU check: the leaf must explicitly assert clientAuth.
 	// Certs with no EKU extension (empty ExtKeyUsage) are also rejected: absence
 	// of the extension means the cert is technically unrestricted under RFC 5280,

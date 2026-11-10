@@ -12,6 +12,8 @@ Use campaigns to investigate an emergency stop, collect uncertain model
 predictions, or save examples of an object detected by a camera. For a single
 recording, use `wendy data record` without deploying a campaign.
 
+For robotics evaluation, record raw observations alongside model outputs and actions. Retain capture time, frame identity, units, and validity. These let you distinguish a bad policy decision from [biased, delayed, or missing sensor input](/docs/integrations/sensor-fidelity). Recording alone does not align a training dataset or verify labels.
+
 ## Local capture, Cloud, and BI
 
 Start with a local episode and verify its manifest before adding remote
@@ -127,7 +129,9 @@ To switch the campaign off without losing its plan or episodes, run
 `wendy data campaign disarm machine-faults`; it stays off across restarts and
 redeploys until `wendy data campaign arm machine-faults`. To delete the plan,
 run `wendy data campaign remove machine-faults`. Every episode it recorded is
-kept.
+kept. To delete episodes from the device, run
+`wendy data delete <episode-id>`, or `wendy data delete --all` for every
+finalized episode. It asks before deleting, and it cannot be undone.
 
 On a cloud-enrolled device, deployment also registers `campaign:<name>` in Cloud
 Apps. For an intentionally offline deployment, pass `--skip-cloud-registration`.
@@ -168,7 +172,7 @@ for selectors, capture policies, and all fields.
 
 ## Record data from your app
 
-Add the [`episode-write` entitlement](/docs/advanced/apps/wendy.json#episode-write)
+Add the [`episode-write` entitlement](/docs/reference/app-configuration#episode-write)
 to your app to submit events and predictions. The agent supplies an app-private
 socket and attributes records to that app. Its events can trigger deployed
 campaigns; the entitlement does not grant access to sensors.

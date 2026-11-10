@@ -62,6 +62,17 @@ func ctxWithLeaf(leaf *x509.Certificate) context.Context {
 	})
 }
 
+func TestCheckMTLSRejectsCACredential(t *testing.T) {
+	leaf := buildLeaf(leafOptions{commonName: "sh/wendy/7/5"})
+	leaf.IsCA = true
+	for _, mode := range []OrgMode{OrgModeOff, OrgModeGrace, OrgModeStrict} {
+		err := CheckMTLS(ctxWithLeaf(leaf), zap.NewNop(), certs.Scope{OrgID: 7}, mode)
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("mode %v: CheckMTLS = %v, want Unauthenticated", mode, err)
+		}
+	}
+}
+
 func TestCheckMTLS_OrgEnforcement(t *testing.T) {
 	logger := zap.NewNop()
 	expectedScope := certs.Scope{OrgID: 7}

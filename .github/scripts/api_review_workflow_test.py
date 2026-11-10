@@ -65,6 +65,63 @@ class TrustedSourceTests(unittest.TestCase):
         self.assertEqual(result["calls"], [{"owner": "wendylabsinc", "repo": "WendyOS", "ref": "heads/main"}])
         return result
 
+    def test_review_event_gates(self):
+        # Evaluate the actual job expressions using their shared JS operators.
+        for name, label in (("api-review", "review: api"), ("docs-review", "review: docs"),
+                            ("integration-test-review", "review: integration-tests"),
+                            ("security-review", None)):
+            path = WORKFLOW.with_name(name + ".yml")
+            if not path.is_file():
+                continue
+            text = path.read_text()
+            lines = text.splitlines()
+            start = next(i for i, line in enumerate(lines) if line.startswith("    if:"))
+            expression = lines[start].split("if:", 1)[1].strip()
+            if expression == ">-":
+                parts = []
+                for line in lines[start + 1:]:
+                    if not line.startswith("      "):
+                        break
+                    parts.append(line.strip())
+                expression = " ".join(parts)
+            else:
+                expression = expression.strip('"')
+            expression = expression.replace("github.event.pull_request.labels.*.name", "labels")
+            group = next(line.strip().removeprefix('group: ').strip('"')
+                         for line in lines if line.startswith("  group:"))
+            cases = []
+            for action in ("opened", "synchronize", "reopened", "labeled", "ready_for_review"):
+                for enabled in (False, True):
+                    for matching in (False, True):
+                        for draft in (False, True):
+                            for fork in (False, True):
+                                labels = [label] if enabled and label else []
+                                event = {"action": action, "label": {"name": label if matching else "unrelated"},
+                                         "pull_request": {"draft": draft, "head": {"repo": {"full_name": "fork" if fork else "repo"}},
+                                                          "user": {"login": "author"}}}
+                                expected = (not fork and (enabled and (action != "labeled" or matching)
+                                                          if label else not draft))
+                                cases.append({"github": {"event_name": "pull_request", "event": event,
+                                                         "repository": "repo", "actor": "author", "run_id": 123},
+                                              "labels": labels, "expected": expected})
+            execution = subprocess.run(["node", "-e", r'''
+const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const evaluate = new Function("github", "labels", "contains", "return " + input.expression);
+for (const c of input.cases) {
+  const actual = evaluate(c.github, c.labels, (items, value) => items.includes(value));
+  if (actual !== c.expected) throw new Error(JSON.stringify({c, actual}));
+  if (input.label) {
+    const group = input.group.replace(/\$\{\{(.*?)\}\}/g, (_, expr) =>
+      new Function("github", "inputs", "return " + expr)(c.github, {}));
+    const unrelated = c.github.event.action === "labeled" && c.github.event.label.name !== input.label;
+    if (!group.endsWith(unrelated ? "-123" : "-review")) throw new Error(group);
+  }
+}
+'''], input=json.dumps({"expression": expression, "cases": cases, "group": group, "label": label}), text=True, capture_output=True)
+            self.assertEqual(execution.returncode, 0, execution.stderr)
+            self.assertIn("types: [opened, synchronize, reopened, " +
+                          ("labeled]" if label else "ready_for_review]"), text)
+
     def test_retained_pr_base_cannot_pin_obsolete_automation(self):
         result = self.run_resolver({"object": {"type": "commit", "sha": CURRENT_MAIN}})
         self.assertFalse(result["failed"])

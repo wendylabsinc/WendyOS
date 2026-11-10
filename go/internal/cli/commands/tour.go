@@ -2057,7 +2057,7 @@ func (m *tourWizardModel) createProjectFromTemplate() error {
 		}
 	}
 
-	if err := renderAndWriteTemplate(m.templateFiles, dir, appID, m.selectedTemplate, vals); err != nil {
+	if err := renderAndWriteTemplate(m.templateFiles, dir, appID, m.selectedTemplate, vals, false); err != nil {
 		return fmt.Errorf("writing template files: %w", err)
 	}
 

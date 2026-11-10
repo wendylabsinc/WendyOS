@@ -1,5 +1,5 @@
 ---
-title: Speaker Access
+title: Speaker access
 description: Play audio through speakers and other output devices from WendyOS apps
 ---
 
@@ -63,7 +63,7 @@ The `audio` entitlement also bind-mounts `/dev/snd`, so `aplay` and other raw AL
 
 A paired Bluetooth speaker appears in `wendy device audio list` alongside wired outputs once it is connected, and can be made the default the same way. Your app needs the `audio` entitlement to reach it — the `bluetooth` entitlement governs scanning and pairing, not playback.
 
-Pair and connect the speaker first (see [Bluetooth Access](/docs/hardware/bluetooth)), then:
+Pair and connect the speaker first (see [Bluetooth access](/docs/hardware/bluetooth)), then:
 
 ```bash
 wendy device audio list

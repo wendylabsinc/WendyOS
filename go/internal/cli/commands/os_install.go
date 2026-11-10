@@ -167,6 +167,11 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				}
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
+			// Map an alias first so driver lookup and the install checks see the device it stands for.
+			var aliasErr error
+			if deviceType, storageOverride, aliasErr = resolveInstallDeviceType(cmd.Context(), deviceType, storageOverride, prNumber); aliasErr != nil {
+				return aliasErr
+			}
 			prepared, err := prepareOSInstallDrivers(cmd.Context(), deviceType, versionFlag, nightly, prNumber, drivers)
 			if err != nil {
 				return err
@@ -318,7 +323,9 @@ type pickerDevice struct {
 // installedFromFlashBundle reports whether a device's manifest image is a flash
 // bundle rather than a writable disk image. Such a device must not reach the
 // generic download or tour flows, which would treat the bundle as an image and
-// could write it to a disk. (Thor's generic path is a real .img.zip.)
+// could write it to a disk. Thor and the recovery-mode Orins stay listed: both
+// flows route them to their flashpack (installsFromFlashpack, the tour's native
+// installer).
 //
 // The device-type prefix is a floor, not a fallback, so the manifest can only
 // widen the set: a new EDL board is excluded without a code change here.
@@ -439,7 +446,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		return fmt.Errorf("--storage emmc is supported only for --device-type %s", orinDeviceType)
 	}
 	if rootfsOnly && storageOverride == "emmc" {
-		return fmt.Errorf("--storage emmc cannot be combined with --rootfs-only; eMMC is available only through full recovery")
+		return fmt.Errorf("--rootfs-only cannot write eMMC; eMMC is available only through full recovery")
 	}
 	if isT234RecoveryDevice(flagDeviceType) && !rootfsOnly {
 		if err := rejectRecoveryDriveFlags(flagDrive, noBmap, yesOverwriteInternal); err != nil {

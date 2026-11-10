@@ -39,6 +39,7 @@ type appsFakeContainerClient struct {
 	startReq           *agentpb.StartContainerRequest
 	stopReq            *agentpb.StopContainerRequest
 	deleteReq          *agentpb.DeleteContainerRequest
+	attachCalls        int
 }
 
 func (f *appsFakeContainerClient) StartContainer(ctx context.Context, in *agentpb.StartContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
@@ -61,6 +62,7 @@ func (f *appsFakeContainerClient) StartContainer(ctx context.Context, in *agentp
 }
 
 func (f *appsFakeContainerClient) AttachContainer(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse], error) {
+	f.attachCalls++
 	return nil, status.Error(codes.Unimplemented, "attach is not supported by this fake")
 }
 
@@ -186,6 +188,38 @@ func TestAppsStartAttachedJSONKeepsStdoutForTheResult(t *testing.T) {
 	}
 	if fake.startReq.GetRestartPolicy() != nil {
 		t.Error("an attached start must keep the app's deployed restart policy")
+	}
+}
+
+func TestAppsStartAttachedGroupUsesStartContainer(t *testing.T) {
+	fake := &appsFakeContainerClient{
+		container: &agentpb.AppContainer{
+			AppName:      "robot",
+			RunningState: agentpb.AppRunningState_RUNNING,
+			Services: []*agentpb.ServiceEntry{
+				{Name: "body", RunningState: agentpb.AppRunningState_RUNNING},
+				{Name: "voice", RunningState: agentpb.AppRunningState_RUNNING},
+			},
+		},
+	}
+	useAppsFake(t, fake, true)
+
+	stdout, stderr, err := runAppsCmd(t, newAppsStartCmd(), "robot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.attachCalls != 0 {
+		t.Errorf("a multi-service app must not go through AttachContainer; attach calls = %d", fake.attachCalls)
+	}
+	if fake.startReq.GetAppName() != "robot" {
+		t.Errorf("StartContainer app = %q, want robot", fake.startReq.GetAppName())
+	}
+	if strings.Contains(stderr, "stdin not attached") {
+		t.Errorf("a group start must not report a stdin fallback; stderr = %q", stderr)
+	}
+	want := appActionResult{App: "robot", Action: "start", Status: "running"}
+	if got := decodeAppResult(t, stdout); !reflect.DeepEqual(got, want) {
+		t.Errorf("result = %+v, want %+v", got, want)
 	}
 }
 

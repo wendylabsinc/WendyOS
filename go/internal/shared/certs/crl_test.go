@@ -23,7 +23,11 @@ func TestCLIRevocationOnFullAndResumedVerification(t *testing.T) {
 	previous := revocation.Default
 	revocation.Default = revocation.New(p.Client)
 	defer func() { revocation.Default = previous }()
-	verify, err := BuildServerVerifyConnection(ServerVerifyOpts{ChainPEM: p.PEM})
+	expected, found, err := IdentityFromCert(leaf.Cert)
+	if err != nil || !found {
+		t.Fatalf("fixture identity: found=%v err=%v", found, err)
+	}
+	verify, err := BuildServerVerifyConnection(ServerVerifyOpts{ChainPEM: p.PEM, ExpectedIdentity: &expected})
 	if err != nil {
 		t.Fatal(err)
 	}

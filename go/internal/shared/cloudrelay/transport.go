@@ -11,9 +11,20 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 )
+
+// ConnectionSetupTimeout includes TCP/TLS and HTTP/2 startup over a borrowed
+// mesh uplink. Callers' shorter contexts and signed admission deadlines still win.
+const ConnectionSetupTimeout = time.Minute
+
+func cloudConnectBudget() grpc.DialOption {
+	return grpc.WithConnectParams(grpc.ConnectParams{
+		Backoff: backoff.DefaultConfig, MinConnectTimeout: ConnectionSetupTimeout,
+	})
+}
 
 // brokerKeepalive keeps idle presence and relay streams from being dropped by
 // NAT or load-balancer idle timeouts, and detects a dead path without waiting
@@ -22,6 +33,15 @@ import (
 // ACK timeout matches the CLI's broker dial: a device saturated by an OS update
 // can take well over 10s to read the ACK.
 var brokerKeepalive = keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 20 * time.Second, PermitWithoutStream: true}
+
+// Public broker TLS carries no client identity. These dials share the same
+// standard hostname/system-root policy, so a bounded process-local cache can
+// resume their certificate exchange. Device mTLS must not use this cache.
+var brokerSessionCache = tls.NewLRUClientSessionCache(64)
+
+func publicBrokerTLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS13, ClientSessionCache: brokerSessionCache}
+}
 
 // withKeepalive is grpc.WithKeepaliveParams; tests swap it to observe the
 // parameters each dial passes, since gRPC dial options are opaque.
@@ -176,5 +196,7 @@ func dialBroker(endpoint string, fallback bool) (*grpc.ClientConn, error) {
 		return nil, err
 	}
 	host, _, _ := net.SplitHostPort(t)
-	return newCloudClient(t, credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: host}), fallback)
+	config := publicBrokerTLSConfig()
+	config.ServerName = host
+	return newCloudClient(t, credentials.NewTLS(config), fallback)
 }

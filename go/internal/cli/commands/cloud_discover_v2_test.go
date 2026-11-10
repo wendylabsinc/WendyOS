@@ -333,6 +333,38 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 	}
 }
 
+func TestCloudDiscoveryJSONPreservesPKIDeviceBinding(t *testing.T) {
+	const assetID = "00000000-0000-4000-8000-000000000001"
+	const deviceID = "00000000-0000-4000-8000-000000000002"
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint(bound), func(t *testing.T) {
+			asset := &cloudpbv2.Asset{Id: assetID, Name: "Cloud Thor"}
+			if bound {
+				deviceName := deviceID
+				asset.PkiDeviceName = &deviceName
+			}
+			row := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: assetID}
+			encoded, err := json.Marshal(row.info(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if fields["id"] != assetID {
+				t.Fatalf("PKI binding changed the Cloud routing ID: %s", encoded)
+			}
+			if bound && fields["pkiDeviceName"] != deviceID {
+				t.Fatalf("Cloud row lost its different PKI device identity: %s", encoded)
+			}
+			if !bound && fields["pkiDeviceName"] != nil {
+				t.Fatalf("older row invented an explicit PKI binding: %s", encoded)
+			}
+		})
+	}
+}
+
 type discoveryV1Server struct {
 	cloudpb.UnimplementedAssetServiceServer
 }

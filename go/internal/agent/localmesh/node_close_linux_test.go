@@ -4,11 +4,14 @@ package localmesh
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"log"
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalOwnerClosePreservesFirstControlReason(t *testing.T) {
@@ -19,10 +22,22 @@ func TestNormalOwnerClosePreservesFirstControlReason(t *testing.T) {
 	defer link.Close()
 	p := &nodePeer{device: remote, id: 7, transport: "lan-tls", link: link,
 		control: make(chan ControlMessage, 2)}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := asyncdiag.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&output)
-	defer log.SetOutput(previous)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := asyncdiag.Flush(ctx); err != nil {
+			t.Error(err)
+		}
+		log.SetOutput(previous)
+	}()
 	n := &Node{}
 	n.closePeer(p, "catalogue-runtime", errors.New("catalogue inventory lifecycle ended"))
 	n.closePeer(p, "directory-control", errors.New("later owner cleanup"))

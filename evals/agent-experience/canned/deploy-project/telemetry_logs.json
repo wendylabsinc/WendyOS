@@ -1,0 +1,63 @@
+{
+  "tool": "telemetry_logs",
+  "replies": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"batches_collected\": 0, \"collection_limited\": false, \"logs\": []}"
+        }
+      ],
+      "structuredContent": {
+        "batches_collected": 0,
+        "collection_limited": false,
+        "logs": []
+      }
+    }
+  ],
+  "captured_with": {
+    "wendy_version": "wendy version dev",
+    "wendy_sha256": "d2f55e39f847d28b4d30c4b03abc34dc591eb562abbce73d910b39add24d55e1",
+    "device_kind": "simulator"
+  },
+  "after": {
+    "actions": [
+      "tool:run",
+      "cli:run"
+    ],
+    "replies": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"batches_collected\": 1, \"collection_limited\": false, \"logs\": [{\"attributes\": {\"stream\": \"stdout\"}, \"body\": \"Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\\n\", \"observedTimeUnixNano\": \"1792453897464925865\", \"resource\": {\"service.instance.id\": \"scrubbed\", \"service.name\": \"sensor-dashboard_web\", \"service.namespace\": \"wendy\"}, \"scope\": {\"name\": \"wendy.container\"}, \"severityNumber\": \"SEVERITY_NUMBER_INFO\", \"severityText\": \"INFO\", \"timeUnixNano\": \"1792453897464925865\"}]}"
+          }
+        ],
+        "structuredContent": {
+          "batches_collected": 1,
+          "collection_limited": false,
+          "logs": [
+            {
+              "attributes": {
+                "stream": "stdout"
+              },
+              "body": "Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...\n",
+              "observedTimeUnixNano": "1792453897464925865",
+              "resource": {
+                "service.instance.id": "scrubbed",
+                "service.name": "sensor-dashboard_web",
+                "service.namespace": "wendy"
+              },
+              "scope": {
+                "name": "wendy.container"
+              },
+              "severityNumber": "SEVERITY_NUMBER_INFO",
+              "severityText": "INFO",
+              "timeUnixNano": "1792453897464925865"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

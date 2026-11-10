@@ -17,7 +17,7 @@ Wendy Labs has three main components to achieve this mission:
 - Wendy-Agent
 - Cloud
 
-[WendyOS](/docs/#2-set-up-a-device) is a pre-built OS for specific hardware (NVIDIA Jetson — Orin Nano, AGX Orin, AGX Thor —, Raspberry Pi, ...) that packages all the tools you need to build & run apps.
+[WendyOS](/docs/installation) is a pre-built OS for specific hardware (NVIDIA Jetson — Orin Nano, AGX Orin, AGX Thor —, Raspberry Pi, ...) that packages all the tools you need to build & run apps.
 
 Wendy-Agent is a daemon, akin to Docker, that manages and runs your apps. It also exposes a way to remotely control the machine and upload apps.
 
@@ -41,5 +41,5 @@ the links use Ethernet, Wi-Fi, or Bluetooth.
 For contributors, the engine is a separate Go library in `go/babel`. It uses the
 Babel routing protocol; carrier integration and application services belong to
 the agent. See the [library guide](https://github.com/wendylabsinc/WendyOS/blob/main/go/babel/README.md)
-for its API and the [testing guide](../development/testing.md#routing-engine-tests)
+for its API and the [testing guide](https://github.com/wendylabsinc/WendyOS/blob/main/go/internal/cli/assets/docs/development/testing.md#routing-engine-tests)
 for the separate module checks.

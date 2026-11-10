@@ -76,7 +76,7 @@ func TestAttachCancellationKeepsKernelOwnedTUN(t *testing.T) {
 			}
 			attached := make(chan error, 1)
 			go func() {
-				attached <- node.attachLink(node.ctx, peer.Device, 256, link, []*x509.Certificate{certificate})
+				attached <- node.attachLink(node.ctx, peer.Device, 256, link, certificate)
 			}()
 			var event nodeEvent
 			select {
@@ -163,7 +163,7 @@ func TestRejectedDuplicateDoesNotPublishLink(t *testing.T) {
 	node := &Node{ctx: ctx, events: make(chan nodeEvent, 1)}
 	link := &teardownTestLink{done: make(chan struct{}), reading: make(chan struct{})}
 	done := make(chan error, 1)
-	go func() { done <- node.attachLink(WithConnectionLease(ctx, duplicate), peer, 64, link, nil) }()
+	go func() { done <- node.attachLink(WithConnectionLease(ctx, duplicate), peer, 64, link) }()
 	select {
 	case event := <-node.events:
 		cancel()

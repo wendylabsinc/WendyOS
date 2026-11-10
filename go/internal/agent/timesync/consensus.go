@@ -20,6 +20,8 @@ const maxCaptureRTT = 5 * time.Second
 type RoughtimeEvidence struct {
 	Server            string `json:"server"`
 	Address           string `json:"address"`
+	LocalAddress      string `json:"local_address,omitempty"`
+	RemoteAddress     string `json:"remote_address,omitempty"`
 	KeyID             string `json:"key_id"`
 	Nonce             []byte `json:"nonce"`
 	RawResponse       []byte `json:"raw_response"`
@@ -77,6 +79,8 @@ func queryConsensus(ctx context.Context, servers []roughtime.Server, query query
 			} else if ev.RTTNanos < 0 || ev.RTTNanos > maxCaptureRTT.Nanoseconds() {
 				ev.Error = "implausible RTT"
 			} else {
+				ev.LocalAddress = r.LocalAddress
+				ev.RemoteAddress = r.RemoteAddress
 				ev.Nonce = r.Nonce
 				ev.RawResponse = r.RawResponse
 				ev.MidpointUnixNanos = r.Midpoint.UnixNano()

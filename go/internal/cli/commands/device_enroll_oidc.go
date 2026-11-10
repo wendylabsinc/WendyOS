@@ -16,7 +16,14 @@ import (
 )
 
 func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, directoryURL string) error {
-	_, err := runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, directoryURL)
+	identity, err := runOIDCEnrollDeviceIdentity(ctx, conn, auth, name, orgOverride, directoryURL)
+	if err != nil {
+		return err
+	}
+	next, err := verifyAndSaveEnrollment(ctx, conn, auth, identity, name)
+	if next != nil && next != conn {
+		next.Close()
+	}
 	return err
 }
 

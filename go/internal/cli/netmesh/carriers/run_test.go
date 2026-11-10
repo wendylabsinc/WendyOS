@@ -79,7 +79,7 @@ func TestRunKeepsAttachedLinkAfterAdvertisementDisappears(t *testing.T) {
 	wait(t, ended)
 }
 
-func TestRunAuthenticatedBLECacheSuppressesLANRedialAndFallsBack(t *testing.T) {
+func TestRunRetainsAuthenticatedBLEThroughLANUpgradeAndLoss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	updates := make(chan []Candidate, 8)
@@ -101,7 +101,7 @@ func TestRunAuthenticatedBLECacheSuppressesLANRedialAndFallsBack(t *testing.T) {
 			mu.Unlock()
 		}
 		mu.Lock()
-		view.Links = append(view.Links, localmesh.PeerLink{Device: peer, Cost: c.Cost, Transport: c.Transport})
+		view.Links = append(view.Links, localmesh.PeerLink{Device: peer, Cost: c.Cost, Transport: c.Transport, ForwardingReady: true})
 		mu.Unlock()
 		entered <- c.Transport
 		<-linkCtx.Done()
@@ -132,13 +132,23 @@ func TestRunAuthenticatedBLECacheSuppressesLANRedialAndFallsBack(t *testing.T) {
 	if wait(t, entered) != TCP {
 		t.Fatal("missing LAN")
 	}
-	if wait(t, ended) != BLE {
-		t.Fatal("BLE did not yield after authenticated LAN")
-	}
 	select {
+	case transport := <-ended:
+		t.Fatalf("spare-capacity carrier ended after LAN upgrade: %s", transport)
 	case <-entered:
-		t.Fatal("known BLE reauthenticated while LAN healthy")
+		t.Fatal("known BLE reauthenticated instead of remaining attached")
 	case <-time.After(60 * time.Millisecond):
+	}
+	// Withdraw only the LAN discovery recipe before the physical lifetime ends;
+	// the attached link must stay owned, and its later loss must use the retained
+	// BLE carrier rather than redial either the withdrawn LAN or the radio.
+	updates <- []Candidate{ble}
+	select {
+	case transport := <-ended:
+		t.Fatalf("discovery withdrawal ended an attached carrier: %s", transport)
+	case transport := <-entered:
+		t.Fatalf("discovery withdrawal duplicated a carrier: %s", transport)
+	case <-time.After(40 * time.Millisecond):
 	}
 	mu.Lock()
 	close := dropLAN
@@ -150,8 +160,18 @@ func TestRunAuthenticatedBLECacheSuppressesLANRedialAndFallsBack(t *testing.T) {
 	if wait(t, ended) != TCP {
 		t.Fatal("LAN didn't end")
 	}
-	if wait(t, entered) != BLE {
-		t.Fatal("known radio did not immediately recover after LAN loss")
+	select {
+	case transport := <-entered:
+		t.Fatalf("warm standby required a cold redial after LAN loss: %s", transport)
+	case transport := <-ended:
+		t.Fatalf("standby ended with LAN: %s", transport)
+	case <-time.After(60 * time.Millisecond):
+	}
+	mu.Lock()
+	links := append([]localmesh.PeerLink(nil), view.Links...)
+	mu.Unlock()
+	if len(links) != 1 || links[0].Transport != BLE {
+		t.Fatalf("warm BLE carrier was not retained: %+v", links)
 	}
 	cancel()
 	wait(t, done)

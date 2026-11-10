@@ -2,6 +2,25 @@
 
 When your project needs more than one container managed through a `wendy.json` file (rather than a `docker-compose.yml`), declare a `services` map in `wendy.json`. `wendy run` detects the map and automatically orchestrates a parallel multi-service build and deployment. `wendy build` detects the same map and builds the images locally without deploying — see [Building without deploying](#building-without-deploying).
 
+A service is one separately managed container, such as an API or inference worker. Separate services when they need independent lifecycles. Existing `docker-compose.yml` projects are also supported; neither this map nor Stagefiles are mandatory.
+
+Each `context` is a directory relative to the `wendy.json` containing the map. For example, `"context": "api"` means `./api/`, not an image name or URL:
+
+```text
+project/
+├── wendy.json
+├── db/
+│   └── Dockerfile
+├── api/
+│   ├── Dockerfile
+│   └── ... source files
+└── frontend/
+    ├── Dockerfile
+    └── ... source files
+```
+
+Run `wendy run` from `project/`. Each Dockerfile copies sources from its own context; `COPY ../api` cannot reach outside it. Context paths must be relative and cannot contain `..`.
+
 ## `wendy.json` structure
 
 ```json
@@ -36,10 +55,10 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 | `context` | string | **yes** | Build context directory, relative to `wendy.json`. Must be a relative path and must not contain `..` components. |
 | `entitlements` | array | no | [Entitlements](../device/entitlements.md) to apply to this service's container. Same schema as the top-level `entitlements` field. |
 | `dependsOn` | array of strings | no | Names of other services in this `services` map that must be created before this one. All referenced names must exist in the same map. |
-| `env` | object | no | Environment variables for this service's container. Overrides the top-level [`env`](./wendy.json.md#env) per key, so a service can change one variable without dropping the rest. |
+| `env` | object | no | Environment variables for this service's container. Overrides the top-level [`env`](/docs/reference/app-configuration#env) per key, so a service can change one variable without dropping the rest. |
 | `readiness` | object | no | Readiness probe for this service. Same schema as the top-level `readiness` field; see [Readiness and lifecycle hooks](#readiness-and-lifecycle-hooks). |
 | `hooks` | object | no | Lifecycle hooks for this service. Same schema as the top-level `hooks` field. |
-| `resources` | object | no | CPU/memory/PID ceilings for this service. Overrides the top-level [`resources`](./wendy.json.md#resources) per field. |
+| `resources` | object | no | CPU/memory/PID ceilings for this service. Overrides the top-level [`resources`](/docs/reference/app-configuration#resources) per field. |
 | `frameworks` | object | no | Framework configuration (e.g. ROS 2) for this service, replacing the top-level `frameworks`. |
 | `simulation` | object | no | Explicit environment and entitlement overrides for a matching managed robot VM. See [Simulation backends](#simulation-backends). |
 
@@ -49,6 +68,7 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 - A service with an empty or missing `context`.
 - A `context` that is an absolute path.
 - A `context` that contains `..` path components.
+- On Windows, a `context` that is drive-relative (`C:camera`), root-relative (`\camera`), or a reserved device name (`NUL`).
 - A `dependsOn` entry that references a service name not present in the `services` map.
 - A service `entitlements` entry with an unknown or missing type.
 - A service `persist` entitlement missing `name` or `path`, or with a non-absolute or `..`-containing `path`.

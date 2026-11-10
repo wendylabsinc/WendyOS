@@ -130,3 +130,130 @@ type agentListenerAddr struct{}
 
 func (agentListenerAddr) Network() string { return "wendy-net-operator" }
 func (agentListenerAddr) String() string  { return "authenticated-agent-stream" }
+
+// MeshTLSListener is an in-process ingress for ordinary end-to-end agent TLS.
+// It must be served only by the mesh-scoped TLS server and dialed only from the
+// already authenticated app-session service. No network address, ALPN or peer
+// metadata can select this listener. Unlike AgentListener, it never inherits an
+// outer stream's identity: the bytes it delivers still require a TLS handshake.
+type MeshTLSListener struct {
+	connections chan *meshTLSConn
+	done        chan struct{}
+	mu          sync.Mutex
+	closed      bool
+	pipes       map[*meshTLSPipe]struct{}
+}
+
+func NewMeshTLSListener() *MeshTLSListener {
+	return &MeshTLSListener{connections: make(chan *meshTLSConn), done: make(chan struct{}), pipes: make(map[*meshTLSPipe]struct{})}
+}
+
+type meshTLSPipe struct {
+	listener *MeshTLSListener
+	ends     [2]net.Conn
+	done     chan struct{}
+	once     sync.Once
+}
+
+func (p *meshTLSPipe) close() {
+	p.once.Do(func() {
+		// Publish full closure before either endpoint can return its I/O
+		// error, so forwarders can distinguish it from a transport failure.
+		close(p.done)
+		_ = p.ends[0].Close()
+		_ = p.ends[1].Close()
+		p.listener.mu.Lock()
+		delete(p.listener.pipes, p)
+		p.listener.mu.Unlock()
+	})
+}
+
+type meshTLSConn struct {
+	net.Conn
+	pipe *meshTLSPipe
+}
+
+func (c *meshTLSConn) Close() error { c.pipe.close(); return nil }
+
+// Done reports owner revocation. An ordinary endpoint close must not revoke
+// bytes already accepted by an outer proxy but still waiting to be forwarded.
+func (c *meshTLSConn) Done() <-chan struct{} { return c.pipe.listener.done }
+
+// Closed reports a full pipe close, not a TCP half-close. Forwarders drain the
+// accepted outbound bytes before retiring their otherwise idle reverse read.
+func (c *meshTLSConn) Closed() <-chan struct{} { return c.pipe.done }
+
+// DialContext waits for the local TLS server to accept this pipe. Cancellation
+// before handoff closes both ends; after handoff the ordinary connection and
+// listener lifecycle own the pipe, as with net.Dialer.DialContext.
+func (l *MeshTLSListener) DialContext(ctx context.Context) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a, b := net.Pipe()
+	p := &meshTLSPipe{listener: l, ends: [2]net.Conn{a, b}, done: make(chan struct{})}
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = a.Close()
+		_ = b.Close()
+		return nil, net.ErrClosed
+	}
+	l.pipes[p] = struct{}{}
+	l.mu.Unlock()
+	select {
+	case l.connections <- &meshTLSConn{Conn: b, pipe: p}:
+		if err := ctx.Err(); err != nil {
+			p.close()
+			return nil, err
+		}
+		return &meshTLSConn{Conn: a, pipe: p}, nil
+	case <-ctx.Done():
+		p.close()
+		return nil, ctx.Err()
+	case <-l.done:
+		p.close()
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *MeshTLSListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.connections:
+		select {
+		case <-l.done:
+			_ = c.Close()
+			return nil, net.ErrClosed
+		default:
+			return c, nil
+		}
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *MeshTLSListener) Close() error {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil
+	}
+	l.closed = true
+	close(l.done)
+	pipes := make([]*meshTLSPipe, 0, len(l.pipes))
+	for p := range l.pipes {
+		pipes = append(pipes, p)
+	}
+	l.mu.Unlock()
+	for _, p := range pipes {
+		p.close()
+	}
+	return nil
+}
+
+func (l *MeshTLSListener) Addr() net.Addr { return meshTLSListenerAddr{} }
+
+type meshTLSListenerAddr struct{}
+
+func (meshTLSListenerAddr) Network() string { return "wendy-net-inner-tls" }
+func (meshTLSListenerAddr) String() string  { return "mesh-agent-tls-ingress" }
