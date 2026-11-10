@@ -174,3 +174,64 @@ func TestTunnelSessionPauseCancelsAuthorization(t *testing.T) {
 		t.Fatal("pause did not cancel authorization")
 	}
 }
+
+// A retained connection that failed to reconnect refuses requests until its
+// backoff expires, long after Cloud is reachable again. A dial must not wait
+// for that: it gets a connection that tries now, as an unshared dial would.
+func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
+	serve := func(address string) *grpc.Server {
+		t.Helper()
+		lis, err := net.Listen("tcp", address)
+		for range 50 {
+			if err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+			lis, err = net.Listen("tcp", address)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := grpc.NewServer(grpc.UnknownServiceHandler(func(any, grpc.ServerStream) error {
+			return status.Error(codes.PermissionDenied, "test refusal")
+		}))
+		go srv.Serve(lis)
+		return srv
+	}
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := free.Addr().String()
+	free.Close()
+	srv := serve(address)
+	defer func() { srv.Stop() }()
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = address
+	var session TunnelSession
+	session.SetActive(true)
+	defer session.SetActive(false)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ctx = session.Context(ctx)
+	id := "00000000-0000-4000-8000-000000000042"
+	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
+	dial := func() codes.Code {
+		_, err := d.openTunnel(ctx, nil, auth, 50052)
+		return status.Code(err)
+	}
+	if got := dial(); got != codes.PermissionDenied {
+		t.Fatalf("dial before the outage: %v", got)
+	}
+	srv.Stop()
+	// The first dial finds the connection lost; the second finds it in backoff.
+	for range 2 {
+		if got := dial(); got != codes.Unavailable {
+			t.Fatalf("dial during the outage: %v", got)
+		}
+	}
+	srv = serve(address)
+	if got := dial(); got != codes.PermissionDenied {
+		t.Fatalf("dial after Cloud returned: %v", got)
+	}
+}
