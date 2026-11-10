@@ -78,6 +78,7 @@ final class AppModel: ObservableObject {
         selection != nil && selection?.id == connected?.id && connectingDevice == nil && detailError == nil
     }
     @Published private var nearbyRequest: UUID?
+    private var nearbyBrowseStarted = Date.distantPast
     @Published private var cloudRequest: UUID?
     @Published private(set) var nearbyLoaded = false
     @Published private(set) var cloudLoaded = false
@@ -229,14 +230,18 @@ final class AppModel: ObservableObject {
 
     func refreshNearby(
         automatic: Bool = false,
-        load: () async throws -> (devices: [Device], warning: String?) = { try await GoClient.shared.nearbyInventory() }
+        load: () async throws -> (devices: [Device], warning: WendyError?) = { try await GoClient.shared.nearbyInventory() }
     ) async {
         guard initialized, !nearbyLoading else { return }
-        if automatic && nearbyError?.localizedCaseInsensitiveContains("local network access denied") == true { return }
+        // Access is granted in Settings, outside the app. Check a denied browse
+        // again occasionally so nearby devices return without a manual refresh.
+        if automatic, nearbyError?.localizedCaseInsensitiveContains("local network access denied") == true,
+           Date.now.timeIntervalSince(nearbyBrowseStarted) < 30 { return }
         #if os(iOS)
         let scope = mobileCloudSelectionKey
         guard scope == mobileRuntimeScope else { return }
         #endif
+        nearbyBrowseStarted = .now
         let request = UUID()
         nearbyRequest = request
         defer { if nearbyRequest == request { nearbyRequest = nil } }
@@ -251,7 +256,7 @@ final class AppModel: ObservableObject {
             #endif
             nearby = inventory.devices
             nearbyLoaded = true
-            nearbyError = inventory.warning
+            nearbyErrorFailure = inventory.warning
         }
         catch {
             guard nearbyRequest == request, !Task.isCancelled else { return }

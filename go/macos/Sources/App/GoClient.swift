@@ -131,12 +131,17 @@ final class GoClient: Sendable {
     func initialize(cliPath: String) async throws {
         try await perform { try Self.withCString(cliPath) { try Self.finish(WDInitialize($0)) } }
     }
-    func nearbyInventory() async throws -> (devices: [Device], warning: String?) {
+    func nearbyInventory() async throws -> (devices: [Device], warning: WendyError?) {
         try await perform {
             guard let result = WDNearby() else { throw WendyError(message: "Missing devices result.") }
             defer { WDDevicesFree(result) }
-            if result.pointee.count == 0 { try Self.check(result.pointee.status) }
-            return (Self.deviceRows(result), Self.optionalString(result.pointee.status.message))
+            let status = result.pointee.status
+            if result.pointee.count == 0 { try Self.check(status) }
+            // Devices found another way stay listed; keep the typed reason beside them.
+            let warning = Self.optionalString(status.message).map {
+                WendyError(message: $0, code: status.error_code, remedy: status.remedy)
+            }
+            return (Self.deviceRows(result), warning)
         }
     }
     func nearby() async throws -> [Device] { try await nearbyInventory().devices }

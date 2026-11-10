@@ -134,7 +134,7 @@ final class MobileTests: XCTestCase {
         model.initialized = true
         await model.runMobileMesh(active: false)
         let started = expectation(description: "Nearby discovery in flight")
-        let finish = AsyncCallback<(devices: [Device], warning: String?)>()
+        let finish = AsyncCallback<(devices: [Device], warning: WendyError?)>()
         async let nearby: Void = model.refreshNearby {
             started.fulfill()
             return try await finish.value()
@@ -336,7 +336,7 @@ final class MobileTests: XCTestCase {
         XCTAssertEqual(model.nearbyError, denial)
         await model.refreshNearby(automatic: true) { XCTFail("Retried a denied browse"); return ([], nil) }
         let peer = Device(id: "usb", name: "Peer", selector: "usb", transport: .usb, address: "")
-        await model.refreshNearby { ([peer], denial) }
+        await model.refreshNearby { ([peer], WendyError(message: denial)) }
         XCTAssertEqual(model.nearby.map(\.id), [peer.id])
         XCTAssertEqual(model.nearbyError, denial)
         await model.refreshNearby { ([], nil) }
