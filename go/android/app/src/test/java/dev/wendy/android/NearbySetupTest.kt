@@ -42,4 +42,25 @@ class NearbySetupTest {
         assertEquals("B", SetupDevice("b", "wendyos-b", -50).title)
         assertEquals("Wendy device", SetupDevice("x", "", -50).title)
     }
+
+    @Test fun setupMovesThroughFourStepsLikeIOS() {
+        val flow = SetupFlow()
+        assertEquals(SetupFlow.Step.Device, flow.step)
+        flow.continueFromNetwork(connected = true)
+        assertEquals("Continuing needs a chosen device first", SetupFlow.Step.Device, flow.step)
+        flow.choseDevice(); assertEquals(SetupFlow.Step.Network, flow.step)
+        flow.continueFromNetwork(connected = false); assertEquals(SetupFlow.Step.Network, flow.step)
+        flow.continueFromNetwork(connected = false, useEthernet = true); assertEquals(SetupFlow.Step.Organization, flow.step)
+        flow.backToNetwork(); assertEquals(SetupFlow.Step.Network, flow.step)
+        flow.reset(); assertEquals(SetupFlow.Step.Device, flow.step)
+        assertEquals(listOf("Device", "Connection", "Organization", "Enrollment"), SetupFlow.Step.entries.map { it.title })
+    }
+
+    @Test fun wifiLimitsAreProtocolBytes() {
+        assertTrue(SetupFlow.validWiFi("Office", ""))
+        assertFalse(SetupFlow.validWiFi("   ", "secret"))
+        assertFalse(SetupFlow.validWiFi("é".repeat(17), ""))
+        assertTrue(SetupFlow.validWiFi("é".repeat(16), "p".repeat(64)))
+        assertFalse(SetupFlow.validWiFi("Office", "p".repeat(65)))
+    }
 }

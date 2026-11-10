@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -80,27 +82,46 @@ fun hasBluetoothPermission(context: Context) = bluetoothPermissions().all { cont
 
 private object SetupAction { const val Status = 0; const val ScanWiFi = 1; const val ConnectWiFi = 2; const val Enroll = 3; const val CheckEnrollment = 4 }
 
-/** Bluetooth setup for a nearby device (iOS NearbySetupView). Discovery and status checks run on their own. */
+/** The four setup steps and the moves between them (iOS NearbySetupFlow). */
+class SetupFlow {
+    enum class Step(val number: Int, val title: String) { Device(1, "Device"), Network(2, "Connection"), Organization(3, "Organization"), Enroll(4, "Enrollment") }
+    var step by mutableStateOf(Step.Device); private set
+    fun choseDevice() { step = Step.Network }
+    fun continueFromNetwork(connected: Boolean, useEthernet: Boolean = false) { if (step == Step.Network && (connected || useEthernet)) step = Step.Organization }
+    fun backToNetwork() { if (step == Step.Organization) step = Step.Network }
+    fun reset() { step = Step.Device }
+    companion object {
+        /** Protocol byte limits, not character counts. */
+        fun validWiFi(ssid: String, password: String) = ssid.isNotBlank() && ssid.toByteArray().size <= 32 && password.toByteArray().size <= 64
+    }
+}
+
+/** Bluetooth setup for a nearby device in four steps (iOS NearbySetupView). Discovery and status checks run on their own. */
 @Composable
 fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val page = LocalNavPage.current
     var permitted by remember { mutableStateOf(hasBluetoothPermission(context)) }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result -> permitted = result.values.all { it } }
     var devices by remember { mutableStateOf(emptyList<SetupDevice>()) }
+    var candidate by remember { mutableStateOf<SetupDevice?>(null) }
+    var scanned by remember { mutableStateOf(false) }
+    val flow = remember { SetupFlow().also { if (initial != null) it.choseDevice() } }
     var selected by remember { mutableStateOf(initial) }
     var state by remember { mutableStateOf(SetupSnapshot()) }
     var organizations by remember { mutableStateOf(emptyList<JSONObject>()) }
     var organization by remember { mutableStateOf("") }
     var organizationsLoaded by remember { mutableStateOf(false) }
+    var organizationError by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf(initial?.let { EnrollmentForm.suggestedName(it.title) } ?: "") }
     var ssid by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var wifiExpanded by remember { mutableStateOf(false) }
-    var customizing by remember { mutableStateOf(false) }
+    var wifiExpanded by remember { mutableStateOf(initial != null) }
     var busy by remember { mutableStateOf(false) }
     var automatic by remember { mutableStateOf(false) }
     var opening by remember { mutableStateOf(false) }
+    var closing by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var observationError by remember { mutableStateOf<String?>(null) }
@@ -120,7 +141,23 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
         state.connected && organizationsLoaded -> "ready"
         else -> "connecting"
     }
+    // Closing while a request is out asks first; the request may still finish on the device.
+    SideEffect { page?.interceptBack = { if (editingLocked || state.pending) { closing = true; true } else false } }
+    androidx.activity.compose.BackHandler(editingLocked || state.pending) { closing = true }
+    var scopeKey by remember { mutableStateOf(model.account to model.organization) }
+    LaunchedEffect(model.account, model.organization) { if (scopeKey != (model.account to model.organization)) { password = ""; done() } }
     suspend fun waitIdle() { while (busy) delay(100) }
+    suspend fun discover() {
+        if (busy) return
+        busy = true; automatic = true
+        try {
+            val found = model.backend.call("NearbyDiscover").items().map(SetupDevice::parse)
+            devices = found; scanned = true
+            if (candidate != null && found.none { it.address == candidate?.address }) candidate = null
+            observationError = null
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { devices = emptyList(); candidate = null; scanned = true; observationError = e.message }
+        finally { busy = false; automatic = false }
+    }
     suspend fun connect(device: SetupDevice) {
         if (busy) return
         busy = true; automatic = true; selected = device
@@ -130,6 +167,21 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
         } catch (e: CancellationException) { throw e } catch (e: Exception) { observationError = e.message } finally { busy = false; automatic = false }
         nextReconnect = System.currentTimeMillis() + reconnectDelay
         reconnectDelay = if (state.connected) 3_000 else minOf(reconnectDelay * 2, 30_000)
+    }
+    suspend fun choose(device: SetupDevice) {
+        waitIdle()
+        if (selected != null || devices.none { it.address == device.address }) return
+        name = EnrollmentForm.suggestedName(device.title)
+        flow.choseDevice(); wifiExpanded = true
+        connect(device)
+    }
+    suspend fun chooseAnother() {
+        if (busy || state.attempted || state.pending || editingLocked) return
+        busy = true
+        try { if (state.session != 0L) model.backend.call("NearbyClose", state.session) } catch (e: CancellationException) { throw e } catch (_: Exception) {} finally { busy = false }
+        selected = null; candidate = null; state = SetupSnapshot(); flowReset(flow)
+        password = ""; ssid = ""; error = null; observationError = null
+        nextReconnect = 0L; reconnectDelay = 3_000L
     }
     suspend fun perform(action: Int, automatically: Boolean = false) {
         if (!automatically) waitIdle()
@@ -143,7 +195,7 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
             val detail = value.error
             if (automatically || value.pending) observationError = detail
             else if (detail != null && ConnectionRecovery.canRetry(detail)) observationError = detail
-            else { error = detail; if (detail?.contains("name is already in use") == true) customizing = true }
+            else error = detail
             if ((value.pending || value.canResume) && !value.wifiConnected && action == SetupAction.Enroll) wifiExpanded = true
             if (value.completed) { error = null; observationError = null }
         } catch (e: CancellationException) { throw e } catch (e: Exception) {
@@ -156,6 +208,14 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
         }
     }
     fun submit(action: Int) = scope.launch { perform(action) }
+    suspend fun loadOrganizations() {
+        try {
+            organizations = model.backend.call("EnrollmentOrganizations").items()
+            organizationError = null
+            organization = EnrollmentForm.defaultOrganization(organizations, model.account)
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { organizationError = e.message }
+        organizationsLoaded = true
+    }
     /** Opens the enrolled device by its identifier, never by a possibly duplicated display name. */
     fun finish() = scope.launch {
         if (opening) return@launch
@@ -171,20 +231,15 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
     }
     LaunchedEffect(permitted) {
         if (!permitted) return@LaunchedEffect
-        try {
-            organizations = model.backend.call("EnrollmentOrganizations").items()
-            organization = EnrollmentForm.defaultOrganization(organizations, model.account)
-        } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message }
-        organizationsLoaded = true
+        loadOrganizations()
         while (true) {
             if (!busy) {
                 val now = System.currentTimeMillis()
-                when (state.observation(selected != null, wifiExpanded, (now - lastStatus) / 1000.0, (now - lastScan) / 1000.0)) {
-                    SetupSnapshot.Observation.Discover -> {
-                        busy = true; automatic = true
-                        try { devices = model.backend.call("NearbyDiscover").items().map(SetupDevice::parse); observationError = null }
-                        catch (e: CancellationException) { throw e } catch (e: Exception) { observationError = e.message } finally { busy = false; automatic = false }
-                    }
+                if (!model.inForeground) {
+                    // Bluetooth stays closed while Wendy is in the background.
+                    if (state.connected) { try { model.backend.call("NearbyClose", state.session) } catch (e: CancellationException) { throw e } catch (_: Exception) {}; state = state.copy(connected = false) }
+                } else when (state.observation(selected != null, wifiExpanded, (now - lastStatus) / 1000.0, (now - lastScan) / 1000.0)) {
+                    SetupSnapshot.Observation.Discover -> discover()
                     SetupSnapshot.Observation.Reconnect -> selected?.let { if (now >= nextReconnect) connect(it) }
                     SetupSnapshot.Observation.CheckEnrollment -> perform(SetupAction.CheckEnrollment, true)
                     SetupSnapshot.Observation.Status -> perform(SetupAction.Status, true)
@@ -196,41 +251,52 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
         }
     }
     val session = state.session
-    DisposableEffect(Unit) { onDispose { password = "" } }
+    DisposableEffect(Unit) { onDispose { password = ""; page?.interceptBack = null } }
     DisposableEffect(session) { onDispose { if (session != 0L) model.task { withContext(NonCancellable) { model.backend.call("NearbyClose", session) } } } }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(22.dp)) {
-        if (finished) IconTile(Icons.Outlined.CheckCircle, Modifier.size(96.dp)) else DeviceIllustration(Modifier.size(150.dp), MaterialTheme.colorScheme.primary)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
         if (!permitted) {
+            DeviceIllustration(Modifier.size(150.dp), MaterialTheme.colorScheme.primary)
             Text("Find your Wendy.", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
             Text("Wendy uses Bluetooth to find and set up nearby devices.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             PrimaryAction("Allow Bluetooth") { permissions.launch(bluetoothPermissions()) }
             return@Column
         }
+        if (!finished) {
+            val step = if (state.pending || state.attempted || (editingLocked && progress == "Preparing enrollment…")) SetupFlow.Step.Enroll else if (selected == null) SetupFlow.Step.Device else flow.step
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Step ${step.number} of 4 · ${step.title}", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (1..4).forEach { number -> Box(Modifier.weight(1f).height(4.dp).background(if (number <= step.number) LensStyle.green else MaterialTheme.colorScheme.onSurface.copy(alpha = .18f), CircleShape)) }
+                }
+            }
+        }
+        if (finished) IconTile(Icons.Outlined.CheckCircle, Modifier.size(96.dp)) else DeviceIllustration(Modifier.size(104.dp), MaterialTheme.colorScheme.primary)
         val headline = when (stage) {
             "attention" -> "Setup needs attention."
             "done" -> if (state.completed) "You’re all set." else "Already part of Wendy."
-            "discovering" -> "Find your Wendy."
+            "discovering" -> if (observationError == null) "Choose a device" else "Bluetooth unavailable"
             "connecting" -> "Connecting to your Wendy…"
             "working" -> if (!state.attempted && !state.pending) progress else if (state.attempted && !editingLocked) "Checking enrollment…" else "Making it yours…"
-            else -> "Make it yours."
+            else -> if (flow.step == SetupFlow.Step.Network) "Connect to Wi-Fi" else "Name & organization"
         }
         val explanation = when (stage) {
             "attention" -> state.failure
             "done" -> "Your device is enrolled and ready to open."
             "discovering" -> "Power on your device and keep it nearby. We’ll find it automatically."
-            "connecting" -> "Keep your device nearby. We’re taking care of the connection."
+            "connecting" -> "Keep your device nearby."
             "working" -> when {
                 !state.attempted && !state.pending && progress == "Connecting to Wi-Fi…" -> "We’ll continue when your device is connected."
                 state.attempted && !state.pending && !editingLocked -> "We haven’t received confirmation yet. Your enrollment won’t be sent twice."
-                state.wifiConnected -> "Your device is joining your organization. We’ll keep checking automatically."
-                else -> "Your device needs internet to finish. Connect it to Wi-Fi below, or plug in Ethernet. We’ll keep checking automatically."
+                state.wifiConnected -> "Your device is joining your organization."
+                else -> "Connect to Wi-Fi below or plug in Ethernet to finish."
             }
-            else -> choice?.let { "Add this device to ${it.text("Name")}." } ?: if (organizations.isEmpty()) "Sign in to add this device to your organization." else "Choose the organization this device belongs to."
+            else -> if (flow.step == SetupFlow.Step.Network) "Credentials are sent over Bluetooth. You can also use an Ethernet connection."
+                else choice?.let { "Add this device to ${it.text("Name")}." } ?: if (organizations.isEmpty()) "Sign in to add this device to your organization." else "Choose the organization this device belongs to."
         }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(headline, style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
-            selected?.let { Text(name.ifEmpty { it.title }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            selected?.let { Text(name.ifEmpty { it.title }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
             Text(explanation, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
         @Composable fun wifiControls() {
@@ -238,57 +304,91 @@ fun NearbySetupScreen(model: WendyModel, initial: SetupDevice? = null, done: () 
                 TextButton(onClick = { wifiExpanded = !wifiExpanded }, enabled = !editingLocked) {
                     Text(if (state.wifiConnected) "Wi-Fi connected" else "Connect to Wi-Fi"); Icon(if (wifiExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null)
                 }
-                if (wifiExpanded) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (wifiExpanded) Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (state.wifiConnected) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { Icon(Icons.Outlined.Wifi, null, tint = MaterialTheme.colorScheme.onSurfaceVariant); Text(state.ssid, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    if (state.networks.isNotEmpty()) ChoiceField("Network", listOf("" to "Choose network") + state.networks.toSortedSet().map { it to it }, ssid, !editingLocked) { ssid = it }
-                    else LoadingRow("Finding networks…")
+                    when {
+                        state.networks.isNotEmpty() -> {
+                            val names = (state.networks.toSortedSet() + listOfNotNull(ssid.ifEmpty { null })).toSortedSet()
+                            ChoiceField("Network", listOf("" to "Choose network") + names.map { it to it }, ssid, !editingLocked) { ssid = it }
+                        }
+                        lastScan == 0L -> LoadingRow("Finding networks…")
+                        else -> SecondaryText("No networks found. Enter a network name or scan again.")
+                    }
+                    TextButton(onClick = { submit(SetupAction.ScanWiFi) }, enabled = state.connected && !editingLocked) { Text("Scan networks") }
                     OutlinedTextField(ssid, { ssid = it }, Modifier.fillMaxWidth(), label = { Text("Network name") }, singleLine = true, enabled = !editingLocked, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
                     OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("Password") }, singleLine = true, enabled = !editingLocked,
                         visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
-                    Button(onClick = { submit(SetupAction.ConnectWiFi) }, enabled = ssid.isNotEmpty() && !editingLocked) { Text("Connect") }
+                    Button(onClick = { submit(SetupAction.ConnectWiFi) }, enabled = SetupFlow.validWiFi(ssid, password) && state.connected && !editingLocked) { Text("Connect") }
                 }
             }
         }
         when (stage) {
             "done" -> if (opening) LoadingRow("Opening device…") else PrimaryAction("Open device") { finish() }
-            "discovering" -> {
-                CircularProgressIndicator()
+            "discovering" -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (!scanned) LoadingRow("Scanning over Bluetooth…")
+                observationError?.let { Text(PresentedFailure(it).message, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
+                    ?: run { if (scanned && devices.isEmpty()) Text("No nearby devices found. Keep the device powered on and within a few metres, then scan again.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
                 devices.forEach { device ->
-                    Surface(onClick = { scope.launch { waitIdle(); if (selected == null) { name = EnrollmentForm.suggestedName(device.title); connect(device) } } },
-                        shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
+                    val picked = candidate?.address == device.address
+                    Surface(onClick = { candidate = device }, shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, if (picked) LensStyle.green else MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            IconTile(Icons.Outlined.Memory); Text(device.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); Icon(Icons.Outlined.ChevronRight, null)
+                            IconTile(Icons.Outlined.Memory)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(device.title, style = MaterialTheme.typography.titleMedium)
+                                SecondaryText(if (device.rssi < 0) "Bluetooth signal ${device.rssi} dBm" else "Bluetooth signal unavailable")
+                            }
+                            Icon(if (picked) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked, if (picked) "Selected" else null, tint = if (picked) LensStyle.accent else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
+                TextButton(onClick = { scope.launch { discover() } }, enabled = !busy) { Text("Scan again") }
+                PrimaryAction("Continue", enabled = candidate != null && !busy && devices.any { it.address == candidate?.address }) { candidate?.let { scope.launch { choose(it) } } }
             }
-            "connecting" -> CircularProgressIndicator()
+            "connecting" -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                CircularProgressIndicator()
+                if (!busy) {
+                    selected?.let { device -> TextButton(onClick = { scope.launch { connect(device) } }) { Text("Retry connection") } }
+                    TextButton(onClick = { scope.launch { chooseAnother() } }) { Text("Choose another device") }
+                }
+            }
             "attention" -> {
                 if (state.canResume) PrimaryAction("Continue setup", enabled = state.connected && !editingLocked) { submit(SetupAction.Enroll) }
                 else if (opening) LoadingRow("Opening device…") else PrimaryAction("View device") { finish() }
                 wifiControls()
             }
             "working" -> { CircularProgressIndicator(); if (!editingLocked) wifiControls() }
-            else -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                val organizationChoices = organizations.map { it.text("Account") to "${it.text("Name")} · ${it.text("Email").ifEmpty { it.text("Account") }}" }
-                if (organizations.isEmpty()) PrimaryAction("Sign in") { done(); model.signIn() }
+            else -> if (flow.step == SetupFlow.Step.Network) Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                wifiControls()
+                if (state.wifiConnected) PrimaryAction("Continue") { flow.continueFromNetwork(connected = true) }
                 else {
-                    if (choice == null) ChoiceField("Organization", organizationChoices, organization) { organization = it }
-                    PrimaryAction(choice?.let { "Add to ${it.text("Name")}" } ?: "Add device", enabled = choice != null && nameValid && !editingLocked) { submit(SetupAction.Enroll) }
-                    TextButton(onClick = { customizing = !customizing }) { Text("Name & organization"); Icon(if (customizing) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null) }
-                    if (customizing) {
+                    TextButton(onClick = { flow.continueFromNetwork(connected = false, useEthernet = true) }) { Text("Use Ethernet instead") }
+                    SecondaryText("Ethernet connectivity will be checked when the device enrolls.")
+                }
+                TextButton(onClick = { scope.launch { chooseAnother() } }, enabled = !editingLocked) { Text("Choose another device") }
+            } else Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                val organizationChoices = organizations.map { it.text("Account") to "${it.text("Name")} · ${it.text("Email").ifEmpty { it.text("Account") }}" }
+                when {
+                    organizationError != null -> { SecondaryText(organizationError!!); TextButton(onClick = { scope.launch { loadOrganizations() } }) { Text("Retry organizations") } }
+                    organizations.isEmpty() -> PrimaryAction("Sign in") { done(); model.signIn() }
+                    else -> {
                         OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("Device name") }, singleLine = true, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
                         if (!nameValid) SecondaryText("Use a lowercase name with letters, numbers, and hyphens.")
-                        ChoiceField("Organization", organizationChoices, organization) { organization = it }
+                        ChoiceField("Organization", listOf("" to "Choose organization") + organizationChoices, organization) { organization = it }
+                        PrimaryAction(choice?.let { "Enroll in ${it.text("Name")}" } ?: "Enroll device", enabled = choice != null && nameValid && !editingLocked) { submit(SetupAction.Enroll) }
                     }
                 }
-                wifiControls()
+                TextButton(onClick = { flow.backToNetwork(); wifiExpanded = true }, enabled = !editingLocked) { Text("Back to connection") }
             }
         }
         error?.let { if (stage in setOf("ready", "done", "attention")) Text(PresentedFailure(it).message, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
         (observationError ?: error)?.let { detail -> if (!finished) SetupDetails(PresentedFailure(detail).details) }
     }
+    if (closing) ConfirmAction("Close setup?", "A request already sent to the device may still finish. Closing stops checks here; it does not undo enrollment or Wi-Fi changes. Reopen setup to check the same device.",
+        "Close setup", onDismiss = { closing = false }) { closing = false; password = ""; done() }
 }
+
+/** Starts the flow over at the device step after choosing another device. */
+private fun flowReset(flow: SetupFlow) { flow.reset() }
 
 @Composable
 private fun SetupDetails(text: String) {

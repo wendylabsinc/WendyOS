@@ -129,7 +129,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     // Device pages belong to one account and organization (iOS drops device routes when it changes).
     LaunchedEffect(model.account, model.organization) { nav.dropScoped() }
     val top = nav.top
-    BackHandler(top != null) { nav.pop() }
+    BackHandler(top != null) { nav.back() }
     BackHandler(top == null && editingHome) { editingHome = false }
     CompositionLocalProvider(LocalNavigator provides nav, LocalRecordingCatalog provides catalog, LocalRecordingPosters provides posters) {
         if (model.initialized && model.primaryLens == null) LensPreferenceScreen { model.choosePrimaryLens(it) }
@@ -140,7 +140,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     when {
                         top != null -> {
-                            IconButton(onClick = nav::pop) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                            IconButton(onClick = nav::back) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
                             Text(top.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             top.actions?.invoke(this)
                         }
