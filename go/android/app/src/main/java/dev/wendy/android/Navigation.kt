@@ -18,6 +18,8 @@ class NavPage(title: String, actions: (@Composable RowScope.() -> Unit)? = null,
     var title by mutableStateOf(title)
     /** Toolbar buttons; a page may replace them, for example an editor whose Done follows its draft. */
     var actions by mutableStateOf(actions)
+    /** Returns true when the page handled back itself, for example to confirm closing setup. */
+    var interceptBack: (() -> Boolean)? = null
     val key: Long = keys.incrementAndGet()
     private companion object { val keys = AtomicLong() }
 }
@@ -38,6 +40,8 @@ class Navigator {
         if (index >= 0) while (stack.size > index) stack.removeAt(stack.lastIndex)
     }
     fun pop() { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
+    /** Back from the toolbar or the system: the top page may handle it first. */
+    fun back() { if (top?.interceptBack?.invoke() != true) pop() }
     fun clear() { stack.clear() }
 }
 
