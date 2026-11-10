@@ -51,7 +51,7 @@ func newPromptTerminal(ctx context.Context, in io.Reader, out io.Writer) *prompt
 		input.program = t.program
 	}
 	go func() {
-		_, err := tui.RunProgram(t.program)
+		_, err := tui.RunInlineProgram(t.program)
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, tea.ErrInterrupted) {
 			t.err = err
 		}

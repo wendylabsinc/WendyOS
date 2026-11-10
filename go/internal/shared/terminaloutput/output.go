@@ -10,14 +10,19 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
 	"sync"
 )
 
 const maxPendingBytes = 64 << 10
 
-var output struct {
+var output outputState
+
+type outputState struct {
 	sync.Mutex
 	owners       int
+	blocking     int        // owners without a printer
+	printers     []*printer // inline owners, newest last
 	bytes        int
 	droppedBytes int
 	dropped      int
@@ -31,6 +36,10 @@ type write struct {
 	dst  io.Writer
 	data []byte
 }
+
+// printer prints a diagnostic above an inline view. It reports false when it
+// cannot take the write, which is then deferred as under Suspend.
+type printer struct{ print func([]byte) bool }
 
 type writer struct{ dst io.Writer }
 
@@ -50,24 +59,45 @@ func (w writer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	output.Lock()
+	if print := output.inlinePrinter(w.dst); print != nil {
+		output.Unlock()
+		if print(p) {
+			return len(p), nil
+		}
+		output.Lock()
+	}
 	defer output.Unlock()
 	if output.owners == 0 {
 		return w.dst.Write(p)
 	}
+	output.enqueue(w.dst, p)
+	return len(p), nil
+}
+
+// inlinePrinter returns the printer for a stderr write while only inline views
+// are active. Callers hold output's lock.
+func (o *outputState) inlinePrinter(dst io.Writer) func([]byte) bool {
+	if o.owners == 0 || o.blocking > 0 || len(o.printers) == 0 || dst != io.Writer(os.Stderr) {
+		return nil
+	}
+	return o.printers[len(o.printers)-1].print
+}
+
+// enqueue defers a write. Callers hold output's lock.
+func (o *outputState) enqueue(dst io.Writer, p []byte) {
 	// Keep the newest writes: the ones just before the view exits usually
 	// explain its outcome, and evicting from the front keeps the replay free
 	// of gaps.
-	output.pending = append(output.pending, write{w.dst, append([]byte(nil), p...)})
-	output.bytes += len(p)
-	for output.bytes > maxPendingBytes {
-		evicted := output.pending[0]
-		output.pending[0] = write{}
-		output.pending = output.pending[1:]
-		output.bytes -= len(evicted.data)
-		output.droppedBytes += len(evicted.data)
-		output.dropped++
+	o.pending = append(o.pending, write{dst, append([]byte(nil), p...)})
+	o.bytes += len(p)
+	for o.bytes > maxPendingBytes {
+		evicted := o.pending[0]
+		o.pending[0] = write{}
+		o.pending = o.pending[1:]
+		o.bytes -= len(evicted.data)
+		o.droppedBytes += len(evicted.data)
+		o.dropped++
 	}
-	return len(p), nil
 }
 
 type stderrWriter struct{}
@@ -81,10 +111,31 @@ var Stderr io.Writer = stderrWriter{}
 // included because discovery and third-party libraries use the default logger.
 // The bounded queue avoids unbounded memory use during a long-running view.
 func Suspend() func() {
+	release := suspend(nil)
+	return func() { release(nil) }
+}
+
+// SuspendInline is Suspend for an inline view that can print lines above
+// itself, such as a prompt that stays up for a whole session. While only
+// inline views are active, stderr diagnostics go to print as they arrive
+// instead of waiting for the view to exit. Writes to other destinations, and
+// any write print refuses, are deferred as under Suspend. The idempotent
+// release takes the stderr writes print accepted but never showed, oldest
+// first; they are replayed ahead of anything deferred.
+func SuspendInline(print func([]byte) bool) func(unprinted [][]byte) {
+	return suspend(&printer{print})
+}
+
+func suspend(inline *printer) func(unprinted [][]byte) {
 	lifecycle.Lock()
 	output.Lock()
 	first := output.owners == 0
 	output.owners++
+	if inline != nil {
+		output.printers = append(output.printers, inline)
+	} else {
+		output.blocking++
+	}
 	output.Unlock()
 	if first {
 		loggerOutput = log.Writer()
@@ -92,13 +143,29 @@ func Suspend() func() {
 	}
 	lifecycle.Unlock()
 	var once sync.Once
-	return func() {
+	return func(unprinted [][]byte) {
 		once.Do(func() {
 			lifecycle.Lock()
 			defer lifecycle.Unlock()
 			output.Lock()
+			if len(unprinted) > 0 {
+				queued := output.pending
+				output.pending, output.bytes = nil, 0
+				for _, data := range unprinted {
+					output.enqueue(os.Stderr, data)
+				}
+				for _, entry := range queued {
+					output.enqueue(entry.dst, entry.data)
+				}
+			}
 			output.owners--
+			if inline != nil {
+				output.printers = slices.DeleteFunc(output.printers, func(p *printer) bool { return p == inline })
+			} else {
+				output.blocking--
+			}
 			last := output.owners == 0
+			var handOff []write
 			if last {
 				if output.dropped > 0 {
 					_, _ = fmt.Fprintf(os.Stderr, "wendy: omitted %d earlier background diagnostic writes (%d bytes) while the TUI was active\n", output.dropped, output.droppedBytes)
@@ -108,8 +175,15 @@ func Suspend() func() {
 				}
 				output.pending = nil
 				output.bytes, output.dropped, output.droppedBytes = 0, 0, 0
+			} else if output.inlinePrinter(os.Stderr) != nil {
+				// The last full-screen view left an inline one: its deferred
+				// stderr writes can be shown now rather than at session end.
+				handOff, output.pending, output.bytes = output.pending, nil, 0
 			}
 			output.Unlock()
+			for _, entry := range handOff {
+				_, _ = Writer(entry.dst).Write(entry.data)
+			}
 			if last {
 				log.SetOutput(loggerOutput)
 			}

@@ -120,3 +120,57 @@ func TestBoundedQueueKeepsTheNewestWritesWithoutGaps(t *testing.T) {
 		}
 	}
 }
+
+func TestInlineViewPrintsStderrDiagnosticsUntilAFullScreenViewStarts(t *testing.T) {
+	previous := os.Stderr
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = stderr
+	t.Cleanup(func() { os.Stderr = previous })
+	var printed []string
+	var stdout bytes.Buffer
+	release := SuspendInline(func(p []byte) bool {
+		printed = append(printed, string(p))
+		return true
+	})
+	t.Cleanup(func() { release(nil) })
+
+	fmt.Fprint(Stderr, "live\n")
+	fmt.Fprint(Writer(&stdout), "stdout waits\n")
+	picker := Suspend()
+	fmt.Fprint(Stderr, "under picker\n")
+	if strings.Join(printed, "") != "live\n" {
+		t.Fatalf("printed %q, want only the write made before the picker", printed)
+	}
+	picker()
+	if strings.Join(printed, "") != "live\nunder picker\n" {
+		t.Fatalf("picker exit did not hand its stderr writes to the inline view: %q", printed)
+	}
+	if stdout.Len() != 0 {
+		t.Fatal("stdout write escaped while the inline view was active")
+	}
+	release([][]byte{[]byte("unprinted\n")})
+	got, _ := os.ReadFile(stderr.Name())
+	if string(got) != "unprinted\n" || stdout.String() != "stdout waits\n" {
+		t.Fatalf("exit replay: stderr %q stdout %q", got, stdout.String())
+	}
+}
+
+func TestInlineViewRefusalDefersInOrder(t *testing.T) {
+	previous := os.Stderr
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = stderr
+	t.Cleanup(func() { os.Stderr = previous })
+	release := SuspendInline(func([]byte) bool { return false })
+	fmt.Fprint(Stderr, "refused\n")
+	release([][]byte{[]byte("older\n")})
+	got, _ := os.ReadFile(stderr.Name())
+	if string(got) != "older\nrefused\n" {
+		t.Fatalf("stderr = %q", got)
+	}
+}
