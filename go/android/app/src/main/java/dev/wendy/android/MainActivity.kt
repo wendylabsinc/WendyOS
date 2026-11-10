@@ -6,11 +6,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -22,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,7 +40,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         model = ViewModelProvider(this)[WendyModel::class.java]
         setContent {
-            WendyTheme {
+            val dark = when (model.appearance) { "Dark" -> true; "Light" -> false; else -> androidx.compose.foundation.isSystemInDarkTheme() }
+            // Status and navigation bar icons follow Wendy's appearance, not only the system's.
+            LaunchedEffect(dark) {
+                val style = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT) else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                enableEdgeToEdge(style, style)
+            }
+            WendyTheme(model.appearance) {
                 WendyApp(model, intent?.action == WendyVpnService.OPEN) { url ->
                     try {
                         val uri = Uri.parse(url)
@@ -52,113 +61,135 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { model.setForeground(false); super.onStop() }
 }
 
-private val devicePanes = listOf("Overview", "Cameras", "Apps")
-private val moreDevicePanes = listOf("Digital Twin", "Campaigns", "Chat")
+/**
+ * Routes of the lens app (iOS MobileRootView): General Home is the root, a lens is the
+ * first pushed page, and device pages sit above it.
+ */
+@Stable
+private class RootRoutes(val model: WendyModel, val nav: Navigator) {
+    var devicesTab by mutableStateOf(DevicesTab.Home)
+    var chat by mutableStateOf(false)
+    var address by mutableStateOf(false)
+    private var lensPage: Pair<Long, Lens>? = null
+    private fun currentLens() = lensPage?.takeIf { (key, _) -> nav.stack.firstOrNull()?.key == key }?.second
+
+    fun enter(lens: Lens) {
+        if (currentLens() == lens) { while (nav.stack.size > 1) nav.pop(); return }
+        nav.clear(); devicesTab = DevicesTab.Home
+        when (lens) {
+            Lens.Devices -> nav.push("Devices", actions = { if (devicesTab == DevicesTab.Home) DevicesHomeActions() }) {
+                DevicesLens(model, devicesTab, { devicesTab = it }, { openSetup() }, ::openActivity, { chat = true }, ::select)
+            }
+            Lens.Sites -> nav.push("Sites") { LensWithChat { SitesScreen(model) } }
+            Lens.Robots -> nav.push("Robots") { LensWithChat { UnderConstructionLens("Robots") } }
+        }
+        lensPage = nav.stack.first().key to lens
+    }
+    fun select(device: Device) {
+        enter(Lens.Devices); devicesTab = DevicesTab.Home
+        nav.pushScoped(device.title, actions = { DeviceLensActions(model, device) }) { DeviceLensPage(model, device) }
+    }
+    fun openActivity() = nav.push("Activity") { ActivityScreen(model, ::select) }
+    fun openRecordings() { enter(Lens.Devices); devicesTab = DevicesTab.Data }
+    fun openSetup(device: SetupDevice? = null) = nav.push("Device setup") { NearbySetupScreen(model, device) { nav.pop(); model.task { model.refresh() } } }
+    fun openVpn() = nav.push("Private network") { VpnScreen(model) { nav.pop() } }
+
+    @Composable private fun DevicesHomeActions() {
+        IconButton(onClick = ::openActivity) { Icon(Icons.Outlined.Notifications, "Notifications") }
+        OverflowMenu("Connect to a device", listOf(
+            MenuItem("Set up a device nearby", Icons.Outlined.Bluetooth) { openSetup() },
+            MenuItem("Connect by address", Icons.Outlined.Link) { address = true },
+        ), icon = Icons.Outlined.Add, enabled = model.initialized)
+    }
+    @Composable private fun LensWithChat(content: @Composable () -> Unit) {
+        Column(Modifier.fillMaxSize()) { Box(Modifier.weight(1f)) { content() }; AskWendyBar(model) { chat = true } }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> Unit) {
+    val context = LocalContext.current
     val nav = remember { Navigator() }
-    var tab by rememberSaveableState("Devices")
-    var accounts by remember { mutableStateOf(false) }
-    var address by remember { mutableStateOf(false) }
-    var addDevice by remember { mutableStateOf(false) }
-    var setup by rememberSaveableState(if (openVpn) "vpn" else "")
-    var pane by rememberSaveableState("Overview")
+    val routes = remember { RootRoutes(model, nav) }
+    val widgets = remember { HomeWidgetStore(context.applicationContext) }
+    var settings by remember { mutableStateOf(false) }
+    var editingHome by remember { mutableStateOf(false) }
     var errorDetails by remember { mutableStateOf<String?>(null) }
-    var setupDevice by remember { mutableStateOf<SetupDevice?>(null) }
+    LaunchedEffect(Unit) { if (openVpn) routes.openVpn() }
     LaunchedEffect(model.browserURL) { model.browserURL?.let { model.browserURL = null; openURL(it) } }
     LaunchedEffect(model.linkRequest) { model.linkRequest?.let { model.linkRequest = null; openURL(it) } }
-    LaunchedEffect(model.requestNearbySetup) { if (model.requestNearbySetup) { model.requestNearbySetup = false; nav.clear(); setup = "setup" } }
-    // A different device or session invalidates pages pushed for the previous one.
-    LaunchedEffect(model.selected?.selector, model.session) { nav.clear() }
-    LaunchedEffect(model.selected?.selector) { pane = "Overview" }
+    LaunchedEffect(model.requestNearbySetup) { if (model.requestNearbySetup) { model.requestNearbySetup = false; routes.openSetup() } }
+    LaunchedEffect(model.requestSettings) { if (model.requestSettings) { model.requestSettings = false; settings = true } }
+    LaunchedEffect(model.requestChat) { if (model.requestChat) { model.requestChat = false; routes.chat = true } }
+    // Device pages belong to one account and organization (iOS drops device routes when it changes).
+    LaunchedEffect(model.account, model.organization) { nav.dropScoped() }
     val top = nav.top
-    fun back() { when { top != null -> nav.pop(); setup.isNotBlank() -> setup = ""; else -> model.disconnect() } }
-    BackHandler(top != null || model.selected != null || setup.isNotBlank()) { back() }
+    BackHandler(top != null) { nav.pop() }
+    BackHandler(top == null && editingHome) { editingHome = false }
     CompositionLocalProvider(LocalNavigator provides nav) {
-        Scaffold(
+        if (model.initialized && model.primaryLens == null) LensPreferenceScreen { model.choosePrimaryLens(it) }
+        else Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
-                Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(horizontal = 20.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (top != null || model.selected != null || setup.isNotBlank()) {
-                        FilledTonalIconButton(onClick = ::back, colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, if (top != null) "Back" else "Back to devices", Modifier.size(22.dp))
+                Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(horizontal = 12.dp, vertical = 8.dp).heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    when {
+                        top != null -> {
+                            IconButton(onClick = nav::pop) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                            Text(top.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            top.actions?.invoke(this)
                         }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            val title = top?.title ?: model.selected?.title ?: if (setup == "setup") "Device setup" else "Private network"
-                            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val subtitle = when {
-                                top != null -> model.selected?.title ?: ""
-                                model.selected == null -> "Wendy"
-                                model.session == 0L -> if (model.detailError != null) "Not connected" else "Connecting"
-                                else -> "Connected via ${model.selected?.transport}"
+                        editingHome -> {
+                            TextButton(onClick = { nav.push("Add widget") { HomeWidgetManager(model, widgets) } }) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Add widget") }
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { editingHome = false }) { Text("Done", fontWeight = FontWeight.SemiBold) }
+                        }
+                        else -> {
+                            val organization = model.organizations.firstOrNull { it.text("id") == model.organization }?.text("name")?.ifEmpty { null }
+                            Surface(onClick = { settings = true }, enabled = model.initialized, shape = CircleShape, color = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier.widthIn(max = 260.dp).semantics { contentDescription = "Settings, ${organization ?: "Account"}" }) {
+                                Row(Modifier.padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Box(Modifier.size(26.dp).background(LensStyle.green, CircleShape), contentAlignment = Alignment.Center) { WendyMark(Modifier.size(16.dp, 12.dp), Color.White) }
+                                    Text(organization ?: "Account", style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
+                                }
                             }
-                            if (subtitle.isNotEmpty()) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                            Spacer(Modifier.weight(1f))
+                            IconButton(onClick = routes::openActivity, enabled = model.initialized) { Icon(Icons.Outlined.Notifications, "Notifications") }
                         }
-                        when {
-                            top?.actions != null -> top.actions.invoke(this)
-                            top == null && model.selected != null && setup.isBlank() -> {
-                                val ready = model.session != 0L && !model.lite
-                                if (ready) CampaignEventButton(model)
-                                IconButton(onClick = { nav.push("Settings") { DeviceSettingsScreen(model) } }, enabled = ready) { Icon(Icons.Outlined.Settings, "Device settings") }
-                            }
-                        }
-                    } else {
-                        WendyMark(Modifier.size(34.dp, 28.dp))
-                        Text("wendy", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.weight(1f))
-                        IconButton(onClick = { addDevice = true }, enabled = model.initialized) { Icon(Icons.Outlined.Add, "Add a device") }
-                    }
-                    if (top == null && model.selected == null) FilledTonalIconButton(onClick = { accounts = true }, enabled = model.initialized,
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                        val email = model.accounts.firstOrNull { it.text("Context") == model.account }?.text("Email") ?: ""
-                        if (email.isBlank()) Icon(Icons.Outlined.PersonOutline, "Accounts", Modifier.size(22.dp))
-                        else Text(email.take(1).uppercase(), style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { contentDescription = "Accounts" })
                     }
                 }
             },
-            bottomBar = { if (model.selected == null && setup.isBlank() && top == null) WendyNavigation(tab) { tab = it } }
+            floatingActionButton = {
+                if (top == null && !editingHome && model.initialized) FloatingActionButton(onClick = { routes.chat = true }, shape = CircleShape, containerColor = LensStyle.green, contentColor = Color.White) {
+                    Icon(Icons.Outlined.AutoAwesome, "Ask Wendy")
+                }
+            }
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize()) {
                 if (model.busy > 0 || !model.initialized) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
                 Box(Modifier.weight(1f)) {
                     // Pushed pages cover the screen; the pages underneath keep their state.
-                    NavigationHost(nav) { when {
-                        !model.initialized -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyMessage("Getting ready", "Your devices will be here in a moment.") }
-                        setup == "setup" -> NearbySetupScreen(model, setupDevice) { setup = ""; setupDevice = null; model.task { model.refresh() } }
-                        setup == "vpn" -> VpnScreen(model) { setup = "" }
-                        model.selected != null -> if (model.session == 0L) DeviceConnectionScreen(model)
-                            else if (model.lite) key(model.session) { LiteDeviceScreen(model) }
-                            else key(model.session) { DeviceScreen(model, pane) { pane = it } }
-                        else -> androidx.compose.animation.Crossfade(tab, label = "main navigation") { current ->
-                            when (current) {
-                                "Devices" -> DevicesScreen(model, { setup = "setup" }, { setup = "vpn" }, { address = true }, { accounts = true })
-                                "Sites" -> SitesScreen(model)
-                                else -> ActivityScreen(model) { device -> tab = "Devices"; model.connect(device) }
-                            }
-                        }
-                    } }
+                    NavigationHost(nav) {
+                        if (!model.initialized) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyMessage("Getting ready", "Your devices will be here in a moment.") }
+                        else GeneralHomeScreen(model, widgets, editingHome, { editingHome = it }, routes::enter, { routes.openSetup() }, routes::openActivity, routes::openRecordings, routes::select)
+                    }
                 }
             }
         }
+    }
+    CompositionLocalProvider(LocalNavigator provides nav) {
         model.appURL?.let { url -> AppBrowser(url, { model.appURL = null }, openURL) }
-        NearbySetupPrompt(model, active = model.initialized && model.inForeground && setup.isBlank() && !accounts && !addDevice && !address && model.appDeletion == null && model.appURL == null) { device ->
-            nav.clear(); setupDevice = device; setup = "setup"
+        NearbySetupPrompt(model, active = model.initialized && model.inForeground && nav.stack.none { it.title == "Device setup" } && !settings && !routes.chat && !routes.address && model.appDeletion == null && model.appURL == null) { device ->
+            routes.openSetup(device)
         }
-        if (addDevice) ModalBottomSheet(onDismissRequest = { addDevice = false }, containerColor = MaterialTheme.colorScheme.background) {
-            Column(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                PageTitle("Bring a device online", "Choose how you want to connect.")
-                SettingsRow("Set up a device", "Find it nearby using Bluetooth", Icons.Outlined.Bluetooth) { addDevice = false; setup = "setup" }
-                SettingsRow("Connect by address", "Use a hostname or IP address", Icons.Outlined.Link) { addDevice = false; address = true }
-            }
-        }
-        if (address) InputDialog("Connect to device", listOf(Field("address", "Hostname or IP address", "", "hostname:50051")), onDismiss = { address = false }, submitLabel = "Connect") { values ->
+        if (settings) SettingsSheet(model) { settings = false }
+        if (routes.chat) AskWendySheet(model, { routes.chat = false }) { routes.chat = false; routes.enter(Lens.Devices) }
+        if (routes.address) InputDialog("Connect to device", listOf(Field("address", "Hostname or IP address", "", "hostname:50051")), onDismiss = { routes.address = false }, submitLabel = "Connect") { values ->
             val host = values.getValue("address").trim()
-            if (host.isNotBlank()) { address = false; model.connect(Device(host, host, host, "LAN")) }
+            if (host.isNotBlank()) { routes.address = false; routes.select(Device(host, host, host, "LAN")) }
         }
-        if (accounts) AccountSheet(model, { accounts = false }) { title, content -> accounts = false; nav.push(title, null, content) }
         model.error?.let { message ->
             val failure = PresentedFailure(message)
             AlertDialog(onDismissRequest = { model.error = null }, icon = { Icon(Icons.Outlined.ErrorOutline, null) }, title = { Text(failure.title ?: "Could not complete request") },
@@ -173,117 +204,35 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     }
 }
 
-/** A connected device: Overview, Cameras and Apps, with the other tools in an overflow menu (iOS MobileDeviceView). */
+/** Ask Wendy (iOS MobileLensChat): the connected device's chat, or a device to ask about. */
 @Composable
-fun DeviceScreen(model: WendyModel, pane: String, select: (String) -> Unit) {
-    var more by remember { mutableStateOf(false) }
-    Column {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                devicePanes.forEach { name -> PaneChip(name, pane == name) { select(name) } }
-                if (pane in moreDevicePanes) PaneChip(pane, true) {}
-            }
-            Box {
-                IconButton(onClick = { more = true }, modifier = Modifier.semantics { contentDescription = "More device tools" }) { Icon(Icons.Outlined.MoreHoriz, null) }
-                DropdownMenu(more, onDismissRequest = { more = false }) {
-                    moreDevicePanes.forEach { name -> DropdownMenuItem(text = { Text(name) }, onClick = { more = false; select(name) },
-                        trailingIcon = if (pane == name) ({ Icon(Icons.Outlined.Check, null) }) else null) }
-                }
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Box(Modifier.weight(1f)) { key(pane) {
-            when (pane) {
-                "Overview" -> DeviceOverviewScreen(model, select)
-                "Apps" -> AppsScreen(model)
-                "Cameras" -> CamerasScreen(model)
-                "Digital Twin" -> DigitalTwinScreen(model)
-                "Campaigns" -> CampaignsScreen(model)
-                "Chat" -> ChatScreen(model)
-            }
-        } }
+private fun AskWendySheet(model: WendyModel, dismiss: () -> Unit, chooseDevice: () -> Unit) {
+    NavigationSheet("Ask Wendy", dismiss) {
+        if (model.session != 0L && !model.lite && model.deviceChat != null) key(model.session) { ChatScreen(model) }
+        else AskWendyDevices(model, chooseDevice)
     }
 }
 
 @Composable
-private fun WendyNavigation(selected: String, select: (String) -> Unit) {
-    Surface(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(26.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shadowElevation = 3.dp) {
-        Row(Modifier.padding(7.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Devices" to Icons.Outlined.Dashboard, "Sites" to Icons.Outlined.Business, "Activity" to Icons.Outlined.Schedule).forEach { (name, icon) ->
-                val active = name == selected
-                val background by androidx.compose.animation.animateColorAsState(if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, label = "navigation")
-                Surface(onClick = { select(name) }, color = background, shape = RoundedCornerShape(20.dp), modifier = Modifier.weight(1f).semantics { this.selected = active }) {
-                    Column(Modifier.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Icon(icon, null, Modifier.size(22.dp), tint = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(name, style = MaterialTheme.typography.labelMedium, color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+private fun AskWendyDevices(model: WendyModel, chooseDevice: () -> Unit) {
+    val candidates = model.devices.filter { !it.lite }.sortedBy { it.title.lowercase() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Choose a device to ask about", style = MaterialTheme.typography.titleMedium)
+        SecondaryText("Wendy answers with the models, apps and logs on the device you choose.")
+        if (model.connecting) LensLoading("Connecting to ${model.selected?.title ?: "the device"}…")
+        model.detailError?.let { FailureNote(it) }
+        if (model.lite && model.session != 0L) SecondaryText("${model.selected?.title ?: "This device"} runs Wendy Lite, which has no chat. Choose another device.")
+        if (candidates.isNotEmpty()) LensSection("Devices") {
+            candidates.take(12).forEachIndexed { index, device ->
+                if (index > 0) LensDivider()
+                LensRow(device.title, if (device.selector.startsWith("cloud://")) "Cloud" else "Nearby", Icons.Outlined.Memory, enabled = !model.connecting) { model.connect(device) }
             }
-        }
+        } else EmptyMessage("No devices yet", "Set up a device or sign in to Wendy Cloud to ask about it.", Icons.Outlined.AutoAwesome)
+        LensButton("Browse devices", modifier = Modifier.fillMaxWidth(), onClick = chooseDevice)
     }
 }
 
 @Composable private fun rememberSaveableState(initial: String) = androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(initial) }
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DevicesScreen(model: WendyModel, setup: () -> Unit, vpn: () -> Unit, address: () -> Unit, accounts: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    var search by remember { mutableStateOf("") }
-    var searching by remember { mutableStateOf(false) }
-    var refreshing by remember { mutableStateOf(false) }
-    val devices = model.devices.distinctBy { it.selector }.filter { search.isEmpty() || it.title.contains(search, true) || it.selector.contains(search, true) }
-    PullToRefreshBox(refreshing, onRefresh = { scope.launch { refreshing = true; model.refresh(); refreshing = false } }) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            item {
-                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF163C31), Color(0xFF0A2722))))) {
-                    DeviceIllustration(Modifier.align(Alignment.CenterEnd).size(160.dp).offset(x = 22.dp, y = 10.dp))
-                    Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Eyebrow("YOUR DEVICE NETWORK", WendyMint)
-                        Text("Your devices.\nWithin reach.", style = MaterialTheme.typography.headlineLarge, color = Color(0xFFF3F8EA), modifier = Modifier.fillMaxWidth(.77f))
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Box(Modifier.size(6.dp).background(WendyLime, androidx.compose.foundation.shape.CircleShape))
-                            Text("${model.devices.distinctBy { it.selector }.size} ${if (model.source == "Cloud") "cloud" else "nearby"} devices", style = MaterialTheme.typography.labelMedium, color = WendyMint)
-                        }
-                    }
-                }
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ActionTile("Set up device", "Pair over Bluetooth", Icons.Outlined.AddCircleOutline, Modifier.weight(1f), setup)
-                    ActionTile("Private network", "Access from other apps", Icons.Outlined.Shield, Modifier.weight(1f), vpn)
-                }
-            }
-            item {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Connections", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                    IconButton(onClick = { searching = !searching; if (!searching) search = "" }) { Icon(if (searching) Icons.Outlined.Close else Icons.Outlined.Search, "Search devices", Modifier.size(21.dp)) }
-                    IconButton(onClick = { model.task { model.refresh() } }) { Icon(Icons.Outlined.Refresh, "Refresh devices", Modifier.size(21.dp)) }
-                }
-                ChoiceTabs(listOf("Nearby", "Cloud"), model.source, model::changeSource)
-                androidx.compose.animation.AnimatedVisibility(searching) {
-                    OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth().padding(top = 12.dp), singleLine = true, placeholder = { Text("Find a device") }, leadingIcon = { Icon(Icons.Outlined.Search, null) })
-                }
-            }
-            model.discoveryError?.let { item { FormSection { FailureNote(it) } } }
-            if (devices.isEmpty()) item {
-                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-                    Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        IconTile(if (model.source == "Cloud") Icons.Outlined.CloudQueue else Icons.Outlined.WifiTethering, Modifier.size(54.dp))
-                        Text(if (search.isNotBlank()) "No matching devices" else if (model.source == "Cloud" && model.account.isBlank()) "Your devices, anywhere" else if (model.source == "Cloud") "No cloud devices yet" else "No devices nearby", style = MaterialTheme.typography.titleMedium)
-                        Text(if (search.isNotBlank()) "Try another name or address." else if (model.source == "Cloud" && model.account.isBlank()) "Sign in to bring your cloud devices here." else "Connect a device on your network, or add one by address.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        if (search.isBlank()) OutlinedButton(onClick = if (model.source == "Cloud" && model.account.isBlank()) accounts else address) { Text(if (model.source == "Cloud" && model.account.isBlank()) "Sign in" else "Connect by address"); Spacer(Modifier.width(8.dp)); Icon(Icons.Outlined.NorthEast, null, Modifier.size(16.dp)) }
-                    }
-                }
-            }
-            items(devices, key = { it.selector }) { device ->
-                val current = model.selected?.selector == device.selector
-                DeviceCard(device, connected = current && model.session != 0L, connecting = current && model.connecting) { model.connect(device) }
-            }
-        }
-    }
-}
 
 @Composable fun PageTitle(title: String, subtitle: String = "") {
     Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {

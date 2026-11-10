@@ -101,6 +101,13 @@ func New() *Client {
 		"ChatModels": b.ChatModels, "StartChat": b.StartChat, "PollChat": b.PollChat, "StopChat": b.StopChat, "ResolveChatApproval": b.ResolveChatApproval,
 		"ModelHardware": b.ModelHardware, "StartModelRun": b.StartModelRun, "ModelRunStatus": b.ModelRunStatus, "CancelModelRun": b.CancelModelRun,
 		"SaveCameraAlignment": b.SaveCameraAlignment, "SaveCameraLens": b.SaveCameraLens,
+		// Calls added with the redesigned iOS app (#2715).
+		"CameraControls": b.CameraControls, "SetWiFiPriority": b.SetWiFiPriority, "StartHostedChat": b.StartHostedChat,
+		"ManageDevice": b.ManageDevice, "PrepareLocalReset": b.PrepareLocalReset, "ResetLocalEnrollment": b.ResetLocalEnrollment,
+		"MobileOSUpdate": b.MobileOSUpdate, "SiteModels": b.SiteModels,
+		"BeginRecordingRead": b.BeginRecordingRead, "EndRecordingRead": b.EndRecordingRead, "RecordingLibrary": b.RecordingLibrary,
+		"RecordingDetails": b.RecordingDetails, "PlayRecording": b.PlayRecording, "ExportRecordings": b.ExportRecordings,
+		"RecordingThumbnail": b.RecordingThumbnail,
 		"Organizations": func(account string) (any, error) {
 			ctx, cancel := cloudContext()
 			defer cancel()

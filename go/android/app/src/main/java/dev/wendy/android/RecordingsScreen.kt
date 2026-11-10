@@ -153,102 +153,118 @@ fun EpisodeScreen(model: WendyModel, episode: String) = EpisodeViewer(model, epi
 fun EpisodeViewer(model: WendyModel, initialEpisode: String?) {
     val context = LocalContext.current
     val session = model.session
-    val scope = rememberCoroutineScope()
     var episodes by remember { mutableStateOf(emptyList<JSONObject>()) }
     var episode by remember { mutableStateOf(initialEpisode ?: "") }
-    var data by remember { mutableStateOf<RecordingSnapshot?>(null) }
-    var track by remember { mutableStateOf("") }
-    var cursor by remember { mutableDoubleStateOf(0.0) }
-    var playing by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(false) }
+    var listed by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var viewport by remember { mutableStateOf(TimelineViewport(0.0, 1.0)) }
-    var exporting by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(0) }
-    LaunchedEffect(session) {
+    LaunchedEffect(session, reload) {
         try {
             var rows = model.backend.call("VisualEpisodes", session).items().sortedByDescending { it.number("started_unix_nanos") }
             if (initialEpisode != null) rows = rows.filter { it.text("id") == initialEpisode }
             episodes = rows
             if (rows.none { it.text("id") == episode }) episode = rows.firstOrNull()?.text("id") ?: ""
             error = null
-        } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message }
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { listed = true }
     }
-    LaunchedEffect(episode, reload) {
-        if (episode.isEmpty()) { data = null; return@LaunchedEffect }
-        loading = true; error = null; playing = false
-        try {
-            val value = withContext(Dispatchers.Default) { RecordingSnapshot(model.backend.call("VisualEpisode", session, episode).obj()) }
-            data?.mediaPaths?.forEach { deleteMedia(context.cacheDir, it) }
-            data = value; cursor = value.start; viewport = TimelineViewport.fitted(value.start, value.end)
-            track = value.videos.firstOrNull()?.track ?: value.tracks.firstOrNull()?.id ?: ""
-        } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { loading = false }
+    Column(Modifier.fillMaxSize()) {
+        if (initialEpisode == null && episodes.isNotEmpty()) Box(Modifier.padding(horizontal = 20.dp)) {
+            ChoiceField("Recording", episodes.map { it.text("id") to "${it.text("name").ifEmpty { it.text("campaign_name").ifEmpty { "Recording" } }} · ${DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it.number("started_unix_nanos") / 1_000_000))}" }, episode) { episode = it }
+        }
+        Box(Modifier.weight(1f)) {
+            val current = episode
+            when {
+                current.isNotEmpty() -> EpisodeSnapshotViewer(model, current, export = { shareExport(model, context, session, current) }) {
+                    RecordingSnapshot(model.backend.call("VisualEpisode", session, current).obj())
+                }
+                error != null -> FailureView("Could not load recordings", error!!) { reload++ }
+                !listed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingRow("Loading recordings…") }
+                else -> EmptyMessage("No recordings", "Campaign recordings will appear here.", Icons.Outlined.VideoLibrary)
+            }
+        }
+    }
+}
+
+/** Loads one recording with [load] and plays it. [key] identifies the recording; [export] adds a share button. */
+@Composable
+fun EpisodeSnapshotViewer(model: WendyModel, key: Any? = Unit, export: (suspend () -> Unit)? = null, load: suspend () -> RecordingSnapshot) {
+    val context = LocalContext.current
+    var data by remember { mutableStateOf<RecordingSnapshot?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(key, reload) {
+        loading = true; error = null
+        try { data = withContext(Dispatchers.Default) { load() } } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { loading = false }
     }
     // Downloaded media belongs to the loaded snapshot and is deleted with it.
     val current = data
     DisposableEffect(current) { onDispose { current?.mediaPaths?.forEach { deleteMedia(context.cacheDir, it) } } }
-    LaunchedEffect(playing) {
-        val snapshot = data ?: return@LaunchedEffect
+    when {
+        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingRow("Loading recording…") }
+        error != null -> FailureView("Could not load recording", error!!) { reload++ }
+        current == null -> EmptyMessage("No recordings", "Campaign recordings will appear here.", Icons.Outlined.VideoLibrary)
+        else -> SnapshotPlayer(model, current, export)
+    }
+}
+
+@Composable
+private fun SnapshotPlayer(model: WendyModel, current: RecordingSnapshot, export: (suspend () -> Unit)?) {
+    val scope = rememberCoroutineScope()
+    var track by remember(current) { mutableStateOf(current.videos.firstOrNull()?.track ?: current.tracks.firstOrNull()?.id ?: "") }
+    var cursor by remember(current) { mutableDoubleStateOf(current.start) }
+    var playing by remember(current) { mutableStateOf(false) }
+    var viewport by remember(current) { mutableStateOf(TimelineViewport.fitted(current.start, current.end)) }
+    var exporting by remember { mutableStateOf(false) }
+    LaunchedEffect(current, playing) {
         if (!playing) return@LaunchedEffect
         val started = System.nanoTime(); val origin = cursor
-        val bounds = TimelineViewport.fitted(snapshot.start, snapshot.end)
+        val bounds = TimelineViewport.fitted(current.start, current.end)
         while (playing) {
-            cursor = min(snapshot.end, origin + (System.nanoTime() - started) / 1e9)
+            cursor = min(current.end, origin + (System.nanoTime() - started) / 1e9)
             viewport = viewport.revealing(cursor, bounds)
-            if (cursor >= snapshot.end) { playing = false; break }
+            if (cursor >= current.end) { playing = false; break }
             delay(33)
         }
     }
     val visible = LocalPageVisible.current
     LaunchedEffect(visible) { if (!visible) playing = false }
     Column(Modifier.fillMaxSize()) {
-        if (initialEpisode == null && episodes.isNotEmpty()) Box(Modifier.padding(horizontal = 20.dp)) {
-            ChoiceField("Recording", episodes.map { it.text("id") to "${it.text("name").ifEmpty { it.text("campaign_name").ifEmpty { "Recording" } }} · ${DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it.number("started_unix_nanos") / 1_000_000))}" }, episode) { episode = it }
-        }
-        when {
-            loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { LoadingRow("Loading recording…") }
-            error != null -> Box(Modifier.weight(1f)) { FailureView("Could not load recording", error!!) { reload++ } }
-            current == null -> Box(Modifier.weight(1f)) { EmptyMessage("No recordings", "Campaign recordings will appear here.", Icons.Outlined.VideoLibrary) }
-            else -> {
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) { ChoiceField("Channel", current.tracks.map { it.id to it.name }, track) { track = it } }
-                        IconButton(onClick = {
-                            if (exporting) return@IconButton
-                            exporting = true
-                            scope.launch {
-                                try { shareExport(model, context, session, episode) } catch (e: CancellationException) { throw e } catch (e: Exception) { model.error = e.message } finally { exporting = false }
-                            }
-                        }, enabled = !exporting) { if (exporting) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Outlined.IosShare, "Export recording") }
-                    }
-                    val selectedTrack = current.tracks.firstOrNull { it.id == track }
-                    val video = current.videos.firstOrNull { it.track == track }
-                    val audio = current.audio.firstOrNull { it.track == track }
-                    val sample = current.latest(track, cursor)
-                    when {
-                        video != null -> if (video.frame(cursor) != null) RecordedVideo(video, cursor, playing) else EmptyMessage("No frame at this time", "Move the cursor to a time with video.", Icons.Outlined.Videocam)
-                        audio != null -> RecordedAudio(audio, cursor, playing)
-                        sample != null && sample.points.isNotEmpty() -> PointCloudView(sample.points, Modifier.fillMaxWidth().aspectRatio(4f / 3f))
-                        sample != null && sample.image.isNotEmpty() -> {
-                            val image = remember(sample) { runCatching { Base64.decode(sample.image, Base64.DEFAULT).let { BitmapFactory.decodeByteArray(it, 0, it.size) } }.getOrNull() }
-                            image?.let { Image(it.asImageBitmap(), selectedTrack?.name, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))) }
-                        }
-                    }
-                    val numeric = remember(current, track) { current.numeric(track) }
-                    if (numeric.size > 1) NumericChart(numeric, viewport, cursor)
-                    if (sample != null) {
-                        Text(sample.label.ifEmpty { selectedTrack?.name ?: "Sample" }, style = MaterialTheme.typography.titleMedium)
-                        if (sample.value != null) Text("${sample.value} ${sample.unit}".trim(), style = MaterialTheme.typography.bodyLarge)
-                        if (sample.points.isNotEmpty()) SecondaryText("${sample.points.size / 3} points · Drag to rotate · Pinch to zoom · Double-tap to reset")
-                        SecondaryText("Recorded at %+.3f s".format(sample.seconds))
-                        if (sample.detail.isNotEmpty()) SelectionContainer { Text(sample.detail, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
-                    } else if (audio == null) SecondaryText("No sample before the cursor")
-                    SecondaryText(current.warnings)
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                RecordingTimeline(current, cursor, { cursor = it; playing = false }, playing, { if (cursor >= current.end) cursor = current.start; playing = !playing }, viewport) { viewport = it }
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { ChoiceField("Channel", current.tracks.map { it.id to it.name }, track) { track = it } }
+                if (export != null) IconButton(onClick = {
+                    if (exporting) return@IconButton
+                    exporting = true
+                    scope.launch { try { export() } catch (e: CancellationException) { throw e } catch (e: Exception) { model.error = e.message } finally { exporting = false } }
+                }, enabled = !exporting) { if (exporting) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Outlined.IosShare, "Export recording") }
             }
+            val selectedTrack = current.tracks.firstOrNull { it.id == track }
+            val video = current.videos.firstOrNull { it.track == track }
+            val audio = current.audio.firstOrNull { it.track == track }
+            val sample = current.latest(track, cursor)
+            when {
+                video != null -> if (video.frame(cursor) != null) RecordedVideo(video, cursor, playing) else EmptyMessage("No frame at this time", "Move the cursor to a time with video.", Icons.Outlined.Videocam)
+                audio != null -> RecordedAudio(audio, cursor, playing)
+                sample != null && sample.points.isNotEmpty() -> PointCloudView(sample.points, Modifier.fillMaxWidth().aspectRatio(4f / 3f))
+                sample != null && sample.image.isNotEmpty() -> {
+                    val image = remember(sample) { runCatching { Base64.decode(sample.image, Base64.DEFAULT).let { BitmapFactory.decodeByteArray(it, 0, it.size) } }.getOrNull() }
+                    image?.let { Image(it.asImageBitmap(), selectedTrack?.name, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))) }
+                }
+            }
+            val numeric = remember(current, track) { current.numeric(track) }
+            if (numeric.size > 1) NumericChart(numeric, viewport, cursor)
+            if (sample != null) {
+                Text(sample.label.ifEmpty { selectedTrack?.name ?: "Sample" }, style = MaterialTheme.typography.titleMedium)
+                if (sample.value != null) Text("${sample.value} ${sample.unit}".trim(), style = MaterialTheme.typography.bodyLarge)
+                if (sample.points.isNotEmpty()) SecondaryText("${sample.points.size / 3} points · Drag to rotate · Pinch to zoom · Double-tap to reset")
+                SecondaryText("Recorded at %+.3f s".format(sample.seconds))
+                if (sample.detail.isNotEmpty()) SelectionContainer { Text(sample.detail, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+            } else if (audio == null) SecondaryText("No sample before the cursor")
+            SecondaryText(current.warnings)
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        RecordingTimeline(current, cursor, { cursor = it; playing = false }, playing, { if (cursor >= current.end) cursor = current.start; playing = !playing }, viewport) { viewport = it }
     }
 }
 
