@@ -98,6 +98,15 @@ import org.json.JSONObject
             if (changing) LinearProgressIndicator(Modifier.fillMaxWidth())
             (localError ?: failure)?.let { FailureNote(it) }
         }
+        val alwaysOn by WendyVpnService.alwaysOn.collectAsState()
+        val lockdown by WendyVpnService.lockdown.collectAsState()
+        SectionCard("Always-on VPN") {
+            Text(if (alwaysOn) "Android keeps Wendy VPN connected and starts it after a restart, using the account selected here."
+                else "Android can keep Wendy VPN connected and start it after a restart. Turn on Always-on VPN for Wendy in Android’s VPN settings.")
+            Text("Leave “Block connections without VPN” off. Wendy reaches the mesh over your normal network.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (lockdown) Text("“Block connections without VPN” is on, so the mesh cannot connect.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            OutlinedButton(onClick = { try { context.startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS)) } catch (e: Exception) { localError = e.message } }) { Text("Open VPN settings") }
+        }
         SectionCard("Automatic internet backup") {
             Text("If your normal internet goes down, Wendy uses an available mesh uplink and switches back when it recovers.")
         }
