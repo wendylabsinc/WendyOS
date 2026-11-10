@@ -24,18 +24,77 @@ class LensTest {
     }
 
     @Test fun recordingEpisodesParseFromTheGoLibrary() {
-        val episode = RecordingItem.parse(JSONObject("""{"ID":"e1","Title":"","Trigger":"person","Kind":"video","Campaign":"door","Started":1700000000123456789,"Bytes":2048,"Duration":12.5}"""))
+        val episode = RecordingEpisode.parse(JSONObject("""{"ID":"e1","Title":"","Trigger":"event:person_detected","Kind":"video","UploadState":"uploaded","Campaign":"door","Started":1700000000123456789,"Bytes":2048,"Duration":12.5,"DetailsLoaded":true,"PreviewCounts":[3,4],"PreviewFile":{"path":"cameras/a.jpg","size":10,"sha256":"00"}}"""))
         assertEquals("e1", episode.id)
-        assertEquals("Recording", episode.title)
-        assertEquals("person", episode.trigger)
+        // An untitled episode shows its ID, as on iOS.
+        assertEquals("e1", episode.title)
+        assertEquals("Person", episode.trigger)
         assertEquals(1700000000123L, episode.started)
-        assertEquals(12.5, episode.duration, 1e-9)
-        // A missing duration is unavailable, as Go reports -1.
-        assertEquals(-1.0, RecordingItem.parse(JSONObject("""{"ID":"e2"}""")).duration, 1e-9)
+        assertEquals(12.5, episode.duration!!, 1e-9)
+        assertEquals(true, episode.synced)
+        assertEquals("door", episode.campaign)
+        assertEquals(listOf(3L, 4L), episode.previewCounts)
+        assertEquals("cameras/a.jpg", JSONObject(episode.previewFile!!).getString("path"))
+        // The list index has no details: no duration, kind or campaign yet.
+        val bare = RecordingEpisode.parse(JSONObject("""{"ID":"e2","Kind":"later-kind","Duration":-1}"""))
+        assertNull(bare.duration); assertNull(bare.campaign); assertNull(bare.synced); assertNull(bare.started)
+        assertEquals("unknown", bare.kind)
+        // Details keep the index row's title, start and size.
+        val detailed = RecordingEpisode.parse(JSONObject("""{"ID":"e2","Title":"other","Started":5,"Bytes":9,"Kind":"audio","DetailsLoaded":true}"""), bare.copy(title = "Kept"))
+        assertEquals("Kept", detailed.title); assertEquals(0L, detailed.startedNanos); assertEquals("audio", detailed.kind)
+    }
+
+    @Test fun triggerLabelsNormalizeLikeIOS() {
+        assertNull(RecordingEpisode.triggerLabel(""))
+        assertEquals("Door opened", RecordingEpisode.triggerLabel("door-open"))
+        assertEquals("Loud sound", RecordingEpisode.triggerLabel("event:loud_sound_detected"))
+        assertEquals("Forklift near dock", RecordingEpisode.triggerLabel("forklift  near_dock"))
+    }
+
+    @Test fun recordingOwnersJoinLanAndCloudRoutes() {
+        val lan = Device("spiffe://wendy.sh/tenant/76/device/42", "pi", "pi.local:50051", "LAN")
+        val cloud = Device("cloud://api.wendy.dev:443/tenant/76/asset/42", "pi", "cloud://api.wendy.dev:443/tenant/76/asset/42", "Cloud")
+        assertEquals("76/42", recordingDeviceID(lan))
+        assertEquals(recordingDeviceID(lan), recordingDeviceID(cloud))
+        assertEquals("pi.local", recordingDeviceID(Device("pi.local", "pi", "pi.local", "LAN")))
+        assertEquals("spiffe://other/tenant/1/device/2", recordingDeviceID(Device("spiffe://other/tenant/1/device/2", "x", "x", "LAN")))
+    }
+
+    @Test fun filteredExportsWaitForEveryDetail() {
+        val device = Device("d", "pi", "pi.local", "LAN")
+        fun episode(id: String, trigger: String?, loaded: Boolean) = RecordingEpisode(id, id, 1, 10, null, trigger, "video", null, emptyList(), loaded, null, null, emptyList())
+        val library = RecordingLibrary(device, null, listOf(episode("a", "Person", true), episode("b", null, false)), null)
+        assertEquals("Details checked: 1 of 2 episodes", library.labelCoverage)
+        assertEquals(emptyList<RecordingEpisode>(), library.exportTargets("Person", null))
+        assertEquals(listOf("a"), library.exportTargets("Person", "a").map { it.id })
+        assertEquals(2, library.exportTargets(null, null).size)
+        assertEquals(listOf("Person" to 1), library.labels)
+    }
+
+    @Test fun activityReceiptsRoundTripAndExpire() {
+        val now = 40L * 24 * 3600 * 1000
+        val old = ArchivedAlert(AlertSummary("a", "Person", "pi", 5), now - 31L * 24 * 3600 * 1000)
+        val fresh = ArchivedAlert(AlertSummary("b", "Update", "pi", null), now - 1000)
+        val receipts = ActivityReceipts(setOf("a"), mapOf("a" to old, "b" to fresh))
+        assertEquals(receipts, ActivityReceipts.parse(receipts.json()))
+        val expired = receipts.expire(now)
+        assertEquals(setOf("b"), expired.archived.keys)
+        assertEquals(setOf("a"), expired.expired)
+        assertEquals(ActivityReceipts(), ActivityReceipts.parse("not json"))
+        assertNotEquals(ActivityReceipts.key("a", "b"), ActivityReceipts.key("a|b", ""))
+    }
+
+    @Test fun alertIDsAndExportNamesAreStable() {
+        val device = Device("spiffe://wendy.sh/tenant/7/device/9", "pi", "pi.local", "LAN")
+        assertEquals("3:7/9:clip.e1", alertID(device, "clip.e1"))
+        assertEquals("Door-cam 2", exportTitle("Door/cam 2"))
+        assertEquals("Recording", exportTitle(""))
+        assertEquals(100, exportTitle("x".repeat(300)).length)
     }
 
     @Test fun recordingKindsAndLabelsMatchIOS() {
         assertEquals("ROS bag", recordingKindTitle("rosbag"))
+        assertEquals(listOf("mixed", "video", "audio", "rosbag", "images", "dataset", "unknown"), recordingKinds)
         assertEquals("Recording", recordingKindTitle("unknown"))
         assertEquals(labelColor("Person"), labelColor("person"))
         assertNotEquals(labelColor("person"), labelColor("motion"))

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/modelhub"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
@@ -107,7 +108,14 @@ func New() *Client {
 		"MobileOSUpdate": b.MobileOSUpdate, "SiteModels": b.SiteModels,
 		"BeginRecordingRead": b.BeginRecordingRead, "EndRecordingRead": b.EndRecordingRead, "RecordingLibrary": b.RecordingLibrary,
 		"RecordingDetails": b.RecordingDetails, "PlayRecording": b.PlayRecording, "ExportRecordings": b.ExportRecordings,
-		"RecordingThumbnail": b.RecordingThumbnail,
+		// Thumbnails carry their format, as the iOS bridge reports it beside the bytes.
+		"RecordingThumbnail": func(id uint64, selector string, secure bool, episode string, file data.File) (map[string]any, error) {
+			raw, err := b.RecordingThumbnail(id, selector, secure, episode, file)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"format": backend.RecordingPreviewFormat(file), "bytes": raw}, nil
+		},
 		"Organizations": func(account string) (any, error) {
 			ctx, cancel := cloudContext()
 			defer cancel()

@@ -170,7 +170,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
         try {
             val fleet = backend.call("Fleet", account, org).obj()
             if (account == this.account && org == organization) {
-                presence = fleet.list("Devices").map { FleetDevice(it.text("ID"), it.text("Name"), it.text("Selector"), it.text("SiteID"), it.text("Site"), it.text("Hardware"), it.text("Address"), it.flag("Online")) }
+                presence = fleet.list("Devices").map { FleetDevice(it.text("ID"), it.text("Name"), it.text("Selector"), it.text("SiteID"), it.text("Site"), it.text("Hardware"), it.text("Address"), it.flag("Online"), it.flag("Lite")) }
                 presenceError = fleet.text("PresenceError"); presenceAt = System.currentTimeMillis()
             }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { presence = null }
