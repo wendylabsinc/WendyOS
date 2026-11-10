@@ -186,7 +186,7 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	// plaintext port (50051) is shut down after provisioning. (On-device containers
 	// with the admin entitlement can reach the agent via the local unix socket.)
 	dialOpt := clouddefaults.TunnelDialer(func(tunnelCtx context.Context) (net.Conn, error) {
-		return asset.openTunnel(tunnelCtx, brokerConn, auth, defaultAgentPort+1)
+		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1)
 	})
 
 	cert := auth.Certificates[0]
@@ -222,15 +222,15 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		agentConn.Host = asset.key
 	}
 	agentConn.CertInfo = &cert
-	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
-		return asset.openTunnel(ctx, brokerConn, auth, uint32(port))
+	agentConn.RegistryDialer = func(registryCtx context.Context, port int) (net.Conn, error) {
+		return asset.openTunnel(carryTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port))
 	}
 	// Pin reconnect to this exact asset (by id) so a post-restart reconnect
 	// can't drift to a different cloud device — the asset name may be empty or
 	// ambiguous, and re-running device discovery while the agent is mid-restart
 	// can match whichever other device happens to be reachable.
 	agentConn.Reconnect = func(rctx context.Context) (*grpcclient.AgentConnection, error) {
-		return asset.reconnect(rctx, auth, brokerURL)
+		return asset.reconnect(carryTunnelSession(rctx, ctx), auth, brokerURL)
 	}
 	if brokerConn != nil {
 		agentConn.AddCloser(brokerConn)
@@ -250,6 +250,8 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 // than a LAN restart wait: the new agent process must first register its
 // presence with the Cloud relay again, and only then can a new tunnel reach it.
 const cloudAgentRestartTimeout = 60 * time.Second
+
+const cloudAgentRestartProbeTimeout = 15 * time.Second
 
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
 	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
@@ -272,11 +274,10 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 		// connect only creates a lazy client, so the tunnel itself (Cloud
 		// authorization, both sides joining the relay, the mTLS handshake) is
 		// built inside the probe RPC. That takes 6-10 s when the device is on a
-		// slow uplink, so the probe gets the whole attempt budget, the same one
-		// `cloud discover` gives a new tunnel to fetch the agent version. A
-		// short probe deadline cancels every attempt and reports a successful
+		// slow uplink, so the probe gets the whole attempt budget. A short
+		// probe deadline cancels every attempt and reports a successful
 		// restart as a timeout.
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudAgentRestartProbeTimeout)
 		conn, err := connect(attemptCtx)
 		if err != nil {
 			attemptCancel()
@@ -357,24 +358,7 @@ func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.C
 	if err != nil {
 		return nil, err
 	}
-	signer, err := tunnelPrincipalSigner(auth)
-	if err != nil {
-		return nil, err
-	}
-	cloudCtx, err := cloudContext(ctx, auth)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := dialCloudGRPC(auth)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	issuer, err := cloudrelay.Issuer(auth.CloudGRPC, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
-	if err != nil {
-		return nil, err
-	}
-	return cloudrelay.OpenTCP(ctx, cloudCtx, conn, &cloudrelay.Verifier{Issuer: issuer}, d.key, service, signer)
+	return openAuthorizedTunnel(ctx, auth, d.key, service)
 }
 
 func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {

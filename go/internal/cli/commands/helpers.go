@@ -576,8 +576,8 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 	if pinKey == "" {
 		pinKey = pinKeyForAddr(address)
 	}
-	if isEnrollmentSelection(ctx) {
-		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, address); handled {
+	if isUnboundSetupSelection(ctx) {
+		if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, address); handled {
 			if err != nil {
 				return false, nil, err
 			}
@@ -926,6 +926,12 @@ type SelectedDevice struct {
 	DefaultSelector string
 	// Explicit enrollment defers saving its verified replacement until old-pin cleanup.
 	recordEnrollmentBinding func(func() error)
+	// unverifiedSetup marks a plaintext connection to an unbound device that
+	// only self-reported NotProvisioned; nothing authenticated the peer.
+	unverifiedSetup bool
+	// unverifiedSetupAccepted records the user's consent to send Wi-Fi
+	// credentials over such a connection.
+	unverifiedSetupAccepted bool
 }
 
 // Close releases any resources held by this SelectedDevice.
@@ -1616,16 +1622,16 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 	if pinKey == "" {
 		pinKey = pinKeyForAddr(addr)
 	}
-	if isEnrollmentSelection(ctx) {
-		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr, lanDialCandidates(ctx, *d.LAN)...); handled {
-			return target, err
-		}
-	}
 	// Feed every interface the device was seen at to the ladder, not just addr:
 	// a device the CLI can reach only over its USB link (WiFi on another net)
 	// advertises both, and dialing addr alone (its unreachable WiFi IP) is what
 	// made `device info/shell/pair` report a reachable device as unreachable.
 	candidates := lanDialCandidates(ctx, *d.LAN)
+	if isUnboundSetupSelection(ctx) {
+		if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, addr, candidates...); handled {
+			return target, err
+		}
+	}
 	dial := func() (*grpcclient.AgentConnection, error) {
 		return connectAgentAtAddressKeyed(ctx, addr, pinKey, func() bool { return mtls }, candidates...)
 	}
@@ -3613,7 +3619,7 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		o(&cfg)
 	}
 	if cfg.enrollmentTrustRecovery {
-		ctx = withEnrollmentSelection(ctx)
+		ctx = withUnboundSetupSelection(ctx)
 	}
 	ctx = robotRuntimePromptContext(ctx, cfg.nonInteractive)
 
@@ -3707,8 +3713,8 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// its retries and the pin check below all use it (see
 		// recheckDialPinKey).
 		pinKey := pinKeyForAddr(addr)
-		if cfg.enrollmentTrustRecovery {
-			if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr); handled {
+		if isUnboundSetupSelection(ctx) {
+			if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, addr); handled {
 				return target, err
 			}
 		}
@@ -4641,7 +4647,9 @@ func connectLocalPickerChoice(ctx context.Context, sel *tui.PickerItem, suppress
 			return picked, err
 		}
 		if d.LAN != nil {
-			if isEnrollmentSelection(ctx) {
+			// Wi-Fi setup keeps the ordinary address walk and Bluetooth
+			// shortcut; its probes and the picked dial try the setup endpoint.
+			if unboundSetupScopeFrom(ctx) == unboundSetupEnrollment {
 				return connectPickedLANDevice(ctx, d, preferredLANAddress(*d.LAN), suppressUpdateCheck)
 			}
 			addr, _, _, err := resolveLANAgentVersion(ctx, *d.LAN)

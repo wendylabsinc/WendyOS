@@ -10,7 +10,7 @@ import (
 
 var (
 	connectPickerEnrollmentFn = func(ctx context.Context, item *tui.PickerItem, suppressUpdateCheck bool) (*SelectedDevice, error) {
-		return connectLocalPickerChoice(withEnrollmentSelection(ctx), item, suppressUpdateCheck)
+		return connectLocalPickerChoice(withUnboundSetupSelection(ctx), item, suppressUpdateCheck)
 	}
 	promptPickerEnrollmentWifiFn = promptWifiIfNeeded
 	runPickerEnrollmentFn        = runEnrollDevice
@@ -34,7 +34,9 @@ func enrollLocalPickerDevice(ctx context.Context, item *tui.PickerItem, auth *co
 		if err != nil {
 			return err
 		}
-		if err := promptPickerEnrollmentWifiFn(ctx, conn); err != nil {
+		// The Wi-Fi prompt asks before sending a password over an unverified
+		// setup connection.
+		if err := promptPickerEnrollmentWifiFn(context.WithValue(ctx, wifiCredentialTargetKey{}, target), conn); err != nil {
 			return err
 		}
 		if target.recordEnrollmentBinding != nil {

@@ -84,8 +84,9 @@ its own permission policy.
 
 Errors carry an `error_code` to branch on: `NOT_CONNECTED`, `DEVICE_UNREACHABLE`,
 `ENTITLEMENT_DENIED`, `RPC_IDENTITY_DENIED`, `AUTH_REQUIRED`, `INVALID_ARGUMENT`, `NOT_FOUND`,
-`MULTIPLE_SESSIONS`, `UNSUPPORTED`, `TIMEOUT`, `CANCELLED`, `INTERNAL`, or
-`DENIED` when a `wendy cloud mcp` relay policy refuses the call.
+`MULTIPLE_SESSIONS`, `UNSUPPORTED`, `TIMEOUT`, `CANCELLED`, `INTERNAL`,
+`CONFIRMATION_REQUIRED`, or `DENIED` when a `wendy cloud mcp` relay policy
+refuses it.
 `RPC_IDENTITY_DENIED` means the caller's certificate role or tenant is refused.
 Use operator credentials for management; app entitlements cannot grant RPC access.
 List results nest rows under one key such as `devices`, `containers` or `logs`. Ask

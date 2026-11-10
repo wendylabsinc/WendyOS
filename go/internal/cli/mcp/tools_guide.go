@@ -202,7 +202,8 @@ these counts do not include unseen stream data. collection_limited marks reachin
 the batch limit; an observation window never proves the stream has no other data. Errors include an error_code you can branch
 on — e.g. NOT_CONNECTED, DEVICE_UNREACHABLE, ENTITLEMENT_DENIED, AUTH_REQUIRED,
 INVALID_ARGUMENT, NOT_FOUND, MULTIPLE_SESSIONS, UNSUPPORTED, TIMEOUT,
-CANCELLED, INTERNAL. Tool annotations mark read-only vs destructive vs mutating
+CANCELLED, INTERNAL, CONFIRMATION_REQUIRED (ask the user, then pass the
+argument the message names). Tool annotations mark read-only vs destructive vs mutating
 operations and whether a tool reaches beyond the connected device (open-world).
 
 ## Documentation
