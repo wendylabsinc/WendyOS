@@ -402,3 +402,46 @@ func TestEnrollmentWifiAsksBeforeUnverifiedPassword(t *testing.T) {
 		})
 	}
 }
+
+// The MCP Wi-Fi tools' device argument reaches a first-boot device the same
+// way the CLI's Wi-Fi commands do, and reports it as unverified.
+func TestMCPWiFiDeviceReachesFirstBootDevice(t *testing.T) {
+	for _, tc := range []struct {
+		state          string
+		wantUnverified bool
+		wantIdentity   bool
+	}{
+		{state: "unprovisioned", wantUnverified: true},
+		{state: "enrolled", wantIdentity: true},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			restoreDeviceGlobals(t)
+			deviceFlag, jsonOutput = "", false
+			addr := serveSetupProbe(t, tc.state)
+			setTempConfig(t, &config.Config{Auth: []config.AuthConfig{{Certificates: []config.CertificateInfo{selfSignedCLICert(t, 2)}}}})
+			setPinCache(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, unverified, err := connectMCPWiFiDevice(ctx, addr)
+			if conn != nil {
+				defer conn.Close()
+			}
+			if tc.wantIdentity {
+				if !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+					t.Fatalf("enrolled device: %v", err)
+				}
+				return
+			}
+			if err != nil || conn == nil || unverified != tc.wantUnverified {
+				t.Fatalf("conn=%v unverified=%v err=%v", conn, unverified, err)
+			}
+			// device_connect keeps refusing the same device.
+			if session, err := connectMCPDevice(ctx, addr); !errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+				if session != nil {
+					session.Close()
+				}
+				t.Fatalf("device_connect inherited the Wi-Fi setup exception: %v", err)
+			}
+		})
+	}
+}
