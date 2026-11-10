@@ -17,6 +17,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 )
 
 type managedCarrier struct {
@@ -35,7 +36,7 @@ func (s *Session) runCarriers(ctx context.Context) error {
 func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) (result error) {
 	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
 		defer func() {
-			fmt.Fprintf(os.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
+			fmt.Fprintf(terminaloutput.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
 		}()
 	}
 	defer func() {
@@ -108,7 +109,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	defer func() { _ = link.Close(); link.Wait() }()
 	peer = link.Peer()
 	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
-		fmt.Fprintf(os.Stderr, "wendy: mesh %s authenticated %s\n", candidate.Transport, peer.Principal())
+		fmt.Fprintf(terminaloutput.Stderr, "wendy: mesh %s authenticated %s\n", candidate.Transport, peer.Principal())
 	}
 	candidate.Authenticated(peer)
 	s.linkMu.Lock()
