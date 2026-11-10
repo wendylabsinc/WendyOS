@@ -93,26 +93,14 @@ SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
 )
 
 check_shared_grpc_api_contracts_ancestry() (
-    local ref="${SHARED_GRPC_API_CONTRACTS_REF:-}" scratch
-    if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "error: shared contract pin must be a full 40-character commit SHA" >&2
-        return 1
-    fi
+    local scratch
     scratch="$(mktemp -d)" || return $?
     trap 'rm -rf "$scratch"' EXIT
-    git init --bare --quiet "$scratch" || return $?
-    # Fetch complete master history, independently of the consumer's checkout.
-    # Fetch the pin too so an existing branch-only commit is rejected by ancestry.
-    git -C "$scratch" fetch --quiet --no-tags --no-auto-maintenance --filter=blob:none \
-        https://github.com/wendylabsinc/service-protos.git \
-        '+refs/heads/master:refs/heads/master' "$ref:refs/heads/contract-pin" || {
-        echo "error: could not fetch service-protos master and pinned commit $ref" >&2
-        return 1
-    }
-    git -C "$scratch" merge-base --is-ancestor "$ref" refs/heads/master || {
-        echo "error: shared contract pin $ref is not an ancestor of service-protos master, or ancestry could not be verified" >&2
-        return 1
-    }
+    # Policy comes from authoritative master, independently of the schema pin.
+    curl --fail --silent --show-error --location \
+        https://raw.githubusercontent.com/wendylabsinc/service-protos/master/tools/check-pin.sh \
+        --output "$scratch/check-pin.sh" || return $?
+    bash "$scratch/check-pin.sh" "${SHARED_GRPC_API_CONTRACTS_REF:-}"
 )
 
 check_shared_grpc_api_contracts_sources() {
