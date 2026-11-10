@@ -24,6 +24,8 @@ class CameraPlayer(context: Context, private val failed: (String) -> Unit, priva
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
     private var waitingForKeyframe = true
+    /** Receives IDR pictures for camera calibration while it has an owner. */
+    @Volatile var calibration: CameraCalibrationFrames? = null
     private val drainOutput = object : Runnable {
         override fun run() {
             val decoder = codec ?: return
@@ -59,6 +61,7 @@ class CameraPlayer(context: Context, private val failed: (String) -> Unit, priva
         if (surface == null || sps == null || pps == null) return
         val keyframe = frame[4].toInt() and 31 == 5
         if (waitingForKeyframe && !keyframe) return
+        if (keyframe) calibration?.takeIf { it.enabled }?.let { frames -> h264Dimensions(sps!!).let { frames.acceptH264(sps!!, pps!!, frame, it.width, it.height) } }
         if (codec == null) {
             val dimensions = h264Dimensions(sps!!)
             post { resized(dimensions.width, dimensions.height) }

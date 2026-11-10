@@ -184,7 +184,8 @@ class ThermalOverlay(frame: JSONObject, private val receivedAt: Long) {
  * One live camera. The tile owns its stream: it starts when shown or played and
  * stops when paused, scrolled away, or when the device session ends.
  */
-@Composable fun CameraTile(model: WendyModel, camera: JSONObject, compact: Boolean = false, onOpen: (() -> Unit)? = null, onExpand: (() -> Unit)? = null) {
+@Composable fun CameraTile(model: WendyModel, camera: JSONObject, compact: Boolean = false, onOpen: (() -> Unit)? = null, onExpand: (() -> Unit)? = null,
+                          calibration: CameraCalibrationFrames? = null, onStream: (Long) -> Unit = {}) {
     val session = model.session
     val id = camera.number("id")
     var running by remember(session, id) { mutableStateOf(true) }
@@ -212,6 +213,7 @@ class ThermalOverlay(frame: JSONObject, private val receivedAt: Long) {
         stream = next
         try { model.backend.call("StartCamera", id, next, session, camera.text("stable_id")) } catch (e: Exception) { if (stream == next) error = e.message }
     }
+    LaunchedEffect(stream) { calibration?.reset(); onStream(stream) }
     DisposableEffect(stream) {
         val current = stream
         if (current != 0L) model.videoConsumers[current] = { value -> if (value.number("Kind") == 6L) { received = true; lastReceived = System.currentTimeMillis(); player?.append(Base64.decode(value.text("Bytes"), Base64.DEFAULT)) } }
@@ -228,7 +230,7 @@ class ThermalOverlay(frame: JSONObject, private val receivedAt: Long) {
         if (event == null) return@LaunchedEffect
         when (event.number("Kind").toInt()) {
             7 -> error = event.text("Text")
-            8 -> { received = true; lastReceived = System.currentTimeMillis(); bitmap = withContext(Dispatchers.Default) { val bytes = Base64.decode(event.text("Bytes"), Base64.DEFAULT); BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }; bitmap?.let { resolution = "${it.width}×${it.height}" } }
+            8 -> { received = true; lastReceived = System.currentTimeMillis(); bitmap = withContext(Dispatchers.Default) { val bytes = Base64.decode(event.text("Bytes"), Base64.DEFAULT); BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also { calibration?.acceptJpeg(it) } }; bitmap?.let { resolution = "${it.width}×${it.height}" } }
             9 -> {
                 val frame = event.child("Thermal")
                 val decoded = withContext(Dispatchers.Default) {
@@ -243,7 +245,8 @@ class ThermalOverlay(frame: JSONObject, private val receivedAt: Long) {
     val name = camera.text("name").ifEmpty { "Camera" }
     val shape = RoundedCornerShape(if (compact) 24.dp else 16.dp)
     Box(Modifier.fillMaxWidth().aspectRatio(4f / 3f).clip(shape).background(Color.Black).let { if (onOpen != null) it.clickable(onClick = onOpen) else it }) {
-        AndroidView(factory = { context -> CameraPlayer(context, { error = it }, { w, h -> resolution = "$w×$h" }).also { player = it } }, modifier = Modifier.fillMaxSize())
+        AndroidView(factory = { context -> CameraPlayer(context, { error = it }, { w, h -> resolution = "$w×$h" }).also { player = it } }, modifier = Modifier.fillMaxSize(),
+            update = { it.calibration = calibration })
         bitmap?.let { image ->
             Image(image.asImageBitmap(), contentDescription = name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
                 filterQuality = if (thermal != null) FilterQuality.None else FilterQuality.Low, alpha = if (thermal?.fresh(now) == false) 0.35f else 1f)
