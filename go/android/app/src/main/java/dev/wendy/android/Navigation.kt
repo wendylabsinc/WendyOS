@@ -13,9 +13,11 @@ import java.util.concurrent.atomic.AtomicLong
  * NavigationStack: the top bar shows [title] and a back arrow, system back pops
  * the page, and [actions] supplies page-specific toolbar buttons.
  */
-class NavPage(title: String, val actions: (@Composable RowScope.() -> Unit)? = null, val scoped: Boolean = false, val content: @Composable () -> Unit) {
+class NavPage(title: String, actions: (@Composable RowScope.() -> Unit)? = null, val scoped: Boolean = false, val content: @Composable () -> Unit) {
     /** Pages may retitle themselves, for example a lens whose title follows its tab. */
     var title by mutableStateOf(title)
+    /** Toolbar buttons; a page may replace them, for example an editor whose Done follows its draft. */
+    var actions by mutableStateOf(actions)
     val key: Long = keys.incrementAndGet()
     private companion object { val keys = AtomicLong() }
 }

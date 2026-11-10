@@ -105,7 +105,7 @@ func New() *Client {
 		// Calls added with the redesigned iOS app (#2715).
 		"CameraControls": b.CameraControls, "SetWiFiPriority": b.SetWiFiPriority, "StartHostedChat": b.StartHostedChat,
 		"ManageDevice": b.ManageDevice, "PrepareLocalReset": b.PrepareLocalReset, "ResetLocalEnrollment": b.ResetLocalEnrollment,
-		"MobileOSUpdate": b.MobileOSUpdate, "SiteModels": b.SiteModels,
+		"MobileOSUpdate": b.MobileOSUpdate, "SiteModels": b.SiteModels, "HomeCampaign": b.HomeCampaign,
 		"BeginRecordingRead": b.BeginRecordingRead, "EndRecordingRead": b.EndRecordingRead, "RecordingLibrary": b.RecordingLibrary,
 		"RecordingDetails": b.RecordingDetails, "PlayRecording": b.PlayRecording, "ExportRecordings": b.ExportRecordings,
 		// Thumbnails carry their format, as the iOS bridge reports it beside the bytes.
