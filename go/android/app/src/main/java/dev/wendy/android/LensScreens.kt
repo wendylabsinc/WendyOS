@@ -264,7 +264,7 @@ fun RecentRecordings(model: WendyModel, openDevice: (Device) -> Unit, recent: Bo
         when {
             session == 0L || device == null || model.lite -> Text("Connect a device to see its recordings.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             error != null -> Box(Modifier.padding(16.dp)) { FailureNote(error!!) }
-            rows == null -> LensLoading("Loading recordings…")
+            rows == null -> LoadingPlaceholder("Loading recordings…", PlaceholderStyle.Recordings, rows = 2, modifier = Modifier.padding(16.dp))
             rows.isEmpty() -> Text("No recordings on ${device.title}.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             else -> (if (recent) rows.take(3) else rows).forEachIndexed { index, episode ->
                 if (index > 0) LensDivider()
@@ -435,7 +435,7 @@ private fun DeviceAppsList(model: WendyModel, device: Device) {
                 val error = model.appsError
                 when {
                     error != null -> Box(Modifier.padding(16.dp)) { FailureNote(error) }
-                    model.visibleApps.isEmpty() && model.detailsSession != model.session -> LensLoading("Loading apps…")
+                    model.visibleApps.isEmpty() && model.detailsSession != model.session -> LoadingPlaceholder("Loading apps…", modifier = Modifier.padding(16.dp))
                     model.visibleApps.isEmpty() -> Text("No visible apps on this device.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (model.hiddenAppCount > 0) Box(Modifier.padding(horizontal = 12.dp)) { ToggleRow("Show hidden apps", model.showHiddenApps, subtitle = "${model.hiddenAppCount} hidden apps") { model.showHiddenApps = it } }

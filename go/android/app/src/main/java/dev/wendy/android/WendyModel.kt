@@ -47,6 +47,8 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     var organizations by mutableStateOf(emptyList<JSONObject>()); private set
     var browserURL by mutableStateOf<String?>(null)
     var appURL by mutableStateOf<String?>(null)
+    /** The app and device whose page [appURL] shows, for the browser's header. */
+    var appPage by mutableStateOf<Pair<String, String>?>(null)
     /** A link the activity should open; loopback app links stay in the in-app browser. */
     var linkRequest by mutableStateOf<String?>(null)
     var loginPending by mutableStateOf(false); private set
@@ -343,7 +345,7 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
     fun openApp(app: String) = task {
         val captured = session
         val url = backend.call("OpenApp", app, captured) as? String ?: return@task
-        if (session == captured) linkRequest = url
+        if (session == captured) { appPage = app to (selected?.title ?: ""); linkRequest = url }
     }
 
     // MARK: Logs

@@ -160,7 +160,7 @@ fun DeviceActivityScreen(model: WendyModel, segment: ActivitySegment, setSegment
                         item(key = "status") {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 when {
-                                    checking && shown.isEmpty() -> Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface) { LensLoading("Checking for alerts…") }
+                                    checking && shown.isEmpty() -> Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface) { LoadingPlaceholder("Checking for alerts…", rows = 2, modifier = Modifier.padding(16.dp)) }
                                     checking -> LensLoading("Checking for alerts…")
                                     shown.isEmpty() -> EmptyMessage(if (incomplete) "No alerts from available devices" else "No alerts", "", Icons.Outlined.Notifications)
                                 }
