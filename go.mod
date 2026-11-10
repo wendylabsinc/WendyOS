@@ -29,7 +29,7 @@ require (
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v29.9.1+incompatible
 	github.com/dustin/go-humanize v1.0.1
-	github.com/ebitengine/oto/v3 v3.4.0
+	github.com/ebitengine/oto/v3 v3.5.1
 	github.com/ebitengine/purego v0.11.3
 	github.com/foxglove/mcap/go/mcap v1.7.4
 	github.com/fsnotify/fsnotify v1.10.1
@@ -131,6 +131,7 @@ require (
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/jfreymuth/pulse v0.1.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
