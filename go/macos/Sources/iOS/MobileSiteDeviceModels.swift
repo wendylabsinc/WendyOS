@@ -6,8 +6,11 @@ private struct DeviceSiteModel: Decodable, Identifiable, Sendable {
     let size: Int64?
 }
 private extension GoClient {
+    // A transfer can take minutes, and the shared request queue runs one call at a time.
+    static let siteModelQueue = DispatchQueue(label: "dev.wendy.site-models", qos: .userInitiated)
+
     func siteModels(session: UInt64, action: String, path: String = "", name: String = "", id: String = "") async throws -> [DeviceSiteModel] {
-        try await perform {
+        try await BlockingWork.run(on: GoClient.siteModelQueue) {
             try Self.withCString(action) { action in
                 try Self.withCString(path) { path in
                     try Self.withCString(name) { name in
