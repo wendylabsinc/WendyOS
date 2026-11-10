@@ -185,7 +185,7 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	// plaintext port (50051) is shut down after provisioning. (On-device containers
 	// with the admin entitlement can reach the agent via the local unix socket.)
 	dialOpt := clouddefaults.TunnelDialer(func(tunnelCtx context.Context) (net.Conn, error) {
-		return asset.openTunnel(carryDesktopTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1)
+		return asset.openTunnel(carryTunnelSession(tunnelCtx, ctx), brokerConn, auth, defaultAgentPort+1)
 	})
 
 	cert := auth.Certificates[0]
@@ -222,14 +222,14 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	}
 	agentConn.CertInfo = &cert
 	agentConn.RegistryDialer = func(registryCtx context.Context, port int) (net.Conn, error) {
-		return asset.openTunnel(carryDesktopTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port))
+		return asset.openTunnel(carryTunnelSession(registryCtx, ctx), brokerConn, auth, uint32(port))
 	}
 	// Pin reconnect to this exact asset (by id) so a post-restart reconnect
 	// can't drift to a different cloud device — the asset name may be empty or
 	// ambiguous, and re-running device discovery while the agent is mid-restart
 	// can match whichever other device happens to be reachable.
 	agentConn.Reconnect = func(rctx context.Context) (*grpcclient.AgentConnection, error) {
-		return asset.reconnect(carryDesktopTunnelSession(rctx, ctx), auth, brokerURL)
+		return asset.reconnect(carryTunnelSession(rctx, ctx), auth, brokerURL)
 	}
 	if brokerConn != nil {
 		agentConn.AddCloser(brokerConn)

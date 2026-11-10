@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestDesktopTunnelSessionReusesConnectionButAuthorizesEveryDial(t *testing.T) {
+func TestTunnelSessionReusesConnectionButAuthorizesEveryDial(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestDesktopTunnelSessionReusesConnectionButAuthorizesEveryDial(t *testing.T
 	auth.CloudGRPC = lis.Addr().String()
 	id := "00000000-0000-4000-8000-000000000042"
 	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
-	var session DesktopTunnelSession
+	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -58,10 +58,10 @@ func TestDesktopTunnelSessionReusesConnectionButAuthorizesEveryDial(t *testing.T
 	}
 }
 
-func TestDesktopTunnelSessionScopeAndLifetime(t *testing.T) {
+func TestTunnelSessionScopeAndLifetime(t *testing.T) {
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = "127.0.0.1:12345"
-	var session DesktopTunnelSession
+	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
 	old := session.Context(t.Context())
@@ -106,10 +106,10 @@ func TestDesktopTunnelSessionScopeAndLifetime(t *testing.T) {
 	}
 }
 
-func TestDesktopTunnelSessionConcurrentReuse(t *testing.T) {
+func TestTunnelSessionConcurrentReuse(t *testing.T) {
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = "127.0.0.1:12345"
-	var session DesktopTunnelSession
+	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
 	ctx := session.Context(t.Context())
@@ -134,7 +134,7 @@ func TestDesktopTunnelSessionConcurrentReuse(t *testing.T) {
 	}
 }
 
-func TestDesktopTunnelSessionPauseCancelsAuthorization(t *testing.T) {
+func TestTunnelSessionPauseCancelsAuthorization(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestDesktopTunnelSessionPauseCancelsAuthorization(t *testing.T) {
 	defer srv.Stop()
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = lis.Addr().String()
-	var session DesktopTunnelSession
+	var session TunnelSession
 	session.SetActive(true)
 	defer session.SetActive(false)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

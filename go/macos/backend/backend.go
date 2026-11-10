@@ -47,7 +47,7 @@ type Backend struct {
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
 	mobileScope             string
-	tunnelSession           commands.DesktopTunnelSession
+	tunnelSession           commands.TunnelSession
 	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun

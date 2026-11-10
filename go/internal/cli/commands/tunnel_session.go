@@ -13,31 +13,31 @@ import (
 	"google.golang.org/grpc"
 )
 
-// DesktopTunnelSession owns authorization transports for one foreground account
+// TunnelSession owns authorization transports for one foreground account
 // scope. It shares setup, never tunnel grants, session keys, or device streams.
 // Call SetActive(false) before changing accounts and on background/shutdown.
-type DesktopTunnelSession struct {
+type TunnelSession struct {
 	mu      sync.Mutex
-	current *desktopTunnelGeneration
+	current *tunnelGeneration
 }
-type desktopTunnelGeneration struct {
+type tunnelGeneration struct {
 	mu      sync.Mutex
 	closed  bool
 	entries map[[32]byte]*tunnelAuthorization
 }
-type desktopTunnelContextKey struct{}
+type tunnelContextKey struct{}
 type tunnelAuthorization struct {
 	conn     *grpc.ClientConn
 	verifier *cloudrelay.Verifier
 	sign     func([]byte) ([]byte, error)
 }
 
-func (s *DesktopTunnelSession) SetActive(active bool) {
+func (s *TunnelSession) SetActive(active bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if active {
 		if s.current == nil {
-			s.current = &desktopTunnelGeneration{entries: make(map[[32]byte]*tunnelAuthorization)}
+			s.current = &tunnelGeneration{entries: make(map[[32]byte]*tunnelAuthorization)}
 		}
 		return
 	}
@@ -55,18 +55,18 @@ func (s *DesktopTunnelSession) SetActive(active bool) {
 
 // Context captures the current generation. Old handles cannot acquire a new
 // account's transport even after the session is resumed.
-func (s *DesktopTunnelSession) Context(ctx context.Context) context.Context {
+func (s *TunnelSession) Context(ctx context.Context) context.Context {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.current
 	if g == nil {
-		g = &desktopTunnelGeneration{closed: true}
+		g = &tunnelGeneration{closed: true}
 	}
-	return context.WithValue(ctx, desktopTunnelContextKey{}, g)
+	return context.WithValue(ctx, tunnelContextKey{}, g)
 }
-func carryDesktopTunnelSession(ctx, source context.Context) context.Context {
-	if g, ok := source.Value(desktopTunnelContextKey{}).(*desktopTunnelGeneration); ok {
-		return context.WithValue(ctx, desktopTunnelContextKey{}, g)
+func carryTunnelSession(ctx, source context.Context) context.Context {
+	if g, ok := source.Value(tunnelContextKey{}).(*tunnelGeneration); ok {
+		return context.WithValue(ctx, tunnelContextKey{}, g)
 	}
 	return ctx
 }
@@ -93,7 +93,7 @@ func tunnelAuthorizationFor(ctx context.Context, auth *config.AuthConfig) (*tunn
 	if err != nil {
 		return nil, nil, err
 	}
-	g, _ := ctx.Value(desktopTunnelContextKey{}).(*desktopTunnelGeneration)
+	g, _ := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
 	if g != nil {
 		g.mu.Lock()
 		defer g.mu.Unlock()
