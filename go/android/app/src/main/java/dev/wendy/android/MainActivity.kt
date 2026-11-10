@@ -123,10 +123,8 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
             Column(Modifier.padding(padding).fillMaxSize()) {
                 if (model.busy > 0 || !model.initialized) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
                 Box(Modifier.weight(1f)) {
-                    // Pushed pages cover the screen; the pane underneath keeps its state.
-                    val showing = top
-                    if (showing != null) key(showing.key) { showing.content() }
-                    else when {
+                    // Pushed pages cover the screen; the pages underneath keep their state.
+                    NavigationHost(nav) { when {
                         !model.initialized -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyMessage("Getting ready", "Your devices will be here in a moment.") }
                         setup == "setup" -> NearbySetupScreen(model) { setup = "" }
                         setup == "vpn" -> VpnScreen(model) { setup = "" }
@@ -140,7 +138,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
                                 else -> ActivityScreen(model) { device -> tab = "Devices"; model.connect(device) }
                             }
                         }
-                    }
+                    } }
                 }
             }
         }

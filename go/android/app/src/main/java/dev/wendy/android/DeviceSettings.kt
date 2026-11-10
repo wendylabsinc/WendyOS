@@ -488,8 +488,9 @@ private fun NetworkTrafficSection(model: WendyModel, session: Long) {
     var error by remember(session) { mutableStateOf<String?>(null) }
     var updated by remember(session) { mutableStateOf<Long?>(null) }
     var virtualOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(session, model.foregroundGeneration) {
-        while (true) {
+    val visible = LocalPageVisible.current
+    LaunchedEffect(session, model.foregroundGeneration, visible) {
+        while (visible) {
             try { snapshot = TrafficSnapshot(model.backend.call("NetworkTraffic", session).obj()); updated = System.currentTimeMillis(); error = null }
             catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message }
             delay(2000)

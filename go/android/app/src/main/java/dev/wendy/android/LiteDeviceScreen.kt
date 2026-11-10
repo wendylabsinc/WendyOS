@@ -115,8 +115,9 @@ private fun LiteTemperaturePage(model: WendyModel) {
     var error by remember { mutableStateOf<String?>(null) }
     var live by remember { mutableStateOf(true) }
     var retry by remember { mutableIntStateOf(0) }
-    LaunchedEffect(session, live, retry) {
-        if (!live) return@LaunchedEffect
+    val visible = LocalPageVisible.current
+    LaunchedEffect(session, live, retry, visible) {
+        if (!live || !visible) return@LaunchedEffect
         try {
             while (true) {
                 sample = model.backend.call("SensorTemperature", session).obj(); received = System.currentTimeMillis(); error = null
