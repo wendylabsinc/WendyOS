@@ -1,10 +1,10 @@
 ---
-title: Camera Feed in TypeScript
+title: Camera feed in TypeScript
 description: Start a live camera feed app using the TypeScript camera template
 language: typescript
 ---
 
-## Live Camera Feed with TypeScript
+## Live camera feed with TypeScript
 
 Use the Wendy camera template when you want a browser-viewable camera stream without wiring the project from scratch. The template ships an Express + WebSocket backend (`src/index.ts`) that runs a GStreamer pipeline to capture MJPEG frames from `/dev/video0` and broadcast them over a `/stream` WebSocket, plus the browser UI (`index.html`, `assets/`), a `Dockerfile`, and a `wendy.json` with the `network` (host mode), `camera`, and `gpu` entitlements.
 
@@ -14,11 +14,11 @@ Use the Wendy camera template when you want a browser-viewable camera stream wit
 - Node.js 22 or later installed
 - A WendyOS device with a USB camera connected
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     ```bash
     wendy init typescript-camera --target wendyos --language node --template camera-feed --var APP_ID=typescript-camera --var PORT=5003 --assistant skip --git-init no
@@ -43,9 +43,9 @@ Use the Wendy camera template when you want a browser-viewable camera stream wit
   </Step>
 </Steps>
 
-## Code Breakdown
-
 The generated `wendy.json` includes a readiness probe on port `5003` and a `postStart` hook that opens your browser automatically once the stream is ready. Otherwise, open the app URL from the Wendy run output to view the stream.
+
+## Code breakdown
 
 The backend in `src/index.ts` does the heavy lifting:
 
@@ -55,3 +55,8 @@ The backend in `src/index.ts` does the heavy lifting:
 - Send a `{"switch_camera": "/dev/videoN"}` message over the WebSocket to switch the active camera.
 
 The runtime image installs the GStreamer plugin set and `v4l-utils` so the pipeline and camera enumeration work on the device.
+
+## Next steps
+
+- Read [hardware access](/docs/hardware) to give an app cameras, microphones, speakers, Bluetooth, or a GPU.
+- Try the [tutorials in other languages](/docs/guides/tutorials).

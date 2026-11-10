@@ -1,18 +1,20 @@
 ---
 title: NVIDIA Jetson Orin Nano
-description: Install WendyOS with full USB recovery, or write rootfs-only media when the Jetson boot firmware is already compatible.
+description: Install WendyOS on a Jetson Orin Nano or AGX Orin developer kit over USB.
 ---
 
 <Figure src="/images/get-started/jetson-orin-nano-wendy-run.webp" alt="Overhead view of a Jetson Orin Nano developer kit with a webcam, connected by USB-C to a laptop whose terminal shows an app being deployed" caption="A Jetson Orin Nano running WendyOS, connected to a laptop by one USB-C cable while an app deploys to it." />
 
-For supported **Jetson Orin Nano developer kits**, current recovery releases
-install the boot firmware and OS together over USB. An NVMe-to-USB adapter is
-needed only for the separate rootfs-only workflow below.
+This page installs WendyOS on a **Jetson Orin Nano developer kit** over USB.
+Current recovery releases install the boot firmware and OS together. An
+NVMe-to-USB adapter is needed only for the separate rootfs-only workflow below.
 
-For **AGX Orin developer kits**, choose `jetson-agx-orin` and select NVMe or eMMC.
-Custom robot carriers need their vendor's procedure. For Unitree G1 PC2, follow
-[Install Wendy Agent on Unitree G1](/docs/installation/wendy-agent-unitree-g1)
-and keep its vendor Ubuntu installation.
+<Callout title="Other Jetson boards">
+  The same steps work for **AGX Orin developer kits**: choose `jetson-agx-orin` and select NVMe or eMMC.
+  Custom robot carriers need their vendor's procedure. For Unitree G1 PC2, follow
+  [Install Wendy Agent on Unitree G1](/docs/installation/wendy-agent-unitree-g1)
+  and keep its vendor Ubuntu installation.
+</Callout>
 
 ## Full USB recovery
 

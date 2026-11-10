@@ -1,10 +1,10 @@
 ---
-title: Bluetooth Discovery
+title: Bluetooth discovery
 description: Build a real-time Bluetooth Low Energy scanner with Server-Sent Events
 language: python
 ---
 
-## Scanning for Bluetooth Devices
+## Scanning for Bluetooth devices
 
 Bluetooth Low Energy (BLE) is essential for IoT applications, from connecting sensors to communicating with wearables. In this guide, we'll build a real-time Bluetooth discovery application that scans for nearby BLE devices and streams the results to a web interface using Server-Sent Events (SSE).
 
@@ -15,11 +15,11 @@ Bluetooth Low Energy (BLE) is essential for IoT applications, from connecting se
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 - Bluetooth hardware on your WendyOS device (built-in or USB adapter)
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Create a Python Wendy project in the current directory:
 
@@ -56,7 +56,7 @@ Bluetooth Low Energy (BLE) is essential for IoT applications, from connecting se
   </Step>
 
   <Step>
-    ### Create the Application
+    ### Create the application
 
     Create an `app.py` file with the Bluetooth scanning logic:
 
@@ -152,7 +152,7 @@ Bluetooth Low Energy (BLE) is essential for IoT applications, from connecting se
   </Step>
 
   <Step>
-    ### Create the Frontend
+    ### Create the frontend
 
     Create an `index.html` file that displays discovered devices in a table:
 
@@ -389,7 +389,7 @@ Bluetooth Low Energy (BLE) is essential for IoT applications, from connecting se
     </Step>
 </Steps>
 
-## Run Again on WendyOS
+## Run on WendyOS
 
 Deploy your Bluetooth scanner to your WendyOS device:
 
@@ -416,7 +416,7 @@ INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 ```
 
-## View Discovered Devices
+## View discovered devices
 
 Your browser will open automatically once the server is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
 
@@ -430,11 +430,11 @@ http://wendyos-humble-pepper.local:8000
 
 You should see a table that populates in real-time as Bluetooth devices are discovered. Devices are sorted by signal strength, with the strongest signals at the top.
 
-## Understanding the Architecture
+## Understanding the architecture
 
 The application uses two complementary patterns for device discovery:
 
-### Server-Sent Events (SSE)
+### Server-sent events (SSE)
 
 The `/events` endpoint uses SSE to stream device discoveries in real-time:
 
@@ -444,7 +444,7 @@ The `/events` endpoint uses SSE to stream device discoveries in real-time:
 4. Keepalive events are sent every second to maintain the connection
 5. Scanning stops after 30 seconds
 
-### One-Shot Discovery
+### One-shot discovery
 
 The `/discovered` endpoint provides a simpler alternative:
 
@@ -452,7 +452,7 @@ The `/discovered` endpoint provides a simpler alternative:
 2. Returns all discovered devices as a JSON array
 3. Useful for polling or when SSE isn't needed
 
-## API Reference
+## API reference
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -460,7 +460,7 @@ The `/discovered` endpoint provides a simpler alternative:
 | `/discovered` | GET | Returns JSON array of devices found in 5-second scan |
 | `/events` | GET | SSE stream of real-time device discoveries |
 
-### Device Object
+### Device object
 
 Each discovered device has the following properties:
 
@@ -478,7 +478,10 @@ Each discovered device has the following properties:
 | `address` | string | Bluetooth MAC address |
 | `rssi` | integer or null | Received Signal Strength Indicator in dBm |
 
-## Next Steps
+## Next steps
+
+- Read [hardware access](/docs/hardware) to give an app cameras, microphones, speakers, Bluetooth, or a GPU.
+- Try the [tutorials in other languages](/docs/guides/tutorials).
 
 Now that you have Bluetooth discovery working:
 
@@ -514,7 +517,7 @@ Now that you have Bluetooth discovery working:
   <Accordion title="Testing Locally Without a Device">
     You can test the application on your development machine if you have Bluetooth hardware:
 
-    ### Using Python Directly
+    ### Using Python directly
 
     ```bash
     pip install -r requirements.txt

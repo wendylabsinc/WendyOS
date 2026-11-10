@@ -50,6 +50,7 @@ const legacyRedirects: Record<string, string> = {
   'advanced/clients/wendy-cli/commands/analytics/disable': '/reference/cli/analytics/disable/',
   'advanced/clients/wendy-cli/commands/analytics/enable': '/reference/cli/analytics/enable/',
   'advanced/clients/wendy-cli/commands/cache/clear': '/reference/cli/cache/clear/',
+  'guides/tutorials/typescript/simple-web-server': '/getting-started/app/',
 };
 
 function getLegacyRedirect(slug?: string[]) {

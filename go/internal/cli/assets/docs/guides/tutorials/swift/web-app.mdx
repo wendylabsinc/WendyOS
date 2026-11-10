@@ -1,10 +1,10 @@
 ---
-title: Full-Stack Web App
+title: Full-stack web app
 description: Build a full-stack device dashboard with a React/Vite frontend and Hummingbird backend
 language: swift
 ---
 
-## Building a Full-Stack Device Dashboard
+## Building a full-stack device dashboard
 
 <Callout type="info">
   **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/swift/web-app](https://github.com/wendylabsinc/samples/tree/main/swift/web-app)
@@ -27,7 +27,65 @@ This demonstrates how to:
 - Swift 6.2 or later installed **via [swiftly](https://www.swift.org/install/)** (Xcode's Swift is not supported)
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 
-## Project Structure
+## Setting up your project
+
+<Steps>
+  <Step>
+    ### Initialize the project
+
+    Start from the Wendy full-stack Swift template:
+
+    ```bash
+    wendy init web-app --target wendyos --language swift --template fullstack --var APP_ID=web-app --var PORT=8000 --var SWIFT_VERSION=6.3 --assistant skip --git-init no
+    cd web-app
+    ```
+
+    <CliShot flow="init" step="wizard" alt="wendy init scaffolding the full-stack Swift web-app project" />
+
+    The template creates `wendy.json`, the Dockerfile, the entire React frontend, and the Swift backend. The sections below explain how the generated full-stack app fits together.
+  </Step>
+
+  <Step>
+    ### Run on WendyOS
+
+    ```bash
+    wendy run
+    ```
+
+    <CliShot flow="run" step="deploy" alt="wendy run building and deploying the full-stack Swift web app" />
+
+    Wendy will build the frontend, build and cross-compile the Swift backend, deploy the container, and stream the run output. Once the readiness probe passes, the `postStart` hook opens the dashboard in your browser.
+  </Step>
+</Steps>
+
+## Test your web app
+
+Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
+
+```
+http://wendyos-true-probe.local:8000
+```
+
+<Callout type="warning">
+  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
+</Callout>
+
+## Test the API directly
+
+```bash
+# System info (host, CPU, memory, disk, uptime)
+curl http://wendyos-true-probe.local:8000/api/system
+
+# List cars (SQLite-backed CRUD)
+curl http://wendyos-true-probe.local:8000/api/cars
+
+# Create a car
+curl -X POST http://wendyos-true-probe.local:8000/api/cars \
+  -H "Content-Type: application/json" \
+  -d '{"make":"Tesla","model":"Model 3","color":"#cc0000","year":2024}'
+```
+
+## Project structure
 
 The template ships a complete frontend under `frontend/` and a Swift backend at the project root. The frontend is built to static assets and copied into the backend image as `./static`:
 
@@ -67,42 +125,11 @@ web-app/
   The generated project contains many more frontend files (the full shadcn/ui component library lives under `frontend/src/components/ui/`). The tree above shows the meaningful structure — you don't build any of it by hand; the template ships the whole thing.
 </Callout>
 
-## Setting Up Your Project
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Initialize the Project
-
-    Start from the Wendy full-stack Swift template:
-
-    ```bash
-    wendy init web-app --target wendyos --language swift --template fullstack --var APP_ID=web-app --var PORT=8000 --var SWIFT_VERSION=6.3 --assistant skip --git-init no
-    cd web-app
-    ```
-
-    <CliShot flow="init" step="wizard" alt="wendy init scaffolding the full-stack Swift web-app project" />
-
-    The template creates `wendy.json`, the Dockerfile, the entire React frontend, and the Swift backend. The sections below explain how the generated full-stack app fits together.
-  </Step>
-
-  <Step>
-    ### Run on WendyOS
-
-    ```bash
-    wendy run
-    ```
-
-    <CliShot flow="run" step="deploy" alt="wendy run building and deploying the full-stack Swift web app" />
-
-    Wendy will build the frontend, build and cross-compile the Swift backend, deploy the container, and stream the run output. Once the readiness probe passes, the `postStart` hook opens the dashboard in your browser.
-  </Step>
-</Steps>
-
-## Code Breakdown
-
-<Steps>
-  <Step>
-    ### Generated Frontend
+    ### Generated frontend
 
     The frontend is a React 19 SPA built with Vite, Tailwind CSS v4, and shadcn/ui. It uses `react-router-dom` v7 for client-side routing and renders a sidebar dashboard. The default route redirects to `/camera`:
 
@@ -148,7 +175,7 @@ web-app/
   </Step>
 
   <Step>
-    ### Generated Backend Package
+    ### Generated backend package
 
     The generated `Package.swift` pulls in Hummingbird (with WebSockets), GRDB for SQLite persistence, and the GStreamer Swift wrapper (Linux only) for camera/audio capture:
 
@@ -189,7 +216,7 @@ web-app/
   </Step>
 
   <Step>
-    ### Generated Backend Routes
+    ### Generated backend routes
 
     `Sources/web-app/App.swift` builds the Hummingbird server on port `8000`. It opens a SQLite database at `/data/cars.db`, wires up the device endpoints, and serves the built SPA from `./static`, falling back to `index.html` for client-side routing:
 
@@ -335,56 +362,11 @@ web-app/
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your full-stack dashboard to your WendyOS device:
-
-```bash
-wendy run
-```
-
-## Test Your Web App
-
-Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
-
-```
-http://wendyos-true-probe.local:8000
-```
-
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
-</Callout>
-
-## Test the API Directly
-
-```bash
-# System info (host, CPU, memory, disk, uptime)
-curl http://wendyos-true-probe.local:8000/api/system
-
-# List cars (SQLite-backed CRUD)
-curl http://wendyos-true-probe.local:8000/api/cars
-
-# Create a car
-curl -X POST http://wendyos-true-probe.local:8000/api/cars \
-  -H "Content-Type: application/json" \
-  -d '{"make":"Tesla","model":"Model 3","color":"#cc0000","year":2024}'
-```
-
-## Learn More
+## Learn more
 
 - [Hummingbird Documentation](https://docs.hummingbird.codes/)
 - [Vite Documentation](https://vitejs.dev/)
 - [shadcn/ui Components](https://ui.shadcn.com/)
-
-## Next Steps
-
-Now that you have a full-stack device dashboard running:
-
-- Add new `/api/*` routes and a matching page in `frontend/src/pages/`
-- Extend the cars example into your own SQLite-backed data model
-- Stream additional device data over WebSockets
-- Add authentication middleware
-- Customize the shadcn/ui theme and sidebar navigation
 
 <Accordions>
   <Accordion title="Testing locally without a WendyOS device">
@@ -398,7 +380,7 @@ Now that you have a full-stack device dashboard running:
     npm run dev
     ```
 
-    ### Build and Run with Docker
+    ### Build and run with Docker
 
     To run the whole stack the same way it runs on a device:
 
@@ -410,3 +392,15 @@ Now that you have a full-stack device dashboard running:
     Then open `http://localhost:8000` in your browser. Note that camera, audio, and GPU endpoints depend on hardware that may not be available on your development machine.
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Continue with [Camera feed in Swift](/docs/guides/tutorials/swift/camera) to stream a USB camera to the browser.
+
+Now that you have a full-stack device dashboard running:
+
+- Add new `/api/*` routes and a matching page in `frontend/src/pages/`
+- Extend the cars example into your own SQLite-backed data model
+- Stream additional device data over WebSockets
+- Add authentication middleware
+- Customize the shadcn/ui theme and sidebar navigation

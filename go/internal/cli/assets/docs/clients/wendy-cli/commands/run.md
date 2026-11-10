@@ -124,7 +124,7 @@ and is omitted when `endpoints` is empty, including when routing cannot be
 determined. A TCP readiness probe alone does not declare an HTTP endpoint.
 
 For user-networked VMs, URLs use the connected VM's live forwarding on host
-loopback. See [VM HTTP verification](../../../installation/wendyos-virtual-machine.mdx#reaching-an-app-you-deployed).
+loopback. See [VM HTTP verification](/docs/installation/simulator-management#reaching-an-app-you-deployed).
 Multi-service and Compose runs emit one group result after the selected services
 start. A partial deployment returns non-zero without a whole-group success
 result. Fleet runs, `--deploy`, watch mode, and local container providers do not
@@ -392,7 +392,7 @@ in the CLI config. The flag always wins over the default. This is a
 per-developer setting rather than a project one, because the right build host
 depends on which network you are on.
 
-For a complete example, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+For a complete example, follow [Build once, deploy to several devices](/docs/guides/fleet-deployment).
 
 ### Requirements
 

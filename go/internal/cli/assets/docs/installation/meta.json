@@ -2,15 +2,14 @@
   "title": "Set up a device",
   "pages": [
     "index",
-    "cli",
-    "agent-assisted-setup",
-    "wendyos-virtual-machine",
-    "so101-simulator",
     "wendyos-nvidia-jetson-orin-nano",
     "wendyos-nvidia-jetson-agx-thor",
     "wendyos-raspberry-pi-5",
     "linux",
     "wendy-agent-macos",
-    "wendy-lite-esp32"
+    "wendy-lite-esp32",
+    "wendyos-virtual-machine",
+    "so101-simulator",
+    "cli"
   ]
 }

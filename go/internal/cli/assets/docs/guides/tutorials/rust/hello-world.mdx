@@ -1,10 +1,10 @@
 ---
-title: Hello World in Rust
+title: Hello world in Rust
 description: Create your first application using Rust
 language: rust
 ---
 
-## Creating Your First Rust Application
+## Creating your first Rust application
 
 This guide will walk you through creating your first WendyOS application in Rust. The Wendy Rust template scaffolds a small, long-running HTTP server (built with [Axum](https://docs.rs/axum/latest/axum/)) so you can prove out the full workflow: build on your machine, deploy over USB or Wi-Fi, and open the running app in your browser.
 
@@ -21,11 +21,11 @@ a local language installation if you choose to run the source outside Docker.
   **Containerized Deployment**: Unlike Swift, which compiles natively for WendyOS, Rust applications run inside containers on your WendyOS device. The Wendy CLI handles the local build setup when deploying Rust applications.
 </Callout>
 
-### Creating the Project
+### Creating the project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy Rust template:
 
@@ -54,11 +54,40 @@ a local language installation if you choose to run the source outside Docker.
   </Step>
 </Steps>
 
-## Code Breakdown
+## What you should see
+
+`wendy run` builds your Docker image, transfers it to your device, and runs it. Once port `4001` is accepting connections, your browser opens automatically to `http://<your-device-hostname>:4001`, where you'll see:
+
+```json
+{"message":"hello-world"}
+```
+
+## Verifying deployment on your device
+
+After deploying your application to a WendyOS device, you can verify it is running by listing the applications on your device:
+
+```bash
+wendy device apps list
+✔︎ Searching for WendyOS devices [5.3s]
+✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
+╭───────────────┬─────────┬─────────┬──────────╮
+│ App           │ Version │ State   │ Failures │
+├───────────────┼─────────┼─────────┼──────────┤
+│ hello-world   │ 0.1.0   │ Running │ 0        │
+╰───────────────┴─────────┴─────────┴──────────╯
+```
+
+<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running hello-world app" />
+
+<Callout type="info">
+  **Expected State**: The app shows as "Running" because it's a long-lived HTTP server — it keeps listening for requests until you stop it. The "Failures" column showing `0` confirms it started cleanly without crashing.
+</Callout>
+
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Explore the Project Structure
+    ### Explore the project structure
 
     The initialized project has this structure:
 
@@ -75,7 +104,7 @@ a local language installation if you choose to run the source outside Docker.
   </Step>
 
   <Step>
-    ### Verify the Code
+    ### Verify the code
 
     The generated `src/main.rs` starts an Axum HTTP server. The root route (`/`) returns a JSON message, and there are also `/health` and `POST /items` routes to demonstrate JSON handling:
 
@@ -216,50 +245,6 @@ a local language installation if you choose to run the source outside Docker.
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your containerized application to your WendyOS device:
-
-```bash
-wendy run
-```
-
-The Wendy CLI will build your Docker image, transfer it to your device, and run it. Once port `4001` is accepting connections, your browser opens automatically to `http://<your-device-hostname>:4001`, where you'll see:
-
-```json
-{"message":"hello-world"}
-```
-
-## Verifying Deployment on Your Device
-
-After deploying your application to a WendyOS device, you can verify it is running by listing the applications on your device:
-
-```bash
-wendy device apps list
-✔︎ Searching for WendyOS devices [5.3s]
-✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
-╭───────────────┬─────────┬─────────┬──────────╮
-│ App           │ Version │ State   │ Failures │
-├───────────────┼─────────┼─────────┼──────────┤
-│ hello-world   │ 0.1.0   │ Running │ 0        │
-╰───────────────┴─────────┴─────────┴──────────╯
-```
-
-<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running hello-world app" />
-
-<Callout type="info">
-  **Expected State**: The app shows as "Running" because it's a long-lived HTTP server — it keeps listening for requests until you stop it. The "Failures" column showing `0` confirms it started cleanly without crashing.
-</Callout>
-
-## Next Steps
-
-Now that you have a basic Rust application running:
-
-- Learn how to build a [Simple Web Server](/docs/guides/tutorials/rust/simple-web-server) with Axum
-- Explore environment variables and configuration
-- Build more complex applications with networking and data processing
-- Integrate with WendyOS device features via HTTP APIs
-
 <Callout type="info">
   **Containerized Deployment**: Rust applications on WendyOS run in containers. This provides isolation and portability while the Wendy CLI manages the deployment workflow.
 </Callout>
@@ -268,7 +253,7 @@ Now that you have a basic Rust application running:
   <Accordion title="Testing the app on your own machine">
     There are times when you might not have a WendyOS device around. You can still run the server locally using Cargo or Docker.
 
-    ### Using Cargo Directly
+    ### Using Cargo directly
 
     Run your application locally using Cargo:
 
@@ -297,7 +282,7 @@ Now that you have a basic Rust application running:
     {"message":"hello-world"}
     ```
 
-    ### Using Docker Locally
+    ### Using Docker locally
 
     Build and run your application in a Docker container:
 
@@ -319,3 +304,12 @@ Now that you have a basic Rust application running:
     ```
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Now that you have a basic Rust application running:
+
+- Learn how to build a [Simple web server](/docs/guides/tutorials/rust/simple-web-server) with Axum
+- Explore environment variables and configuration
+- Build more complex applications with networking and data processing
+- Integrate with WendyOS device features via HTTP APIs
