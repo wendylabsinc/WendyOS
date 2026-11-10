@@ -92,3 +92,5 @@ fun CampaignEditor(model: WendyModel, done: () -> Unit) {
         } }) { Text("Create campaign") }
     }
 }
+
+@Composable fun CampaignEventButton(model: WendyModel) {}
