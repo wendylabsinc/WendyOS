@@ -15,7 +15,8 @@ enum LocalCLIAssertions {
 
     static func prepare(_ cli: WendyE2ESession, config: String? = config) async throws {
         let home = try #require(cli.env["HOME"], "These specs require an isolated scenario HOME")
-        let separator = cli.machine.os == .windows ? "\\" : "/"
+        // Match CLIAndAgentScenario's path spelling, including C:/ roots on Windows.
+        let separator = home.contains("\\") && !home.contains("/") ? "\\" : "/"
         try #require(cli.workingDirectory == home + separator + "work")
         try await cli.sh(
             posix:
