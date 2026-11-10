@@ -9,11 +9,12 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 )
 
 // VerifiedOperator is a primary client-auth credential-path snapshot. It cannot
 // be constructed by role strings. Reverify against current local trust after a
-// trust/credential change or CRL refresh. The snapshot expires by CRL NextUpdate;
+// trust/credential change or CRL refresh. A listed certificate is refused;
 // active mesh carriers also revalidate the original chain during maintenance.
 type VerifiedOperator struct {
 	operator  Operator
@@ -118,7 +119,7 @@ func verifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tena
 		base = policy.BaseTime(now)
 		leafNow = policy.LeafTimeAtBase(base, leaf.NotBefore)
 	}
-	window, err := certs.VerifyLivePeerCertificateChainWindow(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, base, leafNow)
+	window, err := certs.VerifyLivePeerCertificateChainWindow(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, base, leafNow, revocation.RevokedOnly)
 	if err != nil {
 		return result, err
 	}

@@ -161,6 +161,17 @@ func main() {
 	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
 		configPath = envPath
 	}
+	// Before any credential is loaded or verified: persisted CRLs and their
+	// number floor must survive a restart, and an offline boot starts from them.
+	crlConfig := revocation.ConfigFromEnv(filepath.Join(configPath, "crl"))
+	crlConfig.Logf = logger.Sugar().Warnf
+	if err := revocation.Default.Configure(crlConfig); err != nil {
+		logger.Warn("Certificate revocation lists will not persist across restarts", zap.Error(err))
+		crlConfig.Dir = ""
+		if err := revocation.Default.Configure(crlConfig); err != nil {
+			logger.Fatal("Invalid certificate revocation configuration", zap.Error(err))
+		}
+	}
 	accessPolicy, err := networkaccess.Load(configPath)
 	if err != nil {
 		logger.Fatal("Invalid network access configuration", zap.Error(err))

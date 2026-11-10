@@ -297,20 +297,19 @@ bytes. The key includes every presented DER entry, including unused issuers.
 Current leaf validity, the verified path's expiry, full principal and tenant, and
 the configured identity authorization callback still run on every lookup. The
 independent certificate lifetime policy still limits leaf validity windows.
-Live verifiers also require fresh issuer-signed CRLs for certificates carrying
-CRL distribution URLs. Agent and CLI refresh registered URLs every five minutes
-or halfway to `NextUpdate`, whichever comes first. Accepted CRL changes invalidate
-cached paths immediately, and path-cache deadlines never exceed `NextUpdate`.
-Every second, the node checks its own identity and each carrier's original
-certificate chain. A revoked carrier closes and loses its Babel link and
-forwarding interface. A renewed leaf for the same principal does not rescue an
-old carrier. Directory and route-authority lookups also reject revoked identities.
+Live verifiers also consult issuer-signed CRLs. Agent and CLI refresh registered
+URLs every five minutes or halfway to `NextUpdate`, whichever comes first.
+Accepted CRL changes invalidate cached paths immediately. Every second, the node
+checks each carrier's original certificate chain. A carrier whose certificate a
+verified CRL lists closes and loses its Babel link and forwarding interface. A
+renewed leaf for the same principal does not rescue an old carrier. Directory
+and route-authority lookups also reject revoked identities.
 
-The CRL cache is process-local. Fresh cached evidence permits temporary outages;
-a cold cache, expired evidence, or invalid response denies admission. Certificates
-without distribution URLs retain their previous policy. See
-[CRL verification](../../shared/revocation/README.md) for fetch limits, offline
-behavior, and scope. Rollback of the verifier's actual clock
+Only positive revocation closes a carrier. A missing, unreachable or expired CRL
+never does, so an outage or an offline site keeps its mesh, and the node does
+not judge its own identity. Verified CRLs persist across restarts. See
+[CRL verification](../../shared/revocation/README.md) for the evidence levels,
+fetch limits and scope. Rollback of the verifier's actual clock
 forces a fresh path check. Concurrent callers' snapshot timestamps retain their
 own validity bounds without evicting newer proofs or extending cache lifetimes.
 Failed checks are not cached, and new credentials or trust create a fresh cache.

@@ -47,7 +47,17 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 		}
 		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})...)
 	}
-	return tls.X509KeyPair(bundle, []byte(keyPEM))
+	pair, err := tls.X509KeyPair(bundle, []byte(keyPEM))
+	if err != nil {
+		return pair, err
+	}
+	// Carry the issuer CRL this machine already holds, so an offline peer can
+	// judge the credential without fetching. The roots dropped from the bundle
+	// above still identify which CRL that is.
+	if parsed, err := x509.ParseCertificate(leafBlock.Bytes); err == nil {
+		pair.OCSPStaple = revocation.Default.Staple(append(append([]*x509.Certificate{parsed}, embedded...), chain...))
+	}
+	return pair, nil
 }
 
 // VerifyPeerCertificateChain verifies signatures through peer-supplied issuers
@@ -71,26 +81,29 @@ func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x5
 // VerifyPeerCertificateChainWindow additionally returns the latest NotBefore
 // on the exact successful path, for signed claim validity-window checks.
 func VerifyPeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (CertificateWindow, error) {
-	return verifyPeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow, false)
+	return verifyPeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow, nil)
 }
 
-// VerifyLivePeerCertificateChainWindow also checks current issuer-signed CRLs.
-// Historical receipts must use the pure VerifyPeerCertificateChainWindow.
-func VerifyLivePeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (CertificateWindow, error) {
-	return verifyPeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow, true)
+// VerifyLivePeerCertificateChainWindow also applies CRL evidence at the given
+// level. Historical receipts must use the pure VerifyPeerCertificateChainWindow.
+func VerifyLivePeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time, level revocation.Level) (CertificateWindow, error) {
+	return verifyPeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow, &level)
 }
 
+// VerifyLivePeerCertificateChainExpiry and VerifyLivePeerCertificateChain are
+// for device and server certificates: they refuse only a certificate that a
+// verified CRL lists, never one whose evidence is missing or expired.
 func VerifyLivePeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (time.Time, error) {
-	window, err := VerifyLivePeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow)
+	window, err := VerifyLivePeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow, revocation.RevokedOnly)
 	return window.NotAfter, err
 }
 
 func VerifyLivePeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) error {
-	_, err := VerifyLivePeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow)
+	_, err := VerifyLivePeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow, revocation.RevokedOnly)
 	return err
 }
 
-func verifyPeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time, live bool) (CertificateWindow, error) {
+func verifyPeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time, live *revocation.Level) (CertificateWindow, error) {
 	if len(peers) > 32 {
 		return CertificateWindow{}, fmt.Errorf("too many peer certificates")
 	}
@@ -101,14 +114,14 @@ func verifyPeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x5
 		return CertificateWindow{}, fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
 	}
 	revoked := func(window CertificateWindow, child, ca *x509.Certificate) (CertificateWindow, error) {
-		if !live {
+		if live == nil {
 			return window, nil
 		}
-		deadline, err := revocation.Default.CheckPath([]*x509.Certificate{child, ca}, now)
-		if err != nil {
+		// The signature from ca over child was verified just above.
+		if err := revocation.Default.Check(child, ca, now, *live); err != nil {
 			return CertificateWindow{}, err
 		}
-		return window.Intersect(CertificateWindow{NotBefore: window.NotBefore, NotAfter: deadline}), nil
+		return window, nil
 	}
 	candidates := append(append([]*x509.Certificate(nil), roots...), peers...)
 	seen := map[string]bool{}

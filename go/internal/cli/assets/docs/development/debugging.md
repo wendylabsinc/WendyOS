@@ -59,6 +59,8 @@ All environment variables are read at startup. Restart the agent after changing 
 | `WENDY_CONTAINERD_ADDR` | _(containerd default)_ | Unix socket path for the containerd client |
 | `WENDY_REGISTRY_ADDR` | _(internal default)_ | Address for the embedded OCI registry |
 | `WENDY_BROKER_URL` | _(derived from cloud host)_ | WebSocket URL for the cloud tunnel broker |
+| `WENDY_CRL_GRACE` | _(unset)_ | How long past a certificate revocation list's expiry new operator sessions are still admitted, as a Go duration such as `72h`. Unset, an expired or missing list is logged and never refuses a session; a listed certificate is always refused |
+| `WENDY_CRL_MIRROR` | _(certificate URL)_ | Base URL replacing the scheme and host of the revocation list URL in certificates, for self-hosted, proxied and NAT64 sites. Also read by the CLI |
 | `WENDY_OTEL_PORT` | `4317` | Port for the OTEL gRPC receiver |
 | `WENDY_OTEL_HTTP_PORT` | `4318` | Port for the OTEL HTTP/protobuf receiver |
 | `WENDY_MTLS_ORG_ENFORCEMENT` | `strict` | mTLS client organization enforcement on the device's mTLS gate: `off` (no org check), `grace` (reject any client cert whose organization differs from the device's own org, but allow legacy certs that carry no org identity), `strict` (as `grace`, and additionally reject certs that carry no org identity). Unrecognized values also default to `strict`. See note below. |

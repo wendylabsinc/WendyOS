@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/memguard"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -45,6 +47,15 @@ func main() {
 	// context, keeps Ctrl+C effective no matter how many TUIs have already run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Persisted CRLs let a command start warm and staple evidence to devices
+	// that cannot fetch it. Without a config directory they stay in memory.
+	crlConfig := revocation.ConfigFromEnv("")
+	if dir, err := config.ConfigDir(); err == nil {
+		crlConfig.Dir = filepath.Join(dir, "crl")
+	}
+	if err := revocation.Default.Configure(crlConfig); err != nil {
+		_, _ = os.Stderr.WriteString("warning: certificate revocation settings ignored: " + err.Error() + "\n")
+	}
 	go revocation.Default.Run(ctx)
 
 	executed, err := executeInvocation(ctx, cmd, os.Args[1:])

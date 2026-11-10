@@ -298,6 +298,7 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			return fmt.Errorf("device presented no TLS certificate")
 		}
 		leaf := cs.PeerCertificates[0]
+		revocation.Default.Offer(cs.OCSPResponse)
 
 		// Best-effort: surface the server's observed Wendy identity before any
 		// verification step so callers can report a cross-org mismatch even when
@@ -337,7 +338,9 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		}
 
 		if stdErr == nil {
-			if _, err := revocation.Default.CheckPaths(paths, time.Now()); err != nil {
+			// A device certificate is refused only on positive evidence: the
+			// CLI must still reach a device it cannot fetch a CRL for.
+			if err := revocation.Default.CheckPaths(paths, time.Now(), revocation.RevokedOnly); err != nil {
 				return err
 			}
 		}

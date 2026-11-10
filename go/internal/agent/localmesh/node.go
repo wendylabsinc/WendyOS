@@ -21,6 +21,7 @@ import (
 	quic "github.com/quic-go/quic-go"
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 )
 
 type nodePeer struct {
@@ -1268,21 +1269,21 @@ func (n *Node) Send(d babel.Datagram) error {
 }
 
 // Recheck the actual carrier certificate, not a newer leaf for the same
-// principal learned through gossip. Closing and removing the link withdraws
-// routes and tears down its forwarding interface through the normal owner.
+// principal learned through gossip. Only positive revocation evidence closes
+// an established carrier: an expired or unreachable CRL must not take a site's
+// mesh down, and the node never judges its own identity here. Closing and
+// removing the link withdraws routes and tears down its forwarding interface
+// through the normal owner.
 func (n *Node) revalidatePeerCertificates(now time.Time) error {
-	if _, err := n.Credentials.Verify(n.Credentials.Certificate.Certificate, now); err != nil {
-		return fmt.Errorf("mesh local credential: %w", err)
-	}
 	for id, p := range n.peers {
 		if len(p.authenticatedChain) == 0 {
 			continue
 		}
-		identity, err := n.Credentials.VerifyTLS(p.authenticatedChain, now)
-		if err == nil && identity.Device.Principal() == p.device.Principal() {
+		_, err := n.Credentials.VerifyTLS(p.authenticatedChain, now)
+		if !errors.Is(err, revocation.ErrRevoked) {
 			continue
 		}
-		n.closePeer(p, "certificate-revalidation", err)
+		n.closePeer(p, "certificate-revoked", err)
 		if err := n.handle(nodeEvent{id: id, remove: true}); err != nil {
 			return err
 		}

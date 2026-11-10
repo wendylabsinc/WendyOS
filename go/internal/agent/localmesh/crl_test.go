@@ -108,6 +108,20 @@ func TestCRLRefreshRemovesMeshCarrierAndCachedRoutes(t *testing.T) {
 			if link.closed {
 				t.Fatal("valid carrier closed")
 			}
+			// An outage that outlasts the CRL is not a revocation, even for a
+			// fleet that demands fresh evidence for new sessions: the carrier
+			// stays, so a CDN failure cannot take a whole site's mesh down.
+			if err = revocation.Default.Configure(revocation.Config{Grace: 0}); err != nil {
+				t.Fatal(err)
+			}
+			p.Respond(nil, 503)
+			revocation.Default.Refresh(context.Background())
+			if err = node.revalidatePeerCertificates(now.Add(3 * time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if link.closed || len(node.peers) != 1 {
+				t.Fatal("carrier closed without positive revocation evidence")
+			}
 			// A renewed credential for the same principal must not rescue the old
 			// authenticated carrier. Admission remains bound to serial 42.
 			replacement := p.Issue(t, 43, principal)
