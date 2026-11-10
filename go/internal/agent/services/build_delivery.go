@@ -118,7 +118,7 @@ func meshTargetDialer(peers PeerDialer, resolve func(string) (DeliveryTarget, er
 		if err != nil {
 			return nil, err
 		}
-		resolved, err := resolveBuildDeliveryTarget(ctx, resolve, target.GetAssetUuid())
+		resolved, err := resolve(target.GetAssetUuid())
 		if err != nil {
 			return nil, fmt.Errorf("resolving delivery target device %s: %w", target.GetAssetUuid(), err)
 		}

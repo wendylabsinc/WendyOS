@@ -131,8 +131,7 @@ type BuildServiceOptions struct {
 	// ResolveTarget requires the canonical device UUID to be present in this
 	// tenant's Cloud roster and returns its full device principal. Cloud's
 	// asset UUID is that same device UUID; the lookup remains the build host's
-	// membership gate for legacy/test delivery. Verified operator assignments
-	// supply an exact target independently of Cloud, including after restart.
+	// membership gate for delivery targets.
 	ResolveTarget func(assetUUID string) (DeliveryTarget, error)
 	// PushTLS supplies the TLS config for the delivery hop, PINNED to the
 	// resolved device it is meant to reach.
@@ -504,7 +503,7 @@ func (s *BuildService) BuildImage(stream agentpbv2.WendyBuildService_BuildImageS
 			return err
 		}
 	}
-	if ctx, err = s.verifyDeliveryAssignments(ctx, spec, targets); err != nil {
+	if err = s.verifyDeliveryAssignments(spec, targets); err != nil {
 		return err
 	}
 	// Duplicates would push the same image to the same device twice and report
@@ -562,7 +561,7 @@ func (s *BuildService) BuildImage(stream agentpbv2.WendyBuildService_BuildImageS
 	// validated up front: a build that cannot be delivered is wasted minutes on
 	// a machine other people share.
 	for _, t := range targets {
-		resolved, err := resolveBuildDeliveryTarget(ctx, s.resolveTarget, t.GetAssetUuid())
+		resolved, err := s.resolveTarget(t.GetAssetUuid())
 		if err != nil {
 			return status.Errorf(codes.FailedPrecondition, "resolving delivery target device %s: %v", t.GetAssetUuid(), err)
 		}
@@ -794,7 +793,7 @@ func (s *BuildService) buildAndDeliver(
 ) (buildErr, deliveryErr error) {
 	// Resolved against this tenant's roster, then pinned to that device's
 	// principal, so only that device can terminate the registry hop.
-	resolved, err := resolveBuildDeliveryTarget(ctx, s.resolveTarget, target.GetAssetUuid())
+	resolved, err := s.resolveTarget(target.GetAssetUuid())
 	if err != nil {
 		return nil, fmt.Errorf("resolving delivery target device %s: %w", target.GetAssetUuid(), err)
 	}

@@ -77,7 +77,6 @@ func newAuthCmd() *cobra.Command {
 		newAuthLoginCmd(),
 		newAuthLogoutCmd(),
 		newAuthRefreshCertsCmd(),
-		newAuthPrepareBuildDeliveryCmd(),
 		newAuthStatusCmd(),
 		newAuthUseCmd(),
 		newAuthRenameCmd(),
@@ -397,9 +396,6 @@ func newAuthLogoutCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 			config.DeleteStoredSecrets(&config.Config{Auth: entries})
-			if err := clearDeliveryCredentials(); err != nil {
-				return err
-			}
 
 			// A prepared session broker retains an authenticated device
 			// transport; logging out must sever that too, not just future

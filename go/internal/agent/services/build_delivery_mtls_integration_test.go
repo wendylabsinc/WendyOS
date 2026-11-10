@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -74,7 +75,7 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 	target, builder := f.TargetID, mustDeliveryDevice(t, deliverypki.BuilderPrincipal)
 	targetCert, targetKey := f.Target.PEM, f.Target.Key
 	builderCert, builderKey := f.Builder.PEM, f.Builder.Key
-	primary := f.Mint(t, deliverypki.OperatorPrincipal, nil)
+	primary := f.Mint(t, deliverypki.OperatorPrincipal)
 	operatorCert, operatorKey := primary.PEM, primary.Key
 	targetManager := f.Manager(t)
 	workerManager := delivery.NewManager(t.TempDir(), "localhost:5000/", func() (string, string) { return builderCert, rootPEM })
@@ -140,6 +141,12 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 	}
 	svc := services.NewBuildService(logger, services.BuildServiceOptions{
 		ConfigPath: buildConfig, StateDir: t.TempDir(), BuildkitAddress: buildkitAddr, DeliverySource: workerManager.Get,
+		ResolveTarget: func(id string) (services.DeliveryTarget, error) {
+			if id != target.UUID().String() {
+				return services.DeliveryTarget{}, fmt.Errorf("unknown target %s", id)
+			}
+			return services.DeliveryTarget{Device: target, AssetUUID: id}, nil
+		},
 		Chunks: deliveryContext(contextTar.Bytes()), Peers: deliveryPeer{agent: targetAddr, registry: "127.0.0.1:5000"}, PushTLS: pushTLS,
 	})
 	builderAddr := start(builderCert, builderKey, func(s *grpc.Server) { agentpbv2.RegisterWendyBuildServiceServer(s, svc) })

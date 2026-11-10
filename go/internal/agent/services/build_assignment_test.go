@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-func TestBuildHostRequiresMatchingAssignmentAndDurableTargetAdmission(t *testing.T) {
+func TestBuildHostRequiresMatchingOperatorAssignment(t *testing.T) {
 	l := newDeliveryRPCLab(t)
 	worker := delivery.NewManager(t.TempDir(), "localhost:5000/", func() (string, string) { return l.f.Builder.PEM, l.f.Chain })
 	t.Cleanup(worker.Close)
@@ -33,26 +33,32 @@ func TestBuildHostRequiresMatchingAssignmentAndDurableTargetAdmission(t *testing
 	spec.PushTarget.DeliveryAuthorizationJws = compact
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := svc.verifyDeliveryAssignments(ctx, spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
-		t.Fatal("unadmitted assignment accepted")
+	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
+		t.Fatal("assignment without a session accepted")
 	}
 	admitted, err := agentpbv2.NewWendyBuildDeliveryServiceClient(l.operator).AdmitDelivery(ctx, &agentpbv2.AdmitDeliveryRequest{AuthorizationJws: compact})
 	if err != nil {
 		t.Fatal(err)
 	}
 	spec.PushTarget.DeliverySession = admitted.GetSession()
-	if _, err := svc.verifyDeliveryAssignments(ctx, spec, []*agentpbv2.PushTarget{spec.PushTarget}); err != nil {
+	// The target enforces timely admission at delivery. Verification before
+	// building must not add a new build-host-to-target connectivity requirement.
+	svc.dialTarget = func(context.Context, *agentpbv2.PushTarget) (*grpc.ClientConn, error) {
+		t.Fatal("assignment verification contacted the target")
+		return nil, nil
+	}
+	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); err != nil {
 		t.Fatal(err)
 	}
 	spec.Platform = "linux/amd64"
-	if _, err := svc.verifyDeliveryAssignments(ctx, spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
+	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
 		t.Fatal("changed build accepted")
 	}
 	spec.Platform = "linux/arm64"
 	rotated := delivery.NewManager(t.TempDir(), "localhost:5000/", func() (string, string) { return l.f.OtherBuilder.PEM, l.f.Chain })
 	t.Cleanup(rotated.Close)
 	svc.deliverySource = rotated.Get
-	if _, err := svc.verifyDeliveryAssignments(ctx, spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
+	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
 		t.Fatal("rotated builder key accepted")
 	}
 }

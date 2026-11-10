@@ -71,9 +71,9 @@ The CLI refuses a host or target without operator authorization support. Switchi
 to registry delivery does not bypass that requirement.
 
 Before submitting a build, the CLI verifies the builder's public certificate
-against its locally trusted PKI and selected device identity. It obtains a
-short-lived operator certificate carrying `deployment:create` for each target,
-then signs and admits a separate job on each target. The job binds the build
+against its locally trusted PKI and selected device identity. It uses the existing
+operator certificate to sign and admit a separate job on each target, without
+requesting an additional certificate from Cloud. The job binds the build
 inputs, builder identity and public key, exact image reference, previous image
 digest, a 64 GiB transfer budget and a delivery deadline of 24 hours. An intervening
 change to the image reference causes publication to fail rather than overwrite it.
@@ -84,31 +84,10 @@ operator certificate chain; the operator's signing key stays on the CLI machine.
 The contract authorizes delivery of a build whose output digest is not yet known.
 It is independent of image signing.
 
-For an airgapped deployment, prepare a target-scoped operator credential while
-Cloud is reachable:
-
-```sh
-wendy auth prepare-build-delivery --device camera-one
-```
-
-The command prints its admission deadline (at most 15 minutes). Create the job
-before that deadline, using `--skip-cloud-registration` if Cloud is unavailable.
-The target must be reachable to admit the job. After admission, delivery and
-retries use the target's durable record and can continue without Cloud or the
-operator connection until the job deadline, including after the signing
-certificate expires. The worker uses the signed target identity and authenticated
-LAN or mesh routing, so it does not need a fresh Cloud roster after restarting.
-Base images and other build dependencies must also be available locally.
-
 This separates delivery authority from the operator connection; it does not add a
 job queue. The current `BuildImage` RPC remains a streamed build and cancels when
 its CLI connection is closed. A queued worker must retain the signed assignment
 and admitted session when scheduling delivery later.
-
-The cached credential uses the platform credential store when available, with
-the same owner-only file fallback as other CLI credentials. `wendy auth logout`
-removes cached delivery signing credentials. Already admitted jobs remain valid
-until their deadline or the target's enrollment reset.
 
 A builder certificate renewed with the same key can continue the job. A key
 rotation requires a new job authorization; current agent renewal rekeys, so a job

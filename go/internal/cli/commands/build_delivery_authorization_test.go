@@ -31,18 +31,15 @@ func (absentDeliveryImage) ImageDigest(context.Context, string) (string, error) 
 }
 
 // Real operator mTLS connects the CLI to two independently enrolled agents.
-// A previously prepared entitlement credential allows creation without Cloud.
-func TestAuthorizeRemoteBuildOfflineWithRealAgentTLS(t *testing.T) {
+// No Cloud session, certificate issuer or delivery-credential cache is present.
+// The CLI must sign using the existing management operator certificate.
+func TestAuthorizeRemoteBuildWithExistingOperatorCertificate(t *testing.T) {
 	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	t.Setenv("WENDY_SECRET_STORE", "file")
 	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
 	f := deliverypki.New(t)
-	primary := f.Mint(t, deliverypki.OperatorPrincipal, nil)
+	primary := f.Mint(t, deliverypki.OperatorPrincipal)
 	operator := &config.CertificateInfo{PemCertificate: primary.PEM, PemCertificateChain: f.Chain, PemPrivateKey: primary.Key, PrincipalURI: deliverypki.OperatorPrincipal}
-	entitled := &config.CertificateInfo{PemCertificate: f.Operator.PEM, PemCertificateChain: f.Chain, PemPrivateKey: f.Operator.Key, PrincipalURI: deliverypki.OperatorPrincipal}
-	if err := saveDeliveryCredential(deliverypki.OperatorPrincipal, f.TargetID, entitled); err != nil {
-		t.Fatal(err)
-	}
 	targetManager := f.Manager(t)
 	workerManager := delivery.NewManager(t.TempDir(), "localhost:5000/", func() (string, string) { return f.Builder.PEM, f.Chain })
 	t.Cleanup(workerManager.Close)
@@ -103,11 +100,5 @@ func TestAuthorizeRemoteBuildOfflineWithRealAgentTLS(t *testing.T) {
 	changed, _ := buildassignment.InputSHA256(spec)
 	if _, err := builddelivery.VerifyBuildBinding(spec.PushTarget.DeliveryAuthorizationJws, spec.PushTarget.DeliverySession, changed, []*x509.Certificate{f.Root}, f.TargetID, f.Builder.Leaf, time.Now()); err == nil {
 		t.Fatal("changed input accepted")
-	}
-	if err := clearDeliveryCredentials(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadDeliveryCredential(deliverypki.OperatorPrincipal, f.TargetID); err == nil {
-		t.Fatal("logout retained delivery signing credential")
 	}
 }
