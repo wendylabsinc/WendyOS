@@ -144,7 +144,7 @@ func runWifiInteractive(cmd *cobra.Command) error {
 	// device-side rescan (which can take several seconds) fills its cache.
 	model := wifitable.NewModel(nil).WithHandler(&wifiTUIHandler{ctx: ctx, client: client})
 	p := tea.NewProgram(model)
-	if _, err := p.Run(); err != nil {
+	if _, err := tui.RunProgram(p); err != nil {
 		return fmt.Errorf("wifi TUI: %w", err)
 	}
 	return nil
@@ -897,7 +897,7 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		return "", fmt.Errorf("selected device does not support WiFi network scanning")
 	}
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	cancelScan()
 	if err != nil {
 		return "", fmt.Errorf("network picker: %w", err)

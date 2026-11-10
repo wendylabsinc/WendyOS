@@ -742,7 +742,7 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 			})
 			pp.Send(tui.ProgressDoneMsg{Err: pushErr})
 		}()
-		finalModel, err := pp.Run()
+		finalModel, err := tui.RunProgram(pp)
 		if err != nil {
 			return fmt.Errorf("progress TUI: %w", err)
 		}

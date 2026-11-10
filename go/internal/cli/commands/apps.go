@@ -373,7 +373,7 @@ func runAppsDashboard(ctx context.Context, conn *grpcclient.AgentConnection) err
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	result, err := p.Run()
+	result, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("apps dashboard: %w", err)
 	}
@@ -1065,7 +1065,7 @@ func pickApp(ctx context.Context, target *SelectedDevice, title string) (string,
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return "", fmt.Errorf("app picker: %w", err)
 	}

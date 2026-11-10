@@ -97,7 +97,7 @@ func runFlashSteps(title string, steps []flashStep, cancelWork func(), logW io.W
 		resC <- outcome{failedID, runErr, failVerbose}
 		prog.Send(tui.StepsDoneMsg{Err: runErr})
 	}()
-	final, uiErr := prog.Run()
+	final, uiErr := tui.RunProgram(prog)
 	if uiErr != nil {
 		return -1, fmt.Errorf("flash progress UI: %w", uiErr)
 	}
@@ -292,7 +292,7 @@ func waitForRecovery[T any](hints recoveryWaitHints, scan func() ([]T, error)) (
 		}
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	close(stop)
 	if err != nil {
 		return nil, fmt.Errorf("recovery scan: %w", err)

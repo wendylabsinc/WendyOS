@@ -3180,7 +3180,7 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 			p.Send(tui.SpinnerDoneMsg{Err: uploadErr})
 		}()
 
-		finalModel, runErr := p.Run()
+		finalModel, runErr := tui.RunProgram(p)
 		if runErr != nil {
 			return fmt.Errorf("TUI error: %w", runErr)
 		}

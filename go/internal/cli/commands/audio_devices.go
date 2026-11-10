@@ -227,7 +227,7 @@ func pickAudioDevice(candidates []*agentpb.AudioDevice) (uint32, error) {
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return 0, fmt.Errorf("microphone picker: %w", err)
 	}

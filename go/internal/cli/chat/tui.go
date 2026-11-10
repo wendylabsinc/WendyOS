@@ -76,7 +76,7 @@ func Run(ctx context.Context, opts UIOptions) error {
 	if opts.Output != nil {
 		options = append(options, tea.WithOutput(opts.Output))
 	}
-	_, err := tea.NewProgram(m, options...).Run()
+	_, err := tui.RunProgram(tea.NewProgram(m, options...))
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
