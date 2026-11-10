@@ -107,6 +107,7 @@ func TestRunPingLoopCountsReplies(t *testing.T) {
 type delayedReturnPingSession struct {
 	*fakePingSession
 	received chan struct{}
+	once     sync.Once
 }
 
 func (s *delayedReturnPingSession) sendEcho(req *cloudpb.IcmpEchoRequest) error {
@@ -129,13 +130,13 @@ func (s *delayedReturnPingSession) sendEcho(req *cloudpb.IcmpEchoRequest) error 
 func (s *delayedReturnPingSession) recv() (*cloudpb.TunnelData, error) {
 	reply, err := s.fakePingSession.recv()
 	if err == nil {
-		close(s.received)
+		s.once.Do(func() { close(s.received) })
 	}
 	return reply, err
 }
 
 func TestPingRTTExcludesReplyQueueDelay(t *testing.T) {
-	session := &delayedReturnPingSession{newFakePingSession(t.Context()), make(chan struct{})}
+	session := &delayedReturnPingSession{fakePingSession: newFakePingSession(t.Context()), received: make(chan struct{})}
 	stats := runPingLoop(t.Context(), session, "device", 1, time.Second, io.Discard)
 	if stats.Sent != 1 || stats.Received != 1 || stats.Err != nil {
 		t.Fatalf("unexpected stats: %+v", stats)
