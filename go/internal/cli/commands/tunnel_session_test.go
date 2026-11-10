@@ -2,7 +2,9 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -233,5 +235,28 @@ func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
 	srv = serve(address)
 	if got := dial(); got != codes.PermissionDenied {
 		t.Fatalf("dial after Cloud returned: %v", got)
+	}
+}
+
+// A signing pair supplied as files can be replaced on disk, so it is read for
+// every dial instead of being retained with the session.
+func TestTunnelSessionReadsSigningFilesOnEveryDial(t *testing.T) {
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = "127.0.0.1:12345"
+	liteRelaySigningIdentity(t, auth.Certificates[0].PrincipalURI)
+	var session TunnelSession
+	session.SetActive(true)
+	defer session.SetActive(false)
+	ctx := session.Context(t.Context())
+	_, release, err := tunnelAuthorizationFor(ctx, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := os.Remove(os.Getenv("WENDY_TUNNEL_SIGNING_KEY")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tunnelAuthorizationFor(ctx, auth); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dial after the signing key was removed: %v", err)
 	}
 }
