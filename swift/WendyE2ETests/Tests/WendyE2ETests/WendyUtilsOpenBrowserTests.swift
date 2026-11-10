@@ -66,9 +66,9 @@ struct `'wendy utils open-browser'` {
 
     /**
      The utility operates independently of Wendy project files, cloud auth,
-     and default device configuration: URL validation runs before any of
-     that state is consulted, so a malformed URL fails the same way even when
-     a bogus default device is configured.
+     and device configuration: URL validation runs before any of that state
+     is consulted, so a malformed URL fails the same way even when a bogus
+     build host is configured.
      */
     @Test
     func `does not require project, auth, or device state`() async throws {
@@ -76,11 +76,11 @@ struct `'wendy utils open-browser'` {
             try await cli.sh(
                 posix: """
                     mkdir -p "$HOME/.wendy"
-                    printf '{"defaultDevice":"do-not-contact.invalid"}\n' > "$HOME/.wendy/config.json"
+                    printf '{"defaultBuildHost":"do-not-contact.invalid"}\n' > "$HOME/.wendy/config.json"
                     """,
                 power: """
                     New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
-                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultDevice":"do-not-contact.invalid"}'
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultBuildHost":"do-not-contact.invalid"}'
                     """
             )
 

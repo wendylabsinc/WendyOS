@@ -775,32 +775,6 @@
     "notes": "Ask only: the write needs explicit erase authorization for the probed drive. Host-side, but the captures need a host with a removable SD card (this host has none), so it waits with the board scenarios. os_list_drives is canned so the run host's own drives don't matter."
   },
   {
-    "id": "set-default-device",
-    "group": "setup",
-    "environments": [
-      "simulator"
-    ],
-    "prompt": "Make {device} my default device so I don't have to name it on every command.",
-    "expect": {
-      "right": [
-        {
-          "tool": "device_set_default"
-        },
-        {
-          "cli": "device set-default"
-        }
-      ],
-      "wrong": [
-        {
-          "shell": "(?:>>?|\\btee\\b|\\bsed\\s+-i\\b)[^\\n;&|]*(?:\\.wendy/config\\.json|\\.(?:bash|zsh)rc\\b|\\.profile\\b|config\\.fish)"
-        }
-      ]
-    },
-    "captures": [
-      "device_set_default"
-    ]
-  },
-  {
     "id": "update-agent",
     "group": "setup",
     "environments": [

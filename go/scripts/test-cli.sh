@@ -233,9 +233,6 @@ echo ""
 
 echo -e "${BOLD}Phase 3: Device commands${RESET}"
 
-run_test "wendy device set-default" \
-    "$WENDY" device set-default "$HOSTNAME"
-
 run_test "wendy device info" \
     "$WENDY" device info --device "$HOSTNAME"
 
@@ -367,15 +364,6 @@ else
     echo "    Output: $TELEM_OUTPUT"
     ((FAIL_COUNT++))
 fi
-
-echo ""
-
-# ── Phase 8: Cleanup ────────────────────────────────────────────────
-
-echo -e "${BOLD}Phase 8: Cleanup${RESET}"
-
-run_test "wendy device unset-default" \
-    "$WENDY" device unset-default
 
 echo ""
 

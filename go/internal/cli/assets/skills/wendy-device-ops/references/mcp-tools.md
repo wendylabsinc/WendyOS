@@ -6,7 +6,6 @@ the enabled set, so list every group you still need.
 
 - Inspect (core): `device_info` (versions, storage, battery) and
   `hardware_capabilities(category=...)`.
-- Default device (`setup`): `device_set_default(address=...)`.
 - WiFi (`setup`): `wifi_status`, `wifi_list`, `wifi_known_networks`,
   `wifi_connect(ssid=..., password=...)` and `wifi_disconnect`. Connecting drops
   the current network, so the session may lose the device. Forget and rank have

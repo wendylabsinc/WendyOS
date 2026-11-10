@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestMeshSelectorDefaultBothPathsMCPAndOrdinaryDeviceInfo(t *testing.T) {
+func TestMeshSelectorBothPathsMCPAndOrdinaryDeviceInfo(t *testing.T) {
 	for _, device := range []string{"22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"} {
 		t.Run(device, func(t *testing.T) {
 			meshSelectorOrdinaryDeviceInfo(t, "mesh://11111111-1111-4111-8111-111111111111/"+device)
@@ -24,13 +24,13 @@ func TestMeshSelectorDefaultBothPathsMCPAndOrdinaryDeviceInfo(t *testing.T) {
 	}
 }
 func meshSelectorOrdinaryDeviceInfo(t *testing.T, selector string) {
-	setTempConfig(t, &config.Config{DefaultDevice: selector})
+	setTempConfig(t, &config.Config{})
 	t.Setenv("WENDY_AGENT_SOCKET", "")
 	oldFlag, oldJSON, oldConnect, oldDescribe := deviceFlag, jsonOutput, connectOperatorMeshSelector, describeOperatorMeshTarget
 	t.Cleanup(func() {
 		deviceFlag, jsonOutput, connectOperatorMeshSelector, describeOperatorMeshTarget = oldFlag, oldJSON, oldConnect, oldDescribe
 	})
-	deviceFlag, jsonOutput = "", true
+	deviceFlag, jsonOutput = selector, true
 	describeOperatorMeshTarget = func(context.Context, string) (sessionbroker.OperatorTargetInfo, error) {
 		return sessionbroker.OperatorTargetInfo{Platform: "WendyOS"}, nil
 	}
@@ -67,8 +67,8 @@ func meshSelectorOrdinaryDeviceInfo(t *testing.T, selector string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored, err := defaultDeviceNameFor(target); err != nil || stored != selector {
-		t.Fatal("default replaced full mesh identity", stored, err)
+	if target.Selector != selector {
+		t.Fatal("selection replaced full mesh identity", target.Selector)
 	}
 	target.Close()
 	client, err = connectMCPDevice(ctx, mcpStartupAddress(selector))
@@ -96,10 +96,10 @@ func meshSelectorOrdinaryDeviceInfo(t *testing.T, selector string) {
 
 func TestMeshLiteSelectorChoosesNativeProvider(t *testing.T) {
 	const selector = "mesh://11111111-1111-4111-8111-111111111111/33333333-3333-4333-8333-333333333333"
-	setTempConfig(t, &config.Config{DefaultDevice: selector})
-	oldFlag, oldDescribe, oldConnect := deviceFlag, describeOperatorMeshTarget, connectOperatorMeshSelector
+	setTempConfig(t, &config.Config{})
+	oldFlag, oldFromEnv, oldDescribe, oldConnect := deviceFlag, deviceFlagFromEnv, describeOperatorMeshTarget, connectOperatorMeshSelector
 	t.Cleanup(func() {
-		deviceFlag, describeOperatorMeshTarget, connectOperatorMeshSelector = oldFlag, oldDescribe, oldConnect
+		deviceFlag, deviceFlagFromEnv, describeOperatorMeshTarget, connectOperatorMeshSelector = oldFlag, oldFromEnv, oldDescribe, oldConnect
 	})
 	deviceFlag = ""
 	describeOperatorMeshTarget = func(context.Context, string) (sessionbroker.OperatorTargetInfo, error) {
@@ -109,10 +109,13 @@ func TestMeshLiteSelectorChoosesNativeProvider(t *testing.T) {
 		t.Fatal("Lite target must not receive a gRPC agent probe")
 		return nil, nil
 	}
-	for _, explicit := range []bool{false, true} {
-		deviceFlag = ""
-		if explicit {
-			deviceFlag = selector
+	// --device, then WENDY_DEVICE, which the root pre-run copies into deviceFlag.
+	for _, fromEnv := range []bool{false, true} {
+		deviceFlag = selector
+		if fromEnv {
+			deviceFlag = ""
+			t.Setenv(deviceEnvVar, selector)
+			applyDeviceEnv()
 		}
 		picked, err := resolveTargetInner(context.Background(), NonInteractive())
 		if err != nil {
@@ -121,8 +124,8 @@ func TestMeshLiteSelectorChoosesNativeProvider(t *testing.T) {
 		if picked.Agent != nil || picked.External == nil || picked.Provider == nil || picked.Provider.Key() != "wendy-lite" || picked.External.ConnectionType() != "Mesh" || picked.External.ConnectionInfo["caps"] != "sensors,future-optional" {
 			t.Fatalf("Lite selection %#v", picked)
 		}
-		if stored, err := defaultDeviceNameFor(picked); err != nil || stored != selector {
-			t.Fatal(stored, err)
+		if picked.Selector != selector {
+			t.Fatal("selection replaced full mesh identity", picked.Selector)
 		}
 		picked.Close()
 	}

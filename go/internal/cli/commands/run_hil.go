@@ -30,7 +30,7 @@ import (
 
 // HIL owns a cloud inference deployment and a local forward for the lifetime
 // of an attached simulator run. It calls the normal Go deployment path for
-// both apps; it neither runs a project script nor changes the default device.
+// both apps; it does not run a project script.
 func runHILCommand(ctx context.Context, opts runOptions, peerName string) error {
 	if peerName == "" && (opts.yes || !isInteractiveTerminal()) {
 		return fmt.Errorf("--hil needs an interactive device picker; use --hil=DEVICE for non-interactive runs")

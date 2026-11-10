@@ -20,7 +20,7 @@ Run these in this directory. `wendy <command> --help` is the authority on flags.
 - Build only: `wendy build`
 {{- end}}
 - Find devices: `wendy discover --json` scans nearby devices once. For Wendy Cloud devices, sign in with `wendy auth login`, then run `wendy cloud discover`.
-- Choose the device: pass `--device <host[:port]>` to any command, set `WENDY_DEVICE` for one shell, or save a default with `wendy device set-default <device>` (`wendy device get-default` shows it). Non-interactive shells get no device picker, so choose one before deploying.
+- Choose the device: pass `--device <host[:port]>` to any command, or set `WENDY_DEVICE` for one shell. Non-interactive shells get no device picker, so choose one before deploying.
 {{- if .Lite}}
 - Logs: `wendy device logs` streams the firmware console.
 {{- else if .Linux}}

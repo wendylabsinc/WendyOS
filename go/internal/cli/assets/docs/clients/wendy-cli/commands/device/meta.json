@@ -6,8 +6,6 @@
     "dashboard",
     "top",
     "info",
-    "set-default",
-    "unset-default",
     "update",
     "volumes",
     "wifi",
@@ -21,7 +19,6 @@
     "power-mode",
     "setup",
     "push-agent",
-    "get-default",
     "telemetry-stream",
     "version"
   ]

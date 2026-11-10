@@ -11,7 +11,7 @@ func TestDesktopAccountPickerSelectsExactSavedContext(t *testing.T) {
 	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	firstOrg := "11111111-1111-4111-8111-111111111111"
 	secondOrg := "22222222-2222-4222-8222-222222222222"
-	cfg := &config.Config{CurrentContext: "first", DefaultDevice: "local-device", Auth: []config.AuthConfig{
+	cfg := &config.Config{CurrentContext: "first", DefaultBuildHost: "build-host.local", Auth: []config.AuthConfig{
 		{Name: "first", CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + firstOrg + "/operator/one"}}},
 		{Name: "second", CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + secondOrg + "/operator/two"}}},
 		{Name: "incomplete", CloudGRPC: "other.test:443"},
@@ -46,7 +46,7 @@ func TestDesktopAccountPickerSelectsExactSavedContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.CurrentContext != "second" || saved.DefaultDevice != "local-device" || len(saved.Auth) != 3 {
+	if saved.CurrentContext != "second" || saved.DefaultBuildHost != "build-host.local" || len(saved.Auth) != 3 {
 		t.Fatal("selection changed unrelated configuration")
 	}
 }

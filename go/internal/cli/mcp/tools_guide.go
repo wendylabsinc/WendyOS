@@ -63,7 +63,7 @@ Run resources/list for documentation. Group selection only changes discovery;
 it is not an authorization boundary. Apps' own tools remain discoverable.
 Hosts that cache the tool list can start with wendy mcp serve --tool-groups all.
 
-setup: installation jobs, project validation, agent/OS updates, WiFi, cloud enrollment, saved default.
+setup: installation jobs, project validation, agent/OS updates, WiFi, cloud enrollment.
 simulator: local simulator list, create, stop, delete; connect with vm:name to start.
 hardware: Bluetooth and cameras.
 robotics: ROS topics, topic info, samples, rates, and LiDAR summaries.

@@ -231,10 +231,10 @@ func TestLegacyLoginSession_KeepsCurrentContextAndConcurrentConfigChanges(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Another wendy process (e.g. `wendy device set-default` in a terminal)
-	// writes while the user is still in the browser.
+	// Another wendy process (e.g. one saving a default build host) writes
+	// while the user is still in the browser.
 	if err := config.Update(func(cfg *config.Config) (bool, error) {
-		cfg.DefaultDevice = "pinned-device"
+		cfg.DefaultBuildHost = "pinned-device"
 		return true, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -249,8 +249,8 @@ func TestLegacyLoginSession_KeepsCurrentContextAndConcurrentConfigChanges(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultDevice != "pinned-device" {
-		t.Fatalf("DefaultDevice = %q: the login save reverted a concurrent change", cfg.DefaultDevice)
+	if cfg.DefaultBuildHost != "pinned-device" {
+		t.Fatalf("DefaultBuildHost = %q: the login save reverted a concurrent change", cfg.DefaultBuildHost)
 	}
 	if len(cfg.Auth) != 2 || cfg.CurrentContext != "default" {
 		t.Fatalf("auth entries = %d, current = %q; want 2 and the unchanged \"default\"", len(cfg.Auth), cfg.CurrentContext)

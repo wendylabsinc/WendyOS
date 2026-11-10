@@ -30,7 +30,7 @@ func reconcileCompletedV2Unenroll(ctx context.Context, raw []byte, override, ass
 // The only fallback is a public read from the explicitly named/saved LAN host.
 // It neither accepts that host's present identity nor changes its existing pin.
 func recoverCompletedV2Unenroll(ctx context.Context, override, assetOverride string) error {
-	addr, key, _, err := resolveDeviceAddress()
+	addr, key, err := resolveDeviceAddress()
 	if err != nil {
 		return err
 	}

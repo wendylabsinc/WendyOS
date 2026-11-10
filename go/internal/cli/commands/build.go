@@ -55,8 +55,7 @@ type buildOptions struct {
 }
 
 func mustStopBuildAfterTargetError(err error) bool {
-	var recoveryStopped *defaultDeviceRecoveryStoppedError
-	return errors.As(err, &recoveryStopped) || errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled)
+	return errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled)
 }
 
 var appleContainerLocalProviderHintSupported = func() bool {

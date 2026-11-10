@@ -36,7 +36,7 @@ func DesktopFleetOverview(ctx context.Context, account, org string) (DesktopFlee
 	}
 	out := DesktopFleet{PresenceError: cloudError(presenceErr)}
 	for _, a := range assets {
-		selector, err := cloudDiscoveryDeviceDefault(auth, cloudDiscoveryDevice{cloudAssetMetadata: a, v2: a, key: a.GetId()})
+		selector, err := cloudDiscoverySelector(auth, cloudDiscoveryDevice{cloudAssetMetadata: a, v2: a, key: a.GetId()})
 		if err != nil {
 			return DesktopFleet{}, err
 		}

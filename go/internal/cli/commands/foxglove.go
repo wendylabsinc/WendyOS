@@ -114,7 +114,7 @@ type foxgloveServeOpts struct {
 	domain    int
 	rmw       string
 	distro    string
-	device    string // global --device; "" = default device
+	device    string // global --device; "" = WENDY_DEVICE or the picker
 	iface     string // optional CycloneDDS network interface
 	builder   string // optional image builder; "" = normal wendy run selection
 }

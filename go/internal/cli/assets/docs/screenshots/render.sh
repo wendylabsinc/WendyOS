@@ -66,7 +66,7 @@ echo "» Reminder: a WendyOS device must be attached — these are scripted real
 #
 # Run non-interactively (stdin from /dev/null) so it updates the agent and only
 # *reports* any OS update rather than applying it — no surprise reflash/reboot
-# mid-pipeline. Targets the default device, same as the tapes. Skip with
+# mid-pipeline. Targets $WENDY_DEVICE, same as the tapes. Skip with
 # WENDY_SHOTS_SKIP_UPDATE=1 when you already know the agent is current.
 if [ "${WENDY_SHOTS_SKIP_UPDATE:-0}" != "1" ]; then
   echo "» Ensuring the target device's agent is up to date..." >&2

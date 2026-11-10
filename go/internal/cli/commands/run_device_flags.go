@@ -80,8 +80,8 @@ func selectedBuildHostName(selected *SelectedDevice) (string, error) {
 	}
 	// A cloud tunnel's loopback address stops working when selection closes.
 	// Retain the full cloud selector so deployment reconnects to that asset.
-	if selected.DefaultSelector != "" {
-		return selected.DefaultSelector, nil
+	if selected.Selector != "" {
+		return selected.Selector, nil
 	}
 	// Keep the LAN pin's hostname and the port that answered discovery.
 	if selected.PinKey != "" {

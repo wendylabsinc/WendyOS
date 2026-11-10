@@ -34,7 +34,7 @@ func TestMeshNearbyJSONOnceContinuousAndWithdrawal(t *testing.T) {
 		t.Fatal(collection, err)
 	}
 	item := discoverTableItems(collection)[0]
-	if item.defaultDevice != snapshot.Devices[0].Selector || !strings.Contains(item.picker.Type, "WendyNet") || item.picker.Address != "-" {
+	if !strings.Contains(item.picker.Type, "WendyNet") || item.picker.Address != "-" {
 		t.Fatal(item)
 	}
 	model := newDiscoverModel(context.Background(), opts, false)
@@ -103,7 +103,7 @@ func TestMeshNearbyNameAndDefaultUseCanonicalSelector(t *testing.T) {
 		return snapshot.Devices[0], nil
 	}
 	picked, matched, err := connectNamedDeviceSelector(context.Background(), "C5", true)
-	if err != nil || !matched || picked.External == nil || picked.DefaultSelector != snapshot.Devices[0].Selector {
+	if err != nil || !matched || picked.External == nil || picked.Selector != snapshot.Devices[0].Selector {
 		t.Fatal(picked, matched, err)
 	}
 	row := snapshot.Devices[0]

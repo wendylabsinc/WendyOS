@@ -48,7 +48,7 @@ From the project directory, use the `WENDY_TARGET` you set in the previous
 tutorial. In a new terminal, set it again to your device hostname or IP from
 `wendy discover`, `vm:<name>` from `wendy vm list`, or `127.0.0.1:50051` for an
 unenrolled local-only Linux agent. Watch mode requires an
-explicit target or a saved default; it cannot ask you to choose one.
+explicit target, from `--device` or `WENDY_DEVICE`; it cannot ask you to choose one.
 
 ```bash
 wendy run --device "$WENDY_TARGET" --watch

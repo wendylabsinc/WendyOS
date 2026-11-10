@@ -146,9 +146,7 @@ func collectDoctorReport(ctx context.Context, d doctorDeps, project, selected st
 	} else if home, err := d.homeDir(); err == nil {
 		configDir = filepath.Join(home, ".wendy")
 	}
-	var cfg struct {
-		DefaultDevice string `json:"defaultDevice"`
-	}
+	var cfg struct{}
 	if configDir == "" {
 		out.add("cli_config", "fail", true, "config_location_invalid", "The CLI configuration location is unavailable.", "Set WENDY_CONFIG_DIR to an absolute directory or check the home directory configuration.")
 	} else if err := d.readJSON(filepath.Join(configDir, "config.json"), &cfg); err != nil && !os.IsNotExist(err) {
@@ -158,9 +156,6 @@ func collectDoctorReport(ctx context.Context, d doctorDeps, project, selected st
 	}
 	if selected == "" {
 		selected = strings.TrimSpace(d.getenv("WENDY_DEVICE"))
-	}
-	if selected == "" {
-		selected = cfg.DefaultDevice
 	}
 	selected = strings.TrimSpace(selected)
 

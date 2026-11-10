@@ -964,7 +964,7 @@ const (
 // DeviceTableLegendBase documents the glyphs the device table always explains.
 // These are common enough that their absence from a row is itself informative,
 // so they stay listed whether or not any row carries them.
-const DeviceTableLegendBase = "● provisioned  ○ unprovisioned  ✦ default"
+const DeviceTableLegendBase = "● provisioned  ○ unprovisioned"
 
 // DeviceTableLegend documents the base glyphs plus each warning glyph that
 // items actually render, so a warning is never advertised when none is shown.

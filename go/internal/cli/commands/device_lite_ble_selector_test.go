@@ -23,7 +23,7 @@ func TestExplicitPhysicalLiteBLESelectionBypassesProviderDiscovery(t *testing.T)
 		return nil
 	}
 	selected, err := resolveTarget(context.Background(), SelectDevice(selector), SuppressUpdateCheck())
-	if err != nil || selected == nil || selected.Agent != nil || selected.External == nil || selected.External.ID != selector || selected.DefaultSelector != selector {
+	if err != nil || selected == nil || selected.Agent != nil || selected.External == nil || selected.External.ID != selector || selected.Selector != selector {
 		t.Fatalf("direct selection %+v %v", selected, err)
 	}
 	if _, ok := selected.Provider.(*providers.MicroWendyProvider); !ok {

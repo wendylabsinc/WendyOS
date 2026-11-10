@@ -41,7 +41,7 @@ func reportFailure(stderr io.Writer, err error, executed *cobra.Command, args []
 		}
 		return 0
 	}
-	if err == nil || errors.Is(err, commands.ErrDefaultCleared) {
+	if err == nil {
 		return 0
 	}
 	var reported *commands.ReportedExitError

@@ -159,7 +159,7 @@ func DesktopCloud(ctx context.Context) ([]DesktopDevice, error) {
 	}
 	result := make([]DesktopDevice, 0, len(devices))
 	for _, d := range devices {
-		selector, err := cloudDiscoveryDeviceDefault(auth, d)
+		selector, err := cloudDiscoverySelector(auth, d)
 		if err != nil {
 			return nil, err
 		}

@@ -1,7 +1,7 @@
 Many CLI operations run on the remote device. When a connection is to be
 established, the CLI goes down a list in order to connect to this device.
 
-For interactive examples, start with `wendy run` or `wendy device info` and choose a target when prompted. The picker is a fallback: `WENDY_DEVICE` or a saved default may already select a device. Check the displayed target.
+For interactive examples, start with `wendy run` or `wendy device info` and choose a target when prompted. The picker is a fallback: `WENDY_DEVICE` may already select a device. Check the displayed target.
 
 Use `--device` when scripting, running without a terminal, or deliberately addressing several devices. The sections below document selection precedence, not required setup steps.
 
@@ -23,7 +23,7 @@ A value made only of digits, such as `283`, is rejected: it is not a hostname or
 
 ## 2. `WENDY_DEVICE`
 
-If `--device` is not given and the `WENDY_DEVICE` environment variable is set, the CLI connects to that device exactly as if it had been passed with `--device`. Use it to give one terminal, script or AI session its own target without changing the saved default that every session shares:
+If `--device` is not given and the `WENDY_DEVICE` environment variable is set, the CLI connects to that device exactly as if it had been passed with `--device`. Use it to give one terminal, script or AI session its own target:
 
 ```sh
 WENDY_DEVICE=my-pi.local wendy run
@@ -31,26 +31,7 @@ WENDY_DEVICE=my-pi.local wendy run
 
 `--device` still takes precedence. A blank value is ignored.
 
-## 3. Default Device
-
-If a Default Device is set using [`wendy device set-default`](./commands/device/set-default.md),
-the CLI attempts to connect to it. The saved value may be a hostname, IP
-address, provider key, or explicit `host:port` value.
-
-```sh
-wendy device set-default my-mac.local:50051
-wendy device info --json
-wendy run
-```
-
-Use [`wendy device get-default`](./commands/device/get-default.md) to check
-the current default. If the default device cannot be reached from an
-interactive terminal, the CLI shows the picker so you can select another
-device. In non-interactive shells, the command fails with a clear message
-that the default is set but unreachable instead of opening a picker.
-
-
-## 4. Show Picker
+## 3. Show Picker
 
 The picker finds nearby [WendyOS](/docs/installation), Wendy Agent and
 [Wendy Lite](/docs/advanced/wendy-lite/) devices using local-network and Bluetooth discovery.
@@ -74,14 +55,12 @@ Network permissions.
 
 The picker table shows the same columns as
 [`wendy discover`](./commands/discover.md#interactive-tui). The leading
-marker column displays provisioned state (`●`/`○`) for LAN devices alongside
-the `✦` default marker. If the CLI cannot verify the highlighted device's agent,
+marker column displays provisioned state (`●`/`○`) for LAN devices. If the CLI cannot verify the highlighted device's agent,
 a footer hint explains what went wrong and what to try next.
 
 In scripts, CI, SSH sessions without a TTY, or any other non-interactive
-context, no picker is shown. Pass `--device`, or configure a default with
-`wendy device set-default` (confirm it with `wendy device get-default`),
-before running commands that need a target.
+context, no picker is shown. Pass `--device` or set `WENDY_DEVICE` before
+running commands that need a target.
 
 > If the terminal is interactive, a prompt will be made to update the device right now.
 
@@ -116,13 +95,25 @@ Retrying, refreshing client certificates, and synchronizing the device clock
 do not supply a missing device identity. The CLI does not retry this failure
 with weaker certificate checks.
 
+Routine certificate renewal is accepted when the device identity stays the
+same. A different organisation, issuing Cloud, asset, or device identity is
+refused. A previously pinned device that no longer presents an enrolled
+identity is also refused. These checks apply in interactive, `--json`, and
+non-interactive runs, without a trust override prompt.
+
 `wendy device unpin <hostname>` clears saved trust for an intentional reset or
-replacement. Setting a LAN or VM default also clears its saved pin. Neither
-action authorizes learning an identity from the next connection: refresh the
-trusted inventory binding, or complete enrollment if the device is
-unprovisioned. Keep the pin and verify the device if the change was unexpected.
-See [certificate pinning](./commands/device/set-default.md#certificate-pinning)
-for default-device behavior.
+replacement. It does not authorize learning an identity from the next
+connection: refresh the trusted inventory binding, or complete enrollment if
+the device is unprovisioned. Keep the pin and verify the device if the change
+was unexpected.
+
+Loopback addresses share the pin of their bare host, whatever the port:
+`127.0.0.1:50051` and `127.0.0.1:50061` are both checked against the
+`127.0.0.1` pin, and `localhost:50051` against the `localhost` pin. The
+exception is a running local VM: `127.0.0.1` on its forwarded agent port, or on
+the mTLS port after it, is that VM, pinned as `vm:<name>` like
+`--device vm:<name>`, so each VM keeps its own pin. `wendy device unpin
+vm:<name>` clears only that VM's pin, never the shared `127.0.0.1` pin.
 
 ## Simulator startup and authentication failures
 
@@ -146,8 +137,8 @@ diagnose guest startup problems.
 
 After a possible clock-related TLS failure, the CLI broadcasts a signed time
 proof on the LAN and retries the connection, sending the proof again before
-each of three retries over about 10 seconds. This applies to a saved default
-device, a device named with `--device`, and a device chosen in the picker.
+each of three retries over about 10 seconds. This applies to a device named
+with `--device` or `WENDY_DEVICE`, and to a device chosen in the picker.
 Nothing acknowledges the proof, so the CLI counts it as accepted only when the
 device accepts the connection. If the device still rejects it, the CLI says so
 and names the next step: give the device internet access so it sets its own

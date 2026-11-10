@@ -20,7 +20,6 @@ import { Flow, FlowArrow, FlowNode, FlowPart } from './docs/flow';
 import { HardwareCard, HardwareShowcase } from './docs/hardware-showcase';
 import { TrackedCodeBlock } from './docs/install-copy-tracking';
 import { Path, Paths } from './docs/paths';
-import { SetDefaultDeviceSection } from './docs/set-default-device-section';
 import { YouTubeVideo } from './docs/youtube-video';
 
 export function getMDXComponents(components?: MDXComponents) {
@@ -59,7 +58,6 @@ export function getMDXComponents(components?: MDXComponents) {
     CliClip,
     CliShot,
     CliToAgentRelationshipDiagram,
-    SetDefaultDeviceSection,
     YouTubeVideo,
     ...components,
   } satisfies MDXComponents;

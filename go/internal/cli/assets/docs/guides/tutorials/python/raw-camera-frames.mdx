@@ -21,8 +21,10 @@ Raw delivery depends on the capture pipeline. The `--raw` flag requests raw deli
 
 ## 1. Select and inspect the camera
 
+Point this terminal at your WendyOS device, then list its cameras:
+
 ```bash
-wendy device set-default
+export WENDY_DEVICE=<hostname>
 wendy device camera list
 ```
 

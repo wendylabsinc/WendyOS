@@ -20,6 +20,7 @@ corners) so every capture comes out identical.
 - `gif2webp` — `brew install webp` (converts the GIF clip to animated WebP)
 - the `wendy` CLI on your `PATH` (the pipeline drives the shipping binary as-is)
 - a **WendyOS device attached** (USB-C or same-network) — the flows run for real
+  against the device named by `WENDY_DEVICE`, so export it before rendering
 
 Type is rendered with the system's native monospace font (`Set FontFamily
 "monospace"` in `lib/common.tape`), so there's nothing extra to install.

@@ -206,9 +206,6 @@ type appsDashboardModel struct {
 	// Post-quit action.
 	selectedApp string
 	action      appsDashAction
-
-	// Optional callback: called when the user presses 'd'.
-	OnSetDefault func()
 }
 
 func newAppsDashboardModel(conn *grpcclient.AgentConnection, ctx context.Context) appsDashboardModel {
@@ -663,12 +660,6 @@ func (m appsDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "d":
-			if m.OnSetDefault != nil {
-				m.OnSetDefault()
-			}
-			return m, nil
-
 		default:
 			var cmd tea.Cmd
 			m.table, cmd = m.table.Update(msg)
@@ -685,9 +676,9 @@ func (m appsDashboardModel) View() string {
 	var sb strings.Builder
 
 	// Hint line
-	hint := "↑/↓ navigate  s start  x stop  r remove  R remove+vols  enter logs  d default  q quit"
+	hint := "↑/↓ navigate  s start  x stop  r remove  R remove+vols  enter logs  q quit"
 	if m.table.CanScroll() {
-		hint = "↑/↓ navigate  ←/→ scroll  s start  x stop  r remove  R remove+vols  enter logs  d default  q quit"
+		hint = "↑/↓ navigate  ←/→ scroll  s start  x stop  r remove  R remove+vols  enter logs  q quit"
 	}
 	sb.WriteString(m.viewLine(dashDimStyle.Render(hint)) + "\n\n")
 

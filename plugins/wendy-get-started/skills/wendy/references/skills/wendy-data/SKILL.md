@@ -28,7 +28,7 @@ does not verify detection or delivery.
 With a terminal, check `wendy data --help` and relevant subcommand help.
 Use explicit `--device <selector>` on device commands.
 Local CLI commands reconnect independently of an MCP session, so preserve the
-connected target and transport instead of relying on the default device.
+connected target and transport instead of relying on implicit device selection.
 
 The MCP server uses `wendy_status`, `device_list`, and `device_connect`.
 Inspect its actual tool list. General campaign/episode management uses the CLI,

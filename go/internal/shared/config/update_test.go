@@ -37,7 +37,7 @@ func addTipKey(key string) func(*Config) (bool, error) {
 
 func TestUpdateSavesTheChangeAndKeepsEverythingElse(t *testing.T) {
 	useConfigDir(t)
-	if err := Save(&Config{DefaultDevice: "kept.local"}); err != nil {
+	if err := Save(&Config{DefaultBuildHost: "kept.local"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := Update(addTipKey("a")); err != nil {
@@ -47,8 +47,8 @@ func TestUpdateSavesTheChangeAndKeepsEverythingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OptimizeTipShownAt["a"] == "" || cfg.DefaultDevice != "kept.local" {
-		t.Fatalf("after Update: tips=%v default=%q; want the new key and the untouched default", cfg.OptimizeTipShownAt, cfg.DefaultDevice)
+	if cfg.OptimizeTipShownAt["a"] == "" || cfg.DefaultBuildHost != "kept.local" {
+		t.Fatalf("after Update: tips=%v default=%q; want the new key and the untouched default", cfg.OptimizeTipShownAt, cfg.DefaultBuildHost)
 	}
 }
 
@@ -68,12 +68,12 @@ func TestUpdateWithoutAChangeDoesNotWrite(t *testing.T) {
 
 func TestUpdateReturnsFnErrorWithoutSaving(t *testing.T) {
 	useConfigDir(t)
-	if err := Save(&Config{DefaultDevice: "before.local"}); err != nil {
+	if err := Save(&Config{DefaultBuildHost: "before.local"}); err != nil {
 		t.Fatal(err)
 	}
 	refused := errors.New("refused")
 	err := Update(func(c *Config) (bool, error) {
-		c.DefaultDevice = "after.local"
+		c.DefaultBuildHost = "after.local"
 		return true, refused
 	})
 	if !errors.Is(err, refused) {
@@ -83,8 +83,8 @@ func TestUpdateReturnsFnErrorWithoutSaving(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultDevice != "before.local" {
-		t.Fatalf("DefaultDevice = %q: Update saved although fn failed", cfg.DefaultDevice)
+	if cfg.DefaultBuildHost != "before.local" {
+		t.Fatalf("DefaultBuildHost = %q: Update saved although fn failed", cfg.DefaultBuildHost)
 	}
 }
 
@@ -197,7 +197,7 @@ func TestUpdateGivesUpWhileAnotherProcessHoldsTheLock(t *testing.T) {
 
 func TestUpdateWithTimeoutLeavesConfigUntouchedWhenContended(t *testing.T) {
 	dir := useConfigDir(t)
-	if err := Save(&Config{DefaultDevice: "preserved.local"}); err != nil {
+	if err := Save(&Config{DefaultBuildHost: "preserved.local"}); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "config.json")
@@ -216,7 +216,7 @@ func TestUpdateWithTimeoutLeavesConfigUntouchedWhenContended(t *testing.T) {
 	start := time.Now()
 	err = UpdateWithTimeout(timeout, func(cfg *Config) (bool, error) {
 		called = true
-		cfg.DefaultDevice = "must-not-be-written.local"
+		cfg.DefaultBuildHost = "must-not-be-written.local"
 		return true, nil
 	})
 	if !errors.Is(err, flock.ErrTimeout) || !strings.Contains(err.Error(), lockFileName) || !strings.Contains(err.Error(), timeout.String()) {
@@ -244,7 +244,7 @@ func TestUpdateWithTimeoutLeavesConfigUntouchedWhenContended(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultDevice != "preserved.local" || cfg.OptimizeTipShownAt["after-timeout"] == "" {
+	if cfg.DefaultBuildHost != "preserved.local" || cfg.OptimizeTipShownAt["after-timeout"] == "" {
 		t.Fatalf("later update lost config or its own change: %+v", cfg)
 	}
 }
