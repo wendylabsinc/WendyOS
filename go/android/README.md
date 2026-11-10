@@ -129,7 +129,7 @@ compilation does not establish that hardware-dependent workflows work.
 | --- | --- |
 | Sites: room scanning and photo reconstruction | Not available: iOS uses RoomPlan and Object Capture on LiDAR devices. Android imports models made on iOS. |
 | Sites: scan reference capture (the visual map) | Not available: iOS records it with ARKit LiDAR depth during the room scan, in the scan's coordinates. Android uses maps made on iOS, carried in `.wendysite` files. |
-| Digital Twin robot map, localization, people tracking and Go2 controls | Not ported. These move a physical robot and need a robot to test against. |
+| Digital Twin robot map, localization, people tracking and Go2 controls | Not ported. The shared backend's `OpenSiteRobot` sends the Go2 STOP and turns off its onboard obstacle avoidance as soon as the panel opens, so even a view-only panel commands a physical robot. It needs an explicit decision and a robot to test against. |
 | Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. |
 | USB flashing and host simulator management | Desktop workflows, also absent from the iOS app. |
 
