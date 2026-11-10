@@ -61,16 +61,14 @@ func (b *Backend) SiteModels(session uint64, action, path, name, id string) (res
 		if e != nil {
 			return nil, e
 		}
-		if e = stream.Send(&pb.SiteModelUploadRequest{Info: info}); e != nil {
-			return nil, e
-		}
+		// A device refuses an upload by ending the stream. Sending then reports
+		// only io.EOF; the device's reason arrives with the response.
+		e = stream.Send(&pb.SiteModelUploadRequest{Info: info})
 		buf := make([]byte, 256<<10)
-		for {
+		for e == nil {
 			n, readErr := file.Read(buf)
 			if n > 0 {
-				if e = stream.Send(&pb.SiteModelUploadRequest{Data: buf[:n]}); e != nil {
-					return nil, e
-				}
+				e = stream.Send(&pb.SiteModelUploadRequest{Data: buf[:n]})
 			}
 			if readErr == io.EOF {
 				break
@@ -78,6 +76,9 @@ func (b *Backend) SiteModels(session uint64, action, path, name, id string) (res
 			if readErr != nil {
 				return nil, readErr
 			}
+		}
+		if e != nil && e != io.EOF {
+			return nil, e
 		}
 		saved, e := stream.CloseAndRecv()
 		if e != nil {

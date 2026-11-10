@@ -12,10 +12,21 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 func siteBackend(t *testing.T, supported bool) *Backend {
+	t.Helper()
+	if !supported {
+		return siteBackendServing(t, nil)
+	}
+	return siteBackendServing(t, services.NewSiteModelService(t.TempDir()))
+}
+
+// A nil service stands for an agent that predates saved site models.
+func siteBackendServing(t *testing.T, service pb.SiteModelServiceServer) *Backend {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "site-backend-")
 	if err != nil {
@@ -28,8 +39,8 @@ func siteBackend(t *testing.T, supported bool) *Backend {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer()
-	if supported {
-		pb.RegisterSiteModelServiceServer(server, services.NewSiteModelService(t.TempDir()))
+	if service != nil {
+		pb.RegisterSiteModelServiceServer(server, service)
 	}
 	go server.Serve(listener)
 	t.Cleanup(server.Stop)
@@ -78,5 +89,37 @@ func TestSiteModelsBackendExplainsOldAgent(t *testing.T) {
 	_, err := siteBackend(t, false).SiteModels(42, "list", "", "", "")
 	if err == nil || !strings.Contains(err.Error(), "agent update") {
 		t.Fatalf("error: %v", err)
+	}
+}
+
+func siteArchive(t *testing.T, size int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "source.wendysite")
+	if err := os.WriteFile(path, append([]byte("WENDYST2"), bytes.Repeat([]byte{7}, size)...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The device ends the stream to refuse an upload, so a later send reports
+// only io.EOF. The caller must still learn why, whether or not the archive
+// was small enough to be sent before the refusal arrived.
+func TestSiteModelsBackendReportsWhyTheDeviceRefusedAnUpload(t *testing.T) {
+	root := t.TempDir()
+	// The device's quota counts apparent size, so a sparse file fills it.
+	full, err := os.Create(filepath.Join(root, strings.Repeat("0", 64)+".wendysite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = full.Truncate(1 << 30); err != nil {
+		t.Fatal(err)
+	}
+	full.Close()
+	b := siteBackendServing(t, services.NewSiteModelService(root))
+	for _, size := range []int{600 << 10, 16 << 20} {
+		_, err := b.SiteModels(42, "save", siteArchive(t, size), "Warehouse", "")
+		if status.Code(err) != codes.ResourceExhausted || !strings.Contains(err.Error(), "storage limit reached") {
+			t.Fatalf("%d byte archive: got %v, want the device's storage limit refusal", size, err)
+		}
 	}
 }
