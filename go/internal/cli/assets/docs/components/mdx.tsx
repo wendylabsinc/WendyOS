@@ -15,8 +15,11 @@ import {
 } from './docs/buyers-tables';
 import { CliClip, CliShot } from './docs/cli-shot';
 import { CliToAgentRelationshipDiagram } from './docs/cli-to-agent-relationship-diagram';
+import { Figure } from './docs/figure';
+import { Flow, FlowArrow, FlowNode, FlowPart } from './docs/flow';
 import { HardwareCard, HardwareShowcase } from './docs/hardware-showcase';
 import { TrackedCodeBlock } from './docs/install-copy-tracking';
+import { Path, Paths } from './docs/paths';
 import { SetDefaultDeviceSection } from './docs/set-default-device-section';
 import { YouTubeVideo } from './docs/youtube-video';
 
@@ -33,12 +36,19 @@ export function getMDXComponents(components?: MDXComponents) {
     Callout,
     Card,
     Cards,
+    Figure,
     File,
     Files,
+    Flow,
+    FlowArrow,
+    FlowNode,
+    FlowPart,
     Folder,
     HardwareCard,
     HardwareShowcase,
     JetsonBuyersTable,
+    Path,
+    Paths,
     Pi5BuyersTable,
     PiZero2WBuyersTable,
     Step,
