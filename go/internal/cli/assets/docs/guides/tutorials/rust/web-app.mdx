@@ -1,10 +1,10 @@
 ---
-title: Full-Stack Web App
+title: Full-stack web app
 description: Build a full-stack device dashboard with a React frontend and Axum backend
 language: rust
 ---
 
-## Building a Full-Stack Web App
+## Building a full-stack web app
 
 <Callout type="info">
   **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/rust/web-app](https://github.com/wendylabsinc/samples/tree/main/rust/web-app)
@@ -26,11 +26,11 @@ This demonstrates how to:
 - Rust 1.85 or later installed (via `rustup`)
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy full-stack Rust template:
 
@@ -57,7 +57,48 @@ This demonstrates how to:
   </Step>
 </Steps>
 
-## Project Structure
+## Test your web app
+
+Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
+
+```
+http://wendyos-true-probe.local:8000
+```
+
+<Callout type="warning">
+  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
+</Callout>
+
+You'll land on the camera page; use the sidebar to switch between the camera, audio, persistence, GPU, and system pages.
+
+## Test the API directly
+
+Query the system info endpoint:
+
+```bash
+curl http://wendyos-true-probe.local:8000/api/system
+```
+
+Add a car to the persistent SQLite store:
+
+```bash
+curl -X POST http://wendyos-true-probe.local:8000/api/cars \
+  -H "Content-Type: application/json" \
+  -d '{"make":"Toyota","model":"Camry","color":"#1E88E5","year":2015}'
+```
+
+List the saved cars:
+
+```bash
+curl http://wendyos-true-probe.local:8000/api/cars
+```
+
+Response:
+```json
+[{"id":1,"make":"Toyota","model":"Camry","color":"#1E88E5","year":2015,"created_at":"2026-06-06 10:30:00","updated_at":null}]
+```
+
+## Project structure
 
 The generated project has a Rust backend at the root and the React frontend under `frontend/`:
 
@@ -81,11 +122,11 @@ web-app/
 
 The frontend builds to `frontend/dist`, which the Dockerfile copies into the backend image as `./static`.
 
-## Code Breakdown
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Generated Frontend
+    ### Generated frontend
 
     The frontend is a React 19 single-page app built with Vite, Tailwind v4, and shadcn/ui. `App.tsx` sets up a sidebar dashboard and uses `react-router-dom` v7 for client-side routing across five pages — **camera, audio, persistence, gpu, system** — with the default route redirecting to `/camera`:
 
@@ -138,7 +179,7 @@ The frontend builds to `frontend/dist`, which the Dockerfile copies into the bac
   </Step>
 
   <Step>
-    ### Generated Axum Backend
+    ### Generated Axum backend
 
     The generated `Cargo.toml` describes the backend. It pulls in Axum (with WebSocket support), GStreamer for camera/audio capture, and `rusqlite` (bundled SQLite) for persistence:
 
@@ -322,76 +363,17 @@ The frontend builds to `frontend/dist`, which the Dockerfile copies into the bac
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your full-stack web application to your WendyOS device:
-
-```bash
-wendy run
-```
-
-## Test Your Web App
-
-Your browser will open automatically once the app is ready, thanks to the `postStart` hook. If it doesn't, navigate to:
-
-```
-http://wendyos-true-probe.local:8000
-```
-
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output.
-</Callout>
-
-You'll land on the camera page; use the sidebar to switch between the camera, audio, persistence, GPU, and system pages.
-
-## Test the API Directly
-
-Query the system info endpoint:
-
-```bash
-curl http://wendyos-true-probe.local:8000/api/system
-```
-
-Add a car to the persistent SQLite store:
-
-```bash
-curl -X POST http://wendyos-true-probe.local:8000/api/cars \
-  -H "Content-Type: application/json" \
-  -d '{"make":"Toyota","model":"Camry","color":"#1E88E5","year":2015}'
-```
-
-List the saved cars:
-
-```bash
-curl http://wendyos-true-probe.local:8000/api/cars
-```
-
-Response:
-```json
-[{"id":1,"make":"Toyota","model":"Camry","color":"#1E88E5","year":2015,"created_at":"2026-06-06 10:30:00","updated_at":null}]
-```
-
-## Learn More
+## Learn more
 
 - [Axum Documentation](https://docs.rs/axum/latest/axum/)
 - [Vite Documentation](https://vitejs.dev/)
 - [shadcn/ui Components](https://ui.shadcn.com/)
 
-## Next Steps
-
-Now that you have a full-stack web app running:
-
-- Add more `/api/*` endpoints and a matching page under `frontend/src/pages/`
-- Implement real-time updates with WebSockets (the camera and audio pages already do)
-- Connect to more WendyOS device sensors and display data in the UI
-- Add authentication middleware
-- Extend the SQLite schema for richer persistent storage
-
 <Accordions>
   <Accordion title="Testing locally without a WendyOS device">
     Some features (camera, audio, GPU) need real device hardware, but you can still build and run the stack locally.
 
-    ### Build and Run with Docker
+    ### Build and run with Docker
 
     ```bash
     docker build -t web-app .
@@ -400,7 +382,7 @@ Now that you have a full-stack web app running:
 
     Then open `http://localhost:8000` in your browser.
 
-    ### Run Locally with Cargo
+    ### Run locally with Cargo
 
     ```bash
     # Build the frontend first (output goes to frontend/dist)
@@ -416,3 +398,15 @@ Now that you have a full-stack web app running:
     The backend writes its SQLite database to `/data/cars.db`, so create that directory (or adjust permissions) when running outside a container.
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Continue with [Camera feed in Rust](/docs/guides/tutorials/rust/camera) to stream a USB camera to the browser.
+
+Now that you have a full-stack web app running:
+
+- Add more `/api/*` endpoints and a matching page under `frontend/src/pages/`
+- Implement real-time updates with WebSockets (the camera and audio pages already do)
+- Connect to more WendyOS device sensors and display data in the UI
+- Add authentication middleware
+- Extend the SQLite schema for richer persistent storage

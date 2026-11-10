@@ -1,20 +1,9 @@
 ---
-title: AI Coding Agent Setup
+title: Set up a coding agent
 description: Install the Wendy plugin for Codex or Claude Code, then start a Wendy project with an AI coding agent
 ---
 
 This guide assumes you want Codex or Claude Code to do the coding work for you. You install the Wendy plugin, ask the agent to install or verify the Wendy CLI, then ask it to create and run a Wendy app.
-
-For a terminal assistant built into Wendy, run:
-
-```sh
-wendy chat
-```
-
-Wendy guides you through choosing a local server such as Ollama or LM Studio,
-or a hosted provider, and selecting an available model. It remembers your
-selection; use `wendy chat --setup` to change it. See
-[Wendy Chat](/docs/guides/chat) for local model setup and chat controls.
 
 ## Install the Wendy plugin
 
@@ -175,6 +164,19 @@ For a new Wendy app, expect Codex or Claude Code to:
 
 ## Next steps
 
-- [Discover your devices](/docs/device/discovering-devices)
-- [Manage apps](/docs/device/managing-apps)
+- [Install a device with a coding agent](/docs/installation/agent-assisted-setup)
+- [See the Wendy MCP tools the agent can call](/docs/integrations/mcp)
 - [Understand entitlements](/docs/device/entitlements)
+
+## Prefer a built-in assistant?
+
+For a terminal assistant built into Wendy, run:
+
+```sh
+wendy chat
+```
+
+Wendy guides you through choosing a local server such as Ollama or LM Studio,
+or a hosted provider, and selecting an available model. It remembers your
+selection; use `wendy chat --setup` to change it. See
+[Wendy Chat](/docs/guides/chat) for local model setup and chat controls.

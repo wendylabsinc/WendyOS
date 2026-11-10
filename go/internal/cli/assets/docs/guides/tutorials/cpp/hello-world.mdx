@@ -1,10 +1,10 @@
 ---
-title: Hello World in C++
+title: Hello world in C++
 description: Create your first application using C++
 language: cpp
 ---
 
-## Creating Your First C++ Application
+## Creating your first C++ application
 
 This guide will walk you through creating your first WendyOS application in C++. The Wendy C++ template scaffolds a small HTTP server built on the [Drogon](https://drogon.org/) framework, so your very first app is a real, long-running service you can reach from a browser. This is a great way to prove you can send an app to your device and verify your development environment is set up correctly.
 
@@ -17,11 +17,11 @@ This guide will walk you through creating your first WendyOS application in C++.
   **Containerized Deployment**: C++ applications run inside containers on your WendyOS device. The Dockerfile in this guide is configured for the NVIDIA Jetson Orin Nano's ARM64 architecture using `arm64v8/debian:bookworm-slim` as the base image. The Wendy CLI handles the build and deploy for you — you do not need a local C++ toolchain.
 </Callout>
 
-### Creating the Project
+### Creating the project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy C++ template:
 
@@ -50,11 +50,40 @@ This guide will walk you through creating your first WendyOS application in C++.
   </Step>
 </Steps>
 
-## Code Breakdown
+## What you should see
+
+`wendy run` builds your application into a container, deploys it to your device, and streams the logs. When the readiness probe passes, the `postStart` hook opens `http://${WENDY_HOSTNAME}:7001` in your browser, where you should see:
+
+```json
+{"message":"hello-world"}
+```
+
+## Verifying deployment on your device
+
+After deploying your application to a WendyOS device, you can verify it is running by listing the applications on your device:
+
+```bash
+wendy device apps list
+✔︎ Searching for WendyOS devices [5.3s]
+✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
+╭───────────────┬─────────┬─────────┬──────────╮
+│ App           │ Version │ State   │ Failures │
+├───────────────┼─────────┼─────────┼──────────┤
+│ hello-world   │ 0.1.0   │ Running │ 0        │
+╰───────────────┴─────────┴─────────┴──────────╯
+```
+
+<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running hello-world app" />
+
+<Callout type="info">
+  **Expected State**: Because this app is an HTTP server, it shows as "Running" — it stays up to serve requests rather than exiting. The "Failures" column showing `0` confirms it started cleanly. (To stop it, run `wendy device apps stop hello-world`.)
+</Callout>
+
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Generated Application
+    ### Generated application
 
     The generated `main.cpp` starts a Drogon HTTP server with three routes and listens on port `7001`:
 
@@ -235,50 +264,6 @@ This guide will walk you through creating your first WendyOS application in C++.
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your application to a connected WendyOS device:
-
-```bash
-wendy run
-```
-
-This will build your application into a container, deploy it to your device, and stream the logs. When the readiness probe passes, the `postStart` hook opens `http://${WENDY_HOSTNAME}:7001` in your browser, where you should see:
-
-```json
-{"message":"hello-world"}
-```
-
-## Verifying Deployment on Your Device
-
-After deploying your application to a WendyOS device, you can verify it is running by listing the applications on your device:
-
-```bash
-wendy device apps list
-✔︎ Searching for WendyOS devices [5.3s]
-✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
-╭───────────────┬─────────┬─────────┬──────────╮
-│ App           │ Version │ State   │ Failures │
-├───────────────┼─────────┼─────────┼──────────┤
-│ hello-world   │ 0.1.0   │ Running │ 0        │
-╰───────────────┴─────────┴─────────┴──────────╯
-```
-
-<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running hello-world app" />
-
-<Callout type="info">
-  **Expected State**: Because this app is an HTTP server, it shows as "Running" — it stays up to serve requests rather than exiting. The "Failures" column showing `0` confirms it started cleanly. (To stop it, run `wendy device apps stop hello-world`.)
-</Callout>
-
-## Next Steps
-
-Now that you have a basic C++ application running:
-
-- Build out the API in the [Simple Web Server](/docs/guides/tutorials/cpp/simple-web-server) guide
-- Stream a camera feed with the [Camera Feed](/docs/guides/tutorials/cpp/camera) guide
-- Explore environment variables and configuration
-- Integrate with WendyOS device features via HTTP APIs
-
 <Callout type="info">
   **Containerized Deployment**: C++ applications on WendyOS run in containers. This provides isolation and portability, and the Wendy CLI handles the local build setup when deploying to your device.
 </Callout>
@@ -287,7 +272,7 @@ Now that you have a basic C++ application running:
   <Accordion title="Testing the app on your own machine">
     There are times when you might not have a WendyOS device around. The easiest way to test locally is with Docker, which mirrors how the app is built and run on the device.
 
-    ### Using Docker Locally
+    ### Using Docker locally
 
     Build and run your application in a container, mapping the port so you can reach it:
 
@@ -313,3 +298,12 @@ Now that you have a basic C++ application running:
     </Callout>
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Now that you have a basic C++ application running:
+
+- Build out the API in the [Simple web server](/docs/guides/tutorials/cpp/simple-web-server) guide
+- Stream a camera feed with the [Camera feed](/docs/guides/tutorials/cpp/camera) guide
+- Explore environment variables and configuration
+- Integrate with WendyOS device features via HTTP APIs

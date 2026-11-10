@@ -3,7 +3,6 @@
   "description": "Learn how to build with Wendy through practical examples",
   "pages": [
     "tutorials",
-    "chatgpt",
     "chat",
     "agent-service",
     "device-notifications",
@@ -13,7 +12,6 @@
     "fleet-deployment",
     "wendy-net",
     "wendy-net-services",
-    "nvidia-pair",
-    "llm-integration"
+    "nvidia-pair"
   ]
 }
