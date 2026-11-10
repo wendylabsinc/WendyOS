@@ -66,6 +66,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     var setup by rememberSaveableState(if (openVpn) "vpn" else "")
     var pane by rememberSaveableState("Overview")
     var errorDetails by remember { mutableStateOf<String?>(null) }
+    var setupDevice by remember { mutableStateOf<SetupDevice?>(null) }
     LaunchedEffect(model.browserURL) { model.browserURL?.let { model.browserURL = null; openURL(it) } }
     LaunchedEffect(model.linkRequest) { model.linkRequest?.let { model.linkRequest = null; openURL(it) } }
     LaunchedEffect(model.requestNearbySetup) { if (model.requestNearbySetup) { model.requestNearbySetup = false; nav.clear(); setup = "setup" } }
@@ -126,7 +127,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
                     // Pushed pages cover the screen; the pages underneath keep their state.
                     NavigationHost(nav) { when {
                         !model.initialized -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyMessage("Getting ready", "Your devices will be here in a moment.") }
-                        setup == "setup" -> NearbySetupScreen(model) { setup = "" }
+                        setup == "setup" -> NearbySetupScreen(model, setupDevice) { setup = ""; setupDevice = null; model.task { model.refresh() } }
                         setup == "vpn" -> VpnScreen(model) { setup = "" }
                         model.selected != null -> if (model.session == 0L) DeviceConnectionScreen(model)
                             else if (model.lite) key(model.session) { LiteDeviceScreen(model) }
@@ -143,6 +144,9 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
             }
         }
         model.appURL?.let { url -> AppBrowser(url, { model.appURL = null }, openURL) }
+        NearbySetupPrompt(model, active = model.initialized && model.inForeground && setup.isBlank() && !accounts && !addDevice && !address && model.appDeletion == null && model.appURL == null) { device ->
+            nav.clear(); setupDevice = device; setup = "setup"
+        }
         if (addDevice) ModalBottomSheet(onDismissRequest = { addDevice = false }, containerColor = MaterialTheme.colorScheme.background) {
             Column(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 PageTitle("Bring a device online", "Choose how you want to connect.")
