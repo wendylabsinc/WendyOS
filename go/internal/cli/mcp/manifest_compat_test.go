@@ -183,7 +183,9 @@ func TestRelayPublishedProfileControlsListingAndDispatch(t *testing.T) {
 			t.Fatal("listed simulator_create differs from the published definition")
 		}
 	}
-	assertProtocolToolHidden(t, srv, "simulator_start")
+	if reply := callProtocolTool(t, srv, "simulator_start"); !reply.IsError || structuredMap(t, &reply)["error_code"] != string(errCodeNotFound) {
+		t.Fatalf("unpublished tool did not return NOT_FOUND: %+v", reply)
+	}
 	for _, call := range []struct {
 		name string
 		args map[string]any

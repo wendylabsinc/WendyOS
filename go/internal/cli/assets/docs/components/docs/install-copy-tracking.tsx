@@ -19,7 +19,6 @@ const cliInstallCopyLocations: Partial<Record<string, DocsAnalyticsLocation>> = 
   '': 'docs_quickstart_cli_install_command',
   'guides/llm-integration': 'docs_llm_integration_cli_install_command',
   'advanced/wendy-lite/getting-started': 'docs_wendy_lite_getting_started_cli_install_command',
-  'advanced/development/install-hosting': 'docs_install_hosting_cli_install_command',
 };
 
 const cliInstallCopies = new Map<string, Omit<CliInstallCopyParams, 'location'>>([

@@ -1,4 +1,4 @@
-A tool that uploads, removes and promotes (nightly -> release) builds for [WendyOS](../wendyos/) and [Wendy Lite](../wendy-lite/).
+A tool that uploads, removes and promotes (nightly -> release) builds for [WendyOS](/docs/advanced/wendyos/requirements) and [Wendy Lite](/docs/advanced/wendy-lite).
 
 https://github.com/wendylabsinc/wendy-os-publisher
 

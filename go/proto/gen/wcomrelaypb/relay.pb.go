@@ -25,8 +25,13 @@ const (
 
 type WendyComRelayOpen struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The tunnel-v2 canonical request and signing profile are reused unchanged.
-	// service MUST be "wendycom"; request_id is a fresh random 16-byte value.
+	// The tunnel-v2 canonical request body is reused unchanged. service MUST be
+	// "wendycom"; request_id is a fresh random 16-byte value. The reqsig
+	// descriptor follows the tunnel-v2 rules except its operation, which MUST be
+	// "create_lite_tunnel" (aud stays "pki-core/tunnel-attestation"): Cloud and
+	// pki-core refuse "create_tunnel" here and "create_lite_tunnel" on the v2 path,
+	// so each audit names its path. Replay stays closed by pki-core's single-use
+	// descriptor nonce.
 	RequestBody *relaypb.TunnelPrincipalRequestBody `protobuf:"bytes,1,opt,name=request_body,json=requestBody,proto3" json:"request_body,omitempty"`
 	// Mandatory kind "tunnel-principal-request+jws", with an x5c leaf reference.
 	PrincipalRequest *wendyauthpb.SignedArtifact `protobuf:"bytes,2,opt,name=principal_request,json=principalRequest,proto3" json:"principal_request,omitempty"`
@@ -125,8 +130,7 @@ func (x *WendyComRelayPayload) GetBytes() []byte {
 
 type WendyComRelayGrant struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Exact signed WLG3 record, including signature. No JWS
-	// or JSON wrapping.
+	// Exact signed WLG3 record, including signature. No JWS or JSON wrapping.
 	Record        []byte `protobuf:"bytes,1,opt,name=record,proto3" json:"record,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

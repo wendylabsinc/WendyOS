@@ -49,31 +49,6 @@ func callProtocolTool(t *testing.T, srv *server.MCPServer, name string, args ...
 	return reply.Result
 }
 
-// mcp-go rejects filtered tools before invoking tool middleware. Verify the
-// wire error as well as the tests' confirmation and visibility checks.
-func assertProtocolToolHidden(t *testing.T, srv *server.MCPServer, name string) {
-	t.Helper()
-	msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":{}}}`, name)
-	response := srv.HandleMessage(context.Background(), []byte(msg))
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var reply struct {
-		Result json.RawMessage
-		Error  *struct {
-			Code    int
-			Message string
-		}
-	}
-	if err := json.Unmarshal(encoded, &reply); err != nil {
-		t.Fatal(err)
-	}
-	if len(reply.Result) != 0 || reply.Error == nil || reply.Error.Code != mcpgo.INVALID_PARAMS || !strings.Contains(reply.Error.Message, "tool '"+name+"' not found") {
-		t.Fatalf("filtered tool %s was not rejected: %s", name, encoded)
-	}
-}
-
 func deniedByBinding(r mcpgo.CallToolResult) bool {
 	content, _ := r.StructuredContent.(map[string]any)
 	code, _ := content["error_code"].(string)
@@ -82,15 +57,23 @@ func deniedByBinding(r mcpgo.CallToolResult) bool {
 
 func TestBindingAllowListRefusesUnlistedTools(t *testing.T) {
 	var asked []string
+	var logged []string
 	p := &BindingPolicy{Confirm: func(_ context.Context, tool string, _ map[string]any) bool {
 		asked = append(asked, tool)
 		return true
+	}, Log: func(tool, outcome string) {
+		logged = append(logged, tool+" "+outcome)
 	}}
 	srv := bindingServer(t, p)
 
-	assertProtocolToolHidden(t, srv, "device_disconnect")
+	if r := callProtocolTool(t, srv, "device_disconnect"); !deniedByBinding(r) {
+		t.Fatalf("device_disconnect outside the read-only preset: got %+v, want DENIED", r)
+	}
 	if len(asked) != 0 {
 		t.Fatalf("a refused tool must not reach confirmation; asked %v", asked)
+	}
+	if !slices.Equal(logged, []string{"device_disconnect refused: not allowed for this client"}) {
+		t.Fatalf("hidden call bypassed binding audit: %v", logged)
 	}
 	for _, tool := range protocolTools(t, srv) {
 		if tool.Name == "device_disconnect" {
@@ -142,7 +125,9 @@ func TestBindingAllowReadConfirmsMutatingCallsNotReads(t *testing.T) {
 	if len(asked) != 0 {
 		t.Fatalf("a read must not ask for confirmation; asked %v", asked)
 	}
-	assertProtocolToolHidden(t, srv, "container_stop")
+	if r := callProtocolTool(t, srv, "container_stop"); !deniedByBinding(r) {
+		t.Fatalf("--allow-read must not allow unlisted mutations: %+v", r)
+	}
 	if len(asked) != 0 {
 		t.Fatalf("an unlisted mutation must not reach confirmation; asked %v", asked)
 	}
@@ -257,7 +242,9 @@ func TestBindingAllowReadStaysOffTheHost(t *testing.T) {
 		}
 	}
 	for _, name := range probes {
-		assertProtocolToolHidden(t, srv, name)
+		if r := callProtocolTool(t, srv, name); !deniedByBinding(r) {
+			t.Errorf("%s without --allow-tool: got %+v, want DENIED", name, r)
+		}
 	}
 	if len(asked) != 0 {
 		t.Fatalf("a refused tool must not reach confirmation; asked %v", asked)

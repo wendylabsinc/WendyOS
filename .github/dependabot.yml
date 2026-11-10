@@ -17,3 +17,20 @@ updates:
     schedule:
       interval: weekly
       day: monday
+
+  - package-ecosystem: pip
+    directories:
+      - /go/simulator/go2
+      - /go/simulator/g1
+    schedule:
+      interval: weekly
+      day: monday
+    # Keep these manifests on security updates only.
+    open-pull-requests-limit: 0
+    ignore:
+      # ROS Humble uses Python 3.10; Pillow 13 requires Python 3.11+.
+      # Revisit when Pillow is removed or the runtimes upgrade Python.
+      # Background: https://github.com/wendylabsinc/WendyOS/pull/2756
+      # A version range also blocks incompatible security-update PRs.
+      - dependency-name: pillow
+        versions: [">=13"]

@@ -106,6 +106,35 @@ func TestToolGroupsProtocolDiscovery(t *testing.T) {
 	}
 }
 
+func TestDiscoveryProfilesKeepKnownLocalToolsCallable(t *testing.T) {
+	for _, profile := range []string{"", "training", "workflow", "workflow-v1"} {
+		t.Run("profile="+profile, func(t *testing.T) {
+			s := New(&config.Config{}, nil)
+			if err := s.SetToolProfile(profile); err != nil {
+				t.Fatal(err)
+			}
+			started := 0
+			s.SetSimulatorBackend(SimulatorBackend{Start: func(_ context.Context, name string) (*SimulatorInfo, error) {
+				started++
+				return &SimulatorInfo{Name: name, Device: "vm:" + name, State: "running"}, nil
+			}})
+			srv, err := s.newProtocolServer()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range protocolTools(t, srv) {
+				if tool.Name == "simulator_start" {
+					t.Fatal("specialist tool advertised outside the selected discovery profile")
+				}
+			}
+			result := callProtocolTool(t, srv, "simulator_start", map[string]any{"name": "dev"})
+			if result.IsError || started != 1 {
+				t.Fatalf("known local tool did not execute: result=%+v started=%d", result, started)
+			}
+		})
+	}
+}
+
 func TestDeviceConnectLegacyArgumentsRemainCallable(t *testing.T) {
 	s := New(&config.Config{}, func(_ context.Context, device string) (*grpcclient.AgentConnection, error) {
 		if device != "robot.local:50051" {

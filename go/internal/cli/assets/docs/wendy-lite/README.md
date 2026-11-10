@@ -25,13 +25,13 @@ Native app capability is firmware-specific; where the installer offers multiple 
 ## Documentation
 
 ### User Guides
-- [Getting Started](getting-started.md)
-- [Native Apps](native-apps.md)
-- [WASM Apps](wasm-apps.md)
-  - [Host API Reference](host-api.md)
+- [Getting Started](./getting-started.md)
+- [Native Apps](./native-apps.md)
+- [WASM Apps](./wasm-apps.md)
+  - [Host API Reference](./host-api.md)
 
 ### Implementation Details
-- [Source Code](repository.md)
-- [Swift SDK Internals](swift-sdk.md)
-- [StdIO](stdio.md)
-- [WendyCom Protocol](wendy-com.md)
+- [Source Code](./repository.md)
+- [Swift SDK Internals](./swift-sdk.md)
+- [StdIO](./stdio.md)
+- [WendyCom Protocol](./wendy-com.md)

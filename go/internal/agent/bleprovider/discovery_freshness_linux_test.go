@@ -176,7 +176,7 @@ func TestStaleBlueZCacheCannotRefreshRadioSelection(t *testing.T) {
 	props := meshDeviceProps(uuid, raw)
 	objects := managedObjects{path: {deviceInterface: props}}
 	selection := localmesh.NewPeerSelection(func() localmesh.NodeSnapshot {
-		return localmesh.NodeSnapshot{Links: []localmesh.PeerLink{{Device: peerFixture, Cost: 512}}}
+		return localmesh.NodeSnapshot{Links: []localmesh.PeerLink{{Device: peerFixture, Cost: 512, ForwardingReady: true}}}
 	})
 	r := &runtime{cfg: Config{NetworkName: "field", Credentials: &localmesh.Credentials{Device: selfFixture}, Selection: selection}, uuid: uuid, freshness: newAdvertisementFreshness("/org/bluez/hci0", uuid, "field", selfFixture)}
 	base := time.Now()

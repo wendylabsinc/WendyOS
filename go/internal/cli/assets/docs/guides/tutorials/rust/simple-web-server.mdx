@@ -1,10 +1,10 @@
 ---
-title: Simple Web Server
+title: Simple web server
 description: Build a long-running HTTP server using Axum
 language: rust
 ---
 
-## Building a Web Server with Axum
+## Building a web server with Axum
 
 <Callout type="info">
   **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/rust/simple-server](https://github.com/wendylabsinc/samples/tree/main/rust/simple-server)
@@ -20,11 +20,11 @@ To prove this out, we'll use Axum, the most popular and ergonomic web framework 
 - Rust 1.85 or later installed (via `rustup`)
 - A WendyOS device plugged in over USB or connectable over Wi-Fi
 
-## Setting Up Your Project
+## Setting up your project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy Axum template:
 
@@ -51,11 +51,50 @@ To prove this out, we'll use Axum, the most popular and ergonomic web framework 
   </Step>
 </Steps>
 
-## Code Breakdown
+## Test your server on WendyOS
+
+Your browser will open automatically once the server is ready, thanks to the generated `postStart` hook. If it doesn't, open your browser manually and navigate to:
+
+```
+http://wendyos-true-probe.local:3000
+```
+
+<Callout type="warning">
+  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output. In addition, don't forget to add the port to the hostname.
+</Callout>
+
+You should see the following response from the root route:
+
+```json
+{"message":"hello-world"}
+```
+
+This confirms your web server is successfully running on your WendyOS device and accepting requests from your network.
+
+## Verifying deployment
+
+You can verify the server container is running by listing the applications on your device:
+
+```bash
+wendy device apps list
+✔︎ Searching for WendyOS devices [5.3s]
+✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
+╭───────────────┬─────────┬─────────┬──────────╮
+│ App           │ Version │ State   │ Failures │
+├───────────────┼─────────┼─────────┼──────────┤
+│ simple-server │ 0.1.0   │ Running │ 0        │
+╰───────────────┴─────────┴─────────┴──────────╯
+```
+
+<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running simple-server app" />
+
+You should see your containerized web server listed among the running applications.
+
+## Code breakdown
 
 <Steps>
   <Step>
-    ### Generated Package Dependencies
+    ### Generated package dependencies
 
     Review the generated `Cargo.toml` dependencies for Axum, Tokio, and Serde:
 
@@ -74,7 +113,7 @@ To prove this out, we'll use Axum, the most popular and ergonomic web framework 
   </Step>
 
   <Step>
-    ### Generated Web Server
+    ### Generated web server
 
     The generated `src/main.rs` contains the server logic:
 
@@ -199,56 +238,7 @@ To prove this out, we'll use Axum, the most popular and ergonomic web framework 
   </Step>
 </Steps>
 
-## Run Again on WendyOS
-
-Deploy your containerized web server to your WendyOS device:
-
-```bash
-wendy run
-```
-
-The Wendy CLI will build your Docker image, transfer it to your device, and run it with the appropriate port mappings.
-
-## Test Your Server on WendyOS
-
-Your browser will open automatically once the server is ready, thanks to the generated `postStart` hook. If it doesn't, open your browser manually and navigate to:
-
-```
-http://wendyos-true-probe.local:3000
-```
-
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output. In addition, don't forget to add the port to the hostname.
-</Callout>
-
-You should see the following response from the root route:
-
-```json
-{"message":"hello-world"}
-```
-
-This confirms your web server is successfully running on your WendyOS device and accepting requests from your network.
-
-## Verifying Deployment
-
-You can verify the server container is running by listing the applications on your device:
-
-```bash
-wendy device apps list
-✔︎ Searching for WendyOS devices [5.3s]
-✔︎ Listing applications: True Probe [USB, Ethernet, LAN]
-╭───────────────┬─────────┬─────────┬──────────╮
-│ App           │ Version │ State   │ Failures │
-├───────────────┼─────────┼─────────┼──────────┤
-│ simple-server │ 0.1.0   │ Running │ 0        │
-╰───────────────┴─────────┴─────────┴──────────╯
-```
-
-<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the running simple-server app" />
-
-You should see your containerized web server listed among the running applications.
-
-## More Code Notes
+## More code notes
 
 Let's break down what the code does:
 
@@ -266,11 +256,11 @@ Let's break down what the code does:
 
 7. **Run the Server**: The `axum::serve()` function starts the server and keeps it running.
 
-## Learn More
+## Learn more
 
 Axum is a powerful and ergonomic web framework for Rust. Learn more by visiting [https://docs.rs/axum/latest/axum/](https://docs.rs/axum/latest/axum/) and exploring the examples to build more sophisticated servers.
 
-### Other Popular Rust Web Frameworks
+### Other popular Rust web frameworks
 
 While this guide uses Axum, other excellent Rust web frameworks will work similarly on WendyOS:
 
@@ -281,23 +271,11 @@ While this guide uses Axum, other excellent Rust web frameworks will work simila
 
 All of these frameworks can be containerized and deployed to WendyOS following the same Docker-based approach outlined in this guide.
 
-## Next Steps
-
-Now that you have a basic web server running:
-
-- Add more routes to handle different endpoints
-- Implement PUT and DELETE routes for a full REST API
-- Use Axum's extractors for query strings and headers
-- Add middleware for logging, authentication, and error handling
-- Explore Axum's state management for sharing data across handlers
-- Implement WebSocket support for real-time communication
-- Check out the [Axum examples](https://github.com/tokio-rs/axum/tree/main/examples) for comprehensive patterns
-
 <Accordions>
   <Accordion title="Testing the app on your own machine">
     There are times when you might not have a WendyOS device around. You can still test your application locally using Cargo or Docker.
 
-    ### Using Cargo Directly
+    **Using Cargo directly**
 
     ```bash
     cargo run
@@ -312,7 +290,7 @@ Now that you have a basic web server running:
     Server running on http://0.0.0.0:3000
     ```
 
-    ### Using Docker Locally
+    **Using Docker locally**
 
     Build and run the container:
 
@@ -321,7 +299,7 @@ Now that you have a basic web server running:
     docker run -p 3000:3000 simple-server
     ```
 
-    ### Test Your Server
+    **Test your server**
 
     Open another terminal and test with curl:
 
@@ -362,3 +340,17 @@ Now that you have a basic web server running:
     ```
   </Accordion>
 </Accordions>
+
+## Next steps
+
+Continue with [Full-stack web app](/docs/guides/tutorials/rust/web-app) to serve a React frontend from an Axum backend.
+
+Now that you have a basic web server running:
+
+- Add more routes to handle different endpoints
+- Implement PUT and DELETE routes for a full REST API
+- Use Axum's extractors for query strings and headers
+- Add middleware for logging, authentication, and error handling
+- Explore Axum's state management for sharing data across handlers
+- Implement WebSocket support for real-time communication
+- Check out the [Axum examples](https://github.com/tokio-rs/axum/tree/main/examples) for comprehensive patterns

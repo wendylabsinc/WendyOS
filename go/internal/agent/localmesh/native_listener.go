@@ -67,6 +67,7 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 	if policy == nil {
 		policy = NewConnectionPolicy(node.Credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})
 	}
+	policy.SetSnapshot(node.Snapshot)
 	ctx, cancel := context.WithCancel(parent)
 	var workers sync.WaitGroup
 	defer func() { cancel(); _ = listener.Close(); workers.Wait() }()
@@ -135,17 +136,18 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 					} else {
 						return nil, errors.New("native stream ALPN required")
 					}
+					if selected == StreamALPN {
+						lease = policy.ReservePreferred(fmt.Sprintf("tls-incoming:%p", raw), meshid.Device{}, false, group, true)
+						if lease == nil {
+							slot = nil
+							return nil, errors.New("Wendy Net connection limit reached")
+						}
+					}
 					select {
 					case slot <- struct{}{}:
 					default:
 						slot = nil
 						return nil, errors.New("native carrier role capacity reached")
-					}
-					if selected == StreamALPN {
-						lease = policy.ReserveGroup(fmt.Sprintf("tls-incoming:%p", raw), meshid.Device{}, false, group)
-						if lease == nil {
-							return nil, errors.New("device neighbour capacity reached")
-						}
 					}
 				}
 				if config.GetConfigForClient != nil {
@@ -176,33 +178,11 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 	}
 }
 
-// Native LAN streams follow the same cheaper-carrier replacement policy as
-// QUIC LAN links. Releasing the old attachment also releases its shared lease.
+// Native LAN streams retain a slower standby while the provider has capacity.
+// Its exact owned lease may later be reclaimed for a new direct peer.
 func attachNativeTLS(ctx context.Context, node *Node, peer meshid.Device, conn net.Conn, cost uint16) error {
 	defer conn.Close()
-	if node.HasCheaperLink(peer, cost) {
-		return nil
-	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if node.HasCheaperLink(peer, cost) {
-					_ = conn.Close()
-					return
-				}
-			}
-		}
-	}()
 	return node.AttachStream(ctx, peer, conn, cost)
 }

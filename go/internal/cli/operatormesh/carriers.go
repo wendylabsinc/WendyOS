@@ -38,6 +38,11 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 			fmt.Fprintf(os.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
 		}()
 	}
+	defer func() {
+		if result != nil && ctx.Err() == nil && !errors.Is(result, carriers.ErrUnsupportedPeer) && s.options.ReportCarrierFailure != nil {
+			s.options.ReportCarrierFailure(candidate.Transport, result)
+		}
+	}()
 	var peer meshid.Device
 	config := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, NextProtos: []string{meshoperatorlink.RouterALPN}, Certificates: []tls.Certificate{s.Node.Credentials.Certificate}, InsecureSkipVerify: true, SessionTicketsDisabled: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
@@ -106,9 +111,6 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 		fmt.Fprintf(os.Stderr, "wendy: mesh %s authenticated %s\n", candidate.Transport, peer.Principal())
 	}
 	candidate.Authenticated(peer)
-	if s.Snapshot().HasCheaperLink(peer, candidate.Cost) {
-		return nil
-	}
 	s.linkMu.Lock()
 	s.links[link] = managedCarrier{peer: peer, cost: candidate.Cost}
 	s.choosePreferredLocked()
@@ -132,6 +134,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 			_ = retired.Close()
 		}
 	}()
+	ctx = localmesh.WithLinkAttachmentReceiver(ctx, candidate.AttachedLink)
 	return s.Node.AttachOperatorRouterLink(localmesh.WithCarrier(ctx, candidate.Transport), link, candidate.Cost)
 }
 

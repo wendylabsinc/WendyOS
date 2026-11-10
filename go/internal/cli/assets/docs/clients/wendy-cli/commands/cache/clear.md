@@ -1,1 +1,0 @@
-Immediately clears all caches, removing the artifacts from disk.

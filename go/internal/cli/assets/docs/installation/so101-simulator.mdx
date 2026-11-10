@@ -6,6 +6,8 @@ description: Run a virtual six-joint LeRobot SO-101 arm on macOS or Linux.
 The built-in `so101` profile runs the official SO-101 follower model in MuJoCo.
 It is virtual only and needs no physical arm, USB device, camera or GPU.
 
+<Figure src="/images/get-started/so101-arm.webp" alt="A simulated SO-101 robot arm reaching toward a small cube in the 3D viewer" caption="The simulated SO-101 arm in the viewer." />
+
 ```bash
 wendy vm create arm-sim --profile so101
 wendy vm robot start arm-sim
@@ -36,3 +38,8 @@ emulation are slower. The default profile requests 4 CPUs and 4096 MiB.
 
 The simulator uses the official SO-101 follower model, with its license and
 attribution included in the runtime. It does not control a physical arm.
+
+## Next steps
+
+- [Simulator](/docs/installation/wendyos-virtual-machine) covers VM requirements and troubleshooting.
+- [Program a simulated robot](/docs/getting-started/robot) is a guided tutorial with the Go2.

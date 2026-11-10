@@ -332,6 +332,10 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 	attempts := map[string]time.Time{}
 	active := map[string]*radioLink{}
 	policy := localmesh.NewConnectionPolicy(ident, true, localmesh.ConnectionLimits{Outgoing: localmesh.NANMaxOutgoing, Attempts: localmesh.NANMaxOutgoingAttempts, Total: localmesh.NANMaxConnections})
+	policy.SetCarrierCost(NANLinkCost)
+	if selection != nil {
+		policy.SetSnapshot(selection.Snapshot)
+	}
 	defer func() {
 		for _, l := range active {
 			l.peer.Lease.Release()
@@ -353,12 +357,16 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 			}
 			keys = append(keys, nmi)
 		}
-		for _, nmi := range queue.Order(keys, time.Now()) {
+		var view localmesh.NodeSnapshot
+		if selection != nil {
+			view = selection.Snapshot()
+		}
+		for _, nmi := range queue.OrderPreferred(keys, time.Now(), view, func(key string) (meshid.Device, uint16) { return candidates[key].device, NANLinkCost }) {
 			c := candidates[nmi]
 			if !shouldInitiate(ident, c.device, nmi, active, attempts, time.Now()) || (selection != nil && !selection.AllowRadio(c.device, localmesh.RadioNAN)) {
 				continue
 			}
-			lease := policy.Reserve(nmi, c.device, true)
+			lease := policy.ReservePreferred(nmi, c.device, true, "", queue.ReclaimEligible(nmi, time.Now()))
 			if lease == nil {
 				continue
 			}
@@ -390,21 +398,11 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 		case <-ctx.Done():
 			return ctx.Err()
 		case h := <-health:
-			if l := active[radioPeerKey(h.Peer, active)]; l != nil {
-				if l.draining {
-					continue
-				}
-				l.health(h.Up, time.Now())
-				if h.Up {
-					queue.Succeeded(h.Peer.NMI)
-				} else {
-					l.since = time.Now().Add(-35 * time.Second)
-					queue.Failed(h.Peer.NMI, time.Now())
-				}
-				if h.Up && selection != nil {
+			if l := handleRadioHealth(h, active, queue, attempts, time.Now(), emit); l != nil && h.Up {
+				if selection != nil {
 					selection.Connected(h.Peer.Device, localmesh.RadioNAN)
 				}
-				if h.Up && meshid.Compare(h.Peer.Device, ident) < 0 {
+				if meshid.Compare(h.Peer.Device, ident) < 0 {
 					recovery.hasLowerPeer = true
 				}
 			}
@@ -412,41 +410,12 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 		case <-ticker.C:
 			expireRadioAttempts(attempts, time.Now())
 			for _, link := range active {
-				nmi := link.peer.NMI
 				if !link.draining && (selection == nil || selection.AllowRadio(link.peer.Device, localmesh.RadioNAN)) {
 					continue
 				}
-				if !link.draining {
-					link.draining = true
-					link.since = time.Now()
-					// Stop the exact authenticated worker before removing the
-					// underlay; do not lose NDP ownership until disconnect.
-					removed := link.peer
-					removed.NDI = ""
-					emit(removed)
-				}
-				if time.Since(link.since) >= 35*time.Second {
-					return fmt.Errorf("NAN NDP for %s did not disconnect while draining", nmi)
-				}
-				if time.Since(link.stopAttempt) < 5*time.Second {
-					continue
-				}
-				link.stopAttempt = time.Now()
-				info, err := control.command("NAN_PEER_INFO " + nmi + " ndps")
-				if err != nil {
-					logger.Warn("NAN selected-peer lookup failed", zap.String("peer", nmi), zap.Error(err))
-					continue
-				}
-				for _, ndp := range ownedNDPs(nmi, local, info) {
-					if link.peer.ID != "" && ndp.id != link.peer.ID {
-						continue
-					}
-					if (ndp.init == local) != link.peer.Outgoing {
-						continue
-					}
-					if _, err := control.command(fmt.Sprintf("NAN_NDP_TERMINATE peer_nmi=%s init_ndi=%s ndp_id=%s", ndp.peer, ndp.init, ndp.id)); err != nil {
-						logger.Warn("NAN selected-peer termination failed", zap.String("peer", nmi), zap.Error(err))
-					}
+				link.beginDrain(time.Now(), emit)
+				if err := link.drainTick(time.Now(), control, local, logger); err != nil {
+					return err
 				}
 			}
 			anyHealthy := false
@@ -493,19 +462,7 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 				lastProbe = time.Now()
 			}
 			for _, link := range active {
-				if link.draining || !link.expired(time.Now()) {
-					continue
-				}
-				link.draining = true
-				link.since = time.Now()
-				removed := link.peer
-				removed.NDI = ""
-				emit(removed)
-				queue.Failed(link.peer.NMI, time.Now())
-				rememberRadioAttempt(attempts, link.peer.NMI, time.Now())
-				if selection != nil {
-					selection.Failed(link.peer.Device, localmesh.RadioNAN)
-				}
+				expireRadioLink(link, time.Now(), queue, attempts, selection, emit)
 			}
 			tryCandidates()
 			continue
@@ -575,7 +532,7 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 			if active[key] != nil {
 				continue
 			}
-			lease := policy.Reserve(key, peer, false)
+			lease := policy.ReservePreferred(key, peer, false, "", true)
 			if lease == nil {
 				_, _ = control.command(fmt.Sprintf("NAN_NDP_RESPONSE reject peer_nmi=%s ndp_id=%s init_ndi=%s", nmi, v["ndp_id"], v["init_ndi"]))
 				continue
@@ -633,19 +590,7 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 			}
 			emit(p)
 		case "NAN-NDP-DISCONNECTED":
-			if p, ok := disconnectedPeer(v, local, active); ok {
-				key := radioPeerKey(p, active)
-				if key == "" {
-					key, _ = radioEventLink(p.NMI, p.ID, active)
-				}
-				if l := active[key]; l != nil {
-					recovery.setupFailed(l, v)
-					setupRecovery.setupFailed(l, v, time.Now())
-					l.peer.Lease.Release()
-				}
-				emit(p)
-				delete(active, key)
-			}
+			finishRadioDisconnect(v, local, active, &recovery, &setupRecovery, time.Now(), emit)
 		}
 	}
 }
