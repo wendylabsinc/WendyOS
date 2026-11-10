@@ -169,6 +169,8 @@ wendy install --device-type dragonwing-iq-8275
 wendy install --device-type dragonwing-iq-9075
 ```
 
+For a step-by-step guide with photos, see [Qualcomm Dragonwing IQ8 and IQ9](/docs/installation/wendyos-qualcomm-dragonwing).
+
 Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wendy downloads and verifies the bundle, then reads the board's chip id before writing anything and refuses the flash if it belongs to a different Dragonwing. A board that does not answer, or reports an id Wendy does not know, is flashed anyway after a caution — verification only happens when the board answers. Set DIP switch 3 OFF and power-cycle after success.
 
 On the IQ8, after WendyOS boots, move the computer cable from USB0 (USB-C) to USB2 (micro-USB) for normal USB networking and CLI access. USB0 remains the EDL/recovery port. The IQ9 gadget port is unchanged.
