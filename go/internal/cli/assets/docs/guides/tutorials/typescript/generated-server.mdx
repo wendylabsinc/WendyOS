@@ -4,13 +4,12 @@ description: Explore the TypeScript source, Dockerfile, and Wendy app configurat
 language: typescript
 ---
 
-Use the project you already deployed in [your first app](/docs/getting-started/app)
-or the [TypeScript server tutorial](/docs/guides/tutorials/typescript/simple-web-server).
-If you have not created one yet, start there. Keep your existing project; the
-examples below explain its files. App names and ports depend on the values you
-chose when creating it.
+Use the project you deployed in [Deploy your first app](/docs/getting-started/app)
+or [Hello world in TypeScript](/docs/guides/tutorials/typescript/hello-world).
+If you have not created one yet, start there. The examples below explain its
+files. If you chose a different app name or port, your files show those values.
 
-## Code Breakdown
+## Code breakdown
 
 <Steps>
   <Step>
@@ -20,7 +19,7 @@ chose when creating it.
 
     ```json
     {
-      "name": "simple-server",
+      "name": "hello-wendy",
       "version": "0.1.0",
       "type": "module",
       "scripts": {
@@ -70,7 +69,7 @@ chose when creating it.
   </Step>
 
   <Step>
-    ### Generated Web Server
+    ### Generated web server
 
     The generated `src/index.ts` contains the server logic:
 
@@ -78,7 +77,7 @@ chose when creating it.
     import express, { Request, Response } from "express";
 
     const app = express();
-    const port = 3000;
+    const port = 5001;
     const hostname = process.env.WENDY_HOSTNAME || "0.0.0.0";
 
     app.use(express.json());
@@ -151,7 +150,7 @@ chose when creating it.
     COPY --from=builder /app/dist ./dist
     COPY --from=builder /app/node_modules ./node_modules
 
-    EXPOSE 3000
+    EXPOSE 5001
 
     CMD ["node", "dist/index.js"]
     ```
@@ -164,7 +163,7 @@ chose when creating it.
 
     ```json
     {
-        "appId": "simple-server",
+        "appId": "hello-wendy",
         "platform": "linux",
         "version": "0.1.0",
         "entitlements": [
@@ -173,15 +172,19 @@ chose when creating it.
             }
         ],
         "readiness": {
-            "tcpSocket": { "port": 3000 },
+            "tcpSocket": { "port": 5001 },
             "timeoutSeconds": 30
         },
         "hooks": {
             "postStart": {
-                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:3000"
+                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:5001"
             }
         }
     }
     ```
   </Step>
 </Steps>
+
+## Next steps
+
+Continue with [Full-stack web app](/docs/guides/tutorials/typescript/web-app) to serve a React frontend from an Express backend.

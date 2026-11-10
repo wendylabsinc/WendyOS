@@ -247,9 +247,9 @@ func (b *MDNSBridge) withdraw(now time.Time) error {
 
 func (b *MDNSBridge) projection(now time.Time) ([]dns.RR, error) {
 	b.pruneAppClaims(now)
-	// A catalog record can outlive its origin's route. Keep its signed lease
-	// and high-water receipt, but withdraw its DNS projection until the
-	// origin's signed manifest and exact host route are both live again.
+	// A catalog record can outlive its origin's route. Keep the directory's
+	// admitted lease, but withdraw its DNS projection until the manifest and
+	// exact host route are both live again. The directory owns lease cleanup.
 	view := b.snapshot()
 	reachable := make(map[meshid.Device]bool)
 	signed, err := ProjectDNS(b.catalog.Snapshot(now), b.scope.AppID, func(appID string, r Record) bool {

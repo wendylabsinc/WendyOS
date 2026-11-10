@@ -18,6 +18,12 @@ type DialPacer struct {
 	next time.Time
 }
 
+func (p *DialPacer) Ready(now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !now.Before(p.next)
+}
+
 func (p *DialPacer) Admit(now time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

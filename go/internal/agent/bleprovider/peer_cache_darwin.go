@@ -39,10 +39,33 @@ func (c *darwinPeerCache) remember(address string, adv Advertisement, peer meshi
 	c.peers[address] = darwinKnownPeer{adv, peer, now}
 }
 
-func (c *darwinPeerCache) suppressed(address string, adv Advertisement, selection *localmesh.PeerSelection, now time.Time) bool {
+func newDarwinConnectionPolicy(self meshid.Device, snapshot func() localmesh.NodeSnapshot) *localmesh.ConnectionPolicy {
+	policy := localmesh.NewConnectionPolicy(self, true, localmesh.ConnectionLimits{Outgoing: 2, Attempts: 1, Total: 2})
+	policy.SetSnapshot(snapshot)
+	policy.SetCarrierCost(LinkCost)
+	return policy
+}
+
+// The verified identity is a scheduling hint, not authentication. Changed or
+// expired advertisements must authenticate again before their identity is known.
+func (c *darwinPeerCache) known(address string, adv Advertisement, now time.Time) meshid.Device {
 	c.mu.Lock()
 	known, ok := c.peers[address]
 	c.mu.Unlock()
-	return ok && known.advertisement == adv && now.Sub(known.verified) < time.Minute &&
-		selection != nil && !selection.AllowRadio(known.peer, localmesh.RadioBLE)
+	if ok && known.advertisement == adv && now.Sub(known.verified) < time.Minute {
+		return known.peer
+	}
+	return meshid.Device{}
+}
+
+func (c *darwinPeerCache) reserve(policy *localmesh.ConnectionPolicy, candidates *localmesh.CandidateQueue, address string, adv Advertisement, now time.Time) *localmesh.ConnectionLease {
+	return policy.ReservePreferred(address, c.known(address, adv, now), true, "", candidates.ReclaimEligible(address, now))
+}
+
+// Rank new peers before upgrades and standbys, using the same fresh verified
+// identity as reservation. A changed radio advertisement supplies no authority.
+func (c *darwinPeerCache) order(candidates *localmesh.CandidateQueue, keys []string, advertisements map[string]Advertisement, now time.Time, view localmesh.NodeSnapshot) []string {
+	return candidates.OrderPreferred(keys, now, view, func(address string) (meshid.Device, uint16) {
+		return c.known(address, advertisements[address], now), LinkCost
+	})
 }

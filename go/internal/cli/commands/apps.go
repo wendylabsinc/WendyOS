@@ -473,9 +473,24 @@ func newAppsStartCmd() *cobra.Command {
 						appActionResult{App: appName, Action: "start", Status: "started", RestartPolicy: "unless-stopped"},
 						func() { cliSuccess("Application %s started.", appName) })
 				}
-				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
-				if err != nil {
-					return err
+				var outStream containerOutputStream
+				var stdinAttempted bool
+				if isAppGroup(ctx, target.Agent.ContainerService, appName) {
+					// Stdin can only attach to one container, and agents before
+					// the AttachContainer group fix reject a group there with
+					// "has multiple service containers". StartContainer fans out
+					// to every service and its stream ends once all started.
+					outStream, err = target.Agent.ContainerService.StartContainer(ctx, &agentpb.StartContainerRequest{
+						AppName: appName,
+					})
+					if err != nil {
+						return fmt.Errorf("starting container: %w", err)
+					}
+				} else {
+					outStream, stdinAttempted, err = openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
+					if err != nil {
+						return err
+					}
 				}
 				gotFirstResponse := false
 				gotStarted := false
@@ -667,6 +682,15 @@ func startOutcomeResult(appName string, c *agentpb.AppContainer) appActionResult
 		result.TerminationReason = reason
 	}
 	return result
+}
+
+// isAppGroup reports whether appName is a multi-service app. A lookup failure
+// reads as false, so the caller keeps the single-container attach path.
+func isAppGroup(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) bool {
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	c := fetchAppContainer(readCtx, svc, appName)
+	return c != nil && len(c.GetServices()) > 1
 }
 
 // fetchAppContainer returns the AppContainer for appName from the agent's

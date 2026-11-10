@@ -15,14 +15,16 @@ import (
 // be constructed by role strings. Reverify against current local trust after a
 // trust/credential change; the snapshot is not an online revocation service.
 type VerifiedOperator struct {
-	operator Operator
-	leaf     *x509.Certificate
-	notAfter time.Time
-	hashes   [][]byte
+	operator  Operator
+	leaf      *x509.Certificate
+	notBefore time.Time
+	notAfter  time.Time
+	hashes    [][]byte
 }
 
-func (v VerifiedOperator) Operator() Operator  { return v.operator }
-func (v VerifiedOperator) NotAfter() time.Time { return v.notAfter }
+func (v VerifiedOperator) Operator() Operator   { return v.operator }
+func (v VerifiedOperator) NotAfter() time.Time  { return v.notAfter }
+func (v VerifiedOperator) NotBefore() time.Time { return v.notBefore }
 func (v VerifiedOperator) LeafDER() []byte {
 	if v.leaf == nil {
 		return nil
@@ -52,6 +54,16 @@ func (v VerifiedOperator) Descriptor() CertificateDescriptor {
 // it does not replace this primary route-proof credential merely by sharing a
 // principal. P-256 primary paths remain usable when locally trusted as such.
 func VerifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tenant, now time.Time) (VerifiedOperator, error) {
+	return verifyPrimary(chain, roots, tenant, now, nil)
+}
+
+// VerifyPrimaryWithPolicy retains primary trust and operator scope, and uses
+// only the receiver's explicitly local leaf-time policy.
+func VerifyPrimaryWithPolicy(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tenant, now time.Time, policy certs.CertificateTimePolicy) (VerifiedOperator, error) {
+	return verifyPrimary(chain, roots, tenant, now, &policy)
+}
+
+func verifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tenant, now time.Time, policy *certs.CertificateTimePolicy) (VerifiedOperator, error) {
 	var result VerifiedOperator
 	if !tenant.IsValid() || len(chain) == 0 || len(chain) > 16 || len(roots) == 0 {
 		return result, errors.New("missing operator tenant, chain or primary trust")
@@ -70,6 +82,9 @@ func VerifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tena
 		parsed[i] = certificate
 	}
 	leaf := parsed[0]
+	if policy != nil && leaf.NotAfter.Sub(leaf.NotBefore) > certs.MaxPeerCertificateLifetime {
+		return result, errors.New("operator certificate validity window exceeds accepted maximum")
+	}
 	if leaf.IsCA {
 		return result, errors.New("operator credential must not be a CA certificate")
 	}
@@ -97,11 +112,16 @@ func VerifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tena
 	if leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
 		return result, errors.New("operator credential does not permit signing")
 	}
-	expires, err := certs.VerifyPeerCertificateChainExpiry(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, now, now)
+	base, leafNow := now, now
+	if policy != nil {
+		base = policy.BaseTime(now)
+		leafNow = policy.LeafTimeAtBase(base, leaf.NotBefore)
+	}
+	window, err := certs.VerifyPeerCertificateChainWindow(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, base, leafNow)
 	if err != nil {
 		return result, err
 	}
-	if !now.Before(expires) {
+	if !base.Before(window.NotAfter) || policy != nil && !window.Valid() {
 		return result, errors.New("operator primary path expired")
 	}
 	hashes := make([][]byte, len(parsed))
@@ -109,5 +129,5 @@ func VerifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tena
 		hash := sha256.Sum256(certificate.Raw)
 		hashes[i] = bytes.Clone(hash[:])
 	}
-	return VerifiedOperator{operator: operator, leaf: leaf, notAfter: expires, hashes: hashes}, nil
+	return VerifiedOperator{operator: operator, leaf: leaf, notBefore: window.NotBefore, notAfter: window.NotAfter, hashes: hashes}, nil
 }

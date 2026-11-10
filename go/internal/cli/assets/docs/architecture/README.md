@@ -41,5 +41,5 @@ the links use Ethernet, Wi-Fi, or Bluetooth.
 For contributors, the engine is a separate Go library in `go/babel`. It uses the
 Babel routing protocol; carrier integration and application services belong to
 the agent. See the [library guide](https://github.com/wendylabsinc/WendyOS/blob/main/go/babel/README.md)
-for its API and the [testing guide](../development/testing.md#routing-engine-tests)
+for its API and the [testing guide](https://github.com/wendylabsinc/WendyOS/blob/main/go/internal/cli/assets/docs/development/testing.md#routing-engine-tests)
 for the separate module checks.

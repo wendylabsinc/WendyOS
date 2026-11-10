@@ -31,6 +31,9 @@ performing tests or other required checks.
    - UI/UX includes iOS, Android, macOS, and CLI developer experience.
    - For CLI or app UI/UX changes, include a GIF, screenshots, or video in this
      section demonstrating the changed behavior.
+   - Upload PR review assets as GitHub attachments and embed them in the PR
+     description. Do not commit review screenshots, GIFs, videos, or other
+     review-only assets to the repository.
 4. **Significant items of note**
    - Explicitly identify wire protocol breaking changes and added API surface.
    - Identify other breaking changes and any action existing users must take.

@@ -4,6 +4,7 @@
   "pages": [
     "index",
     "../installation/unitree-simulators",
+    "../installation/live-simulation-projects",
     "sim-to-real",
     "sensor-fidelity",
     "vision-language-action",
