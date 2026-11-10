@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/pem"
 	"math/big"
@@ -57,16 +56,16 @@ func New(t testing.TB) *Fixture {
 	f.Chain = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 	f.TargetID, err = meshid.DeviceFromPrincipal(TargetPrincipal)
 	must(t, err)
-	f.Target = f.Mint(t, TargetPrincipal, nil)
-	f.Builder = f.Mint(t, BuilderPrincipal, nil)
-	f.OtherBuilder = f.Mint(t, BuilderPrincipal, nil)
-	f.Operator = f.Mint(t, OperatorPrincipal, []string{"entitlement:deployment:create:device:" + f.TargetID.UUID().String() + ":allow"})
+	f.Target = f.Mint(t, TargetPrincipal)
+	f.Builder = f.Mint(t, BuilderPrincipal)
+	f.OtherBuilder = f.Mint(t, BuilderPrincipal)
+	f.Operator = f.Mint(t, OperatorPrincipal)
 	return f
 }
-func (f *Fixture) Mint(t testing.TB, principal string, rights []string) Credential {
-	return f.MintUntil(t, principal, rights, f.Now.Add(15*time.Minute))
+func (f *Fixture) Mint(t testing.TB, principal string) Credential {
+	return f.MintUntil(t, principal, f.Now.Add(15*time.Minute))
 }
-func (f *Fixture) MintUntil(t testing.TB, principal string, rights []string, notAfter time.Time) Credential {
+func (f *Fixture) MintUntil(t testing.TB, principal string, notAfter time.Time) Credential {
 	t.Helper()
 	f.serial++
 	key, err := mldsa.GenerateKey(mldsa.MLDSA65())
@@ -74,15 +73,6 @@ func (f *Fixture) MintUntil(t testing.TB, principal string, rights []string, not
 	uri, err := url.Parse(principal)
 	must(t, err)
 	leaf := &x509.Certificate{SerialNumber: big.NewInt(f.serial), Subject: pkix.Name{CommonName: "local delivery integration peer"}, NotBefore: f.Now.Add(-time.Minute), NotAfter: notAfter, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}, URIs: []*url.URL{uri}}
-	if rights != nil {
-		values := make([]asn1.RawValue, len(rights))
-		for i, s := range rights {
-			values[i] = asn1.RawValue{Tag: asn1.TagUTF8String, Bytes: []byte(s)}
-		}
-		encoded, err := asn1.Marshal(values)
-		must(t, err)
-		leaf.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 65441, 1}, Value: encoded}}
-	}
 	der, err := x509.CreateCertificate(rand.Reader, leaf, f.Root, key.Public(), f.rootKey)
 	must(t, err)
 	kb, err := x509.MarshalPKCS8PrivateKey(key)

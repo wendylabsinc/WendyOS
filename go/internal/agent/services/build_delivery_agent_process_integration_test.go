@@ -128,7 +128,7 @@ exec /audit/agent`
 		t.Cleanup(func() { conn.Close() })
 		return conn
 	}
-	operator := f.Mint(t, deliverypki.OperatorPrincipal, nil)
+	operator := f.Mint(t, deliverypki.OperatorPrincipal)
 	opConn := connect(operator)
 	opDelivery := agentpbv2.NewWendyBuildDeliveryServiceClient(opConn)
 	waitReady := func(conn *grpc.ClientConn) {
@@ -219,7 +219,7 @@ exec /audit/agent`
 	// The signing certificate expires before either job finishes. The ordinary
 	// admission connection has a distinct primary operator key and is closed.
 	now := time.Now().Truncate(time.Second)
-	f.Operator = f.MintUntil(t, deliverypki.OperatorPrincipal, []string{"entitlement:deployment:create:allow"}, now.Add(8*time.Second))
+	f.Operator = f.MintUntil(t, deliverypki.OperatorPrincipal, now.Add(8*time.Second))
 	admit := func(reference string) string {
 		c := f.Claims(reference)
 		c.IssuedAt = now.Unix()

@@ -54,8 +54,8 @@ communication moves to mTLS on port 50052, and the plaintext port is shut down.
 **Delegated image delivery (Linux).** A build host's device certificate alone
 cannot stage chunks or mutate the target's OCI registry. Delivery requires a
 versioned operator-signed grant, admitted by the target while the operator's
-certificate is valid. Its embedded certificate chain and deployment entitlements
-are checked against the target's provisioned trust. The grant fixes the target,
+certificate is valid. Its operator certificate chain and tenant identity are checked against the
+target's provisioned trust. The grant fixes the target,
 builder identity and public key, build-input hash, repository and tag, prior
 image digest, delivery deadline and resource budget. The actual mTLS caller must
 prove possession of that builder key on either transfer path.

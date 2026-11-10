@@ -99,9 +99,8 @@ func newDeliveryRPCLab(t *testing.T) *deliveryRPCLab {
 		t.Cleanup(func() { conn.Close() })
 		return conn
 	}
-	// Admission transports use the primary identity; the JWS carries a separate
-	// entitlement-bearing operator certificate, as the real Cloud flow does.
-	primary := f.Mint(t, deliverypki.OperatorPrincipal, nil)
+	// Both the admission transport and signed grant use existing operator identity.
+	primary := f.Mint(t, deliverypki.OperatorPrincipal)
 	return &deliveryRPCLab{f, m, backend, connect(primary), connect(f.Builder), connect(f.OtherBuilder)}
 }
 func (l *deliveryRPCLab) admit(t *testing.T, c builddelivery.Claims) string {
