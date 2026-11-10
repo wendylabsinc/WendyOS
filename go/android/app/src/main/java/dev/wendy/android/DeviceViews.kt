@@ -422,22 +422,3 @@ private fun ConfirmingButton(title: String, warning: String, action: () -> Unit)
 
 // MARK: Activity tab
 
-@Composable
-fun ActivityScreen(model: WendyModel, select: (Device) -> Unit) {
-    PageColumn {
-        item { PageTitle("Activity", "Connections and app changes observed by Wendy.") }
-        if (model.experienceEvents.isEmpty()) item { EmptyMessage("You’re up to date", "Activity will appear as you use your devices.", Icons.Outlined.CheckCircle) }
-        items(model.experienceEvents, key = { it.id }) { event ->
-            Row(Modifier.fillMaxWidth().clickable {
-                (model.devices + listOfNotNull(model.selected)).firstOrNull { it.id == event.deviceID }?.let(select)
-            }.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
-                IconTile(when (event.kind) { "connected" -> Icons.Outlined.CheckCircle; "app" -> Icons.Outlined.Layers; else -> Icons.Outlined.Bolt })
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(event.title, style = MaterialTheme.typography.titleMedium)
-                    Text(event.deviceName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(DateUtils.getRelativeTimeSpanString(event.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}

@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
 @Stable
 private class RootRoutes(val model: WendyModel, val nav: Navigator) {
     var devicesTab by mutableStateOf(DevicesTab.Home)
+    var activitySegment by mutableStateOf(ActivitySegment.Alerts)
     var chat by mutableStateOf(false)
     var address by mutableStateOf(false)
     private var lensPage: Pair<Long, Lens>? = null
@@ -78,7 +79,7 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
         nav.clear(); devicesTab = DevicesTab.Home
         when (lens) {
             Lens.Devices -> nav.push("Devices", actions = { if (devicesTab == DevicesTab.Home) DevicesHomeActions() }) {
-                DevicesLens(model, devicesTab, { devicesTab = it }, { openSetup() }, ::openActivity, { chat = true }, ::select)
+                DevicesLens(model, devicesTab, { devicesTab = it }, { openSetup() }, ::openActivity, { chat = true }, ::select, activitySegment, { activitySegment = it })
             }
             Lens.Sites -> nav.push("Sites") { LensWithChat { SitesScreen(model) } }
             Lens.Robots -> nav.push("Robots") { LensWithChat { UnderConstructionLens("Robots") } }
@@ -89,7 +90,7 @@ private class RootRoutes(val model: WendyModel, val nav: Navigator) {
         enter(Lens.Devices); devicesTab = DevicesTab.Home
         nav.pushScoped(device.title, actions = { DeviceLensActions(model, device) }) { DeviceLensPage(model, device) }
     }
-    fun openActivity() = nav.push("Activity") { ActivityScreen(model, ::select) }
+    fun openActivity() { activitySegment = ActivitySegment.Alerts; nav.push("Activity") { DeviceActivityScreen(model, activitySegment, { activitySegment = it }, ::select) } }
     fun openRecordings() { enter(Lens.Devices); devicesTab = DevicesTab.Data }
     fun openSetup(device: SetupDevice? = null) = nav.push("Device setup") { NearbySetupScreen(model, device) { nav.pop(); model.task { model.refresh() } } }
     fun openVpn() = nav.push("Private network") { VpnScreen(model) { nav.pop() } }
@@ -113,6 +114,9 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     val nav = remember { Navigator() }
     val routes = remember { RootRoutes(model, nav) }
     val widgets = remember { HomeWidgetStore(context.applicationContext) }
+    // Recordings and thumbnails belong to one account and organization (iOS MobileRecordingScope).
+    val catalog = remember(model.account, model.organization) { RecordingCatalog(model) }
+    val posters = remember(model.account, model.organization) { RecordingPosters(model) }
     var settings by remember { mutableStateOf(false) }
     var editingHome by remember { mutableStateOf(false) }
     var errorDetails by remember { mutableStateOf<String?>(null) }
@@ -127,7 +131,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
     val top = nav.top
     BackHandler(top != null) { nav.pop() }
     BackHandler(top == null && editingHome) { editingHome = false }
-    CompositionLocalProvider(LocalNavigator provides nav) {
+    CompositionLocalProvider(LocalNavigator provides nav, LocalRecordingCatalog provides catalog, LocalRecordingPosters provides posters) {
         if (model.initialized && model.primaryLens == null) LensPreferenceScreen { model.choosePrimaryLens(it) }
         else Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -179,7 +183,7 @@ fun WendyApp(model: WendyModel, openVpn: Boolean = false, openURL: (String) -> U
             }
         }
     }
-    CompositionLocalProvider(LocalNavigator provides nav) {
+    CompositionLocalProvider(LocalNavigator provides nav, LocalRecordingCatalog provides catalog, LocalRecordingPosters provides posters) {
         model.appURL?.let { url -> AppBrowser(url, { model.appURL = null }, openURL) }
         NearbySetupPrompt(model, active = model.initialized && model.inForeground && nav.stack.none { it.title == "Device setup" } && !settings && !routes.chat && !routes.address && model.appDeletion == null && model.appURL == null) { device ->
             routes.openSetup(device)

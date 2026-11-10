@@ -99,7 +99,8 @@ enum class DevicesTab(val title: String) { Home("Home"), Data("Data"), Activity(
 
 /** The Devices lens: Home, Data and Activity, with Ask Wendy above the tabs (iOS lens tabs). */
 @Composable
-fun DevicesLens(model: WendyModel, tab: DevicesTab, select: (DevicesTab) -> Unit, setup: () -> Unit, notifications: () -> Unit, askWendy: () -> Unit, openDevice: (Device) -> Unit) {
+fun DevicesLens(model: WendyModel, tab: DevicesTab, select: (DevicesTab) -> Unit, setup: () -> Unit, notifications: () -> Unit, askWendy: () -> Unit, openDevice: (Device) -> Unit,
+                activity: ActivitySegment, setActivity: (ActivitySegment) -> Unit) {
     val page = LocalNavPage.current
     LaunchedEffect(tab) { page?.title = if (tab == DevicesTab.Home) "Devices" else tab.title }
     Column(Modifier.fillMaxSize()) {
@@ -107,7 +108,7 @@ fun DevicesLens(model: WendyModel, tab: DevicesTab, select: (DevicesTab) -> Unit
             when (tab) {
                 DevicesTab.Home -> DevicesHome(model, setup, notifications, openDevice)
                 DevicesTab.Data -> DevicesDataTab(model, openDevice)
-                DevicesTab.Activity -> ActivityScreen(model, openDevice)
+                DevicesTab.Activity -> DeviceActivityScreen(model, activity, setActivity, openDevice)
             }
         }
         AskWendyBar(model, askWendy)
@@ -452,7 +453,7 @@ private fun AppStateBadge(state: AppState) {
 
 /** An app: hero with start or stop and open, ports, logs, version and restart (iOS MobileAppDetail). */
 @Composable
-private fun AppLensPage(model: WendyModel, device: Device, name: String) {
+fun AppLensPage(model: WendyModel, device: Device, name: String) {
     val nav = LocalNavigator.current
     val ready = model.selected?.selector == device.selector && model.session != 0L
     val app = if (ready) model.apps.firstOrNull { it.name == name } else null

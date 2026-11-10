@@ -17,9 +17,9 @@ import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
-data class FleetDevice(val id: String, val name: String, val selector: String, val siteID: String, val site: String, val hardware: String, val address: String, val online: Boolean) {
+data class FleetDevice(val id: String, val name: String, val selector: String, val siteID: String, val site: String, val hardware: String, val address: String, val online: Boolean, val lite: Boolean = false) {
     val siteKey get() = siteID.ifEmpty { site }
-    val device get() = Device(selector, name, selector, "Cloud")
+    val device get() = Device(selector, name, selector, "Cloud", lite)
 }
 
 /** The organization's fleet grouped by site (iOS SitesView on iPhone). */
@@ -44,7 +44,7 @@ fun SitesScreen(model: WendyModel) {
         try {
             val value = model.backend.call("Fleet", account, organization).obj()
             if (account != model.account || organization != model.organization) return
-            devices = value.list("Devices").map { FleetDevice(it.text("ID"), it.text("Name"), it.text("Selector"), it.text("SiteID"), it.text("Site"), it.text("Hardware"), it.text("Address"), it.flag("Online")) }
+            devices = value.list("Devices").map { FleetDevice(it.text("ID"), it.text("Name"), it.text("Selector"), it.text("SiteID"), it.text("Site"), it.text("Hardware"), it.text("Address"), it.flag("Online"), it.flag("Lite")) }
             presenceError = value.text("PresenceError"); updated = System.currentTimeMillis()
         } catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message } finally { loading = false }
     }
