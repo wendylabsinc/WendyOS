@@ -28,9 +28,14 @@ class WendyVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP) { disconnect(); return START_NOT_STICKY }
         if (job != null) return START_NOT_STICKY
-        if (intent?.action != START) { stopSelf(); return START_NOT_STICKY }
-        val account = intent.getStringExtra(ACCOUNT).orEmpty()
-        val organization = intent.getStringExtra(ORGANIZATION).orEmpty()
+        // Android's Always-on VPN starts the service with the VpnService action
+        // (or none after a restart). It then uses the account last chosen in the app.
+        val systemStart = intent == null || intent.action == SERVICE_INTERFACE
+        if (intent?.action != START && !systemStart) { stopSelf(); return START_NOT_STICKY }
+        val selection = getSharedPreferences("selection", 0)
+        val account = if (systemStart) selection.getString("account", "").orEmpty() else intent.getStringExtra(ACCOUNT).orEmpty()
+        val organization = if (systemStart) selection.getString("organization", "").orEmpty() else intent.getStringExtra(ORGANIZATION).orEmpty()
+        alwaysOn.value = isAlwaysOn(); lockdown.value = isLockdownEnabled()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel("network", "Wendy network", NotificationManager.IMPORTANCE_LOW))
         startForeground(1, notification("Connecting to mesh"))
@@ -53,11 +58,16 @@ class WendyVpnService : VpnService() {
                         activeRoutes.value = config.list("routes").map { VpnRoute(it.text("name"), it.text("address"), it.text("host")) }
                         internetBackup.value = settings.internetBackup
                         phase.value = VpnPhase.Connected
+                        alwaysOn.value = isAlwaysOn(); lockdown.value = isLockdownEnabled()
                         startForeground(1, notification(if (settings.internetBackup) "Connected · Using mesh internet backup" else "Connected to mesh"))
                         config = awaitConfiguration(next)
                     }
                 } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { failure.value = e.message ?: "VPN connection failed" }
+                catch (e: Exception) {
+                    // In lockdown, Android blocks this app's own traffic, which the mesh broker needs.
+                    failure.value = if (isLockdownEnabled()) "Turn off “Block connections without VPN” for Wendy in Android settings. Wendy needs your normal network to reach the mesh."
+                        else e.message ?: "VPN connection failed"
+                }
                 finally {
                     phase.value = VpnPhase.Disconnecting
                     // Packet workers have stopped before their descriptor is
@@ -145,6 +155,9 @@ class WendyVpnService : VpnService() {
         internal val internetBackup = MutableStateFlow(false)
         internal val activeRoutes = MutableStateFlow<List<VpnRoute>>(emptyList())
         val engaged: Boolean get() = phase.value != VpnPhase.Disconnected
+        /** Whether Android's Always-on VPN and its lockdown were set for Wendy when the service last ran. */
+        internal val alwaysOn = MutableStateFlow(false)
+        internal val lockdown = MutableStateFlow(false)
         val failure = MutableStateFlow<String?>(null)
     }
 }

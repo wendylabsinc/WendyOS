@@ -34,50 +34,68 @@ macOS or Linux.
 
 ## Implemented workflows
 
-- Nearby discovery through Android NSD, Cloud discovery, search, manual addresses,
-  authenticated connections, and explicit recovery when a pinned identity changes.
-- Browser sign-in, multiple saved accounts, organization selection, fleet devices
-  grouped by site, organization metadata, members, invitations and access grants.
-- Device details and resource use; app start, stop, deletion, ports, live logs and
-  embedded web apps over the shared authenticated loopback forwarder.
-- Live H.264, JPEG and thermal cameras. H.264 uses Android MediaCodec; thermal
-  frames use the shared Go measurement decoder.
-- Campaign creation and settings, associated clips, manual recordings, recorded
-  video and image playback, numeric plots, event details and verified ZIP export.
-- Device-local model discovery, downloads and startup, streaming chat and explicit
-  tool approvals. Android uses the in-process MCP tools, as iOS does.
-- Wi-Fi, mesh settings, topology, remote Bluetooth peripherals, audio defaults,
-  sensor/IP camera pairing, Unitree pairing, cloud enrollment and OS updates.
-- Nearby setup through Android Bluetooth GATT. The native Bluetooth adapter also
-  supplies scanning and L2CAP to the shared authenticated mesh implementation.
-- One mesh VPN switch, matching iOS. Open Private network and turn VPN on.
-  Android asks for VPN consent the first time. All mesh devices join automatically,
-  including devices discovered after connecting. The shared automatic controller
-  uses an available mesh uplink if normal internet fails and switches back when
-  it recovers. Public DNS uses Android's resolver while normal internet is active.
-  The foreground notification opens or stops the VPN.
-- Wendy's existing geometric app mark, with adaptive and monochrome launcher icons.
+Screens follow the iOS `WendyMobile` app on `main`, drawn with this app's design
+system. "Verified" below means compiled and unit tested; items marked
+*emulator* were also run on an Android 16 emulator. Nothing here has been run on
+a real phone against a real device yet.
 
-Device and Cloud operations are wired to real backend methods. Successful
-compilation does not establish that every hardware-dependent workflow works.
+- Devices: nearby (Android NSD) and Cloud lists, search, pull to refresh,
+  connect by address, connected and connecting state, readable names.
+- Device: Overview (first app's webpage, live camera previews, apps,
+  shortcuts), Cameras and Apps, with Digital Twin, Campaigns and Chat in the
+  overflow menu and Settings behind a gear, as on iOS. Pages use a back stack;
+  covered pages keep their state and pause polling and streams. Connection
+  failures stay on the device page and retryable ones reconnect on their own.
+- Apps: device resources, temperature and power, hidden apps, app details with
+  usage, GPU, ports, services, start, stop, logs and removal.
+- Logs: app picker, warning filter, search, follow, copy and reconnection.
+- Cameras: H.264, JPEG and thermal streams with play and pause, status, error
+  details, and thermal minimum and maximum markers.
+- Settings: enrollment (Cloud name rules, Wi-Fi check, no second credential),
+  device info with agent updates, Wi-Fi (saved networks, security, hidden
+  networks, traffic), Wendy Mesh (all seven settings, saved together, and the
+  mesh graph), Bluetooth, audio defaults, campaign notification permissions,
+  pairing (Wendy Lite, IP cameras, Unitree robots) and logs.
+- Wendy Lite boards: cameras, SensorLink temperature, console logs, Wi-Fi and
+  enrollment.
+- Campaigns: list with clip counts, campaign pages with recordings and
+  settings, the iOS editor with Hugging Face model and category pickers that
+  pin the model revision, and the toolbar event log with unread markers.
+- Recordings: episode and channel pickers, synced video, images, numeric
+  charts, recorded audio, ROS point clouds (rotate, zoom), the iOS timeline
+  (zoom, fit, drag to pan, pinch, seek) *emulator*, ZIP export, and manual
+  recordings.
+- Chat: per-device conversation, Markdown replies, device cards, approvals,
+  connection settings, and the model library with capacity checks and
+  automatic accelerator choice.
+- Nearby setup over Bluetooth GATT, following the iOS flow, with a one-time
+  invitation when a strong setup advertisement is nearby.
+- Accounts and organization: saved accounts, organization picker, sign-in,
+  teammates and roles, direct device access rules, invite links (copy or
+  share) and invitation revocation.
+- Sites: the organization's fleet by site, with counts, online-only filter and
+  search *emulator*.
+- Activity: connections and app state changes per device.
+- One mesh VPN switch, matching iOS. All mesh devices join automatically; the
+  shared controller switches to a mesh uplink when normal internet fails.
+
+Device and Cloud operations call the shared Go backend. Successful
+compilation does not establish that hardware-dependent workflows work.
 
 ## Parity still required
 
-This is not full Mac/iOS feature parity. The following need further implementation:
-
-| Existing feature | Android status |
+| iOS feature | Android status |
 | --- | --- |
-| Local 3D site documents, USDZ imports, RoomPlan capture, photo reconstruction, recognition viewfinder and lens calibration | Not implemented. The Sites tab currently groups Cloud fleet devices by their assigned site. |
-| Digital-twin robot localization, navigation and motion controls | Not implemented. Robot account pairing is available. |
-| Remote campaign push notifications | Not implemented. The existing registration API targets APNs; Android needs an FCM backend contract and application configuration. |
-| Recorded audio playback, ROS point-cloud rendering, timeline pinch/pan | Not implemented. These original files remain in verified recording exports. |
-| Full organization editing, role management, access revocation and invite sharing UI | Partial. Metadata, member addition, invite creation and access grants are available. |
-| Android always-on VPN | Not implemented. Mesh is enabled explicitly in the app. |
+| Sites and digital twin: local 3D site documents, USDZ import and sharing, RoomPlan capture, photo reconstruction, recognition viewfinder, lens calibration, site reference capture | Not implemented. Needs a 3D stack decision (see the parity PR). The Digital Twin pane explains this. |
+| Robot localization, navigation and motion in the twin | Not implemented. On iOS these live only in the twin and need the site's floor geometry. Robot pairing is available. |
+| Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. Campaign permissions can still be changed. |
+| Always-on VPN | Not implemented. The service declares `SUPPORTS_ALWAYS_ON=false`; the VPN needs the app's account to start. |
 | USB flashing and host simulator management | Desktop workflows, also absent from the iOS app. |
 
 Physical-device checks are still required for BLE GATT/L2CAP, cloud sign-in,
-camera decoding, VPN traffic and destructive device operations. No deployment,
-app deletion, firmware update or robot movement is part of the build tests.
+camera decoding, VPN traffic, campaigns, model downloads and destructive device
+operations. No deployment, app deletion, firmware update or robot movement is
+part of the tests.
 
 ## Architecture and lifecycle
 
@@ -134,10 +152,14 @@ go test ./go/android/mobile ./go/macos/backend
 
 Unit tests cover bridge rejection of malformed calls, stale initialization,
 Unicode, errors, device parsing, automatic VPN route updates and cancellation, private/public DNS isolation,
-and H.264 framing across transport boundaries.
+H.264 framing across transport boundaries, and the iOS rules the screens port:
+Wi-Fi and mesh parsing, the mesh graph, enrollment names and retry safety,
+redacted errors, logs, resources, campaigns, chat Markdown and model fit,
+nearby setup observation, organization snapshots and the recording timeline.
 Instrumentation tests exercise the actual JNI library, native NSD discovery,
 stale session rejection, Activity recreation, native private/public DNS, and idle
 VPN packet-pump cancellation. The VPN lifecycle test also connects, disconnects
 and reconnects a system tunnel when VPN consent has already been granted; otherwise
 it skips. These tests require a running emulator or connected Android device.
-They do not sign in or modify discovered devices.
+`RecordingTimelineTest` drives the timeline and point-cloud gestures. They do not
+sign in or modify discovered devices.
