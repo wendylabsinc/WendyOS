@@ -109,7 +109,7 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 	calls := map[string]int{}
 	record := func(method string) { mu.Lock(); calls[method]++; mu.Unlock() }
 	targetAddr := start(targetCert, targetKey, func(s *grpc.Server) {
-		agentpb.RegisterWendyContainerServiceServer(s, services.NewContainerService(logger, rt, services.WithDeliverySource(targetManager.Get)))
+		agentpb.RegisterWendyContainerServiceServer(s, services.NewContainerService(logger, rt, services.WithDeliverySource(targetManager.Get, interceptor.OrgModeStrict)))
 		agentpbv2.RegisterWendyBuildDeliveryServiceServer(s, services.NewBuildDeliveryService(targetManager.Get, rt))
 	}, grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {
 		record(info.FullMethod)
