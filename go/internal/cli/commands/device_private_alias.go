@@ -272,16 +272,25 @@ func connectPrivateDeviceAlias(ctx context.Context, value string, suppress bool)
 	}
 	if candidate.mesh != "" {
 		selected, _, err := privateAliasConnectMesh(ctx, candidate.mesh, suppress)
-		if err != nil {
+		if err == nil {
+			if selected.Agent != nil {
+				if err := privateAliasEnforcePin(alias.host, selected.Agent.Addr, selected.Agent); err != nil {
+					selected.Close()
+					return nil, true, err
+				}
+			}
+			return selected, true, nil
+		}
+		// Discovery can precede a local router loss. Only the broker's typed
+		// readiness failures permit another path to the same selected identity;
+		// authentication, policy and unclassified transport failures stay terminal.
+		recoverable, _ := sessionbroker.OperatorRecovery(err)
+		if ctx.Err() != nil {
+			return nil, true, ctx.Err()
+		}
+		if !recoverable || len(candidate.lan) == 0 && candidate.cloud == nil {
 			return nil, true, err
 		}
-		if selected.Agent != nil {
-			if err := privateAliasEnforcePin(alias.host, selected.Agent.Addr, selected.Agent); err != nil {
-				selected.Close()
-				return nil, true, err
-			}
-		}
-		return selected, true, nil
 	}
 	if len(candidate.lan) > 0 {
 		selected, err := connectPrivateAliasLAN(ctx, alias, auth, candidate)
