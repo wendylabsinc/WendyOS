@@ -167,6 +167,14 @@ func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*tim
 	svc.resetRecoveryErr = svc.recoverProvisioningReset()
 	if svc.resetRecoveryErr == nil {
 		svc.loadState()
+		if !svc.enrolled {
+			// The registry encryption key belongs to an enrollment. A registration
+			// retry during a reset's cleanup window can write it again after
+			// clearCredentialFiles; an unenrolled start removes that orphan.
+			if err := os.Remove(filepath.Join(configPath, deviceEncryptionKeyFile)); err != nil && !os.IsNotExist(err) {
+				logger.Error("Removing the device encryption key of a past enrollment failed", zap.Error(err))
+			}
+		}
 	} else {
 		logger.Error("Enrollment state recovery failed", zap.Error(svc.resetRecoveryErr))
 	}

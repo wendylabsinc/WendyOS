@@ -134,18 +134,25 @@ func (k *DeviceEncryptionKey) register(ctx context.Context) error {
 	principal, _ := certs.TenantPrincipalFromCert(leaf)
 	id, err := certs.ParsePrincipal(principal)
 	if err != nil || principal != certs.DeviceSPIFFEURI(id.TenantUUID, id.EntityID) {
-		return fmt.Errorf("device certificate names %q, not a device principal", principal)
+		// Permanent for this certificate (a legacy, non-SPIFFE enrollment):
+		// retrying cannot help. A new identity wakes the loop again.
+		k.logger.Warn("Device encryption key not registered: the device certificate names no device principal",
+			zap.String("event", "device_encryption_key_unsupported_identity"), zap.String("principal", principal))
+		return nil
 	}
-	priv, err := loadOrCreateDeviceEncryptionKey(k.configPath, principal)
+	priv, err := loadOrCreateDeviceEncryptionKey(k.logger, k.configPath, principal)
 	if err != nil {
 		return err
 	}
 	signer, err := devicesign.New(certPEM, keyPEM)
-	if err != nil {
+	if errors.Is(err, devicesign.ErrNotMLDSA) {
 		// A P-256 device registers once its ML-DSA-65 renewal restarts the agent.
 		k.logger.Warn("Device encryption key cannot be registered until the device key is ML-DSA-65",
 			zap.String("event", "device_encryption_key_unsignable"), zap.Error(err))
 		return nil
+	}
+	if err != nil {
+		return err
 	}
 
 	pub := priv.PublicKey()
@@ -191,16 +198,24 @@ type storedEncryptionKey struct {
 // persisting a new one when there is none or the stored one belongs to another
 // enrollment (or is unreadable as a key). A file that cannot be read is an
 // error, never replaced.
-func loadOrCreateDeviceEncryptionKey(configPath, principal string) (hpke.PrivateKey, error) {
+func loadOrCreateDeviceEncryptionKey(logger *zap.Logger, configPath, principal string) (hpke.PrivateKey, error) {
 	raw, err := os.ReadFile(filepath.Join(configPath, deviceEncryptionKeyFile))
 	switch {
 	case err == nil:
 		var stored storedEncryptionKey
-		if json.Unmarshal(raw, &stored) == nil && stored.Principal == principal {
-			if priv, err := registrycrypto.KEM.NewPrivateKey(stored.PrivateKey); err == nil {
+		err := json.Unmarshal(raw, &stored)
+		if err == nil && stored.Principal != principal {
+			break // another enrollment's key: replaced, as intended
+		}
+		if err == nil {
+			var priv hpke.PrivateKey
+			if priv, err = registrycrypto.KEM.NewPrivateKey(stored.PrivateKey); err == nil {
 				return priv, nil
 			}
 		}
+		// It was the only key that opens existing wraps to this device.
+		logger.Warn("Stored device encryption key does not parse; replacing it, so existing wraps to it no longer open",
+			zap.String("event", "device_encryption_key_replaced"), zap.Error(err))
 	case !errors.Is(err, fs.ErrNotExist):
 		return nil, fmt.Errorf("reading device encryption key: %w", err)
 	}

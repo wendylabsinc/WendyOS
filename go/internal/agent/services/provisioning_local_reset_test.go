@@ -42,6 +42,9 @@ func TestLocalResetErasesCredentialsWithoutCloudEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(svc.configPath, deviceEncryptionKeyFile), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	key := svc.keyPEM
 	beforeCalled := false
 	svc.BeforeUnprovisioned = func() error {
@@ -71,6 +74,11 @@ func TestLocalResetErasesCredentialsWithoutCloudEvidence(t *testing.T) {
 		}
 	}
 	assertLocalResetClean(t, svc)
+	// A registration retry in the cleanup window rewrites the encryption key;
+	// the unenrolled restart removes it.
+	if err := os.WriteFile(filepath.Join(svc.configPath, deviceEncryptionKeyFile), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	assertLocalResetClean(t, NewProvisioningService(zap.NewNop(), svc.configPath))
 	select {
 	case <-restarted:
@@ -81,7 +89,7 @@ func TestLocalResetErasesCredentialsWithoutCloudEvidence(t *testing.T) {
 
 func assertLocalResetClean(t *testing.T, svc *ProvisioningService) {
 	t.Helper()
-	for _, name := range []string{"device-key.pem", "device.pem", "ca.pem", ".provisioned", "acme-account-key.pem", "cloud-relay", "acme-account-key.pem.d"} {
+	for _, name := range []string{"device-key.pem", deviceEncryptionKeyFile, "device.pem", "ca.pem", ".provisioned", "acme-account-key.pem", "cloud-relay", "acme-account-key.pem.d"} {
 		if _, err := os.Stat(filepath.Join(svc.configPath, name)); !os.IsNotExist(err) {
 			t.Fatalf("credential %s retained: %v", name, err)
 		}
