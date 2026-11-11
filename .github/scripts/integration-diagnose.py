@@ -22,7 +22,22 @@ FILES = ("config.json", "devices.json", "known_devices.json", "organization-name
 MAX_FILE = 4 * 1024 * 1024
 HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                   r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?")
-ATOM = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# Fixed origin vocabulary from commands/auth.go's login presets. These describe
+# stored endpoint origins, not a successful login or a verified Cloud/tenant.
+# Never echo arbitrary hostname labels: credential alphabets can be hostnames.
+KNOWN_ENDPOINTS = {
+    "api.wendy.dev": "wendy-v2-prod-api",
+    "cloud.wendy.dev": "wendy-v2-prod-cloud",
+    "auth.wendy.dev": "wendy-v2-prod-auth",
+    "identity.pki.wendy.dev": "wendy-v2-prod-pki-identity",
+    "api.dev.wendy.sh": "wendy-v2-dev-api",
+    "cloud.dev.wendy.sh": "wendy-v2-dev-cloud",
+    "auth.dev.wendy.sh": "wendy-v2-dev-auth",
+    "identity.dev.pki.wendy.sh": "wendy-v2-dev-pki-identity",
+    "pki.wendy.sh": "wendy-pki-resource",
+    "cloud.wendy.sh": "wendy-legacy-cloud",
+    "wendy-cloud-services-114319063177.us-central1.run.app": "wendy-legacy-api",
+}
 PROFILE = '''(version 1)
 (allow default)
 (deny file-write*)
@@ -47,10 +62,6 @@ def hostname(value):
     return value.lower()
 
 
-def atom(value):
-    return value if isinstance(value, str) and ATOM.fullmatch(value) else "[withheld]"
-
-
 def pin_host(host):
     # Match config.normalizePinHost / DevicePinFor; do not normalize saved keys.
     return host.strip().lower().removesuffix(".").removesuffix(".local")
@@ -60,15 +71,16 @@ def endpoint(value):
     if not value:
         return "absent"
     if not isinstance(value, str) or len(value) > 512:
-        return "[withheld]"
+        return "unknown-withheld"
     try:
         url = urlsplit(value if "://" in value else "https://" + value)
-        if url.scheme not in ("https", "http") or not url.hostname or not HOST.fullmatch(url.hostname):
-            return "[withheld]"
-        # Paths, credentials, query strings and fragments are never logged.
-        return f"{url.scheme}://{url.hostname}" + (f":{url.port}" if url.port else "")
+        if url.scheme != "https" or url.port not in (None, 443):
+            return "unknown-withheld"
+        # Only fixed classifications leave this function; paths, credentials,
+        # query strings, fragments and arbitrary origins are never logged.
+        return KNOWN_ENDPOINTS.get(url.hostname, "unknown-withheld")
     except ValueError:
-        return "[withheld]"
+        return "unknown-withheld"
 
 
 def read_state(source):
@@ -129,18 +141,23 @@ def oauth_expiry(value):
 
 def metadata(state, host):
     cfg = json.loads(state.get("config.json", b"{}"))
-    pins = cfg.get("devicePins") or {}
-    key = pin_host(host)
-    binding = pins.get(key) or {}
-    emit("context", current=atom(cfg.get("currentContext", "")),
-         hostname=host, saved_binding_entry_present=key in pins,
-         saved_binding_asset_present=bool(binding.get("assetId")),
-         saved_binding_principal_present=bool(binding.get("principal")))
     auths = cfg.get("auth", [])
     if not isinstance(auths, list) or len(auths) > 16:
         raise DiagnosticError("invalid or excessive auth contexts")
+    current = cfg.get("currentContext")
+    matches = [index for index, auth in enumerate(auths)
+               if isinstance(auth, dict) and isinstance(current, str) and current
+               and auth.get("name") == current]
+    pins = cfg.get("devicePins") or {}
+    key = pin_host(host)
+    binding = pins.get(key) or {}
+    emit("context", current_context_present=bool(current), matching_context_indices=matches,
+         context_names="withheld",
+         hostname=host, saved_binding_entry_present=key in pins,
+         saved_binding_asset_present=bool(binding.get("assetId")),
+         saved_binding_principal_present=bool(binding.get("principal")))
     for index, auth in enumerate(auths):
-        emit("credential", index=index, context=atom(auth.get("name", "")),
+        emit("credential", index=index,
              oauth_expires_at=oauth_expiry(auth.get("oauthExpiresAt")),
              endpoints={key: endpoint(auth.get(key)) for key in (
                  "cloudGRPC", "cloudDashboard", "oauthIssuer", "pkiEndpoint", "oauthResource", "pkiResource")},

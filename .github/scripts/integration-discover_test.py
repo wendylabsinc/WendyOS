@@ -154,6 +154,30 @@ class RedactionTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_full_script_withholds_credentials_duplicated_in_metadata(self):
+        secrets = ("SYNTHETIC-API-KEY-123456789", "eyJhbGciOiJub25lIn0.payload.signature",
+                   "-----BEGIN PRIVATE KEY-----\nSYNTHETIC-PRIVATE-KEY\n-----END PRIVATE KEY-----")
+        for secret in secrets:
+            with self.subTest(secret=secret), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory)
+                cfg = {"currentContext": secret, "auth": [{"name": secret, "apiKey": secret,
+                       **{key: f"https://{secret}.example.test/private?token={secret}" for key in (
+                           "cloudGRPC", "cloudDashboard", "oauthIssuer", "pkiEndpoint", "oauthResource", "pkiResource")}}],
+                       "unused": "keychain:v1:refuse-before-network"}
+                original = json.dumps(cfg).encode()
+                (source / "config.json").write_bytes(original)
+                result = subprocess.run([sys.executable, str(Path(diagnose.__file__).resolve()),
+                                         "--wendy", "/nonexistent", "--hostname", "127.0.0.1"],
+                                        env={**os.environ, "WENDY_CONFIG_DIR": directory},
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 1)
+                output = result.stdout + result.stderr
+                self.assertNotIn(secret.lower(), output.lower())
+                self.assertNotIn("SYNTHETIC-PRIVATE-KEY", output)
+                self.assertIn("Keychain references present", output)
+                self.assertNotIn('"event": "resolution"', output)
+                self.assertEqual((source / "config.json").read_bytes(), original)
+
     def test_binding_metadata_matches_config_device_pin_for_normalization(self):
         for host in ("wendyos-ci-pi5.local", "WENDYOS-CI-PI5.LOCAL.", " wendyos-ci-pi5.local. "):
             for pin in ({}, {"assetId": "SECRET"}, {"principal": "SECRET"}):
@@ -177,10 +201,41 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(diagnose.hostname("CI-PI.local"), "ci-pi.local")
 
     def test_endpoints_with_credentials_query_path_and_controls(self):
-        self.assertEqual(diagnose.endpoint("https://user:SECRET@cloud.test:443/SECRET?token=SECRET#SECRET"), "https://cloud.test:443")
-        self.assertEqual(diagnose.endpoint("cloud.test:50051"), "https://cloud.test:50051")
-        for value in ("file:///SECRET", "https://SECRET\x1b.test", "https://cloud.test:SECRET", "x" * 513):
-            self.assertEqual(diagnose.endpoint(value), "[withheld]")
+        self.assertEqual(diagnose.endpoint("https://user:SECRET@cloud.wendy.dev:443/SECRET?token=SECRET#SECRET"), "wendy-v2-prod-cloud")
+        self.assertEqual(diagnose.endpoint("api.wendy.dev:443"), "wendy-v2-prod-api")
+        self.assertEqual(diagnose.endpoint(None), "absent")
+        for value in ("file:///SECRET", "https://SECRET\x1b.test", "https://cloud.test:SECRET", "x" * 513,
+                      "https://SECRET.example.test", "https://cloud.wendy.dev.SECRET.test", "https://SECRET.cloud.wendy.dev",
+                      "http://cloud.wendy.dev", "https://cloud.wendy.dev:444"):
+            self.assertEqual(diagnose.endpoint(value), "unknown-withheld")
+
+    def test_known_cloud_presets_and_context_indices_survive_full_script(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            cfg = {"currentContext": "SYNTHETIC-CONTEXT-SECRET", "auth": [
+                {"name": "SYNTHETIC-CONTEXT-SECRET", "cloudGRPC": "api.wendy.dev:443", "cloudDashboard": "https://cloud.wendy.dev"},
+                {"name": "SYNTHETIC-CONTEXT-DEV", "cloudGRPC": "api.dev.wendy.sh:443", "cloudDashboard": "https://cloud.dev.wendy.sh"},
+                {"name": "SYNTHETIC-CONTEXT-LEGACY", "cloudGRPC": "wendy-cloud-services-114319063177.us-central1.run.app:443",
+                 "cloudDashboard": "https://cloud.wendy.sh"},
+                {"name": "SYNTHETIC-CONTEXT-UNKNOWN", "cloudGRPC": "SYNTHETIC-CONTEXT-SECRET.example.test:443"}],
+                "unused": "keychain:v1:refuse-before-network"}
+            (source / "config.json").write_text(json.dumps(cfg))
+            result = subprocess.run([sys.executable, str(Path(diagnose.__file__).resolve()),
+                                     "--wendy", "/nonexistent", "--hostname", "127.0.0.1"],
+                                    env={**os.environ, "WENDY_CONFIG_DIR": directory},
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("synthetic-context", result.stdout.lower())
+            events = [json.loads(line) for line in result.stdout.splitlines()]
+            context = next(row for row in events if row["event"] == "context")
+            self.assertEqual(context["matching_context_indices"], [0])
+            self.assertEqual(context["context_names"], "withheld")
+            creds = [row for row in events if row["event"] == "credential"]
+            self.assertEqual([row["index"] for row in creds], [0, 1, 2, 3])
+            self.assertEqual([row["endpoints"]["cloudGRPC"] for row in creds], [
+                "wendy-v2-prod-api", "wendy-v2-dev-api", "wendy-legacy-api", "unknown-withheld"])
+            self.assertEqual([row["endpoints"]["cloudDashboard"] for row in creds], [
+                "wendy-v2-prod-cloud", "wendy-v2-dev-cloud", "wendy-legacy-cloud", "absent"])
 
     def test_oauth_expiry_never_echoes_unparsed_data(self):
         self.assertEqual(diagnose.oauth_expiry("2026-10-18T12:37:00+02:00"), "2026-10-18T10:37:00+00:00")
