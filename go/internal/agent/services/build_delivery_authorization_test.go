@@ -87,7 +87,7 @@ func newDeliveryRPCLab(t *testing.T) *deliveryRPCLab {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentpb.RegisterWendyContainerServiceServer(server, NewContainerService(zap.NewNop(), backend, WithDeliverySource(m.Get)))
+	agentpb.RegisterWendyContainerServiceServer(server, NewContainerService(zap.NewNop(), backend, WithDeliverySource(m.Get, interceptor.OrgModeStrict)))
 	agentpbv2.RegisterWendyBuildDeliveryServiceServer(server, NewBuildDeliveryService(m.Get, backend))
 	go server.Serve(listener)
 	t.Cleanup(func() { server.Stop(); listener.Close() })

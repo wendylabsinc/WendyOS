@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/builddelivery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"google.golang.org/grpc/codes"
@@ -41,7 +42,7 @@ func Leaf(ctx context.Context) *x509.Certificate {
 // RPC runs after the existing mTLS/role interceptors. Ambient operator and
 // local-admin behavior remains there; every device staging call additionally
 // requires a durable grant bound to this connection's actual certificate key.
-func RPC(ctx context.Context, source Source, imageName string) (context.Context, *Grant, error) {
+func RPC(ctx context.Context, source Source, mode interceptor.OrgMode, imageName string) (context.Context, *Grant, error) {
 	leaf := Leaf(ctx)
 	if leaf == nil {
 		return ctx, nil, nil
@@ -51,6 +52,11 @@ func RPC(ctx context.Context, source Source, imageName string) (context.Context,
 		return ctx, nil, status.Error(codes.PermissionDenied, "invalid delivery caller")
 	}
 	if found && identity.EntityType == certs.EntityUser {
+		return ctx, nil, nil
+	}
+	// The mTLS interceptor has already checked trust and scope. Apply the
+	// same legacy user recognition as the registry when grace mode is on.
+	if !found && interceptor.CheckOperatorCertificate(leaf, certs.Scope{}, mode) == nil {
 		return ctx, nil, nil
 	}
 	if !found || identity.EntityType != certs.EntityAsset {
@@ -135,6 +141,11 @@ func Commit(ctx context.Context, source Source, imageName, output string, curren
 			return apply()
 		})
 	}
+	return Direct(source, apply)
+}
+
+// Direct serializes an operator or local-admin image mutation with delivery.
+func Direct(source Source, apply func() error) error {
 	if source == nil {
 		return apply()
 	}

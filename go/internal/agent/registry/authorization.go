@@ -80,7 +80,7 @@ func authorizationMiddleware(source delivery.Source, mode interceptor.OrgMode) f
 			}
 			ctx := peer.NewContext(r.Context(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: *r.TLS}})
 			ctx = metadata.NewIncomingContext(ctx, metadata.MD{builddelivery.MetadataKey: r.Header.Values(builddelivery.HTTPHeader)})
-			ctx, grant, err := delivery.RPC(ctx, source, "")
+			ctx, grant, err := delivery.RPC(ctx, source, mode, "")
 			if err != nil || grant == nil {
 				_ = ociregistry.WriteError(w, ociregistry.ErrDenied)
 				return

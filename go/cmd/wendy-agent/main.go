@@ -61,7 +61,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/udpmessage"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbgadget"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
-	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
@@ -359,7 +358,7 @@ func main() {
 	}
 	containerSvcOpts := []services.ContainerServiceOption{
 		services.WithLogManager(logManager),
-		services.WithDeliverySource(deliverySource),
+		services.WithDeliverySource(deliverySource, orgMode),
 	}
 	if monitor != nil {
 		containerSvcOpts = append(containerSvcOpts, services.WithMonitor(&containerMonitorAdapter{m: monitor}))
@@ -383,13 +382,6 @@ func main() {
 	}
 	deliveryManager = delivery.NewManager(filepath.Join(configPath, "build-delivery"), deliveryPrefix, provisioningSvc.ProvisioningPublicCertificates)
 	defer deliveryManager.Close()
-	cleanupDelivery := func() error {
-		deliveryManager.Close()
-		if err := os.RemoveAll(filepath.Join(configPath, "build-delivery")); err != nil {
-			return err
-		}
-		return atomicfile.SyncDirectory(configPath)
-	}
 	if ctrdClient != nil {
 		ctrdClient.SetDeliverySource(deliverySource)
 	}
@@ -468,7 +460,7 @@ func main() {
 	// Handle termination now so those workers can drain during startup too.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	cleanupResetOwnedState := func(resetCtx context.Context) error {
-		return errors.Join(cleanupDelivery(), cleanupResetMesh(resetCtx))
+		return errors.Join(deliveryManager.Reset(), cleanupResetMesh(resetCtx))
 	}
 	// A verified completed reset, including a recovered pending reset, has
 	// already erased its credentials. Reclaim owned kernel policy before
@@ -1624,7 +1616,7 @@ func main() {
 	// Revoke Unitree sessions and keys before Unprovision reports success.
 	// A failed clear is retried when the agent restarts unenrolled.
 	provisioningSvc.BeforeUnprovisioned = func() error {
-		deliveryErr := cleanupDelivery()
+		deliveryErr := deliveryManager.Reset()
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()

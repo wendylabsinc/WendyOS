@@ -26,6 +26,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/delivery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
@@ -34,11 +35,12 @@ import (
 
 type ContainerService struct {
 	agentpb.UnimplementedWendyContainerServiceServer
-	deliverySource delivery.Source
-	logger         *zap.Logger
-	containerd     ContainerdClient
-	logManager     *ContainerLogManager
-	monitor        ContainerMonitorRegistrar
+	deliverySource  delivery.Source
+	deliveryOrgMode interceptor.OrgMode
+	logger          *zap.Logger
+	containerd      ContainerdClient
+	logManager      *ContainerLogManager
+	monitor         ContainerMonitorRegistrar
 
 	// imageVerifier checks the container image signature (see RunContainer)
 	// before the image is assembled or the container created. This verifies
@@ -91,8 +93,11 @@ func NewContainerService(logger *zap.Logger, client ContainerdClient, opts ...Co
 
 type ContainerServiceOption func(*ContainerService)
 
-func WithDeliverySource(source delivery.Source) ContainerServiceOption {
-	return func(s *ContainerService) { s.deliverySource = source }
+func WithDeliverySource(source delivery.Source, mode interceptor.OrgMode) ContainerServiceOption {
+	return func(s *ContainerService) {
+		s.deliverySource = source
+		s.deliveryOrgMode = mode
+	}
 }
 
 func WithLogManager(lm *ContainerLogManager) ContainerServiceOption {
@@ -301,7 +306,7 @@ func to32(b []byte) ([32]byte, error) {
 
 func (s *ContainerService) QueryChunks(ctx context.Context, req *agentpb.QueryChunksRequest) (*agentpb.QueryChunksResponse, error) {
 	var err error
-	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, "")
+	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, s.deliveryOrgMode, "")
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +341,7 @@ func (s *ContainerService) QueryChunks(ctx context.Context, req *agentpb.QueryCh
 
 func (s *ContainerService) QueryLayers(ctx context.Context, req *agentpb.QueryLayersRequest) (*agentpb.QueryLayersResponse, error) {
 	var err error
-	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, "")
+	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, s.deliveryOrgMode, "")
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +366,7 @@ func (s *ContainerService) QueryLayers(ctx context.Context, req *agentpb.QueryLa
 }
 
 func (s *ContainerService) WriteChunks(stream grpc.ClientStreamingServer[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse]) error {
-	ctx, grant, err := delivery.RPC(stream.Context(), s.deliverySource, "")
+	ctx, grant, err := delivery.RPC(stream.Context(), s.deliverySource, s.deliveryOrgMode, "")
 	if err != nil {
 		return err
 	}
@@ -424,7 +429,7 @@ func (s *ContainerService) WriteChunks(stream grpc.ClientStreamingServer[agentpb
 // CLI continues uploading later layers. RunContainer repeats the work through
 // idempotent fast paths, so a lost response cannot leave deploy state ambiguous.
 func (s *ContainerService) PrepareImage(ctx context.Context, req *agentpb.RunContainerLayersRequest) (*agentpb.PrepareImageResponse, error) {
-	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, req.GetImageName())
+	ctx, grant, err := delivery.RPC(ctx, s.deliverySource, s.deliveryOrgMode, req.GetImageName())
 	if err != nil {
 		return nil, err
 	}

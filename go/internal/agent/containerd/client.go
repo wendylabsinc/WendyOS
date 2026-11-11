@@ -4992,7 +4992,9 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 		if imgName != "" && !seen[imgName] {
 			seen[imgName] = true
 			imgSvc := c.client.ImageService()
-			if err := imgSvc.Delete(ctx, imgName); err != nil && !errdefs.IsNotFound(err) {
+			if err := delivery.Direct(c.deliverySource, func() error {
+				return imgSvc.Delete(ctx, imgName)
+			}); err != nil && !errdefs.IsNotFound(err) {
 				c.logger.Warn("Failed to delete image", zap.String("image", imgName), zap.Error(err))
 			} else {
 				c.logger.Info("Image deleted", zap.String("image", imgName))

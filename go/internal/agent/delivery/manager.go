@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/builddelivery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -122,6 +124,22 @@ func (m *Manager) Get() (Snapshot, error) {
 	result.ImagePrefix = m.prefix
 	return result, nil
 }
+
+// Reset revokes the current enrollment's grants and allows a future enrollment
+// to open a fresh store. Provisioning gates enrollment until reset completes.
+func (m *Manager) Reset() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.store != nil {
+		m.store.Close()
+		m.store = nil
+	}
+	if err := os.RemoveAll(m.dir); err != nil {
+		return err
+	}
+	return atomicfile.SyncDirectory(filepath.Dir(m.dir))
+}
+
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

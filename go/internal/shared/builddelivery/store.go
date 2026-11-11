@@ -160,6 +160,9 @@ func (s *Store) Admit(compact string, peer *x509.Certificate) (string, error) {
 		return "", errors.New("authenticated admission caller required")
 	}
 	now := s.now()
+	if !now.Before(peer.NotAfter) {
+		return "", errors.New("admission caller certificate expired")
+	}
 	id := sessionID(compact)
 	if old, ok := s.sessions[id]; ok {
 		if err := checkBuilder(old.verified.claims, peer); err != nil {
@@ -234,6 +237,9 @@ func (s *Store) authorize(id string, peer *x509.Certificate, now time.Time) (*se
 	}
 	if err = checkBuilder(entry.verified.claims, peer); err != nil {
 		return nil, err
+	}
+	if !now.Before(peer.NotAfter) {
+		return nil, errors.New("builder certificate expired")
 	}
 	if now.Unix() >= entry.verified.claims.ValidUntil || now.Before(entry.record.AdmittedAt) {
 		return nil, errors.New("delivery session expired or clock regressed")

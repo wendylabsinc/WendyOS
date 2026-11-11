@@ -41,7 +41,7 @@ func TestDurableAdmissionSurvivesOperatorExpiryAndPinsOutput(t *testing.T) {
 	if _, err = s.Authorize(id, operator, ""); err == nil {
 		t.Fatal("operator substituted for bound builder")
 	}
-	other, key := f.mint(f.claims.Builder)
+	other, key := f.mint(f.claims.Builder, 45*time.Minute)
 	_ = key
 	block, _ = pem.Decode([]byte(other))
 	rotated, _ := x509.ParseCertificate(block.Bytes)
@@ -160,6 +160,37 @@ func TestJobReplayAndDurableBudget(t *testing.T) {
 	}
 	if err = s.ReserveBytes(id, f.builder, -1); err == nil {
 		t.Fatal("negative byte budget")
+	}
+}
+
+func TestStoreRejectsExpiredPeerOnAnAdmittedSession(t *testing.T) {
+	f := newFixture(t)
+	clock := f.now
+	s, err := Open(t.TempDir(), f.roots, f.target, func() time.Time { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	compact := f.sign(t, f.claims)
+	expiredOperatorPEM, _ := f.mint(f.claims.Operator, 0)
+	block, _ := pem.Decode([]byte(expiredOperatorPEM))
+	expiredOperator, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Admit(compact, expiredOperator); err == nil {
+		t.Fatal("expired operator connection admitted a valid grant")
+	}
+	id, err := s.Admit(compact, f.builder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = f.builder.NotAfter
+	if _, err := s.Policy(id, f.builder); err == nil {
+		t.Fatal("expired builder connection retained session access")
+	}
+	if _, err := s.Admit(compact, f.builder); err == nil {
+		t.Fatal("expired builder connection retried admission")
 	}
 }
 
