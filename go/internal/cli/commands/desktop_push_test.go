@@ -3,17 +3,21 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
+	"testing"
+
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
-	"testing"
 )
 
 type pushTestConn struct {
 	grpc.ClientConnInterface
-	calls   int
-	success bool
-	err     error
-	enabled bool
+	calls       int
+	success     bool
+	err         error
+	enabled     bool
+	topic       string
+	environment pb.APNSEnvironment
 }
 
 func (c *pushTestConn) Invoke(ctx context.Context, method string, in, out any, _ ...grpc.CallOption) error {
@@ -43,18 +47,24 @@ func (c *pushTestConn) Invoke(ctx context.Context, method string, in, out any, _
 		environment = r.Environment
 		out.(*pb.APNSUnregisterDeviceTokenResponse).Success = c.success
 	}
-	if string(token) != "apple-token" || topic != "dev.wendy.mobile" || environment != pb.APNSEnvironment_APNS_ENVIRONMENT_DEVELOPMENT {
+	if string(token) != "apple-token" || topic != c.topic || environment != c.environment {
 		return errors.New("registration changed")
 	}
 	return nil
 }
 func TestDesktopPushRegistrationConfirmedByCloud(t *testing.T) {
-	for _, enabled := range []bool{true, false} {
-		for _, success := range []bool{true, false} {
-			conn := &pushTestConn{enabled: enabled, success: success}
-			err := setDesktopPushRegistration(context.Background(), conn, []byte("apple-token"), "dev.wendy.mobile", 1, enabled)
-			if conn.calls != 1 || (err == nil) != success {
-				t.Fatalf("enabled=%v success=%v err=%v", enabled, success, err)
+	for _, topic := range []string{"dev.wendy.desktop", "dev.wendy.mobile", "dev.wendy.ccr"} {
+		for _, environment := range []pb.APNSEnvironment{pb.APNSEnvironment_APNS_ENVIRONMENT_DEVELOPMENT, pb.APNSEnvironment_APNS_ENVIRONMENT_PRODUCTION} {
+			for _, enabled := range []bool{true, false} {
+				for _, success := range []bool{true, false} {
+					t.Run(fmt.Sprintf("%s/%s/enabled=%t/success=%t", topic, environment, enabled, success), func(t *testing.T) {
+						conn := &pushTestConn{enabled: enabled, success: success, topic: topic, environment: environment}
+						err := setDesktopPushRegistration(context.Background(), conn, []byte("apple-token"), topic, int32(environment), enabled)
+						if conn.calls != 1 || (err == nil) != success {
+							t.Fatalf("calls=%d err=%v", conn.calls, err)
+						}
+					})
+				}
 			}
 		}
 	}
@@ -70,6 +80,8 @@ func TestDesktopPushRejectsInvalidAndCancelled(t *testing.T) {
 		env   int32
 	}{
 		{nil, "dev.wendy.mobile", 1}, {[]byte("token"), "another.app", 1}, {[]byte("token"), "dev.wendy.mobile", 0},
+		{nil, "dev.wendy.ccr", 2}, {make([]byte, 4097), "dev.wendy.ccr", 2}, {[]byte("token"), "dev.wendy.ccr", 0},
+		{[]byte("token"), "dev.wendy.ccr.beta", 2}, {[]byte("token"), "dev.wendy.ccr.evil", 2},
 	} {
 		conn := &pushTestConn{}
 		if err := setDesktopPushRegistration(context.Background(), conn, item.token, item.topic, item.env, true); err == nil || conn.calls != 0 {
