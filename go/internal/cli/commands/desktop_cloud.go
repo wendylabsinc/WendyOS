@@ -12,6 +12,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/failure"
 	invite "github.com/wendylabsinc/wendy/go/proto/gen/cloudinvitepb"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
@@ -27,7 +28,7 @@ func desktopCloudAuth(account, organization string) (*config.AuthConfig, error) 
 	}
 	selected, ok := cfg.ContextByName(account)
 	if !ok {
-		return nil, errors.New("This saved account is no longer available. Sign in again.")
+		return nil, failure.Wrap(errors.New("This saved account is no longer available. Sign in again."), failure.AuthenticationRequired, failure.SignIn)
 	}
 	if organization == "" {
 		return selected, nil
@@ -36,7 +37,7 @@ func desktopCloudAuth(account, organization string) (*config.AuthConfig, error) 
 		return selected, nil
 	}
 
-	return nil, errors.New("Sign in to this organization first, then refresh accounts.")
+	return nil, failure.Wrap(errors.New("Sign in to this organization first, then refresh accounts."), failure.AuthenticationRequired, failure.SignIn)
 }
 func DesktopOrganizations(ctx context.Context, account string) ([]*pb.Organization, error) {
 	a, e := desktopCloudAuth(account, "")
@@ -197,7 +198,7 @@ func DesktopCreateInvite(ctx context.Context, account, org, role string, expires
 	e := desktopCloudWrite(ctx, account, org, func(ctx context.Context, c grpc.ClientConnInterface, a *config.AuthConfig) error {
 		base, e := url.Parse(a.CloudDashboard)
 		if e != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") {
-			return errors.New("This account has no Cloud dashboard address. Sign in again.")
+			return failure.Wrap(errors.New("This account has no Cloud dashboard address. Sign in again."), failure.AuthenticationRequired, failure.SignIn)
 		}
 		out := &invite.CreateOrganizationInviteResponse{}
 		e = cloudrequest.Invoke(ctx, c, a, invite.OrganizationInviteService_CreateOrganizationInvite_FullMethodName, &invite.CreateOrganizationInviteRequest{OrganizationId: org, Role: role, ExpiresAt: timestamppb.New(time.Unix(expires, 0))}, out)

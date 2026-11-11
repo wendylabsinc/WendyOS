@@ -2634,6 +2634,9 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 	// at the mTLS port), then fall back to port+1 (the normal case where
 	// discovery returns the plaintext port and mTLS is port+1).
 	mtlsAddrs := []string{cand, hostPort(host, port+1)}
+	if w.target.RequiresMTLS {
+		mtlsAddrs = mtlsAddrs[:1]
+	}
 	for addrIdx, mtlsAddr := range mtlsAddrs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -2853,6 +2856,9 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 			tenant = target.Expected.TenantUUID
 		}
 		return nil, walk.lastMTLSErr, pinnedRefusalError(failure, tenant, allCerts, time.Now())
+	}
+	if target.RequiresMTLS {
+		return nil, walk.lastMTLSErr, provisionedAgentConnectError(walk.lastMTLSErr)
 	}
 	// The plaintext rung stays on the primary address rather than walking the
 	// candidates. grpc.NewClient is lazy, so a plaintext "success" against a dead

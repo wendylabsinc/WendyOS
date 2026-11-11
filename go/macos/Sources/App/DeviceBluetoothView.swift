@@ -49,7 +49,7 @@ struct DeviceBluetoothView: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         if busy == device.id { ProgressView() }
                         else {
-                            Menu {
+                            OverflowMenu {
                                 if device.connected {
                                     Button("Disconnect") { actions.submit { await act(device, action: 2) } }
                                 } else {
@@ -57,7 +57,7 @@ struct DeviceBluetoothView: View {
                                     if !device.paired { Button("Pair and connect") { actions.submit { await act(device, action: 1) } } }
                                 }
                                 if device.paired { Button("Forget device", role: .destructive) { forgetting = device } }
-                            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                            }
                                 .accessibilityLabel("Options for \(device.title)").disabled(scanning || busy != nil)
                         }
                     }.padding(.vertical, 4)

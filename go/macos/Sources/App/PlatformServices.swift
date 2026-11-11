@@ -5,6 +5,28 @@ import AppKit
 import UIKit
 #endif
 
+struct OverflowMenu<Content: View>: View {
+    var systemImage = "ellipsis"
+    var font: Font? = nil
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        Menu {
+            content
+        } label: {
+            Image(systemName: systemImage)
+                .font(font)
+                .frame(width: 44, height: 44)
+                .contentShape(.interaction, Rectangle())
+        }
+        // Native borderless menus can discard the label's frame on macOS.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+}
+
 enum PlatformClipboard {
     static func copy(_ text: String) {
         #if os(macOS)

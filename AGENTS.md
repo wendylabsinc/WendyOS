@@ -3,6 +3,65 @@
 Wendy is a CLI and agent platform for developing and deploying applications on
 WendyOS edge devices (Raspberry Pi, NVIDIA Jetson, x86 SBCs, and more).
 
+## Pull request descriptions
+
+Every PR created from now on must use only the applicable sections below, in
+this order. Keep each section concise and describe only what changed. Omit
+sections that do not apply instead of writing `None` or describing unchanged
+behavior. Always include the Risk section. Do not add a summary, test plan,
+checklist, or other sections. These limits apply to the PR description, not to
+performing tests or other required checks.
+
+1. **Affected build products**
+   - WendyOS
+   - Wendy Lite
+   - Wendy Agent
+   - CLI
+   - iOS/Android/macOS app, specifying the affected platforms
+   - WASM
+2. **Affected components**
+   - Networking, specifying mesh networking when affected
+   - Container Runtime
+   - Cloud Connectivity
+   - TLS/Cryptography or Security
+   - Name other affected components explicitly instead of writing `Etc.`
+3. **Type of change(s)**
+   - Identify the applicable types, including UI/UX, wire protocol, bugfix,
+     feature, refactor, or documentation.
+   - UI/UX includes iOS, Android, macOS, and CLI developer experience.
+   - For CLI or app UI/UX changes, include a GIF, screenshots, or video in this
+     section demonstrating the changed behavior.
+4. **Significant items of note**
+   - Explicitly identify wire protocol breaking changes and added API surface.
+   - Identify other breaking changes and any action existing users must take.
+5. **Risk**
+   - The PR author must state `low`, `medium`, or `high` and apply exactly one
+     matching PR label:
+     `risk: low`, `risk: medium`, or `risk: high`.
+   - Risk means the chance of breaking existing users' workflows, including
+     crashes, vulnerabilities, and compatibility regressions. Assess the actual
+     behavior affected, not the size of the diff or whether it is called a bugfix.
+   - Include a brief reason for the rating in this section.
+6. **Architectural changes**
+   - Explicitly describe any broad architectural change, such as adding a major
+     ecosystem component or changing responsibilities between components.
+   - Include this section only when the PR changes the architecture.
+
+## Optional AI reviews
+
+Security review runs automatically on PRs ready for review and subsequent pushes.
+To request additional AI reviews, apply the corresponding PR labels:
+
+- `review: api` for API and compatibility review, including a risk recommendation.
+- `review: docs` for documentation coverage suggestions.
+- `review: integration-tests` for integration-test coverage suggestions.
+
+Each label starts its review and enables reruns on subsequent pushes until removed.
+Explicitly requested reviews can run on drafts. API review recommends a risk rating
+in its comment but does not change the author's risk label. Its `api-review` finding
+label is separate from the `review: api` opt-in label. Existing manual API validation
+remains available without publishing results. Builds and tests run as before.
+
 ## Setup
 
 Install the CLI:

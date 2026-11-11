@@ -60,6 +60,12 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 		p.NextSteps = []string{"Discover and verify the explicit target with install verify; agent-only systems do not report a WendyOS version or device type.", "Verify the robot's existing ROS topics and DDS configuration before deploying an application."}
 		return p, nil
 	}
+	// Mapped after the agent-only plans above, which must not need the manifest.
+	var err error
+	if o.DeviceType, o.Storage, err = resolveInstallDeviceType(ctx, o.DeviceType, o.Storage, 0); err != nil {
+		return nil, err
+	}
+	p.DeviceType = o.DeviceType
 	jetson := isT234RecoveryDevice(o.DeviceType) || o.DeviceType == thorDeviceType
 	if jetson && o.Carrier != "developer-kit" {
 		return nil, fmt.Errorf("Jetson image planning requires carrier=developer-kit; for a robot/custom carrier use its vendor installation guide or install the agent on its existing OS")

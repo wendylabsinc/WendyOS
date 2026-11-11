@@ -1,0 +1,7 @@
+Seeed Studio reference photographs, used for hardware model recognition only.
+Copyright Seeed Studio. CC BY-SA 4.0. Original unmodified images.
+https://creativecommons.org/licenses/by-sa/4.0/
+https://wiki.seeedstudio.com/License/
+https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/img/xiaoesp32s3sense.jpg
+https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/img/4.jpg
+OpenCV 4.12.0: Apache License 2.0. See Notices/OpenCV-LICENSE.txt.

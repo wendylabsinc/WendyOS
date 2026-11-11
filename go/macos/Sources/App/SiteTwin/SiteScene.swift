@@ -8,6 +8,7 @@ public struct SiteScene: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let modelURL: URL
     let site: Site
+    let showCameraCoverage: Bool
     let cameraGeometry: [UUID: SiteCameraGeometry]
     let colorSources: [UUID: SiteCameraColorSource]
     let colorStatus: ([UUID: String]) -> Void
@@ -27,6 +28,7 @@ public struct SiteScene: View {
         modelURL: URL,
         site: Site,
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
+        showCameraCoverage: Bool = true,
         colorSources: [UUID: SiteCameraColorSource] = [:],
         colorStatus: @escaping ([UUID: String]) -> Void = { _ in },
         people: [SitePersonTrack] = [],
@@ -43,6 +45,7 @@ public struct SiteScene: View {
     ) {
         self.modelURL = modelURL
         self.site = site
+        self.showCameraCoverage = showCameraCoverage
         self.cameraGeometry = cameraGeometry
         self.colorSources = colorSources
         self.colorStatus = colorStatus
@@ -65,6 +68,7 @@ public struct SiteScene: View {
                 modelURL: modelURL,
                 site: site,
                 cameraGeometry: cameraGeometry,
+                showCameraCoverage: showCameraCoverage,
                 colorSources: colorSources,
                 colorStatus: colorStatus,
                 people: people,
@@ -97,6 +101,7 @@ private struct SceneSurface {
     var modelURL: URL
     var site: Site
     var cameraGeometry: [UUID: SiteCameraGeometry]
+    var showCameraCoverage: Bool
     var colorSources: [UUID: SiteCameraColorSource]
     var colorStatus: ([UUID: String]) -> Void
     var people: [SitePersonTrack]
@@ -128,7 +133,12 @@ private struct SceneSurface {
         var robotModel = SCNNode()
         var orders = SCNNode()
         var selection = SCNNode()
+        #if os(iOS)
+        var draggedCamera: UUID?
+        var dragPoint: SitePoint?
+        #endif
         var lastCameras: [SiteCamera]?
+        var lastShowCameraCoverage = true
         var lastCameraGeometry: [UUID: SiteCameraGeometry] = [:]
         var lastMarkerScale: Float?
         var lastRobot: SiteRobotRenderState?
@@ -235,8 +245,9 @@ private struct SceneSurface {
             let currentGeometry = parent.cameraGeometry.filter {
                 $0.value.pose.isCurrent(revision: parent.site.modelRevision, now: Date())
             }
-            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry || lastMarkerScale != scale else { return }
+            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry || lastShowCameraCoverage != parent.showCameraCoverage || lastMarkerScale != scale else { return }
             lastCameras = parent.site.cameras
+            lastShowCameraCoverage = parent.showCameraCoverage
             lastCameraGeometry = currentGeometry
             lastMarkerScale = scale
             SCNTransaction.flush()
@@ -256,7 +267,7 @@ private struct SceneSurface {
                         node.simdPosition, forward: SIMD3<Float>(current.pose.forward), in: model)
                 }
                 markers.addChildNode(node)
-                if let current, let rays = current.lens?.boundaryRays {
+                if parent.showCameraCoverage, let current, let rays = current.lens?.boundaryRays {
                     // Two metres is a drawing length, not sensor range or visible
                     // coverage. Surface occlusion and detection range are unknown.
                     var vertices = [SCNVector3(0, 0, 0)]
@@ -446,6 +457,29 @@ private struct SceneSurface {
         }
 
         #if os(iOS)
+            @objc func dragCamera(_ gesture: UILongPressGestureRecognizer) {
+                guard let view else { return }
+                let hits = view.hitTest(gesture.location(in: view), options: [.searchMode: SCNHitTestSearchMode.all.rawValue])
+                switch gesture.state {
+                case .began:
+                    guard parent.placingCamera == nil,
+                          let name = hits.first?.node.name, name.hasPrefix("sensor:"),
+                          let id = UUID(uuidString: String(name.dropFirst(7))) else { return }
+                    draggedCamera = id; dragPoint = nil; view.allowsCameraControl = false
+                case .changed:
+                    guard let id = draggedCamera, let hit = hits.first(where: { isDescendant($0.node, of: model) }) else { return }
+                    let p = hit.worldCoordinates
+                    dragPoint = SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z))
+                    markers.childNode(withName: "sensor:" + id.uuidString, recursively: true)?.worldPosition = p
+                case .ended, .cancelled, .failed:
+                    let id = draggedCamera, point = dragPoint
+                    draggedCamera = nil; dragPoint = nil; view.allowsCameraControl = true
+                    lastCameras = nil
+                    if gesture.state == .ended, let id, let point { parent.place(id, point) }
+                    else { update(parent, view: view) }
+                default: break
+                }
+            }
             @objc func clicked(_ gesture: UITapGestureRecognizer) {
                 tap(at: gesture.location(in: view))
             }
@@ -503,6 +537,13 @@ enum SiteCameraWallPlacement {
 }
 
 #if os(iOS)
+    extension SceneSurface.Coordinator: UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let view, parent.placingCamera == nil else { return false }
+            let hit = view.hitTest(gestureRecognizer.location(in: view), options: nil).first
+            return hit?.node.name?.hasPrefix("sensor:") == true
+        }
+    }
     private var platformAccent: UIColor { .systemGreen }
     private var platformEstimated: UIColor { .systemOrange }
     extension SceneSurface: UIViewRepresentable {
@@ -517,6 +558,10 @@ enum SiteCameraWallPlacement {
                     action: #selector(Coordinator.clicked)
                 )
             )
+            let drag = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.dragCamera))
+            drag.minimumPressDuration = 0.35
+            drag.delegate = context.coordinator
+            view.addGestureRecognizer(drag)
             context.coordinator.update(self, view: view)
             return view
         }

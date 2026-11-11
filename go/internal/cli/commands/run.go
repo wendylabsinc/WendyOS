@@ -1578,6 +1578,15 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	regPort := registryPort(agentOS)
 
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
+	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
+		return err
+	}
 	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 		return classifyCommandError(errBuilderUnavailable, err)
 	}
@@ -1678,6 +1687,12 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
+	}
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
 	}
 
 	product, err := swifttoolchain.FindSwiftProductWithActiveSwiftOptions(cwd, opts.product, !opts.yes && isInteractiveTerminal())
@@ -2304,6 +2319,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	printRunDiskUsageWarning(versionResp)
+	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
+		return err
+	}
 	mark("agent version metadata (in runWithAgent)")
 	activationStep(ctx, "build", map[string]string{"device_reachable": "true"})
 	metrics.deviceType = versionResp.GetDeviceType()
@@ -2446,6 +2464,11 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// ahead of every local path because those exist to optimise a local build
 	// that is not going to happen.
 	if opts.buildHost != "" {
+		// The build host delivers the image to this device, so the device
+		// still needs room for it.
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
 		metrics.transport = "buildhost"
 		if len(opts.fleetDevices) > 0 {
 			// A fleet build starts one container per device: the first device's
@@ -2494,8 +2517,17 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		metrics.transport = ""
 	}
 
-	// A build will run below (the no-build fast path returned above), so make
-	// sure the Apple Container system is up when --builder apple-container is
+	// A build will run below (the no-build fast path returned above). Refuse it
+	// now if this computer's disk, or the device's, is too full to hold it.
+	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
+	ctx = withDeviceStorage(ctx, versionResp)
+
+	// Make sure the Apple Container system is up when --builder apple-container is
 	// explicit. This covers both the chunk-diff and the registry-push build.
 	// The emulation notice goes out now, before the build UI owns the terminal.
 	noteEmulatedBuild(platform, true)
@@ -2567,6 +2599,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// same Dockerfile, so it would fail identically — and can even mask the
 			// real error behind an unrelated builder-setup failure. Surface the
 			// actionable build error directly instead of falling back. (#1166)
+			return err
+		} else if chunkFailureRepeatsOnRegistryPush(err, opts.builder) {
+			// A registry push would stop at the same missing space or plugin.
 			return err
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no

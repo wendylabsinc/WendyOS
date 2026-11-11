@@ -36,13 +36,13 @@ func desktopDial(ctx context.Context, selector string, port uint16) (net.Conn, e
 
 // Report missing Cloud port support once per VPN session. Other dial failures
 // retain their normal behavior, including authorization refusals.
-func reportVPNDialFailures(dial vpn.DialFunc, report func(string)) vpn.DialFunc {
+func reportVPNDialFailures(dial vpn.DialFunc, report func(error)) vpn.DialFunc {
 	var reported sync.Once
 	return func(ctx context.Context, selector string, port uint16) (net.Conn, error) {
 		conn, err := dial(ctx, selector, port)
 		var unsupported *cloudrelay.UnsupportedServiceError
 		if ctx.Err() == nil && errors.As(err, &unsupported) {
-			reported.Do(func() { report(unsupported.Error()) })
+			reported.Do(func() { report(unsupported) })
 		}
 		return conn, err
 	}

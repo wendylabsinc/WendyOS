@@ -15,7 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/internal/cli/modelhub"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -59,14 +62,26 @@ func New() *Client {
 	c.methods = map[string]any{
 		"StartVPN": c.startVPN, "RefreshVPN": c.refreshVPN, "CancelVPN": c.cancelVPN, "StopVPN": c.stopVPN, "VPNRead": c.readPacket, "VPNWrite": c.writePacket,
 		"NearbyDiscover": b.NearbyDiscover, "NearbyOpen": b.NearbyOpen, "NearbyClose": b.NearbyClose, "NearbyAction": b.NearbyAction,
+		// Setup state survives a failed step, as in the iOS bridge: attempted and
+		// pending must stay visible so enrollment is never sent twice.
+		"NearbySetupOpen": func(address string) nearbySetupResult {
+			state, err := b.NearbyOpen(address)
+			return newNearbySetupResult(state, err)
+		},
+		"NearbySetupAction": func(session uint64, action int, ssid, password, account, organization, name string) nearbySetupResult {
+			state, err := b.NearbyAction(session, action, ssid, password, account, organization, name)
+			return newNearbySetupResult(state, err)
+		},
 		"Nearby": b.Nearby, "Cloud": b.Cloud, "Account": b.Account, "Accounts": b.Accounts,
 		"Login": b.Login, "CancelLogin": b.CancelLogin, "SetMobileState": c.setMobileState,
 		"MobileMeshSummary": func() map[string]string {
 			state, detail := b.MobileMeshSummary()
 			return map[string]string{"state": state, "detail": detail}
 		},
-		"Connect": func(selector string, forget bool) (any, error) {
-			session, err := b.Connect(selector, forget)
+		// A device discovery marks as mTLS-only is dialed on the authenticated LAN path, as
+		// the iOS bridge's WDConnect does; a later sighting cannot downgrade that requirement.
+		"Connect": func(selector string, forget, requiresMTLS bool) (any, error) {
+			session, err := b.ConnectTargetRequest(selector, forget, b.ReserveConnection(), requiresMTLS)
 			return map[string]any{"session": session, "lite": b.IsLite(session)}, err
 		},
 		"Disconnect": b.Disconnect, "Shutdown": b.Shutdown, "Poll": b.Poll,
@@ -90,6 +105,26 @@ func New() *Client {
 		"ChatModels": b.ChatModels, "StartChat": b.StartChat, "PollChat": b.PollChat, "StopChat": b.StopChat, "ResolveChatApproval": b.ResolveChatApproval,
 		"ModelHardware": b.ModelHardware, "StartModelRun": b.StartModelRun, "ModelRunStatus": b.ModelRunStatus, "CancelModelRun": b.CancelModelRun,
 		"SaveCameraAlignment": b.SaveCameraAlignment, "SaveCameraLens": b.SaveCameraLens,
+		// Calls added with the redesigned iOS app (#2715).
+		"CameraControls": b.CameraControls, "SetWiFiPriority": b.SetWiFiPriority, "StartHostedChat": b.StartHostedChat,
+		// Lists the models the person's own provider key can use; the key is never stored by Go.
+		"HostedChatModels": func(provider, key string) ([]chat.ModelOption, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return chat.HostedModels(ctx, provider, key)
+		},
+		"ManageDevice": b.ManageDevice, "PrepareLocalReset": b.PrepareLocalReset, "ResetLocalEnrollment": b.ResetLocalEnrollment,
+		"MobileOSUpdate": b.MobileOSUpdate, "SiteModels": b.SiteModels, "HomeCampaign": b.HomeCampaign,
+		"BeginRecordingRead": b.BeginRecordingRead, "EndRecordingRead": b.EndRecordingRead, "RecordingLibrary": b.RecordingLibrary,
+		"RecordingDetails": b.RecordingDetails, "PlayRecording": b.PlayRecording, "ExportRecordings": b.ExportRecordings,
+		// Thumbnails carry their format, as the iOS bridge reports it beside the bytes.
+		"RecordingThumbnail": func(id uint64, selector string, secure bool, episode string, file data.File) (map[string]any, error) {
+			raw, err := b.RecordingThumbnail(id, selector, secure, episode, file)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"format": backend.RecordingPreviewFormat(file), "bytes": raw}, nil
+		},
 		"Organizations": func(account string) (any, error) {
 			ctx, cancel := cloudContext()
 			defer cancel()
@@ -139,6 +174,32 @@ func New() *Client {
 			ctx, cancel := cloudContext()
 			defer cancel()
 			return commands.DesktopDeleteAccess(ctx, account, org, id)
+		},
+		"DeviceAccess": func(account, org, device string) (any, error) {
+			ctx, cancel := cloudContext()
+			defer cancel()
+			return commands.DesktopDeviceAccess(ctx, account, org, device)
+		},
+		// Hugging Face lookups match the iOS bridge's timeouts. They read public
+		// metadata only; nothing is downloaded or executed on the phone.
+		"SearchModels": func(query string) ([]modelhub.Repository, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return modelhub.New().Search(ctx, query)
+		},
+		"ModelFiles": func(repo string) (modelhub.Details, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			return modelhub.New().Details(ctx, repo)
+		},
+		"VisionModel": func(repo string, classification bool) (modelhub.VisionModel, error) {
+			task := "object-detection"
+			if classification {
+				task = "image-classification"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			return modelhub.New().VisionDetails(ctx, repo, task)
 		},
 	}
 	return c
@@ -420,4 +481,17 @@ func (c *Client) writePacket(packet []byte) error {
 	}
 	engine.Write(packet)
 	return nil
+}
+
+type nearbySetupResult struct {
+	State backend.NearbySetupState
+	Error string `json:",omitempty"`
+}
+
+func newNearbySetupResult(state backend.NearbySetupState, err error) nearbySetupResult {
+	result := nearbySetupResult{State: state}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	return result
 }

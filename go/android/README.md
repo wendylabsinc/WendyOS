@@ -34,50 +34,109 @@ macOS or Linux.
 
 ## Implemented workflows
 
-- Nearby discovery through Android NSD, Cloud discovery, search, manual addresses,
-  authenticated connections, and explicit recovery when a pinned identity changes.
-- Browser sign-in, multiple saved accounts, organization selection, fleet devices
-  grouped by site, organization metadata, members, invitations and access grants.
-- Device details and resource use; app start, stop, deletion, ports, live logs and
-  embedded web apps over the shared authenticated loopback forwarder.
-- Live H.264, JPEG and thermal cameras. H.264 uses Android MediaCodec; thermal
-  frames use the shared Go measurement decoder.
-- Campaign creation and settings, associated clips, manual recordings, recorded
-  video and image playback, numeric plots, event details and verified ZIP export.
-- Device-local model discovery, downloads and startup, streaming chat and explicit
-  tool approvals. Android uses the in-process MCP tools, as iOS does.
-- Wi-Fi, mesh settings, topology, remote Bluetooth peripherals, audio defaults,
-  sensor/IP camera pairing, Unitree pairing, cloud enrollment and OS updates.
-- Nearby setup through Android Bluetooth GATT. The native Bluetooth adapter also
-  supplies scanning and L2CAP to the shared authenticated mesh implementation.
-- One mesh VPN switch, matching iOS. Open Private network and turn VPN on.
-  Android asks for VPN consent the first time. All mesh devices join automatically,
-  including devices discovered after connecting. The shared automatic controller
-  uses an available mesh uplink if normal internet fails and switches back when
-  it recovers. Public DNS uses Android's resolver while normal internet is active.
-  The foreground notification opens or stops the VPN.
-- Wendy's existing geometric app mark, with adaptive and monochrome launcher icons.
+Screens follow the lens-based iOS app from PR #2715 (`cn/mobile-app`), drawn
+with Material 3. "Verified" below means compiled and unit tested; items marked
+*emulator* were also opened on an Android 16 emulator. Nothing here has been
+run on a real phone against a real WendyOS device yet.
 
-Device and Cloud operations are wired to real backend methods. Successful
-compilation does not establish that every hardware-dependent workflow works.
+- First launch: choose a primary lens (Devices, Robots, Sites) *emulator*.
+- General Home: lens tiles, the organization button that opens Settings, the
+  notifications bell, the floating Ask Wendy button, and the widget deck
+  (favorite devices, camera feed, campaign recording, data gallery, app web
+  portal, needs you, happening now, quick actions) with add, configure,
+  resize, reorder and delete. Layouts are saved per account and organization
+  *emulator* (quick actions only).
+- Settings sheet: organization list, primary lens, organization management,
+  connection settings, System/Light/Dark appearance, accounts and add account
+  (Wendy Cloud or Development Cloud) *emulator*.
+- Devices lens: Home (device count with presence bar, Local and Cloud
+  inventories, setup, needs attention, recent data), Data and Activity tabs,
+  with Ask Wendy above the tab bar *emulator*.
+- Recordings catalog (iOS `RecordingCatalog`): one library per reachable
+  device, nearby routes first, episode details (labels, kinds, campaigns,
+  previews) loaded in batches of 64, and real thumbnails through
+  `RecordingThumbnail`. Data, Activity and the Data gallery widget share it.
+- Data: kind menu, per-device cards with trigger labels and coverage, an
+  episode picker grouped by day with label filters, export (with a
+  confirmation for several episodes) and playback that starts on open.
+- Activity: Alerts (campaign recordings, agent updates, crash loops) with
+  swipe to archive and read receipts, Events grouped by day, and Archived
+  alerts kept on the phone for 30 days.
+- Home widgets use the iOS four-column packing; the gallery shows thumbnails,
+  camera widgets play inline or full screen, campaign widgets record a clip
+  (`HomeCampaign`), and the editor has the iOS device and resource pickers.
+- Device page: Apps, Cameras, Data, Location and Settings segments; More
+  device tools (appearance, logs, device info and update progress, app
+  activity, Digital Twin, campaigns, device management); custom device
+  appearances (symbol, emoji or photo on a color).
+- Cameras: live tiles with resolution, last-frame time and stale warning,
+  full screen, and per-camera controls through `CameraControls`.
+- App page: start and stop, open, logs, ports, version and restart; deploy
+  instructions with the device selector. The dashboard browser follows
+  `MobileAppBrowser`.
+- Device management: rename, remove from Cloud, reset local enrollment and OS
+  update through the shared Go backend.
+- Ask Wendy: the device's model server, or Cloud inference with the person's
+  own OpenAI or Anthropic key (Android Keystore, unlocked phone only, never
+  sent to the device), remembered AI devices, suggestions and unread replies.
+- Nearby setup in the four iOS steps: Device, Connection, Organization and
+  Enrollment.
+- Robots lens: the iOS four tabs, shown as under construction as on iOS.
+- Device recognition (Devices, "+", Recognize a device): a CameraX viewfinder
+  matches board appearances with OpenCV SIFT and a RANSAC homography (a port
+  of `VisualRecognition.cpp`, with the same bundled Seeed XIAO photos) and
+  reads printed device names with ML Kit text recognition. Tapping a match
+  lets you choose the device and connect; "Remember a device's appearance" saves up to 12 references on the
+  phone. OpenCV is pinned to 4.10: 4.11 and later bundle KleidiCV, whose SVE2
+  code crashes the Android emulator on Apple silicon, which reports SVE2 it
+  cannot run. Unlike iOS there is no ARKit, so outlines follow the 2D image.
+- Sites lens: local sites with devices and robots, a setup checklist, 3D
+  models (USDZ or `.wendysite` import, rename, default, save to and load from
+  a device through `SiteModels`), live cameras, missions and activity.
+  Models are read by a Kotlin USD reader (usda and usdc crate layers) and
+  drawn with OpenGL ES. Fixed cameras are added by gateway identity, placed
+  by tapping the model, previewed and aligned.
+- Camera alignment (Sites and Digital Twin, "Align camera"): live video is
+  matched to the scan's reference map and the lens and position are saved
+  on the gateway (`SaveCameraAlignment`), as on iOS. `SiteLocalization.kt`
+  is a Kotlin port of `SiteLocalization.cpp` on OpenCV's Java API, with the
+  same thresholds, validation folds and two-frame check. The lens can be
+  measured with this phone's screen or a saved checkerboard
+  (`SaveCameraLens`), or the camera adjusted manually. Unplaced cameras are
+  aligned in the background while their site is open, and every camera
+  aligned on the gateway (by either phone) shows its view cone.
+  Calibration frames come from H.264 keyframes decoded by a separate
+  MediaCodec, or from JPEG frames.
+- Live imagery: each aligned camera's latest picture is projected onto the
+  model (iOS `SiteCameraColorRenderer`): a depth map rendered from the
+  camera's pose decides what it can see, its lens distortion is applied, and
+  the best-facing camera colours each surface. The wall a camera hangs on is
+  left out of its depth view, as on iOS. The View menu turns camera coverage
+  and live imagery on or off. This needs OpenGL ES 3; on ES 2 the model is
+  drawn without imagery.
+- Digital Twin (device tool): saved captures with import, share, remove and
+  restore, and the gateway's cameras placed, previewed and aligned.
+- Apps, logs, settings, Wendy Lite boards, campaigns, chat and the model
+  library, organization management and the mesh VPN with Android Always-on
+  VPN carry over from the earlier parity work (PR #2801).
+
+Device and Cloud operations call the shared Go backend. Successful
+compilation does not establish that hardware-dependent workflows work.
 
 ## Parity still required
 
-This is not full Mac/iOS feature parity. The following need further implementation:
-
-| Existing feature | Android status |
+| iOS feature (PR #2715) | Android status |
 | --- | --- |
-| Local 3D site documents, USDZ imports, RoomPlan capture, photo reconstruction, recognition viewfinder and lens calibration | Not implemented. The Sites tab currently groups Cloud fleet devices by their assigned site. |
-| Digital-twin robot localization, navigation and motion controls | Not implemented. Robot account pairing is available. |
-| Remote campaign push notifications | Not implemented. The existing registration API targets APNs; Android needs an FCM backend contract and application configuration. |
-| Recorded audio playback, ROS point-cloud rendering, timeline pinch/pan | Not implemented. These original files remain in verified recording exports. |
-| Full organization editing, role management, access revocation and invite sharing UI | Partial. Metadata, member addition, invite creation and access grants are available. |
-| Android always-on VPN | Not implemented. Mesh is enabled explicitly in the app. |
+| Sites: room scanning and photo reconstruction | Not available: iOS uses RoomPlan and Object Capture on LiDAR devices. Android imports models made on iOS. |
+| Sites: scan reference capture (the visual map) | Not available: iOS records it with ARKit LiDAR depth during the room scan, in the scan's coordinates. Android uses maps made on iOS, carried in `.wendysite` files. |
+| Digital Twin robot map, localization, people tracking and Go2 controls | Not ported. The shared backend's `OpenSiteRobot` sends the Go2 STOP and turns off its onboard obstacle avoidance as soon as the panel opens, so even a view-only panel commands a physical robot. It needs an explicit decision and a robot to test against. |
+| Remote campaign push notifications | Blocked. Cloud registers APNs tokens only (`wendycloud.v2.APNSService`). Android needs an FCM contract from Cloud. |
 | USB flashing and host simulator management | Desktop workflows, also absent from the iOS app. |
 
 Physical-device checks are still required for BLE GATT/L2CAP, cloud sign-in,
-camera decoding, VPN traffic and destructive device operations. No deployment,
-app deletion, firmware update or robot movement is part of the build tests.
+camera decoding, VPN traffic, campaigns, recordings, model downloads and
+destructive device operations. No deployment, app deletion, firmware update or
+robot movement is part of the tests.
 
 ## Architecture and lifecycle
 
@@ -134,10 +193,14 @@ go test ./go/android/mobile ./go/macos/backend
 
 Unit tests cover bridge rejection of malformed calls, stale initialization,
 Unicode, errors, device parsing, automatic VPN route updates and cancellation, private/public DNS isolation,
-and H.264 framing across transport boundaries.
+H.264 framing across transport boundaries, and the iOS rules the screens port:
+Wi-Fi and mesh parsing, the mesh graph, enrollment names and retry safety,
+redacted errors, logs, resources, campaigns, chat Markdown and model fit,
+nearby setup observation, organization snapshots and the recording timeline.
 Instrumentation tests exercise the actual JNI library, native NSD discovery,
 stale session rejection, Activity recreation, native private/public DNS, and idle
 VPN packet-pump cancellation. The VPN lifecycle test also connects, disconnects
 and reconnects a system tunnel when VPN consent has already been granted; otherwise
 it skips. These tests require a running emulator or connected Android device.
-They do not sign in or modify discovered devices.
+`RecordingTimelineTest` drives the timeline and point-cloud gestures. They do not
+sign in or modify discovered devices.
