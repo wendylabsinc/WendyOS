@@ -11,7 +11,11 @@ import sys
 
 RECOVERY = ("In the runner's login session, run 'WENDY_SECRET_STORE=file wendy auth login' "
             "as ci@wendy.sh, then 'WENDY_SECRET_STORE=file wendy auth use wendy'.")
-PRINCIPAL_PREFIX = "spiffe://wendy.sh/tenant/5c9e14bb-49c0-4178-9cc5-493a151f9885/operator/"
+# Public identity of the runner's approved ci@wendy.sh login, not a credential.
+EXPECTED_CI_PRINCIPAL = (
+    "spiffe://wendy.sh/tenant/5c9e14bb-49c0-4178-9cc5-493a151f9885/"
+    "operator/2dae8b57-54b3-4aee-8ab8-f8493298162f"
+)
 
 
 def cli(wendy, *args):
@@ -32,7 +36,7 @@ def session(wendy):
     if (selected.get("context") != "wendy" or
             selected.get("cloudGrpc") != "api.wendy.dev:443" or
             selected.get("loginPath") != "OIDC" or
-            not selected.get("principalUri", "").startswith(PRINCIPAL_PREFIX) or
+            selected.get("principalUri") != EXPECTED_CI_PRINCIPAL or
             not selected.get("certificate")):
         raise ValueError("context")
     return selected

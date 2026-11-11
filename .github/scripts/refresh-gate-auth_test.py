@@ -19,7 +19,9 @@ spec.loader.exec_module(gate)
 
 STATUS = {"loggedIn": True, "sessions": [{
     "context": "wendy", "current": True, "cloudGrpc": "api.wendy.dev:443",
-    "loginPath": "OIDC", "principalUri": gate.PRINCIPAL_PREFIX + "ci-test",
+    "loginPath": "OIDC", "principalUri": (
+        "spiffe://wendy.sh/tenant/5c9e14bb-49c0-4178-9cc5-493a151f9885/"
+        "operator/2dae8b57-54b3-4aee-8ab8-f8493298162f"),
     "certificate": {"expiresAt": "2099-01-01T00:00:00Z", "expired": False},
 }]}
 PRIVATE = "private-token\n::error::private-link\n-----BEGIN PRIVATE KEY-----"
@@ -81,9 +83,17 @@ class RefreshTests(unittest.TestCase):
                 self.assertIn("expired or refused", out)
                 self.assertEqual(len(calls), 2)
 
+    def test_different_operator_in_same_tenant_never_attempts_refresh(self):
+        other = copy.deepcopy(STATUS)
+        other["sessions"][0]["principalUri"] = (
+            STATUS["sessions"][0]["principalUri"].rsplit("/", 1)[0] + "/unrelated-operator")
+        result, _, calls = self.run_refresh([json.dumps(other), "", json.dumps(other)])
+        self.assertEqual(result, 1)
+        self.assertEqual([c.args[1:] for c in calls], [("auth", "status")])
+
     def test_zero_exit_without_usable_certificate_fails(self):
         for field, value in (("certificate", None), ("current", False),
-                             ("principalUri", gate.PRINCIPAL_PREFIX + "another-user")):
+                             ("principalUri", STATUS["sessions"][0]["principalUri"] + "-other")):
             after = copy.deepcopy(STATUS)
             after["sessions"][0][field] = value
             result, _, _ = self.run_refresh([json.dumps(STATUS), "", json.dumps(after)])
