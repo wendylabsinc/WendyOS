@@ -775,7 +775,7 @@ func main() {
 				markCloudEnrolled(logger)
 				client := &cloudrelay.Agent{Endpoint: endpoint, Verifier: &cloudrelay.Verifier{Issuer: issuer},
 					StateDir: filepath.Join(configPath, "cloud-relay"), Credentials: provisioningSvc.ProvisioningCerts,
-					Logger: logger, MTLSPort: mtlsPortNum, OnRegistered: cloudReachedMark(logger)}
+					Logger: logger, MTLSPort: mtlsPortNum, OnRegistered: cloudReachedMark(logger), OnLost: cloudLostMark(logger)}
 				client.Run(ctx)
 				return
 			}
@@ -2120,6 +2120,19 @@ func cloudReachedMark(logger *zap.Logger) func() {
 	return func() {
 		if err := interceptor.MarkRemoteSeen(supervisor.RemoteSeenDir, supervisor.ViaCloud); err != nil {
 			logger.Warn("cannot tell the agent supervisor the cloud relay was reached", zap.Error(err))
+		}
+	}
+}
+
+// cloudLostMark takes the mark back while the relay is down, so the supervisor
+// does not ask a new agent to reach a cloud this one could not reach either.
+func cloudLostMark(logger *zap.Logger) func() {
+	if os.Getenv("WENDY_AGENT_SUPERVISOR") == "" {
+		return nil
+	}
+	return func() {
+		if err := interceptor.ClearRemoteSeen(supervisor.RemoteSeenDir, supervisor.ViaCloud); err != nil {
+			logger.Warn("cannot tell the agent supervisor the cloud relay was lost", zap.Error(err))
 		}
 	}
 }
