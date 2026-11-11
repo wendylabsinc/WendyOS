@@ -199,13 +199,14 @@ class WendyModel(app: Application) : AndroidViewModel(app) {
 
     fun connect(device: Device, forget: Boolean = false) {
         val epoch = ++connectionGeneration
-        val sameDevice = selected?.selector == device.selector && session != 0L
+        // Already connected, unless this device now requires mTLS and the open connection did not (iOS AppModel.connect).
+        val sameDevice = selected?.selector == device.selector && session != 0L && (!device.requiresMTLS || selected?.requiresMTLS == true)
         if (sameDevice && !forget) return
         selected = device; session = 0; connecting = true; detailError = null; canForgetIdentity = false
         clearDeviceState()
         viewModelScope.launch {
             try {
-                val result = backend.call("Connect", device.selector, forget).obj()
+                val result = backend.call("Connect", device.selector, forget, device.requiresMTLS).obj()
                 if (epoch != connectionGeneration || !inForeground) return@launch
                 lite = result.flag("lite")
                 val resolved = device.copy(lite = lite)
