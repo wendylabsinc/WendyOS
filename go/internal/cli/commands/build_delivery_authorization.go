@@ -14,27 +14,79 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// authorizeRemoteBuild finishes every grant before submitting the build. The
-// public builder bundle is verified independently of the submission tunnel;
-// the expected principal comes from the device connection's existing binding.
+type buildDeliveryDestination struct {
+	target     *agentpbv2.PushTarget
+	device     meshid.Device
+	credential *config.CertificateInfo
+	service    agentpbv2.WendyBuildDeliveryServiceClient
+}
+
+// authorizeRemoteBuild selects one delivery mode for the entire assignment
+// before registering any grants. Only explicit lack of support on both sides
+// permits the legacy mode.
 func authorizeRemoteBuild(ctx context.Context, builder *grpcclient.AgentConnection, spec *agentpbv2.BuildSpec, destinations map[string]*grpcclient.AgentConnection) error {
 	capabilities, err := builder.BuildService.GetBuildCapabilities(ctx, &agentpbv2.GetBuildCapabilitiesRequest{})
 	if err != nil {
-		return err
+		return fmt.Errorf("checking build host delivery support: %w", err)
 	}
-	if !capabilities.GetAuthorizedDelivery() {
-		return fmt.Errorf("update the build host: it does not support operator-authorized delivery")
-	}
-	public, err := agentpbv2.NewWendyBuildDeliveryServiceClient(builder.Conn).GetDeliveryCapabilities(ctx, &agentpbv2.GetDeliveryCapabilitiesRequest{})
-	if err != nil {
-		return fmt.Errorf("getting build host public credentials: %w", err)
-	}
+	builderSupportsDelivery := capabilities.GetAuthorizedDelivery()
 	id, verified := builder.ObservedServerIdentity()
 	expected, err := meshid.DeviceFromPrincipal(id.Principal)
 	if !verified || err != nil || builder.CertInfo == nil {
 		return fmt.Errorf("verified build host identity or operator trust unavailable")
+	}
+
+	targets := spec.GetPushTargets()
+	if spec.GetPushTarget() != nil {
+		targets = []*agentpbv2.PushTarget{spec.GetPushTarget()}
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("no remote build delivery targets")
+	}
+	authorizedTargets := make([]buildDeliveryDestination, 0, len(targets))
+	for _, target := range targets {
+		assetID := target.GetAssetUuid()
+		conn := destinations[assetID]
+		if conn == nil {
+			return fmt.Errorf("operator connection missing for delivery target %s", assetID)
+		}
+		service := agentpbv2.NewWendyBuildDeliveryServiceClient(conn.Conn)
+		public, err := service.GetDeliveryCapabilities(ctx, &agentpbv2.GetDeliveryCapabilitiesRequest{})
+		targetSupportsDelivery := err == nil
+		if err != nil && status.Code(err) != codes.Unimplemented {
+			return fmt.Errorf("checking operator-authorized delivery on target %s: %w", assetID, err)
+		}
+		id, verified := conn.ObservedServerIdentity()
+		device, err := meshid.DeviceFromPrincipal(id.Principal)
+		if !verified || err != nil || device.UUID().String() != assetID || device.Tenant() != expected.Tenant() {
+			return fmt.Errorf("delivery target %s does not match the authenticated device and tenant", assetID)
+		}
+		switch {
+		case builderSupportsDelivery && !targetSupportsDelivery:
+			return fmt.Errorf("update target %s: it does not support operator-authorized delivery", assetID)
+		case !builderSupportsDelivery && targetSupportsDelivery:
+			return fmt.Errorf("update the build host: target %s supports operator-authorized delivery", assetID)
+		case targetSupportsDelivery:
+			if public.GetTargetPrincipal() != device.Principal() || public.GetContractVersion() != builddelivery.Version {
+				return fmt.Errorf("target %s reports a different delivery identity or unsupported contract", assetID)
+			}
+			authorizedTargets = append(authorizedTargets, buildDeliveryDestination{
+				target: target, device: device, credential: conn.CertInfo, service: service,
+			})
+		}
+	}
+	if !builderSupportsDelivery {
+		return nil
+	}
+
+	// Verify the public builder bundle independently of the submission tunnel.
+	public, err := agentpbv2.NewWendyBuildDeliveryServiceClient(builder.Conn).GetDeliveryCapabilities(ctx, &agentpbv2.GetDeliveryCapabilitiesRequest{})
+	if err != nil {
+		return fmt.Errorf("getting build host public credentials: %w", err)
 	}
 	roots, err := deliveryTrust(builder.CertInfo)
 	if err != nil {
@@ -51,17 +103,9 @@ func authorizeRemoteBuild(ctx context.Context, builder *grpcclient.AgentConnecti
 	if err != nil {
 		return err
 	}
-	targets := spec.GetPushTargets()
-	if spec.GetPushTarget() != nil {
-		targets = []*agentpbv2.PushTarget{spec.GetPushTarget()}
-	}
-	for _, target := range targets {
-		conn := destinations[target.GetAssetUuid()]
-		if conn == nil {
-			return fmt.Errorf("operator connection missing for delivery target %s", target.GetAssetUuid())
-		}
-		if err := authorizeBuildTarget(ctx, conn, target, expected, leaf, input); err != nil {
-			return fmt.Errorf("authorizing build delivery to %s: %w", target.GetAssetUuid(), err)
+	for _, destination := range authorizedTargets {
+		if err := destination.authorize(ctx, expected, leaf, input); err != nil {
+			return fmt.Errorf("authorizing build delivery to %s: %w", destination.target.GetAssetUuid(), err)
 		}
 	}
 	return nil
@@ -87,22 +131,12 @@ func deliveryTrust(info *config.CertificateInfo) ([]*x509.Certificate, error) {
 	return roots, nil
 }
 
-func authorizeBuildTarget(ctx context.Context, conn *grpcclient.AgentConnection, target *agentpbv2.PushTarget, builder meshid.Device, builderLeaf *x509.Certificate, input string) error {
-	service := agentpbv2.NewWendyBuildDeliveryServiceClient(conn.Conn)
-	public, err := service.GetDeliveryCapabilities(ctx, &agentpbv2.GetDeliveryCapabilitiesRequest{})
-	if err != nil {
-		return fmt.Errorf("target must support operator-authorized delivery: %w", err)
-	}
-	id, verified := conn.ObservedServerIdentity()
-	device, err := meshid.DeviceFromPrincipal(id.Principal)
-	if !verified || err != nil || device.UUID().String() != target.GetAssetUuid() || device.Tenant() != builder.Tenant() || public.GetTargetPrincipal() != device.Principal() || public.GetContractVersion() != builddelivery.Version {
-		return fmt.Errorf("delivery target does not match the authenticated device and tenant")
-	}
-	root, err := deliveryTrust(conn.CertInfo)
+func (destination buildDeliveryDestination) authorize(ctx context.Context, builder meshid.Device, builderLeaf *x509.Certificate, input string) error {
+	target, device, credential, service := destination.target, destination.device, destination.credential, destination.service
+	root, err := deliveryTrust(credential)
 	if err != nil {
 		return err
 	}
-	credential := conn.CertInfo
 	previous, err := service.GetDeliveryReference(ctx, &agentpbv2.GetDeliveryReferenceRequest{Reference: target.GetRepository()})
 	if err != nil {
 		return err

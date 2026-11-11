@@ -66,11 +66,12 @@ They are unchanged by the separate [CLI upload rules for Cloud v2](../run.md#upl
 
 ## Operator authorization
 
-Update the CLI, build host and target agents together before remote delivery.
-The CLI refuses a host or target without operator authorization support. Switching
-to registry delivery does not bypass that requirement.
+You can update the CLI first. It uses the existing delivery flow when the build
+host and every target report that they lack operator authorization support.
+Update the build host and all targets together to enable authorized delivery.
+A mix of supported and unsupported agents stops the build before submission.
 
-Before submitting a build, the CLI verifies the builder's public certificate
+For authorized delivery, the CLI verifies the builder's public certificate
 against its locally trusted PKI and selected device identity. It uses the existing
 operator certificate to sign and admit a separate job on each target, without
 requesting an additional certificate from Cloud. The job binds the build
