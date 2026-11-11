@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,5 +96,23 @@ func TestInjectConfigPartitionRewriteIsClean(t *testing.T) {
 	}
 	if strings.Contains(string(b), "a-longer-device-name") {
 		t.Errorf("stale content from prior write survived:\n%s", b)
+	}
+}
+
+// closeFailFile accepts writes and fails the close, as a FAT driver can when
+// the directory entry is flushed there.
+type closeFailFile struct{ filesystem.File }
+
+func (closeFailFile) Write(p []byte) (int, error) { return len(p), nil }
+func (closeFailFile) Close() error                { return errors.New("flushing directory entry: no space left") }
+
+type closeFailFS struct{ filesystem.FileSystem }
+
+func (closeFailFS) OpenFile(string, int) (filesystem.File, error) { return closeFailFile{}, nil }
+
+func TestFatWriterReportsCloseFailure(t *testing.T) {
+	err := fatWriter{closeFailFS{}}.WriteFile("wendy.conf", []byte("[device]\nname = lab-nano\n"), 0o644)
+	if err == nil || !strings.Contains(err.Error(), "no space left") {
+		t.Fatalf("WriteFile = %v; want the close failure", err)
 	}
 }

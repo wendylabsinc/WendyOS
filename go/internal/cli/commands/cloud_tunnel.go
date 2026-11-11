@@ -20,6 +20,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -375,7 +376,7 @@ func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool)
 			if err != nil {
 				tunnel.Fail(err)
 				if os.Getenv("WENDY_TLS_DEBUG") != "" {
-					fmt.Fprintf(os.Stderr, "[tunnel-debug] broker stream closed: %v\n", err)
+					fmt.Fprintf(terminaloutput.Stderr, "[tunnel-debug] broker stream closed: %v\n", err)
 				}
 				break
 			}
@@ -556,7 +557,7 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if clouddefaults.FindAssetByNameOrID(allAssets, deviceName) == nil {
 			return resolveErr
 		}
-		return commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check the device's power and network connection, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", deviceName)
+		return cloudDeviceOfflineError(deviceName)
 	case errors.Is(resolveErr, errNoCloudDevicesEnrolled):
 		allAssets, err := fetchAll()
 		if err != nil {
@@ -565,10 +566,28 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if len(allAssets) == 0 {
 			return resolveErr
 		}
-		return commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check their power and network connections, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", len(allAssets))
+		return cloudAllDevicesOfflineError(len(allAssets))
 	default:
 		return resolveErr
 	}
+}
+
+// cloudOfflineListStep names the command that also lists offline devices.
+const cloudOfflineListStep = "List all enrolled devices with 'wendy cloud discover --all --json'."
+
+// cloudDeviceOfflineError says a device named in Cloud is enrolled but
+// reported offline. Both Cloud generations report it with these words. What
+// to do about it is attached as next steps, which JSON mode lists separately.
+func cloudDeviceOfflineError(name string) error {
+	return withNextSteps(commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline", name),
+		"Check the device's power and network connection, then retry.", cloudOfflineListStep)
+}
+
+// cloudAllDevicesOfflineError is cloudDeviceOfflineError for a command given
+// no device, when every one of the count enrolled devices is reported offline.
+func cloudAllDevicesOfflineError(count int) error {
+	return withNextSteps(commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline", count),
+		"Check their power and network connections, then retry.", cloudOfflineListStep)
 }
 
 func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string) (*cloudpb.Asset, error) {
@@ -609,7 +628,7 @@ func pickCloudDeviceMode(ctx context.Context, auth *config.AuthConfig, deviceNam
 			assets, fetchErr = fetchCloudAssets(ctx, auth)
 			prog.Send(tui.SpinnerDoneMsg{})
 		}()
-		finalModel, err := prog.Run()
+		finalModel, err := tui.RunProgram(prog)
 		if err != nil {
 			return nil, fmt.Errorf("spinner: %w", err)
 		}
@@ -682,7 +701,7 @@ func pickCloudDeviceFromRoster(ctx context.Context, auth *config.AuthConfig, dev
 }
 
 var runCloudDevicePicker = func(m cloudDiscoverModel) (cloudDiscoverModel, error) {
-	finalModel, err := tea.NewProgram(m).Run()
+	finalModel, err := tui.RunProgram(tea.NewProgram(m))
 	if err != nil {
 		return cloudDiscoverModel{}, err
 	}

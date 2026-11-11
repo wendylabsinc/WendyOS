@@ -514,8 +514,14 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 
 	// Images that will be sent need room on the device, whichever machine
 	// builds them.
+	// A local build also needs room and a working builder on this computer;
+	// report those with the device's disk rather than one at a time.
 	if len(skip) < len(services) {
-		if err := checkDeviceDiskSpace(versionResp); err != nil {
+		if opts.buildHost != "" {
+			if err := checkDeviceDiskSpace(versionResp); err != nil {
+				return err
+			}
+		} else if err := checkRunBuildPrerequisites(ctx, opts.builder, true, versionResp, defaultDoctorDeps()); err != nil {
 			return err
 		}
 		ctx = withDeviceStorage(ctx, versionResp)
@@ -538,9 +544,6 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		invalidateRemoteServiceDeployFingerprints(appCfg.AppID, deviceKey, services, skip)
 	} else {
 		if len(skip) < len(services) {
-			if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
-				return err
-			}
 			noteEmulatedBuild(platform, true)
 		}
 		failed, preparedContent, buildErr = buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
@@ -673,7 +676,8 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		opts.detachedOutput = false
 	}
 	if err := startAndStreamServices(ctx, conn, appCfg.AppID, ordered, preservedLifecycle, opts, createService, svcCfgs, svcLifecycleCfgs, appLevelCfg); err != nil {
-		return err
+		// The activation step is still "build" here.
+		return inRunPhase("deploy", err)
 	}
 	if ctx.Err() == nil {
 		for _, name := range ordered {
@@ -1184,6 +1188,8 @@ func multiServiceCreateConfig(appCfg *appconfig.AppConfig, name string, svc *app
 		Frameworks:  appCfg.Frameworks,
 		Readiness:   svc.Readiness,
 		Hooks:       svc.Hooks,
+		// Tells the device whether the app still has a sketch.
+		MCU: appCfg.MCU,
 	}
 	cfg.Entitlements = append(append([]appconfig.Entitlement{}, appCfg.Entitlements...), svc.Entitlements...)
 	cfg.Entitlements = deduplicateEntitlements(cfg.Entitlements)
@@ -1284,10 +1290,10 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 				AppName: containerName,
 			})
 			if err != nil {
-				return fmt.Errorf("starting service %s: %w", name, err)
+				return deviceRefusalOr(err, "starting service "+name)
 			}
 			if err := awaitStarted(stream); err != nil {
-				return fmt.Errorf("waiting for service %s to start: %w", name, err)
+				return deviceRefusalOr(err, "waiting for service "+name+" to start")
 			}
 		}
 		cliLogln("App group %s running in detached mode.", appID)
@@ -1316,11 +1322,11 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			})
 			if err != nil {
 				startCancel()
-				return fmt.Errorf("starting service %s: %w", name, err)
+				return deviceRefusalOr(err, "starting service "+name)
 			}
 			if err := awaitStarted(stream); err != nil {
 				startCancel()
-				return fmt.Errorf("waiting for service %s to start: %w", name, err)
+				return deviceRefusalOr(err, "waiting for service "+name+" to start")
 			}
 			startCancel()
 			runner.startAsync(runCtx, svcLifecycleCfgs[name])
@@ -1366,13 +1372,13 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			runCancel()
 			wg.Wait()
 			runner.reap()
-			return fmt.Errorf("starting service %s: %w", name, err)
+			return deviceRefusalOr(err, "starting service "+name)
 		}
 		if _, err := stream.Recv(); err != nil && err != io.EOF {
 			runCancel()
 			wg.Wait()
 			runner.reap()
-			return fmt.Errorf("waiting for service %s to start: %w", name, err)
+			return deviceRefusalOr(err, "waiting for service "+name+" to start")
 		}
 		// This service's task is running (Started ack received). Fire its
 		// readiness→announce→postStart sequence on a goroutine so a slow or

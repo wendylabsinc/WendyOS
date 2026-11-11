@@ -267,8 +267,8 @@ RECORDING_PKG="$MODULE/go/proto/gen/recordingpb"
 RECORDING_M_OPTS="--go_opt=Mwendy/agent/apps/v1/recording.proto=$RECORDING_PKG --go-grpc_opt=Mwendy/agent/apps/v1/recording.proto=$RECORDING_PKG"
 ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_M_OPTS $PKI_M_OPTS $SYSTEM_M_OPTS $RECORDING_M_OPTS"
 
-# CI regenerates the migrated gRPC APIs temporarily and compares their outputs.
-if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-shared-grpc-api-contracts ]; then
+# Explicit partial regeneration remains available; CI checks the complete tree below.
+if [ "${1:-}" = --shared-grpc-api-contracts-only ]; then
     SHARED_GRPC_API_CONTRACTS_OUT="$SHARED_GRPC_API_CONTRACTS_DIR/generated"
     mkdir -p "$SHARED_GRPC_API_CONTRACTS_OUT"
     protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
@@ -306,37 +306,7 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
         --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
         --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
         $CLOUD_M_OPTS "${CLOUD_V1_SHARED_INPUTS[@]}"
-    if [ "$1" = --check-shared-grpc-api-contracts ]; then
-        for file in wendy_com_msg.pb.go wendy_conf.pb.go; do
-            diff -u "$GEN_DIR/litepb/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/litepb/$file"
-        done
-        for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
-            case "$proto" in
-                wendy/agent/services/v1/*) package="agentpb" ;;
-                wendy/agent/services/v2/*) package="agentpb/v2" ;;
-                wendy/agent/apps/*) package="recordingpb" ;;
-                wendy/system/*) package="systempb" ;;
-                wendylite/*) package="sensorlinkpb" ;;
-                pkicore/*) package="pkicorepb" ;;
-                wendyauth/*) package="wendyauthpb" ;;
-                wendycloud/tunnel/v2/*) package="relaypb" ;;
-                wendycloud/tunnel/lite/v1/*) package="wcomrelaypb" ;;
-                */*) package="cloudpb/v2" ;;
-                *) package="cloudpb" ;;
-            esac
-            name="${proto##*/}"
-            file="${name%.proto}.pb.go"
-            diff -u "$GEN_DIR/$package/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$package/$file"
-            # Protos without services have no gRPC output. Compare either side
-            # when present so missing or stale committed outputs still fail.
-            file="${name%.proto}_grpc.pb.go"
-            if [ -e "$GEN_DIR/$package/$file" ] || [ -e "$SHARED_GRPC_API_CONTRACTS_OUT/$package/$file" ]; then
-                diff -u "$GEN_DIR/$package/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$package/$file"
-            fi
-        done
-    else
-        cp -R "$SHARED_GRPC_API_CONTRACTS_OUT/." "$GEN_DIR/"
-    fi
+    cp -R "$SHARED_GRPC_API_CONTRACTS_OUT/." "$GEN_DIR/"
     exit 0
 fi
 
@@ -468,6 +438,13 @@ protoc --proto_path="$PROTO_DIR" \
     --go-grpc_opt=Morg_invites.proto="$MODULE/go/proto/gen/cloudinvitepb" org_invites.proto
 
 cp -R "$SHARED_GRPC_API_CONTRACTS_DIR/proto/gen/." "$GEN_DIR/"
+if [ "${1:-}" = --check-shared-grpc-api-contracts ]; then
+    if ! diff -ru "$COMMITTED_GEN_DIR" "$GEN_DIR"; then
+        echo "error: generated Go output differs; regenerate from repository root: bash go/scripts/generate-proto.sh" >&2
+        exit 1
+    fi
+    exit 0
+fi
 rm -rf "$COMMITTED_GEN_DIR"
 mv "$GEN_DIR" "$COMMITTED_GEN_DIR"
 echo "Proto generation complete!"

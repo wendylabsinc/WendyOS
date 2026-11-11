@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 // TunnelSession owns authorization transports for one foreground account
@@ -116,7 +117,14 @@ func tunnelAuthorizationFor(ctx context.Context, auth *config.AuthConfig) (*tunn
 	cache := g != nil && os.Getenv("WENDY_TUNNEL_SIGNING_CERT") == "" && os.Getenv("WENDY_TUNNEL_SIGNING_KEY") == ""
 	if cache {
 		if entry := g.entries[key]; entry != nil {
-			return entry, func() {}, nil
+			// A connection that failed to reconnect refuses requests until its
+			// backoff expires, up to two minutes after Cloud is reachable
+			// again. Replace it so this dial tries now, as an unshared one would.
+			if entry.conn.GetState() != connectivity.TransientFailure {
+				return entry, func() {}, nil
+			}
+			entry.conn.Close()
+			delete(g.entries, key)
 		}
 	}
 	entry, err := newTunnelAuthorization(auth, issuer)

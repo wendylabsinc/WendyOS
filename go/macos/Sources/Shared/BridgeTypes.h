@@ -97,7 +97,7 @@ typedef struct {
 
 typedef enum { WD_ACCOUNT_SIGNED_OUT, WD_ACCOUNT_SIGNED_IN, WD_ACCOUNT_NEEDS_LOGIN } WDAccountState;
 typedef struct { WDStatus status; WDAccountState state; char *context, *cloud, *email; } WDAccountResult;
-typedef struct { WDAccountState state; char *context, *cloud, *email; int32_t active; } WDAccountEntry;
+typedef struct { WDAccountState state; char *context, *cloud, *email; int32_t active; char *organization_id, *organization_name; } WDAccountEntry;
 typedef struct { WDStatus status; WDAccountEntry *items; size_t count; } WDAccountsResult;
 typedef struct { WDStatus status; WDDevice *items; size_t count; } WDDevicesResult;
 typedef struct { WDStatus status; WDApp *items; size_t count; } WDAppsResult;

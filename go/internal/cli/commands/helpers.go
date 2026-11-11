@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"golang.org/x/term"
@@ -319,6 +321,46 @@ func chooseRejectionErrorForScope(ctx context.Context, device certs.Scope, allCe
 	return rejection
 }
 
+// firstContactRefusal reports an enrolled device that refused this CLI's
+// certificate when no saved identity was involved. Only the device's own
+// answer (a TLS alert or an Unauthenticated status) is reworded; an expired
+// login, a cross-org device, or a failure of the CLI's own checks keeps its
+// specific message. errors.Is still sees the underlying rejection.
+func firstContactRefusal(name string, rejection error, attempts []mtlsAttemptError) error {
+	var plain tlsHandshakeRejectedError
+	if !errors.As(rejection, &plain) || expiredLoginFrom(rejection) != nil || isCertRefreshableError(rejection) {
+		return rejection
+	}
+	for _, attempt := range attempts {
+		if strings.Contains(attempt.err.Error(), "remote error: tls:") || status.Code(attempt.err) == codes.Unauthenticated {
+			return deviceRefusedUserError{name: name, cause: rejection}
+		}
+	}
+	return rejection
+}
+
+// deviceRefusedUserError is an enrolled device saying no to this user.
+type deviceRefusedUserError struct {
+	name  string
+	cause error
+}
+
+const deviceRefusedUserStep = "Sign in with an account that has access to this device ('wendy auth login'), then retry."
+
+func (e deviceRefusedUserError) Error() string {
+	name := e.name
+	if name == "" {
+		name = "The device"
+	} else {
+		name = fmt.Sprintf("Device %q", name)
+	}
+	return name + " is enrolled and refused your sign-in certificate.\n  " + deviceRefusedUserStep
+}
+
+func (e deviceRefusedUserError) NextSteps() []string { return []string{deviceRefusedUserStep} }
+
+func (e deviceRefusedUserError) Unwrap() error { return e.cause }
+
 type provisionedAgentUnauthorizedError struct {
 	cause error
 }
@@ -490,15 +532,24 @@ func isExplicitTLSRejection(err error) bool {
 // var so tests can stub it. The question must not carry a "[Y/n]" suffix — the
 // prompt renders its own hint. A cancelled prompt (Ctrl+C / q) counts as no.
 var confirmFn = func(question string) bool {
-	ok, err := tui.ConfirmDefaultYes(question, tea.WithOutput(os.Stderr))
+	ok, err := tui.ConfirmDefaultYes(question, tea.WithOutput(stderrPromptWriter()))
 	return err == nil && ok
+}
+
+// stderrPromptWriter is stderr unless a command chose another terminal for
+// its prompts.
+func stderrPromptWriter() io.Writer {
+	if w, ok := tui.PromptOutput(); ok {
+		return w
+	}
+	return os.Stderr
 }
 
 // confirmDefaultNoFn asks a yes/no question defaulting to No (empty input /
 // Enter counts as no). Used for actions such as applying an OS update. Stubbed
 // in tests.
 var confirmDefaultNoFn = func(question string) bool {
-	ok, err := tui.Confirm(question, tea.WithOutput(os.Stderr))
+	ok, err := tui.Confirm(question, tea.WithOutput(stderrPromptWriter()))
 	return err == nil && ok
 }
 
@@ -546,7 +597,7 @@ func retryOnHandshakeTimeout(ctx context.Context, cause error, retry func() (*gr
 			// The trigger is any timeout-class error (isReachabilityTimeoutError
 			// also matches a bare dial timeout to a down device), not strictly a
 			// handshake stall, so keep the wording generic.
-			fmt.Fprintf(os.Stderr, "connection timed out; retrying (%d/%d)...\n", attempt, maxHandshakeTimeoutRetries)
+			fmt.Fprintf(terminaloutput.Stderr, "connection timed out; retrying (%d/%d)...\n", attempt, maxHandshakeTimeoutRetries)
 		}
 		conn, err := retry()
 		if err == nil {
@@ -575,8 +626,8 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 	if pinKey == "" {
 		pinKey = pinKeyForAddr(address)
 	}
-	if isEnrollmentSelection(ctx) {
-		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, address); handled {
+	if isUnboundSetupSelection(ctx) {
+		if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, address); handled {
 			if err != nil {
 				return false, nil, err
 			}
@@ -645,7 +696,7 @@ var runAgentConnectionSpinner = func(ctx context.Context, label string, fn func(
 		prog.Send(tui.SpinnerDoneMsg{})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-doneCh
@@ -925,6 +976,12 @@ type SelectedDevice struct {
 	DefaultSelector string
 	// Explicit enrollment defers saving its verified replacement until old-pin cleanup.
 	recordEnrollmentBinding func(func() error)
+	// unverifiedSetup marks a plaintext connection to an unbound device that
+	// only self-reported NotProvisioned; nothing authenticated the peer.
+	unverifiedSetup bool
+	// unverifiedSetupAccepted records the user's consent to send Wi-Fi
+	// credentials over such a connection.
+	unverifiedSetupAccepted bool
 }
 
 // Close releases any resources held by this SelectedDevice.
@@ -1051,7 +1108,7 @@ func promptDefaultDeviceRecovery(hostname string) recoveryChoice {
 			"Exit",
 		},
 	}
-	final, err := tea.NewProgram(m).Run()
+	final, err := tui.RunProgram(tea.NewProgram(m))
 	if err != nil {
 		return recoveryExit
 	}
@@ -1262,6 +1319,16 @@ func connectResolvedAgentKeyed(ctx context.Context, hostname, addr, pinKey strin
 // an interactive device picker is presented (unless running in --json mode).
 func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.AgentConnection, error) {
 	conn, err := connectToAgentInner(ctx, opts...)
+	// A changed identity the user accepts is saved, then connected to again;
+	// a second change (its certificate key) may follow the first.
+	for range 2 {
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
+		if !retry {
+			err = confirmErr
+			break
+		}
+		conn, err = connectToAgentInner(ctx, opts...)
+	}
 	if err != nil {
 		if cloudConn, cloudErr, attempted := connectUnresolvedCloudName(ctx, deviceFlag, err, opts...); attempted {
 			conn, err = cloudConn, cloudErr
@@ -1433,7 +1500,8 @@ func connectToAgentInner(ctx context.Context, opts ...resolveOption) (*grpcclien
 // addr for the ladder and its retries, "" when the USB-direct fallback
 // substituted a connection that never touched addr. pinKey is the key the
 // caller derived once for addr and judges the connection under: the ladder
-// and every retry dial under it too.
+// and every retry dial under it too, and a substituted connection is handed
+// back carrying it.
 func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr, pinKey string, isDefault bool) (_ *grpcclient.AgentConnection, dialled string, finished bool, _ error) {
 	startedAt := time.Now()
 	dialled = addr
@@ -1472,7 +1540,10 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 		} else if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
 			// The stored address is unreachable but the same device (verified
 			// by hostname) is on USB — use it directly. It is not the address
-			// that was asked for, so it is never treated as the typed one.
+			// that was asked for, so it is never treated as the typed one. It
+			// is still the device that was asked for, and the caller judges
+			// it under pinKey (see keepAsRequestedDevice).
+			keepAsRequestedDevice(usbConn, pinKey)
 			conn, dialled = usbConn, ""
 		} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 			// Default device is unreachable — offer interactive recovery.
@@ -1506,6 +1577,35 @@ func markTypedVMConnection(conn *grpcclient.AgentConnection, pinKey, dialled str
 	}
 	if name, ok := strings.CutPrefix(pinKey, vmDeviceIDPrefix); ok && name != "" {
 		conn.SimulatorName = name
+	}
+}
+
+// keepAsRequestedDevice makes usbConn — a connection the USB-direct fallback
+// substituted for a named device's own address — the requested device's
+// connection, which is what the front door then judges it as. The fallback
+// dialled it under the USB address's own key, so it arrives carrying that key
+// and that key's answer to "is there a saved identity?" (normally none). Both
+// are about the wrong name, so before the pin check:
+//
+//   - DevicePinKey becomes pinKey. A reconnect after an agent or OS update is
+//     made under the key the connection carries; under the USB address's it
+//     would accept any enrolled board on the cable.
+//   - NoSavedIdentity is cleared when pinKey has a saved identity. The pin
+//     check compares the device with that identity, so this is not a first
+//     contact and must not be announced as one. "Saved" is the ladder's own
+//     reading (see dialTarget.pinned).
+//
+// The mark is only ever cleared, and never for a plaintext connection. Nothing
+// authenticated that peer, whatever is saved: a saved name refuses it (see
+// challengeUnprovisionedDevice), and for an unsaved one it must stay marked so
+// Wi-Fi credentials still need consent (see AgentConnection.UnverifiedPlaintext).
+func keepAsRequestedDevice(usbConn *grpcclient.AgentConnection, pinKey string) {
+	usbConn.DevicePinKey = pinKey
+	if !usbConn.NoSavedIdentity || !usbConn.IsMTLS {
+		return
+	}
+	if _, _, saved := governingPin(pinKey); saved {
+		usbConn.NoSavedIdentity = false
 	}
 }
 
@@ -1615,16 +1715,16 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 	if pinKey == "" {
 		pinKey = pinKeyForAddr(addr)
 	}
-	if isEnrollmentSelection(ctx) {
-		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr, lanDialCandidates(ctx, *d.LAN)...); handled {
-			return target, err
-		}
-	}
 	// Feed every interface the device was seen at to the ladder, not just addr:
 	// a device the CLI can reach only over its USB link (WiFi on another net)
 	// advertises both, and dialing addr alone (its unreachable WiFi IP) is what
 	// made `device info/shell/pair` report a reachable device as unreachable.
 	candidates := lanDialCandidates(ctx, *d.LAN)
+	if isUnboundSetupSelection(ctx) {
+		if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, addr, candidates...); handled {
+			return target, err
+		}
+	}
 	dial := func() (*grpcclient.AgentConnection, error) {
 		return connectAgentAtAddressKeyed(ctx, addr, pinKey, func() bool { return mtls }, candidates...)
 	}
@@ -2108,7 +2208,7 @@ func dialAgentLKG(ctx context.Context, e discoverycache.Entry, pinKey string) (*
 	tlsDebug := os.Getenv("WENDY_TLS_DEBUG") != ""
 	if !lkgTCPAlive(addr) {
 		if tlsDebug {
-			fmt.Fprintf(os.Stderr, "[tls-debug] lkg %s: tcp pre-check failed\n", addr)
+			fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg %s: tcp pre-check failed\n", addr)
 		}
 		return nil, nil, lkgDeadTCP
 	}
@@ -2131,12 +2231,12 @@ func dialAgentLKG(ctx context.Context, e discoverycache.Entry, pinKey string) (*
 			conn.Close()
 		}
 		if tlsDebug {
-			fmt.Fprintf(os.Stderr, "[tls-debug] lkg %s: direct dial failed: %s\n", addr, reason)
+			fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg %s: direct dial failed: %s\n", addr, reason)
 		}
 		return nil, mtlsErr, lkgHandshakeFailed
 	}
 	if tlsDebug {
-		fmt.Fprintf(os.Stderr, "[tls-debug] lkg %s: connected\n", addr)
+		fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg %s: connected\n", addr)
 	}
 	return conn, mtlsErr, lkgConnected
 }
@@ -2207,6 +2307,12 @@ func mdnsLocalHint(host string) string {
 // message: the CLI's rewrite of the gRPC error in the middle of the message
 // used to drop everything after it, and JSON mode lists steps separately.
 func defaultDeviceUnreachableError(hostname string, err error) error {
+	// A missing login is not a failure to reach the default: nothing was
+	// dialled, and its own message names the device and the sign-in step.
+	var noLogin missingLoginError
+	if errors.As(err, &noLogin) {
+		return err
+	}
 	steps := []string{"Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'."}
 	if hint := strings.TrimPrefix(mdnsLocalHint(hostname), "\n  "); hint != "" {
 		steps = append(steps, hint)
@@ -2322,7 +2428,7 @@ func connectWithAutoTLSDiagnosticsTarget(ctx context.Context, plaintextAddr, pin
 				plaintextAddr, fromCache = cachedAddr, true
 			default:
 				if tlsDebug {
-					fmt.Fprintf(os.Stderr, "[tls-debug] lkg-ineligible %s: tcp pre-check failed, skipping cached-IP ladder\n", cachedAddr)
+					fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] lkg-ineligible %s: tcp pre-check failed, skipping cached-IP ladder\n", cachedAddr)
 				}
 			}
 		}
@@ -2671,14 +2777,23 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 				return nil, err
 			}
 			i := w.probeOrder[pos]
-			conn, tlsErr := grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
+			var conn *grpcclient.AgentConnection
+			var tlsErr error
+			if w.target.Expected == nil && !w.target.pinned() {
+				// No saved identity: the device's certificate is verified
+				// against the trust roots only, and the device decides
+				// whether it accepts ours.
+				conn, tlsErr = grpcclient.ConnectWithTLSFirstContact(ctx, mtlsAddr, &w.allCerts[i], w.pins)
+			} else {
+				conn, tlsErr = grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
+			}
 			if tlsErr != nil {
 				if errors.Is(tlsErr, certs.ErrExpectedDeviceIdentity) {
 					return nil, tlsErr
 				}
 				w.recordMTLSErr(mtlsAddr, tlsErr, isPrimary)
 				if w.tlsDebug {
-					fmt.Fprintf(os.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
+					fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
 				}
 				continue
 			}
@@ -2718,7 +2833,7 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 				return nil, spkiRefusal(w.target.refusalKey(), pm)
 			}
 			if w.tlsDebug {
-				fmt.Fprintf(os.Stderr, "[tls-debug] GetAgentVersion(%s) error: %v\n", mtlsAddr, probeErr)
+				fmt.Fprintf(terminaloutput.Stderr, "[tls-debug] GetAgentVersion(%s) error: %v\n", mtlsAddr, probeErr)
 			}
 			if conn.TCPDialError() != nil {
 				// The actual dial never reached TCP. Another credential cannot
@@ -2800,9 +2915,10 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 // authenticate the requested device. A host with any pin is never offered the
 // plaintext rung.
 func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
-	if len(allCerts) > 0 && target.Expected == nil {
-		// A local configuration failure must never turn into a plaintext
-		// attempt or a different carrier's trust-on-first-use connection.
+	if len(allCerts) > 0 && target.Expected == nil && target.pinned() {
+		// A saved binding too old to name a device (organization only) must
+		// never turn into a plaintext attempt or a first-contact connection.
+		// A device with no saved binding at all is dialled below.
 		return nil, certs.ErrExpectedDeviceIdentity, certs.ErrExpectedDeviceIdentity
 	}
 	candidates := target.dialCandidates()
@@ -2864,7 +2980,11 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 				// tenant it belongs to.
 				device.TenantUUID = target.Expected.TenantUUID
 			}
-			return nil, cause, chooseRejectionErrorForScope(ctx, device, allCerts, cause)
+			rejection := chooseRejectionErrorForScope(ctx, device, allCerts, cause)
+			if !target.pinned() && target.Expected == nil {
+				rejection = firstContactRefusal(target.PinKey, rejection, walk.attempts)
+			}
+			return nil, cause, rejection
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -2881,7 +3001,8 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// Nothing answered, so no certificate ever arrived and no identity was
 		// ever compared: this refusal is about reachability and says so, and it
 		// is deliberately NOT an errDeviceIdentityRefused (see
-		// errNoAuthenticatedEndpoint).
+		// errNoAuthenticatedEndpoint). With no stored certificate nothing was
+		// dialled at all, and pinnedRefusalError reports the missing login.
 		failure := pinnedHostNoAuthenticatedEndpointError(target.refusalKey(), candidates, walk.attempts, walk.anyCertRejection)
 		failure.pinKey = target.PinKey
 		tenant := ""
@@ -2900,8 +3021,31 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	// actually worked. The authenticated walk above is where reachability gets
 	// established; cacheFastPathReachable is what proves a plaintext one.
 	conn, err := plaintextConnectFn(ctx, target.Addr)
-	return conn, walk.lastMTLSErr, err
+	if err != nil || len(allCerts) == 0 {
+		return conn, walk.lastMTLSErr, err
+	}
+	// Signed in, no saved binding, and no TLS endpoint accepted us: use the
+	// plaintext setup port only when the device says it is not enrolled. An
+	// enrolled agent never serves it.
+	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
+	state, err := deviceProvisioning(probeCtx, conn)
+	cancel()
+	if err != nil {
+		conn.Close()
+		return nil, walk.lastMTLSErr, err
+	}
+	if state.GetNotProvisioned() == nil {
+		conn.Close()
+		return nil, walk.lastMTLSErr, errEnrolledWithoutTLS
+	}
+	conn.NoSavedIdentity = true
+	return conn, walk.lastMTLSErr, nil
 }
+
+// errEnrolledWithoutTLS is a device that answered on the unencrypted setup port
+// but does not report itself unenrolled. A real enrolled agent serves only
+// TLS, so nothing is sent to it.
+var errEnrolledWithoutTLS = errors.New("the device answered without TLS but does not report itself as unenrolled, so the CLI will not use that connection. Check that the device name or address is correct, then retry")
 
 // dialAgentLadder is dialAgentLadderWithCerts with the CLI's stored certs
 // in config order — the shape every non-fast-path caller wants.
@@ -3054,7 +3198,7 @@ func suggestProvisioning(conn *grpcclient.AgentConnection) {
 	if conn.IsMTLS || jsonOutput {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Hint: connected without mTLS. Run 'wendy device setup' to provision this device.\n")
+	fmt.Fprintf(terminaloutput.Stderr, "Hint: connected without mTLS. Run 'wendy device setup' to provision this device.\n")
 }
 
 // updateCheckTTL bounds how often checkAndOfferUpdate probes the agent. Within
@@ -3150,12 +3294,12 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	}
 
 	if !isInteractiveTerminal() {
-		fmt.Fprintf(os.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
+		fmt.Fprintf(terminaloutput.Stderr, "Warning: agent is behind the CLI (agent: %s, CLI: %s). Run 'wendy device update' to update.\n", agentVer, version.Version)
 		return conn, nil
 	}
 	warn := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
-	fmt.Fprintf(os.Stderr, warn.Render("Agent is behind the CLI (agent: %s, CLI: %s).")+"\n", agentVer, version.Version)
+	fmt.Fprintf(terminaloutput.Stderr, warn.Render("Agent is behind the CLI (agent: %s, CLI: %s).")+"\n", agentVer, version.Version)
 	if !confirmFn("Update the agent now?") {
 		return conn, nil
 	}
@@ -3164,19 +3308,19 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	osName := resp.GetOs()
 
 	if err := performAgentUpdate(ctx, conn, osName, arch, false); err != nil {
-		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
+		fmt.Fprintf(terminaloutput.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
 		return conn, nil
 	}
 
 	conn.Close()
 
-	fmt.Fprintf(os.Stderr, "Waiting for agent to restart...")
+	fmt.Fprintf(terminaloutput.Stderr, "Waiting for agent to restart...")
 	newConn, err := reconnectAgentAfterRestart(ctx, conn)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, " failed.\n")
+		fmt.Fprintf(terminaloutput.Stderr, " failed.\n")
 		return nil, fmt.Errorf("agent did not come back after update: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, " ready.\n")
+	fmt.Fprintf(terminaloutput.Stderr, " ready.\n")
 	return newConn, nil
 }
 
@@ -3193,17 +3337,17 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, o
 	if arch == "" {
 		return fmt.Errorf("device did not report CPU architecture")
 	}
-	fmt.Fprintf(os.Stderr, "Fetching agent for %s...\n", agentPlatformLabel(osName, arch))
+	fmt.Fprintf(terminaloutput.Stderr, "Fetching agent for %s...\n", agentPlatformLabel(osName, arch))
 	binaryData, resolvedVer, source, err := resolveAgentArtifact(osName, arch, nightly)
 	if err != nil {
 		return fmt.Errorf("resolving agent binary: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Downloaded agent %s (from %s)\n", resolvedVer, source)
+	fmt.Fprintf(terminaloutput.Stderr, "Downloaded agent %s (from %s)\n", resolvedVer, source)
 
 	h := sha256.Sum256(binaryData)
 	sha256Hash := hex.EncodeToString(h[:])
 
-	fmt.Fprintf(os.Stderr, "Uploading to device...\n")
+	fmt.Fprintf(terminaloutput.Stderr, "Uploading to device...\n")
 	return deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash)
 }
 
@@ -3365,13 +3509,12 @@ func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateIn
 	if device == nil {
 		return nil, certs.ErrExpectedDeviceIdentity
 	}
-	// The advertised name selects an existing local binding only. It cannot
-	// supply or create an identity: spoofing it still requires that binding's
-	// certificate and private key, and unknown names are rejected.
+	// The advertised name selects an existing local binding only; it cannot
+	// supply an identity. With no binding this is a first contact, checked as
+	// the LAN dial checks one: the chain, a device identity, the legacy org,
+	// any saved key, and the sign-in's tenant. The device decides whether it
+	// accepts this user.
 	expected := expectedIdentityFor(device.HostKey())
-	if expected == nil {
-		return nil, fmt.Errorf("cannot authenticate Bluetooth device %q: %w; refresh its trusted Cloud inventory with 'wendy cloud discover' or use a saved binding from verified enrollment", device.DisplayName, certs.ErrExpectedDeviceIdentity)
-	}
 	keyPEM, err := cert.PrivateKeyPEM()
 	if err != nil {
 		return nil, fmt.Errorf("loading client key: %w", err)
@@ -3380,10 +3523,25 @@ func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateIn
 		ChainPEM:         cert.PemCertificateChain,
 		ExpectedOrgID:    int32(cert.OrganizationID),
 		ExpectedIdentity: expected,
+		FirstContact:     expected == nil,
 		PinStore:         pins,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("building BLE TLS config: %w", err)
+	}
+	if tenant := cert.TenantUUID(); expected == nil && tenant != "" {
+		// The LAN front doors refuse a device from another tenant after
+		// connecting (observeDeviceIdentity); Bluetooth has no such step.
+		verify := tlsCfg.VerifyConnection
+		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if err := verify(cs); err != nil {
+				return err
+			}
+			if id, ok, err := certs.IdentityFromCert(cs.PeerCertificates[0]); err != nil || !ok || id.TenantUUID != tenant {
+				return fmt.Errorf("Bluetooth device %q does not belong to your sign-in's tenant", device.DisplayName)
+			}
+			return nil
+		}
 	}
 	return tlsCfg, nil
 }
@@ -3407,6 +3565,7 @@ func connectBLEAgent(device *models.BluetoothDevice) (*ble.AgentClient, error) {
 
 	client, err := attemptBLEConnect(device, cert, pins)
 	if err == nil {
+		noteBLEFirstContact(device)
 		return client, nil
 	}
 
@@ -3424,7 +3583,19 @@ func connectBLEAgent(device *models.BluetoothDevice) (*ble.AgentClient, error) {
 	if alt == nil {
 		return nil, fmt.Errorf("device belongs to org %s; authenticate for that org with 'wendy auth login'", orgLabel("", mismatch.Got))
 	}
-	return attemptBLEConnect(device, *alt, pins)
+	client, err = attemptBLEConnect(device, *alt, pins)
+	if err == nil {
+		noteBLEFirstContact(device)
+	}
+	return client, err
+}
+
+// noteBLEFirstContact prints the first-contact notice for a Bluetooth device
+// with no saved identity.
+func noteBLEFirstContact(device *models.BluetoothDevice) {
+	if expectedIdentityFor(device.HostKey()) == nil {
+		noteNoSavedIdentityName(device.DisplayName, true)
+	}
 }
 
 // resolveOption configures resolveTarget behaviour.
@@ -3569,6 +3740,14 @@ func ExcludeProviders(keys ...string) resolveOption {
 // device, so the clock fix applies to info, run, deploy, ros2 bag, etc.
 func resolveTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 	sel, err := resolveTargetInner(ctx, opts...)
+	for range 2 {
+		retry, confirmErr := acceptChangedIdentity(err, resolveOptionsNoIdentityPrompt(opts))
+		if !retry {
+			err = confirmErr
+			break
+		}
+		sel, err = resolveTargetInner(ctx, opts...)
+	}
 	if err != nil {
 		device := resolveOptionsDevice(opts)
 		if device == "" {
@@ -3618,7 +3797,7 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		o(&cfg)
 	}
 	if cfg.enrollmentTrustRecovery {
-		ctx = withEnrollmentSelection(ctx)
+		ctx = withUnboundSetupSelection(ctx)
 	}
 	ctx = robotRuntimePromptContext(ctx, cfg.nonInteractive)
 
@@ -3712,12 +3891,15 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// its retries and the pin check below all use it (see
 		// recheckDialPinKey).
 		pinKey := pinKeyForAddr(addr)
-		if cfg.enrollmentTrustRecovery {
-			if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr); handled {
+		if isUnboundSetupSelection(ctx) {
+			if target, handled, err := connectUnboundSetupTarget(ctx, pinKey, addr); handled {
 				return target, err
 			}
 		}
 		conn, brokerHit := (*grpcclient.AgentConnection)(nil), false
+		// dialled is the endpoint conn actually reached: addr, unless the
+		// USB-direct fallback substituted another connection ("" then).
+		dialled := addr
 		if !cfg.disableSessionBroker {
 			conn, brokerHit = connectPinnedSessionKeyed(ctx, addr, pinKey)
 		}
@@ -3757,6 +3939,16 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 				} else if ctx.Err() != nil || cfg.readOnlyMonitoring || stopConnectionRecovery(err) || errors.Is(err, errProvisionedAgentUnauthorized) ||
 					(cfg.enrollmentTrustRecovery && errors.Is(err, errNoAuthenticatedEndpoint)) {
 					return nil, err
+				} else if usbConn, ok := usbDirectFallback(ctx, pinKey); ok {
+					// The same fallback connectToAgentDirect makes, at the same
+					// point: addr is unreachable but the same device (verified by
+					// hostname) is on USB — use it directly. It is not the address
+					// that was asked for, so it is never treated as the typed one.
+					//
+					// It is still the device that was asked for, and the check
+					// below judges it under pinKey (see keepAsRequestedDevice).
+					keepAsRequestedDevice(usbConn, pinKey)
+					conn, dialled = usbConn, ""
 				} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 					// Default device is unreachable — offer interactive recovery.
 					recovered, recErr := handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll, cfg.sameTargetFallback)
@@ -3777,16 +3969,18 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// Judged under the key it was dialled with — unless a local VM started
 		// or stopped meanwhile, which refuses it with nothing recorded or
 		// marked. The typed address goes with it, for a running VM's bare-key
-		// record (see typedVMBarePinKey).
+		// record (see typedVMBarePinKey). A connection the USB fallback
+		// substituted is judged under the same key, the requested device's,
+		// and was never dialled at the typed address.
 		if keyErr := recheckDialPinKey(addr, pinKey); keyErr != nil {
 			conn.Close()
 			return nil, keyErr
 		}
-		if pinErr := enforceDevicePinAt(pinKey, addr, conn); pinErr != nil {
+		if pinErr := enforceDevicePinAt(pinKey, dialled, conn); pinErr != nil {
 			conn.Close()
 			return nil, pinErr
 		}
-		markTypedVMConnection(conn, pinKey, addr)
+		markTypedVMConnection(conn, pinKey, dialled)
 		if !cfg.suppressUpdateCheck {
 			var updateErr error
 			conn, updateErr = checkAndOfferUpdateFn(ctx, conn)
@@ -3831,7 +4025,7 @@ func explicitProviderDevice(ctx context.Context, p providers.DeviceProvider) (*S
 	devices, err := p.DiscoverDevices(providers.WithProbeTimeout(ctx, explicitProviderProbeTimeout))
 	var slow *providers.ProbeTimeoutError
 	if errors.As(err, &slow) && humanPresent() {
-		fmt.Fprintf(os.Stderr, "%s is not responding yet; waiting up to %s for it...\n", p.DisplayName(), dockerDaemonReadyWait)
+		fmt.Fprintf(terminaloutput.Stderr, "%s is not responding yet; waiting up to %s for it...\n", p.DisplayName(), dockerDaemonReadyWait)
 		devices, err = p.DiscoverDevices(providers.WithProbeTimeout(ctx, dockerDaemonReadyWait))
 	}
 	if err != nil {
@@ -4034,6 +4228,11 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 			md.DisplayName = nd.DisplayName
 			existing.SortKey = deviceSortKey(existing.Name, existing.USB)
 		}
+	} else if nd.LAN != nil && lanRowAddressRank(incoming.Address) > lanRowAddressRank(existing.Address) {
+		// A later sighting changes the address the row shows only for a
+		// better-ranked one, so the result does not depend on which sighting
+		// arrived first. The row's device record, and so what is dialled, stays.
+		existing.Address = incoming.Address
 	}
 	if nd.LAN != nil && md.LAN != nil && nd.LAN.ID == md.LAN.ID {
 		// A later event from the same device carries its current cable record.
@@ -4393,7 +4592,7 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 
 	// Cancel continuous discovery when the picker exits.
 	discoverCtx, discoverCancel := context.WithCancel(ctx)
-	p := tea.NewProgram(newDevicePickerModel(discoverCtx, picker, cloudAuth, defaultOrgID, disableEnroll, openOn))
+	p := tea.NewProgram(newDevicePickerModel(discoverCtx, picker, cloudAuth, defaultOrgID, disableEnroll, openOn), tea.WithFilter(tui.InterruptFilter))
 
 	sendLANItem := func(dev models.LANDevice, insecure bool, probe tui.ProbeState) {
 		p.Send(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(dev, insecure, probe)}}})
@@ -4402,11 +4601,13 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	// The engine handles offline detection and retry (see discovery.StreamLAN).
 	events := lanStreamFn(discoverCtx, cliLANStreamOptions(discoverCtx))
 	go func() {
-		// ev.Supersedes needs no handling here: picker rows dedup by hostname
-		// (deviceDedupKey/HostKey), so a superseded connect-minted row and the
-		// TXT-id row that replaces it are already the same row.
+		// Picker rows dedup by hostname (deviceDedupKey/HostKey), so a
+		// superseded connect-minted row and the TXT-id row that replaces it are
+		// already the same row. lanPickerRows takes back the row a device
+		// leaves behind when it comes back under another hostname.
+		rows := newLANPickerRows()
 		for ev := range events {
-			if msg := lanPickerEventMsg(ev); msg != nil {
+			for _, msg := range rows.eventMsgs(ev) {
 				p.Send(devicePickerLocalMsg{msg: msg})
 			}
 		}
@@ -4496,7 +4697,7 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 		}()
 	}
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	discoverCancel() // stop all background discovery
 	if err != nil {
 		return nil, fmt.Errorf("device picker: %w", err)
@@ -4573,6 +4774,118 @@ func lanPickerEventMsg(ev discovery.LANEvent) tea.Msg {
 	}
 }
 
+// lanPickerRows turns the discovery stream's events into picker messages and
+// keeps one LAN row per device the stream reports.
+//
+// The stream identifies a device by its cache identity (the TXT device id);
+// the picker keys rows by hostname. A board that takes a new hostname, as one
+// does when it applies the name chosen at install, therefore arrives as the
+// same device under a new row key, and lanPickerEventMsg alone would add a
+// second row and leave the first. Here the row a device was last listed under
+// is remembered, and taken back when the stream reports that device under
+// another hostname or names it as replaced (LANEvent.Supersedes).
+//
+// Those two are the only grounds for removing a row: the stream saying this is
+// the same device. A name or an address alone is never one.
+type lanPickerRows struct {
+	listed map[string]models.LANDevice // cache identity -> device as last listed
+}
+
+func newLANPickerRows() *lanPickerRows {
+	return &lanPickerRows{listed: make(map[string]models.LANDevice)}
+}
+
+// eventMsgs returns the picker messages for one stream event, in the order
+// they must be delivered.
+func (r *lanPickerRows) eventMsgs(ev discovery.LANEvent) []tea.Msg {
+	msg := lanPickerEventMsg(ev)
+	if msg == nil {
+		return nil
+	}
+	identity := discoverycache.Key(ev.Device.ID, ev.Device.DisplayName)
+	add, listing := msg.(tui.PickerAddMsg)
+	if !listing {
+		delete(r.listed, identity) // retracted: lanPickerEventMsg drops its row
+		return []tea.Msg{msg}
+	}
+
+	rowKey := lanPickerRemoveMsg(ev.Device).Key
+	var msgs []tea.Msg
+	for _, earlier := range []string{identity, ev.Supersedes} {
+		previous, known := r.listed[earlier]
+		if !known {
+			continue
+		}
+		delete(r.listed, earlier)
+		staleKey := lanPickerRemoveMsg(previous).Key
+		if strings.EqualFold(staleKey, rowKey) || r.rowListed(staleKey) {
+			// Still this device's row, or one another device is listed under.
+			continue
+		}
+		switch {
+		case models.CanonicalDevicePrincipal(previous.PrincipalURI) != "":
+			// As for a retraction: take only the LAN path, so a mesh path
+			// merged into the row survives.
+			msgs = append(msgs, lanPickerEventMsg(discovery.LANEvent{Kind: discovery.LANRetracted, Device: previous}))
+		case add.Items[0].Supersedes == "":
+			// The picker swaps the rows in one step and keeps the highlight
+			// on the replacement.
+			add.Items[0].Supersedes = staleKey
+		default:
+			msgs = append(msgs, tui.PickerRemoveMsg{Key: staleKey})
+		}
+	}
+	r.listed[identity] = ev.Device
+	return append(msgs, add)
+}
+
+// rowListed reports whether any device is currently listed under rowKey.
+func (r *lanPickerRows) rowListed(rowKey string) bool {
+	for _, dev := range r.listed {
+		if strings.EqualFold(lanPickerRemoveMsg(dev).Key, rowKey) {
+			return true
+		}
+	}
+	return false
+}
+
+// lanRowAddressRank is the one rule for which address a LAN row shows. The
+// fixed USB address (discovery.WellKnownUSBAddr, which a WendyOS board adds to
+// its USB gadget interface next to that interface's own link-local address)
+// outranks every other address. Which of the two a lookup returns first is
+// arbitrary, so without a rank two USB boards could show one kind each. All
+// other addresses rank equal, so a row keeps the one it showed first.
+func lanRowAddressRank(address string) int {
+	if address == "" {
+		return 0
+	}
+	host := address
+	if h, _, err := net.SplitHostPort(address); err == nil {
+		host = h
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && ip.Zone() != "" && ip.WithZone("") == netip.MustParseAddr(discovery.WellKnownUSBAddr) {
+		return 2
+	}
+	return 1
+}
+
+// lanRowAddress is the address a LAN row shows for dev: the first address the
+// CLI dials, unless a better-ranked one (see lanRowAddressRank) is among those
+// the device was heard at. It is display only. What is dialled, and in which
+// order, still comes from lanAgentAddresses and lanDialCandidates.
+func lanRowAddress(dev models.LANDevice) string {
+	best := preferredLANAddress(dev)
+	if dev.Mesh {
+		return best
+	}
+	for _, heard := range dev.Addresses {
+		if candidate := hostPort(heard, lanAgentPort(dev)); lanRowAddressRank(candidate) > lanRowAddressRank(best) {
+			best = candidate
+		}
+	}
+	return best
+}
+
 // lanPickerItem is the run picker's row for a LAN device.
 func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tui.PickerItem {
 	devCopy := dev
@@ -4596,7 +4909,7 @@ func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tu
 		Name:          dev.DisplayName,
 		Type:          kind,
 		USB:           dev.USB,
-		Address:       preferredLANAddress(dev),
+		Address:       lanRowAddress(dev),
 		AgentVersion:  dev.AgentVersion,
 		AgentOutdated: agentBehindCLI(version.Version, dev.AgentVersion),
 		OS:            os,
@@ -4646,7 +4959,9 @@ func connectLocalPickerChoice(ctx context.Context, sel *tui.PickerItem, suppress
 			return picked, err
 		}
 		if d.LAN != nil {
-			if isEnrollmentSelection(ctx) {
+			// Wi-Fi setup keeps the ordinary address walk and Bluetooth
+			// shortcut; its probes and the picked dial try the setup endpoint.
+			if unboundSetupScopeFrom(ctx) == unboundSetupEnrollment {
 				return connectPickedLANDevice(ctx, d, preferredLANAddress(*d.LAN), suppressUpdateCheck)
 			}
 			addr, _, _, err := resolveLANAgentVersion(ctx, *d.LAN)

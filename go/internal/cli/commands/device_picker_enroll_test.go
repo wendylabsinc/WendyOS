@@ -56,8 +56,9 @@ func TestEnrollLocalPickerDeviceUsesHighlightedDevice(t *testing.T) {
 				return &SelectedDevice{Agent: conn}, nil
 			}
 			promptPickerEnrollmentWifiFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection) error {
-				if gotCtx != ctx || gotConn != conn || closed {
-					t.Fatal("WiFi prompt did not receive the live highlighted connection")
+				target, _ := gotCtx.Value(wifiCredentialTargetKey{}).(*SelectedDevice)
+				if gotCtx.Value(selectionKey{}) != "selected-device" || gotCtx.Err() != ctx.Err() || target == nil || target.Agent != conn || gotConn != conn || closed {
+					t.Fatal("WiFi prompt did not receive the live highlighted connection and its selected target")
 				}
 				calls = append(calls, "wifi")
 				return nil

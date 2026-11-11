@@ -67,6 +67,9 @@ func pickOrinRecoveryDevice(opts t234InstallOptions) (rcm.RecoveryDevice, error)
 			// best-effort (empty under USB redirection) and empty/duplicate keys
 			// would collapse picker rows, resolving a destructive selection to
 			// the wrong board.
+			if err := requireRecoveryChoice(len(recovery), opts.DeviceName); err != nil {
+				return rcm.RecoveryDevice{}, err
+			}
 			var items []tui.PickerItem
 			byKey := map[string]winusb.Device{}
 			for _, d := range recovery {

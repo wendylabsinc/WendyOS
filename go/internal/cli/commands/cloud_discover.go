@@ -54,7 +54,7 @@ func newCloudDiscoverCmd() *cobra.Command {
 			// Alt screen restores the user's terminal content on exit. The
 			// picker-mode embedding in `wendy cloud tunnel` stays inline.
 			p := tea.NewProgram(m, tea.WithAltScreen())
-			if _, err := p.Run(); err != nil {
+			if _, err := tui.RunProgram(p); err != nil {
 				return fmt.Errorf("TUI error: %w", err)
 			}
 			return nil
@@ -75,27 +75,28 @@ type cloudScanMsg struct {
 }
 
 type cloudDiscoverModel struct {
-	purpose       devicePickerPurpose
-	ctx           context.Context
-	auth          *config.AuthConfig
-	brokerURL     string
-	all           bool
-	pickerMode    bool
-	devices       []cloudDiscoveryDevice
-	versions      map[string]*agentpb.GetAgentVersionResponse // Learned only through explicit updates.
-	table         tui.BubbleTable
-	quitting      bool
-	flashMessage  string
-	flashIsError  bool
-	updatingName  string
-	selected      *cloudpb.Asset
-	selectedV2    *cloudpbv2.Asset
-	windowWidth   int
-	windowHeight  int
-	err           error
-	hasResults    bool
-	defaultDevice string
-	certExpired   bool
+	purpose        devicePickerPurpose
+	ctx            context.Context
+	auth           *config.AuthConfig
+	brokerURL      string
+	all            bool
+	pickerMode     bool
+	devices        []cloudDiscoveryDevice
+	versions       map[string]*agentpb.GetAgentVersionResponse // Learned only through explicit updates.
+	table          tui.BubbleTable
+	quitting       bool
+	flashMessage   string
+	flashIsError   bool
+	updatingName   string
+	selected       *cloudpb.Asset
+	selectedV2     *cloudpbv2.Asset
+	windowWidth    int
+	windowHeight   int
+	terminalHeight int // before the banner rows are subtracted
+	err            error
+	hasResults     bool
+	defaultDevice  string
+	certExpired    bool
 }
 
 // authCertExpired reports whether the session's certificate is past NotAfter.
@@ -151,7 +152,8 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
-		msg.Height = max(1, msg.Height-strings.Count(m.purpose.header(msg.Width), "\n"))
+		m.terminalHeight = msg.Height
+		msg.Height = max(1, msg.Height-strings.Count(m.purpose.fittedHeader(msg.Width, msg.Height, 0), "\n"))
 		m.windowHeight = msg.Height
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -286,7 +288,7 @@ func (m cloudDiscoverModel) View() string {
 	var sb strings.Builder
 
 	if m.pickerMode {
-		sb.WriteString(m.purpose.header(m.windowWidth))
+		sb.WriteString(m.purpose.fittedHeader(m.windowWidth, m.terminalHeight, 0))
 		sb.WriteString(m.viewLine(scanStyle.Render("⟳ Fetching cloud devices...")) + "\n")
 		hint := "  ↑/↓ navigate, enter select, d toggle default, u update, q quit"
 		if m.table.CanScroll() {

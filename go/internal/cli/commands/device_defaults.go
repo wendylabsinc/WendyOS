@@ -237,6 +237,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 			}
 			return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
 		}
+		if err := explainCloudSelectorMissV2(ctx, auth, selector, assets); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("cloud asset %s in tenant %s is offline or unavailable; choose another device with --device or 'wendy device set-default'", selector.AssetUUID, config.OrganizationLabel(selector.Endpoint, selector.TenantUUID))
 	}
 	assets, err := fetchDefaultCloudAssetsFn(ctx, auth)
@@ -252,6 +255,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 			return nil, err
 		}
 		return &SelectedDevice{Agent: conn, DefaultSelector: selector.String()}, nil
+	}
+	if err := explainCloudSelectorMissLegacy(ctx, auth, selector, assets); err != nil {
+		return nil, err
 	}
 	return nil, fmt.Errorf("cloud asset %d in organization %s is offline or unavailable; choose another device with --device or 'wendy device set-default'", selector.AssetID, orgLabel(selector.Endpoint, selector.OrgID))
 }
@@ -361,6 +367,18 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 // straight to the local unix socket regardless of device, so device is
 // vestigial in that mode and must not be validated as a hostname.
 func connectMCPDevice(ctx context.Context, device string) (*grpcclient.AgentConnection, error) {
+	conn, _, err := connectMCPDeviceScoped(ctx, device, false)
+	return conn, err
+}
+
+// connectMCPWiFiDevice opens the per-call connection of the MCP Wi-Fi tools'
+// device argument. Like the CLI's Wi-Fi commands, it also reaches an unbound
+// device that reports NotProvisioned, which it reports as unverified.
+func connectMCPWiFiDevice(ctx context.Context, device string) (*grpcclient.AgentConnection, bool, error) {
+	return connectMCPDeviceScoped(ctx, device, true)
+}
+
+func connectMCPDeviceScoped(ctx context.Context, device string, wifiSetup bool) (*grpcclient.AgentConnection, bool, error) {
 	// A simulator connection can build and deploy its managed robot runtime.
 	// Reserve stdout for JSON-RPC throughout that work, including warm deploys
 	// that skip the build and only emit an upload heartbeat.
@@ -368,18 +386,30 @@ func connectMCPDevice(ctx context.Context, device string) (*grpcclient.AgentConn
 	if os.Getenv("WENDY_AGENT_SOCKET") == "" {
 		selected, matched, err := connectNamedDeviceSelector(robotRuntimePromptContext(ctx, true), device, true)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if matched {
-			return selectedAgent(selected)
+			conn, err := selectedAgent(selected)
+			return conn, false, err
 		}
 		if err := rejectNumericDeviceName(device); err != nil {
-			return nil, err
+			return nil, false, err
+		}
+		if wifiSetup {
+			addr := mcpStartupAddress(device)
+			target, handled, err := connectUnboundSetupTarget(withWiFiSetupSelection(ctx), pinKeyForAddr(addr), addr)
+			if handled {
+				if err != nil {
+					return nil, false, err
+				}
+				return target.Agent, target.unverifiedSetup, nil
+			}
 		}
 	}
 	// Dial a bare host as host:port, like the startup default device: that is
 	// the form an mTLS device accepts here, and the target the run tool replays.
-	return connectMCPDirectFn(ctx, mcpStartupAddress(device))
+	conn, err := connectMCPDirectFn(ctx, mcpStartupAddress(device))
+	return conn, false, err
 }
 
 var connectMCPDirectFn = connectWithAutoTLS

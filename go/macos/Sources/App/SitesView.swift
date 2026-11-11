@@ -10,8 +10,10 @@ struct FleetDevice: Identifiable {
 }
 struct FleetSnapshot { let devices: [FleetDevice]; let presenceError: String }
 extension GoClient {
+    private static let fleetRequests = DispatchQueue(label: "dev.wendy.desktop.fleet", qos: .userInitiated)
+
     func fleet(account: String, org: String) async throws -> FleetSnapshot {
-        try await perform {
+        try await BlockingWork.run(on: Self.fleetRequests) {
             let strings = CStringStorage(); defer { withExtendedLifetime(strings) {} }
             guard let p = WDFleet(strings.add(account), strings.add(org)) else { throw WendyError(message: "Missing fleet result.") }
             defer { WDFleetFree(p) }; try Self.check(p.pointee.status)

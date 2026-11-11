@@ -118,7 +118,7 @@ func newBuildCmd() *cobra.Command {
 			appCfg, cfgErr := ensureAppConfig(cfgPath, false)
 			if cfgErr == nil {
 				if err := appCfg.Validate(); err != nil {
-					return fmt.Errorf("invalid wendy.json: %w", err)
+					return invalidAppConfigError(err)
 				}
 				if err := warnAppConfigFile(cfgPath); err != nil {
 					return fmt.Errorf("reading wendy.json warnings: %w", err)
@@ -132,6 +132,11 @@ func newBuildCmd() *cobra.Command {
 			// different architecture from the one the user expected.
 			if mustStopBuildAfterTargetError(targetErr) {
 				return targetErr
+			}
+			if cfgErr == nil {
+				if err := buildMCU(cmd.Context(), cwd, appCfg); err != nil {
+					return err
+				}
 			}
 
 			// If the target is an external provider device, use the provider build path.
@@ -451,7 +456,7 @@ func pickBuildOptionWithTitle(options []BuildOption, title string) (*BuildOption
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("build type picker: %w", err)
 	}
@@ -712,7 +717,7 @@ func buildDockerProject(dir, imageName, platform, dockerfile string) error {
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}

@@ -2,10 +2,35 @@ import XCTest
 import ARKit
 import RoomPlan
 import AVFoundation
+import SwiftUI
 
 @testable import WendyMobile
 
 final class MobileTests: XCTestCase {
+    @MainActor
+    func testOverflowMenuKeepsFullHitArea() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: OverflowMenu { Button("Inspect") {} })
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previousWindow?.makeKeyAndVisible() }
+        try await Task.sleep(for: .milliseconds(100))
+        host.view.layoutIfNeeded()
+        func buttons(_ view: UIView) -> [UIButton] {
+            (view as? UIButton).map { [$0] } ?? view.subviews.flatMap(buttons)
+        }
+        let button = try XCTUnwrap(buttons(host.view).first)
+        XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
+        XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+        for x in [CGFloat(1), button.bounds.width - 1] {
+            for y in [CGFloat(1), button.bounds.height - 1] {
+                XCTAssertTrue(button.point(inside: CGPoint(x: x, y: y), with: nil))
+            }
+        }
+    }
+
     func testEmbeddedSignInProducesBrowserURL() async throws {
         let client = GoClient.shared
         try await initializeIsolatedSandbox()
@@ -95,6 +120,74 @@ final class MobileTests: XCTestCase {
         XCTAssertTrue(model.mobileCloudOrganizations.isEmpty)
         XCTAssertTrue(model.mobileCloudOrganization.isEmpty)
         XCTAssertNil(model.mobileCloudSelectionError)
+    }
+
+    @MainActor
+    func testSavedCertificateScopeIsReadyBeforeOrganizationLookupFinishes() async {
+        let model = AppModel()
+        let saved = SavedAccount(account: CloudAccount(state: WD_ACCOUNT_SIGNED_IN,
+            context: "local-account", cloud: "https://cloud.example", email: "test@example.com"),
+            active: true, organizationID: "tenant", organizationName: "Local organization")
+        await model.refreshMobileCloudSelection(loadAccounts: { [saved] }, loadOrganizations: { _ in
+            // The network request has not returned, yet consumers can use the scope.
+            XCTAssertEqual(model.mobileCloudAccount, saved.id)
+            XCTAssertEqual(model.mobileCloudOrganization, "tenant")
+            XCTAssertEqual(model.mobileCloudOrganizations.first?.name, "Local organization")
+            throw WendyError(message: "Timed out")
+        })
+        XCTAssertEqual(model.mobileCloudOrganization, "tenant")
+        XCTAssertEqual(model.mobileCloudSelectionError, "Timed out")
+    }
+
+    @MainActor
+    func testLocalScopeSwitchNeverReusesPreviousTenant() async {
+        let model = AppModel()
+        model.mobileCloudAccount = "old"
+        model.mobileCloudOrganization = "old-tenant"
+        let saved = SavedAccount(account: CloudAccount(state: WD_ACCOUNT_SIGNED_IN,
+            context: "new", cloud: "https://cloud.example", email: "test@example.com"),
+            active: true, organizationID: "new-tenant")
+        await model.refreshMobileCloudSelection(loadAccounts: { [saved] }, loadOrganizations: { _ in
+            XCTAssertEqual(model.mobileCloudOrganization, "new-tenant")
+            XCTAssertEqual(model.mobileCloudOrganizations.map(\.id), ["new-tenant"])
+            return []
+        })
+        XCTAssertEqual(model.mobileCloudOrganization, "new-tenant")
+    }
+
+    @MainActor
+    func testLoginRequiredDoesNotBootstrapCertificateScope() async {
+        let model = AppModel()
+        let saved = SavedAccount(account: CloudAccount(state: WD_ACCOUNT_NEEDS_LOGIN,
+            context: "expired", cloud: "https://cloud.example", email: "test@example.com"),
+            active: true, organizationID: "tenant")
+        await model.refreshMobileCloudSelection(loadAccounts: { [saved] }, loadOrganizations: { _ in
+            XCTAssertTrue(model.mobileCloudOrganization.isEmpty)
+            throw WendyError(message: "Sign in again")
+        })
+        XCTAssertTrue(model.mobileCloudOrganization.isEmpty)
+    }
+
+    func testAccountReadsDoNotWaitForDeviceRequestQueue() async throws {
+        try await initializeIsolatedSandbox()
+        let client = GoClient.shared
+        let started = expectation(description: "Device request occupies its queue")
+        let readFinished = expectation(description: "Account reads finish independently")
+        let release = DispatchSemaphore(value: 0)
+        async let blocked: Void = client.perform {
+            started.fulfill()
+            _ = release.wait(timeout: .now() + 5)
+        }
+        await fulfillment(of: [started], timeout: 2)
+        @Sendable func readAccounts() async throws {
+            _ = try await client.account()
+            _ = try await client.accounts()
+            readFinished.fulfill()
+        }
+        async let reading: Void = readAccounts()
+        await fulfillment(of: [readFinished], timeout: 2)
+        release.signal()
+        _ = try await (blocked, reading)
     }
 
     private func initializeIsolatedSandbox(isolation: isolated (any Actor)? = #isolation) async throws {

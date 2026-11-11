@@ -19,9 +19,14 @@ final class DownloadedModelTests: XCTestCase {
             window.setContentSize(size)
             try await Task.sleep(for: .milliseconds(100))
             host.layoutSubtreeIfNeeded()
-            XCTAssertLessThanOrEqual(host.fittingSize.width, size.width)
-            XCTAssertLessThanOrEqual(host.fittingSize.height, size.height)
-            XCTAssertEqual(host.frame.size, size)
+            // AppKit may constrain the requested size to the runner's screen.
+            // Check overflow against the space the window actually provides.
+            let available = window.contentLayoutRect.size
+            XCTAssertGreaterThan(available.width, 0)
+            XCTAssertGreaterThan(available.height, 0)
+            XCTAssertLessThanOrEqual(host.fittingSize.width, available.width)
+            XCTAssertLessThanOrEqual(host.fittingSize.height, available.height)
+            XCTAssertEqual(host.frame.size, available)
         }
         XCTAssertNotNil(chat.error)
     }

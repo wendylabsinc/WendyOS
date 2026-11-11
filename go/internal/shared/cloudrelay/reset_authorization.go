@@ -51,8 +51,8 @@ func (v *Verifier) VerifyResetSignature(ctx context.Context, compact string) ([]
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = mldsa.Verify(pk, []byte(parts[0]+"."+parts[1]), sig, nil); err != nil {
-		return nil, nil, err
+	if mldsa.Verify(pk, []byte(parts[0]+"."+parts[1]), sig, nil) != nil {
+		return nil, nil, fmt.Errorf("Cloud's reset response is not signed by Cloud's published key; update the wendy CLI with 'wendy update' and retry")
 	}
 	payload, err := decode64(parts[1])
 	return payload, raw, err
