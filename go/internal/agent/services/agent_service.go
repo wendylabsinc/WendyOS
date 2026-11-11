@@ -628,6 +628,8 @@ func detectFeatureset() []string {
 		features = append(features, "os-healthcheck")
 	}
 
+	features = append(features, mcuFeatureEntries(loadMCULayouts())...)
+
 	return features
 }
 

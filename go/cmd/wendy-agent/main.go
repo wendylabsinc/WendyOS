@@ -363,6 +363,7 @@ func main() {
 	// Before anything reads the store: devices updated from an older agent still
 	// have add-ons in the pre-keyed flat layout.
 	driverSvc.MigrateStore()
+	mcuSvc := services.NewMcuService(logger)
 	containerSvcV2 := services.NewContainerServiceV2(containerSvc)
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
 	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
@@ -881,6 +882,7 @@ func main() {
 		// local admin socket. The store and apply path require Linux.
 		if runtime.GOOS == "linux" {
 			agentpbv2.RegisterWendyDriverServiceServer(srv, driverSvc)
+			agentpbv2.RegisterWendyMcuServiceServer(srv, mcuSvc)
 		}
 		agentpbv2.RegisterWendyContainerServiceServer(srv, containerSvcV2)
 		agentpbv2.RegisterWendyProvisioningServiceServer(srv, provisioningSvcV2)
