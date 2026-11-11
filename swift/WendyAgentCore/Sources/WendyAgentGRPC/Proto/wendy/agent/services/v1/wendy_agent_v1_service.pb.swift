@@ -136,6 +136,104 @@ public nonisolated enum Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf.
 
 }
 
+public nonisolated enum Wendy_Agent_Services_V1_AgentRole: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case unspecified // = 0
+
+  /// The agent in the OS image.
+  case image // = 1
+
+  /// An update that passed its checks, run from /data.
+  case approved // = 2
+
+  /// A new update still being checked.
+  case trial // = 3
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unspecified
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .image
+    case 2: self = .approved
+    case 3: self = .trial
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .image: return 1
+    case .approved: return 2
+    case .trial: return 3
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendy_Agent_Services_V1_AgentRole] = [
+    .unspecified,
+    .image,
+    .approved,
+    .trial,
+  ]
+
+}
+
+public nonisolated enum Wendy_Agent_Services_V1_AgentUpdateState: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+
+  /// No agent update yet.
+  case unspecified // = 0
+
+  /// No verdict yet: the update is staged or running its trial.
+  case trial // = 1
+
+  /// It passed its checks.
+  case approved // = 2
+
+  /// It failed its checks, and the device went back to the agent before it.
+  case rejected // = 3
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unspecified
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .trial
+    case 2: self = .approved
+    case 3: self = .rejected
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .trial: return 1
+    case .approved: return 2
+    case .rejected: return 3
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendy_Agent_Services_V1_AgentUpdateState] = [
+    .unspecified,
+    .trial,
+    .approved,
+    .rejected,
+  ]
+
+}
+
 public nonisolated struct Wendy_Agent_Services_V1_RunContainerRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -2136,15 +2234,14 @@ public nonisolated struct Wendy_Agent_Services_V1_AgentSupervision: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// "image" (the agent in the OS image), "approved" (a checked update kept
-  /// on /data) or "trial" (a new update still being checked).
-  public var role: String = String()
+  /// Which agent runs.
+  public var role: Wendy_Agent_Services_V1_AgentRole = .unspecified
 
   /// Version of the agent in the OS image, the one the device falls back to.
   public var imageVersion: String = String()
 
-  /// How the last agent update went: "" (none), "trial", "approved" or "rejected".
-  public var updateState: String = String()
+  /// How the last agent update went.
+  public var updateState: Wendy_Agent_Services_V1_AgentUpdateState = .unspecified
 
   /// Why the last update was rejected, or why the image agent runs.
   public var reason: String = String()
@@ -2168,6 +2265,14 @@ nonisolated extension Wendy_Agent_Services_V1_NetworkConnectivity: SwiftProtobuf
 
 nonisolated extension Wendy_Agent_Services_V1_WiFiSecurityType: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0WIFI_SECURITY_TYPE_UNSPECIFIED\0\u{1}WIFI_SECURITY_TYPE_OPEN\0\u{1}WIFI_SECURITY_TYPE_WEP\0\u{1}WIFI_SECURITY_TYPE_WPA_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA2_PSK\0\u{1}WIFI_SECURITY_TYPE_WPA3_SAE\0\u{1}WIFI_SECURITY_TYPE_WPA2_ENTERPRISE\0")
+}
+
+nonisolated extension Wendy_Agent_Services_V1_AgentRole: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0AGENT_ROLE_UNSPECIFIED\0\u{1}AGENT_ROLE_IMAGE\0\u{1}AGENT_ROLE_APPROVED\0\u{1}AGENT_ROLE_TRIAL\0")
+}
+
+nonisolated extension Wendy_Agent_Services_V1_AgentUpdateState: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0AGENT_UPDATE_STATE_UNSPECIFIED\0\u{1}AGENT_UPDATE_STATE_TRIAL\0\u{1}AGENT_UPDATE_STATE_APPROVED\0\u{1}AGENT_UPDATE_STATE_REJECTED\0")
 }
 
 nonisolated extension Wendy_Agent_Services_V1_RunContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -5320,9 +5425,9 @@ nonisolated extension Wendy_Agent_Services_V1_AgentSupervision: SwiftProtobuf.Me
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.role) }()
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.role) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.imageVersion) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.updateState) }()
+      case 3: try { try decoder.decodeSingularEnumField(value: &self.updateState) }()
       case 4: try { try decoder.decodeSingularStringField(value: &self.reason) }()
       case 5: try { try decoder.decodeSingularStringField(value: &self.updateSha256) }()
       default: break
@@ -5331,14 +5436,14 @@ nonisolated extension Wendy_Agent_Services_V1_AgentSupervision: SwiftProtobuf.Me
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.role.isEmpty {
-      try visitor.visitSingularStringField(value: self.role, fieldNumber: 1)
+    if self.role != .unspecified {
+      try visitor.visitSingularEnumField(value: self.role, fieldNumber: 1)
     }
     if !self.imageVersion.isEmpty {
       try visitor.visitSingularStringField(value: self.imageVersion, fieldNumber: 2)
     }
-    if !self.updateState.isEmpty {
-      try visitor.visitSingularStringField(value: self.updateState, fieldNumber: 3)
+    if self.updateState != .unspecified {
+      try visitor.visitSingularEnumField(value: self.updateState, fieldNumber: 3)
     }
     if !self.reason.isEmpty {
       try visitor.visitSingularStringField(value: self.reason, fieldNumber: 4)

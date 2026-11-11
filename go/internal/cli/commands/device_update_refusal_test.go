@@ -35,10 +35,10 @@ func (a *refusingAgent) GetAgentVersion(context.Context, *agentpb.GetAgentVersio
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	resp := &agentpb.GetAgentVersionResponse{Version: "2026.10.01-000000", CpuArchitecture: "arm64", Os: "linux",
-		Supervision: &agentpb.AgentSupervision{Role: "approved"}}
+		Supervision: &agentpb.AgentSupervision{Role: agentpb.AgentRole_AGENT_ROLE_APPROVED}}
 	if a.approved {
 		resp.Version = refusalRelease
-		resp.Supervision.UpdateState, resp.Supervision.UpdateSha256 = "approved", a.sha
+		resp.Supervision.UpdateState, resp.Supervision.UpdateSha256 = agentpb.AgentUpdateState_AGENT_UPDATE_STATE_APPROVED, a.sha
 	}
 	return resp, nil
 }

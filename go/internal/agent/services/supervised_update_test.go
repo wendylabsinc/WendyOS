@@ -257,8 +257,8 @@ func TestGetAgentVersionReportsTheSupervision(t *testing.T) {
 		t.Fatal(err)
 	}
 	sup := resp.GetSupervision()
-	if sup.GetRole() != "image" || sup.GetImageVersion() != "2026.10.29-210857" ||
-		sup.GetUpdateState() != "rejected" || sup.GetReason() == "" || sup.GetUpdateSha256() != "abc" {
+	if sup.GetRole() != agentpb.AgentRole_AGENT_ROLE_IMAGE || sup.GetImageVersion() != "2026.10.29-210857" ||
+		sup.GetUpdateState() != agentpb.AgentUpdateState_AGENT_UPDATE_STATE_REJECTED || sup.GetReason() == "" || sup.GetUpdateSha256() != "abc" {
 		t.Fatalf("supervision = %+v", sup)
 	}
 }
@@ -324,7 +324,7 @@ func TestGetAgentVersionReportsAStagedUploadAsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sup := resp.GetSupervision(); sup.GetUpdateState() != "trial" || sup.GetUpdateSha256() != sha || sup.GetReason() != "" {
+	if sup := resp.GetSupervision(); sup.GetUpdateState() != agentpb.AgentUpdateState_AGENT_UPDATE_STATE_TRIAL || sup.GetUpdateSha256() != sha || sup.GetReason() != "" {
 		t.Fatalf("until this agent exits, the client must not read the old verdict as its own: %+v", sup)
 	}
 }
@@ -392,5 +392,31 @@ func TestHoldSupervisorWakeNests(t *testing.T) {
 	osUpdate()
 	if updating(os.Getpid()) {
 		t.Fatal("the mark must go with the last hold")
+	}
+}
+
+func TestSupervisionMapsEveryStatusWord(t *testing.T) {
+	roles := map[supervisor.Role]agentpb.AgentRole{
+		supervisor.RoleImage:      agentpb.AgentRole_AGENT_ROLE_IMAGE,
+		supervisor.RoleApproved:   agentpb.AgentRole_AGENT_ROLE_APPROVED,
+		supervisor.RoleTrial:      agentpb.AgentRole_AGENT_ROLE_TRIAL,
+		"from-a-newer-supervisor": agentpb.AgentRole_AGENT_ROLE_UNSPECIFIED,
+	}
+	for in, want := range roles {
+		if got := supervisionRole(in); got != want {
+			t.Errorf("role %q: want %v, got %v", in, want, got)
+		}
+	}
+	states := map[supervisor.UpdateState]agentpb.AgentUpdateState{
+		supervisor.UpdateNone:     agentpb.AgentUpdateState_AGENT_UPDATE_STATE_UNSPECIFIED,
+		supervisor.UpdateTrial:    agentpb.AgentUpdateState_AGENT_UPDATE_STATE_TRIAL,
+		supervisor.UpdateApproved: agentpb.AgentUpdateState_AGENT_UPDATE_STATE_APPROVED,
+		supervisor.UpdateRejected: agentpb.AgentUpdateState_AGENT_UPDATE_STATE_REJECTED,
+		"from-a-newer-supervisor": agentpb.AgentUpdateState_AGENT_UPDATE_STATE_UNSPECIFIED,
+	}
+	for in, want := range states {
+		if got := supervisionUpdate(in); got != want {
+			t.Errorf("update state %q: want %v, got %v", in, want, got)
+		}
 	}
 }

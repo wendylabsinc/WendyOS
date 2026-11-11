@@ -35,8 +35,29 @@ func (c *scriptedVersionClient) GetAgentVersion(context.Context, *agentpb.GetAge
 
 func supervised(version, role, state, sha, reason string) versionStep {
 	return versionStep{resp: &agentpb.GetAgentVersionResponse{Version: version, Supervision: &agentpb.AgentSupervision{
-		Role: role, UpdateState: state, UpdateSha256: sha, Reason: reason, ImageVersion: "2026.10.29-210857",
+		Role: testRole(role), UpdateState: testUpdateState(state), UpdateSha256: sha, Reason: reason, ImageVersion: "2026.10.29-210857",
 	}}}
+}
+
+// testRole and testUpdateState keep the scripts readable; a typo must not
+// quietly become unspecified.
+func testRole(word string) agentpb.AgentRole {
+	v, ok := agentpb.AgentRole_value["AGENT_ROLE_"+strings.ToUpper(word)]
+	if !ok {
+		panic("unknown role " + word)
+	}
+	return agentpb.AgentRole(v)
+}
+
+func testUpdateState(word string) agentpb.AgentUpdateState {
+	if word == "" {
+		return agentpb.AgentUpdateState_AGENT_UPDATE_STATE_UNSPECIFIED
+	}
+	v, ok := agentpb.AgentUpdateState_value["AGENT_UPDATE_STATE_"+strings.ToUpper(word)]
+	if !ok {
+		panic("unknown update state " + word)
+	}
+	return agentpb.AgentUpdateState(v)
 }
 
 func fastVerdict(t *testing.T) {
@@ -154,13 +175,13 @@ func TestKeptAcrossOSUpdate(t *testing.T) {
 		t.Fatal("an unsupervised device still needs the re-apply")
 	}
 	kept := &agentpb.GetAgentVersionResponse{Version: "2026.11.02-101010-dev", BinarySha256: "mine",
-		Supervision: &agentpb.AgentSupervision{Role: "trial"}}
+		Supervision: &agentpb.AgentSupervision{Role: agentpb.AgentRole_AGENT_ROLE_TRIAL}}
 	if msg, ok := keptAcrossOSUpdate(kept, "mine"); !ok || !strings.Contains(msg, "kept") {
 		t.Fatalf("the supervisor kept the agent: %q, %v", msg, ok)
 	}
 	// The new image's agent was the same or newer, so the user's is sent again.
 	replaced := &agentpb.GetAgentVersionResponse{Version: "2026.11.04-090000", BinarySha256: "image",
-		Supervision: &agentpb.AgentSupervision{Role: "image", Reason: "image agent 2026.11.04-090000 is the same or newer than 2026.11.02-101010"}}
+		Supervision: &agentpb.AgentSupervision{Role: agentpb.AgentRole_AGENT_ROLE_IMAGE, Reason: "image agent 2026.11.04-090000 is the same or newer than 2026.11.02-101010"}}
 	if _, ok := keptAcrossOSUpdate(replaced, "mine"); ok {
 		t.Fatal("an agent the image replaced must be applied again")
 	}

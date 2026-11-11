@@ -19,7 +19,7 @@ type agentVerdict struct {
 	Approved   bool
 	// Running is the version the device runs now, and Role where it came from.
 	Running string
-	Role    string
+	Role    agentpb.AgentRole
 	Reason  string
 }
 
@@ -33,7 +33,7 @@ const AgentVerdictPrefix = "the new agent failed its checks: "
 
 func (e *agentRejectedError) Error() string {
 	from := "the OS image"
-	if e.v.Role != "image" {
+	if e.v.Role != agentpb.AgentRole_AGENT_ROLE_IMAGE {
 		from = "/data"
 	}
 	return fmt.Sprintf(AgentVerdictPrefix+"%s; the device went back to agent %s from %s", e.v.Reason, e.v.Running, from)
@@ -98,14 +98,14 @@ func awaitAgentVerdict(ctx context.Context, conn *grpcclient.AgentConnection, re
 				case sup.GetUpdateSha256() == uploadedSHA:
 					unknownSince = time.Time{}
 					switch sup.GetUpdateState() {
-					case "approved":
+					case agentpb.AgentUpdateState_AGENT_UPDATE_STATE_APPROVED:
 						// An earlier approval of this sha says nothing while another binary runs.
 						if bin := resp.GetBinarySha256(); bin != "" && bin != uploadedSHA {
 							break
 						}
 						last.Approved = true
 						return last, conn, nil
-					case "rejected":
+					case agentpb.AgentUpdateState_AGENT_UPDATE_STATE_REJECTED:
 						return last, conn, &agentRejectedError{v: last}
 					}
 				case unknownSince.IsZero():

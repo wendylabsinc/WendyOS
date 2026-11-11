@@ -210,14 +210,40 @@ func supervisionStatus() *agentpb.AgentSupervision {
 		return nil
 	}
 	sup := &agentpb.AgentSupervision{
-		Role:         string(st.Role),
+		Role:         supervisionRole(st.Role),
 		ImageVersion: st.ImageVersion,
-		UpdateState:  string(st.UpdateState),
+		UpdateState:  supervisionUpdate(st.UpdateState),
 		Reason:       st.Reason,
 		UpdateSha256: st.UpdateSHA256,
 	}
 	if sha, _ := stagedSHA.Load().(string); sha != "" {
-		sup.UpdateState, sup.UpdateSha256, sup.Reason = string(supervisor.UpdateTrial), sha, ""
+		sup.UpdateState, sup.UpdateSha256, sup.Reason = agentpb.AgentUpdateState_AGENT_UPDATE_STATE_TRIAL, sha, ""
 	}
 	return sup
+}
+
+// supervisionRole and supervisionUpdate turn the supervisor's status words into
+// the contract's enums; a word from a newer supervisor stays unspecified.
+func supervisionRole(r supervisor.Role) agentpb.AgentRole {
+	switch r {
+	case supervisor.RoleImage:
+		return agentpb.AgentRole_AGENT_ROLE_IMAGE
+	case supervisor.RoleApproved:
+		return agentpb.AgentRole_AGENT_ROLE_APPROVED
+	case supervisor.RoleTrial:
+		return agentpb.AgentRole_AGENT_ROLE_TRIAL
+	}
+	return agentpb.AgentRole_AGENT_ROLE_UNSPECIFIED
+}
+
+func supervisionUpdate(u supervisor.UpdateState) agentpb.AgentUpdateState {
+	switch u {
+	case supervisor.UpdateTrial:
+		return agentpb.AgentUpdateState_AGENT_UPDATE_STATE_TRIAL
+	case supervisor.UpdateApproved:
+		return agentpb.AgentUpdateState_AGENT_UPDATE_STATE_APPROVED
+	case supervisor.UpdateRejected:
+		return agentpb.AgentUpdateState_AGENT_UPDATE_STATE_REJECTED
+	}
+	return agentpb.AgentUpdateState_AGENT_UPDATE_STATE_UNSPECIFIED
 }
