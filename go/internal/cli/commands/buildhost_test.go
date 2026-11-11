@@ -340,6 +340,12 @@ func TestClassifyRemoteBuildError_JudgesTheHostsErrorNotTheBuildSummary(t *testi
 	if want := "build on spark-office failed or did not complete: rpc error: code = Internal desc = build failed: exit status 1"; !isImageBuildFailure(buildErr) || buildErr.Error() != want {
 		t.Fatalf("build failure = %q, want %q", buildErr, want)
 	}
+
+	upgradeHint := "missing operator build delivery authorization. Update the wendy CLI and retry"
+	upgradeErr := remoteBuild("", status.Error(codes.PermissionDenied, upgradeHint))
+	if want := "build on spark-office failed or did not complete: rpc error: code = PermissionDenied desc = " + upgradeHint; !isImageBuildFailure(upgradeErr) || upgradeErr.Error() != want {
+		t.Fatalf("upgrade error = %q, want %q", upgradeErr, want)
+	}
 }
 
 func TestClassifyRemoteBuildError_DoesNotAssumeGenericTransportErrorIsDelivery(t *testing.T) {

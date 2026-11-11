@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,7 +36,10 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // This test needs real BuildKit/buildctl, a fresh containerd daemon, and an empty
@@ -159,18 +163,34 @@ func TestBuildDeliveryRealRuntimesMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cc.Close()
+	buildClient := agentpbv2.NewWendyBuildServiceClient(cc)
+	baseSpec := &agentpbv2.BuildSpec{
+		AppId: "f1-delivery", Platform: "linux/" + runtime.GOARCH, Chunking: agentpbv2.ChunkingMode_CHUNKING_MODE_FORCE,
+		Context:     &agentpbv2.ChunkManifest{ChunkHashes: [][]byte{contextHash[:]}},
+		PushTargets: []*agentpbv2.PushTarget{{AssetUuid: target.UUID().String(), RegistryPort: 5000, Repository: "f1-delivery:latest"}},
+		Definition:  &agentpbv2.BuildSpec_DockerfileBuild{DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"}},
+	}
+	legacyStream, err := buildClient.BuildImage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyStream.Send(&agentpbv2.BuildImageRequest{Spec: baseSpec}); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacyStream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacyStream.Recv(); status.Code(err) != codes.PermissionDenied ||
+		!strings.Contains(status.Convert(err).Message(), "Update the wendy CLI") {
+		t.Fatalf("legacy build stream returned %v, want PermissionDenied with upgrade hint", err)
+	}
 	firstUploads := 0
 	for iteration := range 3 {
-		stream, err := agentpbv2.NewWendyBuildServiceClient(cc).BuildImage(ctx)
+		stream, err := buildClient.BuildImage(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		spec := &agentpbv2.BuildSpec{
-			AppId: "f1-delivery", Platform: "linux/" + runtime.GOARCH, Chunking: agentpbv2.ChunkingMode_CHUNKING_MODE_FORCE,
-			Context:     &agentpbv2.ChunkManifest{ChunkHashes: [][]byte{contextHash[:]}},
-			PushTargets: []*agentpbv2.PushTarget{{AssetUuid: target.UUID().String(), RegistryPort: 5000, Repository: "f1-delivery:latest"}},
-			Definition:  &agentpbv2.BuildSpec_DockerfileBuild{DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"}},
-		}
+		spec := proto.Clone(baseSpec).(*agentpbv2.BuildSpec)
 		if iteration == 2 {
 			spec.Chunking = agentpbv2.ChunkingMode_CHUNKING_MODE_OFF
 		}

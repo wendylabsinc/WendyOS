@@ -34,13 +34,16 @@ func (s *BuildService) verifyDeliveryAssignments(spec *agentpbv2.BuildSpec, targ
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	for _, target := range targets {
+		if target.GetDeliveryAuthorizationJws() == "" || target.GetDeliverySession() == "" {
+			return status.Error(codes.PermissionDenied, "missing operator build delivery authorization. Update the wendy CLI and retry")
+		}
 		device, err := meshid.ParseDevice(snapshot.Target.Tenant(), target.GetAssetUuid())
 		if err != nil {
 			return status.Error(codes.FailedPrecondition, err.Error())
 		}
 		claims, err := builddelivery.VerifyBuildBinding(target.GetDeliveryAuthorizationJws(), target.GetDeliverySession(), input, snapshot.TrustAnchors, device, builder, time.Now())
 		if err != nil || claims.Reference != target.GetRepository() {
-			return status.Error(codes.PermissionDenied, "missing or mismatched operator build delivery authorization")
+			return status.Error(codes.PermissionDenied, "mismatched operator build delivery authorization")
 		}
 	}
 	return nil

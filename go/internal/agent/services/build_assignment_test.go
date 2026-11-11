@@ -11,7 +11,9 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 func TestBuildHostRequiresMatchingOperatorAssignment(t *testing.T) {
@@ -33,8 +35,9 @@ func TestBuildHostRequiresMatchingOperatorAssignment(t *testing.T) {
 	spec.PushTarget.DeliveryAuthorizationJws = compact
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
-		t.Fatal("assignment without a session accepted")
+	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); status.Code(err) != codes.PermissionDenied ||
+		!strings.Contains(status.Convert(err).Message(), "Update the wendy CLI") {
+		t.Fatalf("assignment without a session returned %v, want PermissionDenied with upgrade hint", err)
 	}
 	admitted, err := agentpbv2.NewWendyBuildDeliveryServiceClient(l.operator).AdmitDelivery(ctx, &agentpbv2.AdmitDeliveryRequest{AuthorizationJws: compact})
 	if err != nil {
@@ -51,8 +54,9 @@ func TestBuildHostRequiresMatchingOperatorAssignment(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec.Platform = "linux/amd64"
-	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); err == nil {
-		t.Fatal("changed build accepted")
+	if err := svc.verifyDeliveryAssignments(spec, []*agentpbv2.PushTarget{spec.PushTarget}); status.Code(err) != codes.PermissionDenied ||
+		strings.Contains(status.Convert(err).Message(), "Update the wendy CLI") {
+		t.Fatalf("changed build returned %v, want PermissionDenied without upgrade hint", err)
 	}
 	spec.Platform = "linux/arm64"
 	rotated := delivery.NewManager(t.TempDir(), "localhost:5000/", func() (string, string) { return l.f.OtherBuilder.PEM, l.f.Chain })
