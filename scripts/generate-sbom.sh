@@ -10,6 +10,8 @@
 #
 # Env:
 #   SYFT_BIN   syft executable (default: syft)
+#   SWIFT_RESOLVED  Package.resolved from the release Xcode build
+#   SWIFT_WORKSPACE_STATE  Xcode SourcePackages/workspace-state.json
 #
 set -euo pipefail
 
@@ -44,8 +46,10 @@ scan_binary() {  # <binary-path> <output-file>
 
 scan_swift() {   # <output-file> <repo-root>
   local out="$1" rr="$2"
-  mkdir -p "$(dirname "$out")"
-  "$SYFT_BIN" scan "dir:$rr/swift" -o spdx-json > "$out"
+  local resolved="${SWIFT_RESOLVED:-$rr/swift/WendyAgent.xcworkspace/xcshareddata/swiftpm/Package.resolved}"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/swift-sbom.py" \
+    "$resolved" "$rr/swift/WendyAgentCore/Package.swift" "$out" \
+    --workspace-state "${SWIFT_WORKSPACE_STATE:-$rr/swift/Build/Xcode/SourcePackages/workspace-state.json}"
 }
 
 scan_source() {  # <output-file> <repo-root>

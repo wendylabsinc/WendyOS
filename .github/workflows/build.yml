@@ -17,6 +17,8 @@ on:
       - 'go.sum'
       - 'swift/**'
       - '.github/workflows/build.yml'
+      - 'scripts/*sbom*'
+      - 'scripts/release-security.py'
   workflow_dispatch:
     inputs:
       publish:
@@ -258,6 +260,23 @@ jobs:
           "./${ARTIFACT}/wendy" --version
           .github/scripts/stagefile-release-smoke_test.sh "./${ARTIFACT}/wendy"
 
+      - name: Inventory statically linked native libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          MUSL_VERSION=$(dpkg-query -W -f='${Version}' musl-dev)
+          MUSL_VERSION=${MUSL_VERSION%%-*}
+          python3 scripts/native-sbom.py "${{ matrix.artifact-name }}/wendy" \
+            "${{ matrix.artifact-name }}-native.spdx.json" "libusb=${LIBUSB_VERSION}" "musl=${MUSL_VERSION}"
+
+      - name: Upload native library inventory
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ matrix.artifact-name }}-native
+          path: ${{ matrix.artifact-name }}-native.spdx.json
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Create archive
         run: |
           ARTIFACT="${{ matrix.artifact-name }}"
@@ -331,6 +350,39 @@ jobs:
 
       - name: Smoke test packaged Stagefile compiler
         run: .github/scripts/stagefile-release-smoke_test.sh "./${{ matrix.artifact-name }}/wendy"
+
+      - name: Inventory statically linked native libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/native-sbom.py "${{ matrix.artifact-name }}/wendy" \
+            "${{ matrix.artifact-name }}-native.spdx.json" "libusb=$(pkg-config --modversion libusb-1.0)"
+
+      - name: Upload native library inventory
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ matrix.artifact-name }}-native
+          path: ${{ matrix.artifact-name }}-native.spdx.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record macOS CLI signature evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            shasum -a 256 "${{ matrix.artifact-name }}/wendy"
+            codesign --verify --strict --verbose=2 "${{ matrix.artifact-name }}/wendy"
+            codesign -dv --verbose=4 "${{ matrix.artifact-name }}/wendy"
+          } > macos-cli-signatures.txt 2>&1
+
+      - name: Upload macOS CLI signature evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-cli-signatures
+          path: macos-cli-signatures.txt
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Create archive
         working-directory: .
@@ -481,6 +533,30 @@ jobs:
         shell: bash
         run: bash ./Scripts/Build.sh
 
+      - name: Inventory resolved Swift dependencies and verify native signatures
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          scripts/generate-sbom.sh swift "release-evidence/wendy-swift-${VERSION}.spdx.json" --repo-root "$PWD"
+          cp swift/WendyAgent.xcworkspace/xcshareddata/swiftpm/Package.resolved release-evidence/Package.resolved
+          {
+            shasum -a 256 "swift/Build/wendy-agent-macos-arm64-${VERSION}.zip"
+            codesign --verify --deep --strict --verbose=2 swift/Build/WendyAgentMac.app
+            xcrun stapler validate swift/Build/WendyAgentMac.app
+            spctl -a -vv --type exec swift/Build/WendyAgentMac.app
+          } > release-evidence/macos-signatures.txt 2>&1
+
+      - name: Upload Swift inventory and signature evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: swift-release-evidence
+          path: release-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Archive Release build cache
         id: archive_release_cache
         if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
@@ -564,6 +640,23 @@ jobs:
       - name: Build browser WASM assets
         run: npm --prefix web-client run build:wasm
 
+      - name: Inventory modules compiled into WASM
+        env:
+          GOOS: js
+          GOARCH: wasm
+          CGO_ENABLED: "0"
+        run: |
+          gzip -dc web-client/public/wendy.wasm.gz > "$RUNNER_TEMP/wendy.wasm"
+          python3 scripts/wasm-sbom.py "$RUNNER_TEMP/wendy.wasm" wendy-web-modules.spdx.json
+
+      - name: Upload WASM inventory
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wendy-web-modules
+          path: wendy-web-modules.spdx.json
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Package wendy-web
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -590,7 +683,7 @@ jobs:
           if-no-files-found: error
 
   sbom-source:
-    name: SBOM (source + swift)
+    name: SBOM (source)
     runs-on: ubuntu-latest
     needs: [determine-version]
     steps:
@@ -600,23 +693,14 @@ jobs:
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.18.1
-      - name: Generate source + swift SBOMs
+      - name: Generate source SBOM
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: |
           set -euo pipefail
           chmod +x scripts/generate-sbom.sh
           mkdir -p sboms
-          scripts/generate-sbom.sh swift  "sboms/wendy-swift-${VERSION}.spdx.json"  --repo-root "$PWD"
           scripts/generate-sbom.sh source "sboms/wendy-source-${VERSION}.spdx.json" --repo-root "$PWD"
-
-      - name: Upload swift SBOM
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: sbom-swift-${{ needs.determine-version.outputs.version }}
-          path: sboms/wendy-swift-${{ needs.determine-version.outputs.version }}.spdx.json
-          retention-days: 14
-          if-no-files-found: error
 
       - name: Upload source SBOM
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -632,7 +716,12 @@ jobs:
     # build-cli-linux produces the wendy-cli-linux-* archives; without it in
     # needs, those matrix entries race the upload and fail with "Artifact not
     # found".
-    needs: [determine-version, build, build-cli-linux, build-go-macos]
+    # Windows archives are overwritten by signing. Inventory only the final bytes.
+    needs: [determine-version, build, build-cli-linux, build-go-macos, package-windows]
+    if: >-
+      always() && needs.build.result == 'success' &&
+      needs.build-cli-linux.result == 'success' && needs.build-go-macos.result == 'success' &&
+      (needs.package-windows.result == 'success' || needs.package-windows.result == 'skipped')
     permissions:
       contents: read
       id-token: write
@@ -1061,6 +1150,26 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      - name: Verify Windows signatures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $paths = @("wendy-cli-windows-${{ matrix.goarch }}/wendy.exe", "wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi")
+          $evidence = foreach ($path in $paths) {
+            $signature = Get-AuthenticodeSignature $path
+            if ($signature.Status -ne "Valid") { throw "Invalid signature on $path : $($signature.Status)" }
+            [PSCustomObject]@{ Path = $path; SHA256 = (Get-FileHash $path -Algorithm SHA256).Hash; Status = "$($signature.Status)"; Signer = $signature.SignerCertificate.Subject }
+          }
+          $evidence | ConvertTo-Json | Set-Content "windows-signatures-${{ matrix.goarch }}.json"
+
+      - name: Upload Windows signature evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-signatures-${{ matrix.goarch }}
+          path: windows-signatures-${{ matrix.goarch }}.json
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Upload MSI
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -1069,12 +1178,84 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  release-security:
+    name: Release contents security gate
+    runs-on: ubuntu-24.04
+    needs: [determine-version, build, build-cli-linux, build-go-macos, build-macos-runtime-guest, build-agent-macos-app, package-linux, package-windows, package-web]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download final artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: '!macos-release-build-*'
+          path: dist
+
+      - name: Install payload extractors
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools msitools rpm
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.18.1
+
+      - name: Install Grype
+        id: grype
+        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          grype-version: v0.121.3
+          cache-db: true
+
+      - name: Inventory final archives and installer payloads
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: |
+          python3 scripts/release-security.py prepare --swift "dist/swift-release-evidence/wendy-swift-${VERSION}.spdx.json"
+
+      - name: Block High and Critical vulnerabilities
+        env:
+          GRYPE_BIN: ${{ steps.grype.outputs.cmd }}
+        run: python3 scripts/release-security.py scan
+
+      - name: Attest release inventory against every final artifact
+        id: attest
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        with:
+          subject-path: |
+            dist/**/wendy*.tar.gz
+            dist/**/wendy*.zip
+            dist/**/wendy*.deb
+            dist/**/wendy*.rpm
+            dist/**/wendy*.msi
+          sbom-path: release-security/wendy-release.spdx.json
+
+      - name: Verify every artifact and attached predicate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: python3 scripts/release-security.py verify --repository "$GITHUB_REPOSITORY" --bundle "$BUNDLE"
+
+      - name: Retain inventories and scan evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-security-evidence
+          path: release-security/
+          retention-days: 90
+          if-no-files-found: error
+
   publish-linux-repos:
     name: Publish to GCP Artifact Registry
     runs-on: ubuntu-latest
-    needs: [determine-version, package-linux, test-templates, integration-tests]
+    needs: [determine-version, package-linux, test-templates, integration-tests, release-security]
     if: |
       always() &&
+      needs.release-security.result == 'success' &&
       needs.determine-version.outputs.is_release == 'true' &&
       needs.determine-version.outputs.is_prerelease == 'false' &&
       needs.package-linux.result == 'success' &&
@@ -1132,13 +1313,11 @@ jobs:
   publish-agent-gcs:
     name: Publish agent to GCS
     runs-on: ubuntu-latest
-    # build-agent-macos-app is intentionally excluded from the result checks
-    # below (though still listed in needs, so its artifact is available to
-    # download): a failed or skipped macOS build must not block Linux agent
-    # publishing. The download step tolerates a missing macOS zip.
-    needs: [determine-version, build, build-agent-macos-app]
+    # All published products must pass the release security gate.
+    needs: [determine-version, build, build-agent-macos-app, release-security]
     if: |
       always() &&
+      needs.release-security.result == 'success' &&
       needs.determine-version.result == 'success' &&
       needs.build.result == 'success' &&
       (github.event_name == 'push' ||
@@ -1156,9 +1335,6 @@ jobs:
           merge-multiple: true
           path: agent-artifacts
 
-      # Optional: matches zero artifacts (and does not fail) if
-      # build-agent-macos-app failed or was skipped, e.g. during a
-      # macOS signing/notarization outage.
       - name: Download macOS agent artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -1186,9 +1362,10 @@ jobs:
   publish-install-scripts:
     name: Publish install scripts to GCS
     runs-on: ubuntu-latest
-    needs: [determine-version, build]
+    needs: [determine-version, build, release-security]
     if: |
       always() &&
+      needs.release-security.result == 'success' &&
       needs.determine-version.result == 'success' &&
       needs.build.result == 'success' &&
       (github.event_name == 'push' ||
@@ -1238,9 +1415,10 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, package-web, test-templates, integration-tests]
+    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, package-web, test-templates, integration-tests, release-security]
     if: |
       always() &&
+      needs.release-security.result == 'success' &&
       needs.determine-version.result == 'success' &&
       needs.build.result == 'success' &&
       needs.build-go-macos.result == 'success' &&
@@ -1254,6 +1432,8 @@ jobs:
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)) &&
       (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Download artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -1266,7 +1446,7 @@ jobs:
           # Create a newline-delimited list of release files
           {
             echo 'FILES<<EOF'
-            find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.msi" -o -name "*.deb" -o -name "*.rpm" -o -name "*.spdx.json" | sort
+            python3 scripts/release-security.py files --dist . --output .
             echo 'EOF'
           } >> $GITHUB_ENV
       # Tag the commit this run built before creating the release. Left to
