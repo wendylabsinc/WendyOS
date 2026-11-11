@@ -1190,7 +1190,7 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	noteWaitReadyApp(ctx, appCfg.AppID)
 
 	if err := appCfg.Validate(); err != nil {
-		return commandErrorf(errConfigInvalid, "invalid wendy.json: %w", err)
+		return invalidAppConfigError(err)
 	}
 	activationStep(ctx, "connect", map[string]string{"project_recognized": "true"})
 	if err := warnAppConfigFile(cfgPath); err != nil {
@@ -1270,6 +1270,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 	// Provider-based run path.
 	if target.External != nil && target.Provider != nil {
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "provider targets"); err != nil {
+			return err
+		}
+		if err := rejectMCUForProvider(appCfg); err != nil {
 			return err
 		}
 		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, appCfg.Entitlements, opts)
@@ -2251,7 +2254,11 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			return err
 		}
 	}
-	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
+	mcu, err := preflightMCU(ctx, conn, cwd, appCfg, opts)
+	if err != nil {
+		return err
+	}
+	if err := registerCloudAppsFn(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
 	}
 	if opts.release != nil {
@@ -2262,7 +2269,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	metrics := newDeployMetrics(opts)
 	metrics.ctx = ctx
-	err := runWithAgentRecorded(ctx, conn, cwd, appCfg, opts, metrics)
+	err = deployMCU(ctx, conn, mcu, appCfg, opts)
+	if err == nil {
+		err = runWithAgentRecordedFn(ctx, conn, cwd, appCfg, opts, metrics)
+	}
 	metrics.emit(err)
 	if opts.release != nil {
 		if recErr := opts.release.outcome(err); recErr != nil {
@@ -2271,6 +2281,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	return err
 }
+
+// runWithAgentRecordedFn lets tests see whether the container deploy ran.
+var runWithAgentRecordedFn = runWithAgentRecorded
 
 func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions, metrics *deployMetrics) error {
 	// The start sites that receive the agent's Started acknowledgement report
