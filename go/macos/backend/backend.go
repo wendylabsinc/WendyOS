@@ -414,7 +414,12 @@ func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, e
 		b.automaticVPN = automatic
 		return cfg, err
 	}
-	dial := reportVPNDialFailures(desktopDial, func(message string) {
+	var err error
+	routes, err = PrepareVPNRoutes(ctx, routes)
+	if err != nil {
+		return vpn.Config{}, err
+	}
+	dial := reportVPNDialFailures(desktopRouteDial(routes), func(message string) {
 		// A full UI event queue must not stall a failed network flow.
 		select {
 		case b.events <- Event{Kind: EventVPNError, Text: message}:

@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -213,6 +214,8 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	agentConn.Host = asset.GetName()
 	if asset.legacy != nil {
 		agentConn.MeshHost = meshname.Device(asset.legacy.GetId())
+	} else if peer, err := meshid.DeviceFromPrincipal(expectedIdentity.Principal); err == nil {
+		agentConn.MeshHost = meshname.DeviceFor(peer)
 	}
 	agentConn.IsMTLS = true
 	agentConn.IsCloudV2 = asset.v2 != nil

@@ -200,7 +200,7 @@ func WDStartVPN(input *C.WDRouteInput, count C.size_t, gateway *C.char) *C.WDVPN
 	}
 	p.config.routes, p.config.route_count = alloc[C.WDRoute](len(config.Routes)), C.size_t(len(config.Routes))
 	for i, r := range config.Routes {
-		unsafe.Slice(p.config.routes, len(config.Routes))[i] = C.WDRoute{selector: C.CString(r.Selector), name: C.CString(r.Name), address: C.CString(r.Address), host: C.CString(r.Host)}
+		unsafe.Slice(p.config.routes, len(config.Routes))[i] = C.WDRoute{selector: C.CString(r.Selector), name: C.CString(r.Name), address: C.CString(r.Address), host: C.CString(r.Host), principal: C.CString(r.Principal)}
 	}
 	return p
 }
@@ -327,6 +327,7 @@ func WDVPNFree(p *C.WDVPNResult) {
 		free(r.name)
 		free(r.address)
 		free(r.host)
+		free(r.principal)
 	}
 	free(p.config.routes)
 	free(p.config.endpoint)

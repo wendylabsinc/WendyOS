@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -659,6 +660,8 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 	agentConn.Host = device.GetName()
 	if !device.isV2 {
 		agentConn.MeshHost = meshname.Device(device.legacyID)
+	} else if peer, err := meshid.DeviceFromPrincipal(device.expectedIdentity(certInfo).Principal); err == nil {
+		agentConn.MeshHost = meshname.DeviceFor(peer)
 	}
 	agentConn.IsMTLS = true
 	agentConn.CertInfo = &certInfo

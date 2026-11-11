@@ -127,7 +127,7 @@ func TestInternetConfigurationAndModernMeshSelectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if routes[0].Host != "device-22222222-2222-4222-8222-222222222222.mesh.wendy.dev" {
+	if routes[0].Host != "device-22222222-2222-4222-8222-222222222222.wendy.internal" {
 		t.Fatal(routes)
 	}
 	for _, suffix := range []string{"?", "#other", "/x"} {
