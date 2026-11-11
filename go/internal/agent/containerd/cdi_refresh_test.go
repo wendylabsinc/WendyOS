@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -278,5 +279,72 @@ func TestStartContainer_RefreshesDriverFilesBeforeUsingTheStoredSpec(t *testing.
 	}
 	if slices.Contains(dests, stale) || !slices.Contains(dests, "/usr/lib/libcublas.so.13.4.1.3") {
 		t.Errorf("the stored spec still carries the previous OS's driver files: %v", dests)
+	}
+}
+
+// Container creation runs ValidateMounts on the assembled spec (WDY-1102), so
+// a mount of containerd's runtime directory can never reach a container that
+// way. The refresh writes mounts into a spec as well and has to hold the same
+// line: a list that names the containerd socket must not be persisted, even
+// though the host's CDI file is trusted.
+func TestCDIRefresh_RejectsAListThatMountsContainerdsRuntimeDirectory(t *testing.T) {
+	for _, source := range []string{"/run/containerd/containerd.sock", "/var/run/containerd"} {
+		t.Run(source, func(t *testing.T) {
+			currentNvidiaCDI(t)
+			loadNvidiaCDISpec = func() (*cdi.CDISpecification, string, error) {
+				return &cdi.CDISpecification{Devices: []cdi.CDIDevice{{Name: "all", ContainerEdits: cdi.CDIContainerEdits{
+					Mounts: []cdi.CDIMount{
+						{HostPath: "/usr/lib/libcublas.so.13.4.1.3", ContainerPath: "/usr/lib/libcublas.so.13.4.1.3", Options: nvidiaCTKMountOptions},
+						{HostPath: source, ContainerPath: "/usr/lib/libnvsocket.so", Options: nvidiaCTKMountOptions},
+					},
+				}}}}, "/etc/cdi/nvidia.yaml", nil
+			}
+			original := storedGPUSpec(t)
+			store := &deviceSpecStore{record: containers.Container{ID: "gpu-probe", Spec: &anypb.Any{TypeUrl: "test-spec", Value: original}}}
+			core, logs := observer.New(zapcore.WarnLevel)
+			client, ctr := storedContainer(t, store, zap.New(core))
+
+			client.refreshNvidiaCDIForStart(context.Background(), ctr, "gpu-probe", gpuLabels)
+
+			if store.masks != nil || string(store.record.Spec.GetValue()) != string(original) {
+				t.Errorf("a spec mounting %s was persisted (masks %v)", source, store.masks)
+			}
+			if logs.Len() != 1 || logs.All()[0].ContextMap()["app_name"] != "gpu-probe" {
+				t.Errorf("want one warning naming the app, got %v", logs.All())
+			}
+		})
+	}
+}
+
+// A device the list names and the host lacks is reported on every start, so
+// it stays visible in the log, but once the files are in line there is
+// nothing to write for it.
+func TestCDIRefresh_ReportsADeviceThatStaysMissingWithoutRewriting(t *testing.T) {
+	currentNvidiaCDI(t)
+	absent := filepath.Join(t.TempDir(), "nvhost-absent")
+	loadNvidiaCDISpec = func() (*cdi.CDISpecification, string, error) {
+		return &cdi.CDISpecification{Devices: []cdi.CDIDevice{{Name: "all", ContainerEdits: cdi.CDIContainerEdits{
+			Mounts:      []cdi.CDIMount{{HostPath: "/usr/lib/libcublas.so.13.4.1.3", ContainerPath: "/usr/lib/libcublas.so.13.4.1.3", Options: nvidiaCTKMountOptions}},
+			DeviceNodes: []cdi.CDIDeviceNode{{Path: "/dev/nvhost-absent", HostPath: absent}},
+		}}}}, "/etc/cdi/nvidia.yaml", nil
+	}
+	store := &deviceSpecStore{record: containers.Container{ID: "gpu-probe", Spec: &anypb.Any{TypeUrl: "test-spec", Value: storedGPUSpec(t)}}}
+	core, logs := observer.New(zapcore.WarnLevel)
+	client, ctr := storedContainer(t, store, zap.New(core))
+
+	// The first start brings the files in line and reports the device.
+	client.refreshNvidiaCDIForStart(context.Background(), ctr, "gpu-probe", gpuLabels)
+	if !reflect.DeepEqual(store.masks, []string{"spec"}) || logs.Len() != 1 {
+		t.Fatalf("first start: masks %v, %d warnings; want the spec written and the device reported", store.masks, logs.Len())
+	}
+	store.masks = nil
+	logs.TakeAll()
+
+	client.refreshNvidiaCDIForStart(context.Background(), ctr, "gpu-probe", gpuLabels)
+	if store.masks != nil {
+		t.Errorf("the spec was written again with nothing new in it (masks %v)", store.masks)
+	}
+	if logs.Len() != 1 || logs.All()[0].ContextMap()["app_name"] != "gpu-probe" {
+		t.Errorf("want the missing device reported again, got %v", logs.All())
 	}
 }

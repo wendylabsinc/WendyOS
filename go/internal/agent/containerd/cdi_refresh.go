@@ -88,9 +88,23 @@ func (c *Client) refreshNvidiaCDIForStart(ctx context.Context, container contain
 	}
 
 	// An error here names device nodes the list has and the host does not.
-	// The rest of the refresh is still applied.
+	// The rest of the refresh is still applied, and the next start tries them
+	// again, so it is reported every time and not only when the spec changes.
 	refresh, deviceErr := cdi.RefreshAppliedEdits(&spec, cdiSpec, device)
+	if deviceErr != nil {
+		c.logger.Warn("NVIDIA CDI spec names device nodes this host does not have; they were not added",
+			zap.String("app_name", appName), zap.String("cdi_spec_path", specPath), zap.Error(deviceErr))
+	}
 	if !refresh.Changed {
+		return
+	}
+
+	// Creation validates the assembled spec before the runtime sees it
+	// (WDY-1102), and the refresh puts mounts into a spec too. The host's CDI
+	// file is trusted, but a spec that fails the same check is not written.
+	if err := localoci.ValidateMounts(&spec); err != nil {
+		c.logger.Warn("Refusing to persist refreshed NVIDIA driver files; starting with the stored spec",
+			zap.String("app_name", appName), zap.String("cdi_spec_path", specPath), zap.Error(err))
 		return
 	}
 
@@ -111,10 +125,6 @@ func (c *Client) refreshNvidiaCDIForStart(ctx context.Context, container contain
 		zap.Strings("devices_added", refresh.DevicesAdded),
 		// True once per container created by an agent that kept no record.
 		zap.Bool("inferred", refresh.Inferred))
-	if deviceErr != nil {
-		c.logger.Warn("NVIDIA CDI spec names device nodes this host does not have; they were not added",
-			zap.String("app_name", appName), zap.String("cdi_spec_path", specPath), zap.Error(deviceErr))
-	}
 }
 
 // marshalRefreshedCDISpec writes what a CDI refresh can change back into the

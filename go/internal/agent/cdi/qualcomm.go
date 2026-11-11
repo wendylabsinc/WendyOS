@@ -188,6 +188,21 @@ func ApplyQualcommNPURuntime(spec *oci.Spec) (result QualcommNPURuntimeResult) {
 	return result
 }
 
+// isQualcommRuntimeMount reports whether m is one of the binds
+// ApplyQualcommNPURuntime adds: the staged transport, or a host-locked DSP file
+// bound at its own path.
+func isQualcommRuntimeMount(m oci.Mount) bool {
+	if m.Destination == qualcommNPUPrefix {
+		return true
+	}
+	for _, glob := range qualcommDSPHostLockedGlobs {
+		if ok, err := filepath.Match(glob, m.Destination); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
 func addRuntimeBind(spec *oci.Spec, existing map[string]bool, source, destination string) bool {
 	if existing[destination] {
 		return false

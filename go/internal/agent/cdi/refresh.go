@@ -27,7 +27,7 @@ type appliedEdits struct {
 	// an unchanged host costs a start one comparison and no write.
 	Digest string         `json:"digest"`
 	Mounts []appliedMount `json:"mounts,omitempty"`
-	Env    []string       `json:"env,omitempty"`
+	Env    []appliedEnv   `json:"env,omitempty"`
 }
 
 // appliedMount identifies one mount a CDI device contributed.
@@ -37,6 +37,16 @@ type appliedMount struct {
 	HostPath string `json:"hostPath,omitempty"`
 }
 
+// appliedEnv identifies one variable assignment a CDI device contributed.
+type appliedEnv struct {
+	Entry string `json:"entry"`
+	// Earlier is how many identical assignments come before this one in the
+	// spec. The image's variables precede the vendor's and the entitlements'
+	// follow, and either may assign the same value the vendor does. The count
+	// picks the vendor's copy out from between them.
+	Earlier int `json:"earlier,omitempty"`
+}
+
 func appliedMountFor(m oci.Mount) appliedMount {
 	if m.Source == m.Destination {
 		return appliedMount{Path: m.Destination}
@@ -44,11 +54,23 @@ func appliedMountFor(m oci.Mount) appliedMount {
 	return appliedMount{Path: m.Destination, HostPath: m.Source}
 }
 
-// recordAppliedEdits notes what edits contributed to spec.
-func recordAppliedEdits(spec *oci.Spec, edits *CDIContainerEdits) {
-	record := appliedEdits{Digest: digestEdits(edits), Env: edits.Env}
+// recordAppliedEdits notes what edits contributed to spec. envStart is where
+// the first of edits.Env sits in the spec's variables.
+func recordAppliedEdits(spec *oci.Spec, edits *CDIContainerEdits, envStart int) {
+	record := appliedEdits{Digest: digestEdits(edits)}
 	for _, m := range ociMounts(edits.Mounts) {
 		record.Mounts = append(record.Mounts, appliedMountFor(m))
+	}
+	for i, entry := range edits.Env {
+		applied := appliedEnv{Entry: entry}
+		if spec.Process != nil && envStart+i <= len(spec.Process.Env) {
+			for _, e := range spec.Process.Env[:envStart+i] {
+				if e == entry {
+					applied.Earlier++
+				}
+			}
+		}
+		record.Env = append(record.Env, applied)
 	}
 	raw, err := json.Marshal(record)
 	if err != nil {
@@ -104,7 +126,7 @@ type EditRefresh struct {
 	// Changed reports whether the spec was modified and needs persisting. It
 	// is true whenever the host's list differs from the one the spec was last
 	// brought in line with, even if the difference left the spec's own
-	// content as it was.
+	// content as it was, and whenever a device node was added.
 	Changed bool
 	// Inferred reports that the spec carried no record, so the vendor's mounts
 	// were recognised by their options instead.
@@ -114,28 +136,48 @@ type EditRefresh struct {
 	MountsRemoved, MountsAdded int
 	// HooksChanged and EnvChanged report a difference in either.
 	HooksChanged, EnvChanged bool
-	// DevicesAdded names the device nodes the list gained.
+	// DevicesAdded names the listed device nodes the spec lacked and now has.
 	DevicesAdded []string
 }
 
 // RefreshAppliedEdits makes the part of spec that a CDI device contributed
 // match what cdiSpec lists now: the mounts, hooks and variables are replaced,
-// and device nodes the list gained are added.
+// and device nodes the list names are added if the spec lacks them.
 //
 // A returned error names device nodes the list has and the host does not. The
-// rest of the refresh has still been applied.
+// rest of the refresh has still been applied, and a later call tries those
+// devices again.
 func RefreshAppliedEdits(spec *oci.Spec, cdiSpec *CDISpecification, deviceName string) (EditRefresh, error) {
 	edits, err := editsFor(cdiSpec, deviceName)
 	if err != nil {
 		return EditRefresh{}, err
 	}
+
+	var result EditRefresh
 	record := decodeAppliedEdits(spec)
-	if record != nil {
-		if digest := digestEdits(edits); digest != "" && record.Digest == digest {
-			return EditRefresh{}, nil
-		}
+	digest := digestEdits(edits)
+	if record == nil || digest == "" || record.Digest != digest {
+		result.Changed = true
+		result.Inferred = record == nil
+		envStart := replaceVendorEdits(spec, edits, record, &result)
+		recordAppliedEdits(spec, edits, envStart)
 	}
-	result := EditRefresh{Changed: true, Inferred: record == nil}
+
+	// Devices are checked on every call, whatever the digest says. A node the
+	// host could not resolve last time left nothing behind in the spec, neither
+	// an entry nor a pin, so the digest matching must not be taken to mean the
+	// node is there.
+	added, deviceErr := addMissingDevices(spec, edits.DeviceNodes)
+	if len(added) > 0 {
+		result.Changed = true
+		result.DevicesAdded = added
+	}
+	return result, deviceErr
+}
+
+// replaceVendorEdits swaps the vendor's mounts, variables and hooks in spec
+// for the ones edits lists, and returns where the vendor's variables now start.
+func replaceVendorEdits(spec *oci.Spec, edits *CDIContainerEdits, record *appliedEdits, result *EditRefresh) (envStart int) {
 	fresh := ociMounts(edits.Mounts)
 
 	// Which of the spec's mounts and variables are the vendor's.
@@ -146,20 +188,30 @@ func RefreshAppliedEdits(spec *oci.Spec, cdiSpec *CDISpecification, deviceName s
 		// may bind a path the vendor also lists; it is applied after the
 		// vendor's edits, so it is the later of the two and is left in place.
 		ownedMount = claimEach(record.Mounts, appliedMountFor)
-		ownedEnv = claimEach(record.Env, func(e string) string { return e })
+		ownedEnv = claimRecordedEnv(record.Env)
 	} else {
 		// A container created before the record existed. Its vendor mounts are
 		// the ones shaped like the vendor's: nvidia-ctk writes one option set
-		// on every mount it lists, and no mount the agent adds itself uses it.
-		// The shapes are read from the current list instead of being fixed
-		// here, so they follow whatever the installed toolkit writes.
-		shapes := make(map[string]bool, 1)
+		// on every mount it lists. The shapes are those of the current list
+		// and of the toolkit's earlier formats, since the container may predate
+		// a toolkit update that changed them.
+		shapes := make(map[string]bool, len(earlierToolkitMountOptions)+1)
 		for _, m := range fresh {
 			shapes[mountShape(m)] = true
 		}
-		ownedMount = func(m oci.Mount) bool { return shapes[mountShape(m)] }
+		for _, options := range earlierToolkitMountOptions {
+			shapes[mountShape(oci.Mount{Type: "bind", Options: options})] = true
+		}
+		// The agent has never written the toolkit's own formats on a mount of
+		// its own. The current list may use a set the agent does write, on the
+		// Qualcomm runtime binds, so those are ruled out by path.
+		ownedMount = func(m oci.Mount) bool { return shapes[mountShape(m)] && !isQualcommRuntimeMount(m) }
 		// Variables have no shape to go by, so only one identical to a current
 		// variable is taken over. Anything else may be the app's and stays.
+		// With no record of which copy is the vendor's, the earliest is taken:
+		// if that is the image's, the current variables land ahead of where a
+		// fresh deploy puts them, which can only lower their precedence. Taking
+		// a later copy could put them above an entitlement's.
 		ownedEnv = claimEach(edits.Env, func(e string) string { return e })
 	}
 
@@ -170,7 +222,7 @@ func RefreshAppliedEdits(spec *oci.Spec, cdiSpec *CDISpecification, deviceName s
 		listed[appliedMountFor(m)] = true
 	}
 	had := make(map[appliedMount]bool, len(fresh))
-	spec.Mounts = replaceBlock(spec.Mounts, func(m oci.Mount) bool {
+	spec.Mounts, _ = replaceBlock(spec.Mounts, func(m oci.Mount) bool {
 		if !ownedMount(m) {
 			return false
 		}
@@ -193,7 +245,8 @@ func RefreshAppliedEdits(spec *oci.Spec, cdiSpec *CDISpecification, deviceName s
 	// earlier variable to stand in for, the current ones go first, where
 	// everything else still overrides them.
 	if spec.Process != nil {
-		env := replaceBlock(spec.Process.Env, ownedEnv, edits.Env, false)
+		var env []string
+		env, envStart = replaceBlock(spec.Process.Env, ownedEnv, edits.Env, false)
 		result.EnvChanged = !slices.Equal(env, spec.Process.Env)
 		if result.EnvChanged {
 			spec.Process.Env = env
@@ -206,33 +259,39 @@ func RefreshAppliedEdits(spec *oci.Spec, cdiSpec *CDISpecification, deviceName s
 	spec.Hooks = nil
 	applyHooks(spec, edits.Hooks)
 	result.HooksChanged = !reflect.DeepEqual(previous, spec.Hooks)
+	return envStart
+}
 
-	// Device nodes are only ever added. One already in the spec keeps its
-	// entry, and its number is kept current by oci.RefreshHostDeviceNumbers.
-	// One the list dropped is left alone, because the gpu entitlement adds
-	// NVIDIA nodes as well and the two cannot be told apart afterwards.
-	var deviceErr error
-	if spec.Linux != nil {
-		present := make(map[string]bool, len(spec.Linux.Devices))
-		for _, d := range spec.Linux.Devices {
-			present[d.Path] = true
-		}
-		var gained []CDIDeviceNode
-		for _, node := range edits.DeviceNodes {
-			if !present[node.Path] {
-				present[node.Path] = true
-				gained = append(gained, node)
-			}
-		}
-		before := len(spec.Linux.Devices)
-		deviceErr = applyDeviceNodes(spec, gained)
-		for _, d := range spec.Linux.Devices[before:] {
-			result.DevicesAdded = append(result.DevicesAdded, d.Path)
+// addMissingDevices adds the nodes spec has no entry for and returns their
+// paths. Device nodes are only ever added. One already in the spec keeps its
+// entry, and its number is kept current by oci.RefreshHostDeviceNumbers. One
+// the list dropped is left alone, because the gpu entitlement adds NVIDIA
+// nodes as well and the two cannot be told apart afterwards.
+func addMissingDevices(spec *oci.Spec, nodes []CDIDeviceNode) ([]string, error) {
+	if spec.Linux == nil {
+		return nil, nil
+	}
+	present := make(map[string]bool, len(spec.Linux.Devices))
+	for _, d := range spec.Linux.Devices {
+		present[d.Path] = true
+	}
+	var missing []CDIDeviceNode
+	for _, node := range nodes {
+		if !present[node.Path] {
+			present[node.Path] = true
+			missing = append(missing, node)
 		}
 	}
-
-	recordAppliedEdits(spec, edits)
-	return result, deviceErr
+	if len(missing) == 0 {
+		return nil, nil
+	}
+	before := len(spec.Linux.Devices)
+	err := applyDeviceNodes(spec, missing)
+	var added []string
+	for _, d := range spec.Linux.Devices[before:] {
+		added = append(added, d.Path)
+	}
+	return added, err
 }
 
 // claimEach returns a predicate that reports an element as the vendor's once
@@ -253,6 +312,36 @@ func claimEach[E any, K comparable](recorded []K, key func(E) K) func(E) bool {
 	}
 }
 
+// earlierToolkitMountOptions are the option sets nvidia-ctk has written on the
+// mounts it lists: the first through v1.17, the second since v1.18.
+var earlierToolkitMountOptions = [][]string{
+	{"ro", "nosuid", "nodev", "bind"},
+	{"ro", "nosuid", "nodev", "rbind", "rprivate"},
+}
+
+// claimRecordedEnv returns a predicate that reports exactly the recorded
+// copies of the vendor's variables, counting identical assignments in the
+// order they are offered to it.
+func claimRecordedEnv(recorded []appliedEnv) func(string) bool {
+	vendors := make(map[string]map[int]bool, len(recorded))
+	for _, r := range recorded {
+		if vendors[r.Entry] == nil {
+			vendors[r.Entry] = make(map[int]bool, 1)
+		}
+		vendors[r.Entry][r.Earlier] = true
+	}
+	seen := make(map[string]int, len(recorded))
+	return func(entry string) bool {
+		copies, ok := vendors[entry]
+		if !ok {
+			return false
+		}
+		n := seen[entry]
+		seen[entry]++
+		return copies[n]
+	}
+}
+
 // mountShape reduces a mount to its type and option set, ignoring option order.
 func mountShape(m oci.Mount) string {
 	options := slices.Sorted(slices.Values(m.Options))
@@ -261,8 +350,8 @@ func mountShape(m oci.Mount) string {
 
 // replaceBlock drops the elements owned reports as the vendor's and puts fresh
 // where the first of them was. When none were there, fresh goes at the end, or
-// at the start if atEnd is false.
-func replaceBlock[T any](existing []T, owned func(T) bool, fresh []T, atEnd bool) []T {
+// at the start if atEnd is false. It also returns where fresh was put.
+func replaceBlock[T any](existing []T, owned func(T) bool, fresh []T, atEnd bool) ([]T, int) {
 	kept := make([]T, 0, len(existing)+len(fresh))
 	insertAt := -1
 	for _, e := range existing {
@@ -280,5 +369,5 @@ func replaceBlock[T any](existing []T, owned func(T) bool, fresh []T, atEnd bool
 			insertAt = len(kept)
 		}
 	}
-	return slices.Insert(kept, insertAt, fresh...)
+	return slices.Insert(kept, insertAt, fresh...), insertAt
 }

@@ -37,8 +37,12 @@ func ApplyCDIDevice(spec *oci.Spec, cdiSpec *CDISpecification, deviceName string
 	// the library mounts and env. A caller that cannot function without the
 	// device (a gpu entitlement) must fail on this error rather than start a
 	// container that is missing the hardware it asked for.
+	envStart := 0
+	if spec.Process != nil {
+		envStart = len(spec.Process.Env)
+	}
 	applyErr := applyContainerEdits(spec, edits)
-	recordAppliedEdits(spec, edits)
+	recordAppliedEdits(spec, edits, envStart)
 	return applyErr
 }
 
