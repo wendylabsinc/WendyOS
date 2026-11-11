@@ -196,8 +196,7 @@ jobs:
         env:
           CONTAINERD_PACKAGE: ${{ matrix.package }}
         run: |
-          python3 .github/scripts/use-canonical-ubuntu-mirrors_test.py
-          sudo python3 .github/scripts/use-canonical-ubuntu-mirrors.py
+          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update --error-on=any
           mkdir -p "$RUNNER_TEMP/wendy-runtime"
           cd "$RUNNER_TEMP/wendy-runtime"
