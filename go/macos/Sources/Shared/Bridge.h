@@ -80,6 +80,7 @@ WDStatus *WDDeleteAccess(char *account, char *org, char *id);
 #include "FleetTypes.h"
 #include "SettingsTypes.h"
 #include "OSUpdateTypes.h"
+#include "SiteModelTypes.h"
 #include "SensorTypes.h"
 #include "EnrollmentTypes.h"
 #ifdef __APPLE__
