@@ -34,15 +34,19 @@ import (
 // Agent owns the authenticated Cloud control connection and an identity-free
 // broker presence stream. Credentials are reloaded on each lease request.
 type Agent struct {
-	dialCloud           func(string, string, string, []byte) (*grpc.ClientConn, error)
-	Endpoint            string
-	Verifier            *Verifier
-	StateDir            string
-	Credentials         func() (string, string, []byte)
-	Logger              *zap.Logger
-	MTLSPort            int
-	OnRegistered        func() // the device is reachable through the relay again
-	OnLost              func() // the relay stayed down after a registration; the device is not reachable
+	dialCloud    func(string, string, string, []byte) (*grpc.ClientConn, error)
+	Endpoint     string
+	Verifier     *Verifier
+	StateDir     string
+	Credentials  func() (string, string, []byte)
+	Logger       *zap.Logger
+	MTLSPort     int
+	OnRegistered func() // the device is reachable through the relay again
+	OnLost       func() // the relay stayed down after a registration; the device is not reachable
+	// ApplicationDial reaches only the dedicated end-to-end authenticated app
+	// admission protocol. An absent callback refuses ApplicationService; it
+	// must never fall through to an administrative or arbitrary local socket.
+	ApplicationDial     func(context.Context) (net.Conn, error)
 	signing, encryption *ecdsa.PrivateKey
 	lease               *pb.IssuePresenceLeaseResponse
 	leaseClaims         claims
@@ -818,12 +822,7 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 	if d.Transport == pb.DialTransport_DIAL_TRANSPORT_DATAGRAM {
 		return serveDatagrams(session, d)
 	}
-	port := int(d.Port)
-	agentSession := a.isAgentSession(string(d.ServiceDescriptor), port)
-	if agentSession {
-		port = a.MTLSPort
-	}
-	local, err := dialLocalService(ctx, d.Host, strconv.Itoa(port), agentSession)
+	local, err := a.dialInstruction(ctx, d)
 	if err != nil {
 		return err
 	}
@@ -888,6 +887,24 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 		}
 	}
 	return nil
+}
+
+func (a *Agent) dialInstruction(ctx context.Context, instruction *pb.DialInstruction) (net.Conn, error) {
+	if err := validateService(instruction); err != nil {
+		return nil, err
+	}
+	if string(instruction.ServiceDescriptor) == ApplicationService {
+		if a.ApplicationDial == nil {
+			return nil, fmt.Errorf("application relay admission is unavailable")
+		}
+		return a.ApplicationDial(ctx)
+	}
+	port := int(instruction.Port)
+	agentSession := a.isAgentSession(string(instruction.ServiceDescriptor), port)
+	if agentSession {
+		port = a.MTLSPort
+	}
+	return dialLocalService(ctx, instruction.Host, strconv.Itoa(port), agentSession)
 }
 
 // Admission lasts at most 60 seconds. Files older than the maximum relay

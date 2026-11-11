@@ -189,6 +189,7 @@ type MDNSService struct {
 | `fqdn` | Optional reverse-DNS name derived from the hostname when present in the service template | `sh.wendy.my-device` |
 | `wendyosdevice` | Device UUID (preferred over `id` when present) | `769dc651-4eb2-49f3-b9f6-3e473f15694a` |
 | `tls` | `"true"` when the device is provisioned and requires mTLS (port 50052) | `true` |
+| `app-tls` | Application-only TLS listener port, advertised only after the enrolled agent has bound it; independent of mesh carrier participation | `43023` |
 | `wired` | Comma-separated IPv4 addresses of the device's connected Ethernet ports (at most 8); absent when none. Used only to choose a route, never to trust a device | `192.168.2.50` |
 
 
@@ -225,3 +226,11 @@ address is a hint: each peer must still authenticate before carrying traffic.
 
 The discovery service is `_wendy-net._udp`; peer traffic uses QUIC over UDP.
 There is no TCP fallback on these LAN connections.
+
+Application connections discovered through `_wendyos._udp` are separate from
+those router links. Updated enrolled agents advertise `app-tls=43023` after
+binding an application-only TLS listener. Permit **TCP** port 43023 for this
+path; it does not require Wendy Net carrier participation. The listener verifies
+the expected tenant/device identity and admits only ports published by running
+apps. It does not serve the management API on port 50052. TXT fields remain
+unauthenticated discovery hints and never replace the TLS identity check.

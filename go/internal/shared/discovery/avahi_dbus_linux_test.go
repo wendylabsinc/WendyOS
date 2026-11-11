@@ -224,11 +224,12 @@ type fakeAvahiConn struct {
 	events []string // ordered log: "AddMatchSignal", "Signal", "Call:<method>", "RemoveSignal"
 	calls  []fakeAvahiCall
 
-	browserPath   dbus.ObjectPath
-	addMatchErr   error
-	browserNewErr error
-	freeErr       error
-	resolveFn     func(args []any) ([]any, error)
+	browserPath      dbus.ObjectPath
+	addMatchErr      error
+	browserNewErr    error
+	freeErr          error
+	resolveFn        func(args []any) ([]any, error)
+	resolveContextFn func(context.Context, []any) ([]any, error)
 
 	// blockMethods, when set for a method name, makes Call hang until its ctx
 	// is done instead of replying — simulating a wedged daemon that still
@@ -303,6 +304,9 @@ func (f *fakeAvahiConn) Call(ctx context.Context, path dbus.ObjectPath, method s
 		}
 		return []any{f.browserPath}, nil
 	case avahiResolveServiceMethod:
+		if f.resolveContextFn != nil {
+			return f.resolveContextFn(ctx, args)
+		}
 		if f.resolveFn != nil {
 			return f.resolveFn(args)
 		}
@@ -326,7 +330,7 @@ func (f *fakeAvahiConn) resolveCallCount() int {
 	return n
 }
 
-// ── resolveAvahiItem (IPv4-then-unspec retry order) ────────────────────────
+// ── resolveAvahiItem (sighted address family and bounded retry) ────────────
 
 func TestResolveAvahiItemUsesInetFirst(t *testing.T) {
 	withFakeInterfaceLookup(t, func(int) (*net.Interface, error) { return nil, errors.New("n/a") })
@@ -940,5 +944,75 @@ func TestAvahiStreamBackendLive(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for the registered service to be discovered")
 		}
+	}
+}
+
+// IPv6-only local mesh/veth sightings must not occupy every resolver worker
+// while a reachable remote IPv4 service waits behind them.
+func TestAvahiBrowseIPv6SightingsDoNotStarveRemoteIPv4(t *testing.T) {
+	fake := newFakeAvahiConn("/browser")
+	fake.resolveContextFn = func(ctx context.Context, args []any) ([]any, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		protocol, addressProtocol := args[1].(int32), args[5].(int32)
+		if protocol == avahiProtoInet6 && addressProtocol != avahiProtoInet6 {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		address := "192.168.2.3"
+		if protocol == avahiProtoInet6 {
+			address = "fe80::1"
+		}
+		name := args[2].(string)
+		return resolveReplyBody(1, name, name+".local.", address, 50052, nil), nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	remote := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- avahiBrowse(ctx, fake, "_wendyos._udp", func(service MDNSService) {
+			if service.InstanceName == "remote" {
+				remote <- struct{}{}
+			}
+		})
+	}()
+	<-fake.ready
+	for i := 0; i < probeWorkers; i++ {
+		fake.sigCh <- &dbus.Signal{Path: "/browser", Name: avahiItemNewSignal, Body: []any{int32(1), avahiProtoInet6, fmt.Sprintf("local-veth-%d", i), "_wendyos._udp", "local", uint32(0)}}
+	}
+	fake.sigCh <- &dbus.Signal{Path: "/browser", Name: avahiItemNewSignal, Body: []any{int32(1), avahiProtoInet, "remote", "_wendyos._udp", "local", uint32(0)}}
+	select {
+	case <-remote:
+	case <-ctx.Done():
+		t.Error("IPv6-only sightings starved the remote IPv4 service")
+	}
+	cancel()
+	<-done
+}
+
+func TestResolveAvahiItemExpiredAttemptDoesNotRetryExpiredContext(t *testing.T) {
+	fake := newFakeAvahiConn("/browser")
+	fake.blockMethods = map[string]bool{avahiResolveServiceMethod: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, ok := resolveAvahiItem(ctx, fake, avahiItemNew{iface: 1, proto: avahiProtoInet, name: "gone", stype: "_wendyos._udp", domain: "local"})
+	if ok || fake.resolveCallCount() != 1 {
+		t.Fatalf("expired resolver success=%v calls=%d", ok, fake.resolveCallCount())
+	}
+}
+
+func TestResolveAvahiItemUsesSightedIPv6Family(t *testing.T) {
+	fake := newFakeAvahiConn("/browser")
+	fake.resolveFn = func(args []any) ([]any, error) {
+		if args[1] != avahiProtoInet6 || args[5] != avahiProtoInet6 {
+			t.Fatalf("IPv6 sighting resolve protocol=%v address protocol=%v", args[1], args[5])
+		}
+		return resolveReplyBody(1, "v6-peer", "v6-peer.local.", "2001:db8::1", 50052, nil), nil
+	}
+	_, ok := resolveAvahiItem(context.Background(), fake, avahiItemNew{iface: 1, proto: avahiProtoInet6, name: "v6-peer", stype: "_wendyos._udp", domain: "local"})
+	if !ok || fake.resolveCallCount() != 1 {
+		t.Fatalf("IPv6 resolver success=%v calls=%d", ok, fake.resolveCallCount())
 	}
 }
