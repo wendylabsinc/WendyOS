@@ -258,7 +258,8 @@ func TestUpdateIdentitySwapsSnapshotAndClearsLANCache(t *testing.T) {
 	d.UpdateIdentity("CERT", "KEY", "CHAIN")
 
 	want := meshIdentity{
-		certPEM: "CERT", keyPEM: "KEY", chainPEM: "CHAIN",
+		generation: 1,
+		certPEM:    "CERT", keyPEM: "KEY", chainPEM: "CHAIN",
 	}
 	if got := d.identity(); got != want {
 		t.Fatalf("identity after UpdateIdentity = %+v, want %+v", got, want)

@@ -161,8 +161,21 @@ an older numeric Cloud asset ID.
 
 The agent checks the signed Wendy Net directory and the organization's
 authenticated Cloud roster for short friendly names. A binding from either
-source can supply the address when the available bindings agree. A resolved
-name still needs a reachable Wendy Net application route.
+source can supply the address when the available bindings agree.
+
+Wendy Net uses a local mesh route when available. It tries Cloud only when
+the local route is missing. An identity or published-port refusal ends the
+connection attempt.
+
+Cloud app connections require `wendy-app` on the Cloud backend and on both the
+source and destination agents. Check the installed versions with
+`wendy device info` on each device and look for Cloud app connection support in
+the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+An unsupported-service error means the Cloud backend needs `wendy-app` support.
+An administrator assigns the source device a role with
+`tunnel:request` covering the destination device. If Cloud reports a permission
+error, check that this device grant is active and covers the destination UUID.
+Operator tunnel permissions govern a separate connection path.
 
 These names resolve to addresses in the calling host's own `10.99.0.0/16`
 mapping table. A DNS answer is not proof of reachability: the connection must
@@ -191,7 +204,9 @@ curl --fail http://jetson.wendy.internal:18080/
 
 Expect a `10.99.x.x` address and the app's HTTP response. If the request fails,
 check [Wendy Net status](/docs/guides/wendy-net) on both devices and confirm that
-the destination app is running and publishes the requested port.
+the destination app is running and publishes the requested port. If the app is
+using Cloud, confirm agent and backend support and check the source device's
+`tunnel:request` grant for the destination UUID.
 
 ## Try the complete Python example
 

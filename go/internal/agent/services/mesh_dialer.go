@@ -68,10 +68,11 @@ func meshDialContextDialer(hostport string) func(context.Context, string) (net.C
 // principal leaves it zero, which keeps the self-VIP and local-mesh legs
 // closed instead of guessing an identity.
 type meshIdentity struct {
-	device   meshid.Device
-	certPEM  string
-	keyPEM   string
-	chainPEM string
+	generation uint64 // retires in-flight Cloud app setup after enrollment changes
+	device     meshid.Device
+	certPEM    string
+	keyPEM     string
+	chainPEM   string
 }
 
 // MeshDialer is the agent's mesh dialer. Every leg is keyed by the target's
@@ -83,16 +84,19 @@ type MeshDialer struct {
 	metrics *MeshMetrics
 
 	// Seams (overridden in tests).
-	lanLookup   func(ctx context.Context, device meshid.Device) (hostport string, ok bool)
-	dialLAN     func(ctx context.Context, hostport string, device meshid.Device, port uint16) (net.Conn, error)
-	serviceDial func(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error)
-	localDial   func(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error)
-	selfDial    func(ctx context.Context, port uint16) (net.Conn, error)
-	now         func() time.Time
+	lanLookup    func(ctx context.Context, device meshid.Device) (hostport string, ok bool)
+	dialLAN      func(ctx context.Context, hostport string, device meshid.Device, port uint16) (net.Conn, error)
+	cloudAppDial func(ctx context.Context, device meshid.Device, port uint16) (net.Conn, error)
+	serviceDial  func(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error)
+	localDial    func(ctx context.Context, peer meshid.Device, port uint16) (net.Conn, error)
+	selfDial     func(ctx context.Context, port uint16) (net.Conn, error)
+	now          func() time.Time
 
-	mu    sync.Mutex
-	ident meshIdentity
-	cache map[meshid.Device]lanCacheEntry
+	mu       sync.Mutex
+	ident    meshIdentity
+	cache    map[meshid.Device]lanCacheEntry
+	cloudURL string
+	appFlows map[*ownedAppConnection]struct{}
 }
 
 // SetLocalMeshDialer supplies the end-to-end QUIC app session toward one
@@ -204,7 +208,17 @@ func NewMeshDialer(logger *zap.Logger, certPEM, keyPEM, chainPEM string, metrics
 	}
 	d.lanLookup = d.discoverOnLAN
 	d.dialLAN = d.meshDialLAN
+	d.cloudAppDial = d.meshDialAppCloud
 	return d
+}
+
+// SetCloudEndpoint scopes app relays to the device's enrolled Cloud endpoint,
+// rather than an endpoint supplied by a DNS query or discovery advertisement.
+func (d *MeshDialer) SetCloudEndpoint(endpoint string) {
+	d.mu.Lock()
+	retired := d.replaceIdentityLocked(d.ident.certPEM, d.ident.keyPEM, d.ident.chainPEM, endpoint)
+	d.mu.Unlock()
+	closeRetiredApplications(retired)
 }
 
 // deviceFromCertPEM reads this device's mesh principal off its own leaf.
@@ -227,7 +241,8 @@ func deviceFromCertPEM(certPEM string) meshid.Device {
 }
 
 // UpdateIdentity swaps the dialer's identity snapshot; subsequent dials use
-// the new values while in-flight dials finish with the snapshot they read.
+// the new values. App transports and in-flight app setup using the prior
+// identity are retired before returning.
 // Called from the OnProvisioned callback so a device enrolled while the agent
 // is running (the normal BLE first-boot flow) gets a working mesh without a
 // restart. The LAN outcome cache is cleared too: re-enrollment may move the
@@ -235,14 +250,49 @@ func deviceFromCertPEM(certPEM string) meshid.Device {
 // peers the new identity can no longer authenticate against.
 func (d *MeshDialer) UpdateIdentity(certPEM, keyPEM, chainPEM string) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.ident = meshIdentity{
-		device:   deviceFromCertPEM(certPEM),
-		certPEM:  certPEM,
-		keyPEM:   keyPEM,
-		chainPEM: chainPEM,
+	retired := d.replaceIdentityLocked(certPEM, keyPEM, chainPEM, d.cloudURL)
+	d.mu.Unlock()
+	closeRetiredApplications(retired)
+}
+
+// UpdateCloudIdentity replaces the enrolled endpoint and credentials atomically.
+// App sessions cannot combine a new identity with the previous tenant endpoint.
+func (d *MeshDialer) UpdateCloudIdentity(endpoint, certPEM, keyPEM, chainPEM string) {
+	d.mu.Lock()
+	retired := d.replaceIdentityLocked(certPEM, keyPEM, chainPEM, endpoint)
+	d.mu.Unlock()
+	closeRetiredApplications(retired)
+}
+
+func (d *MeshDialer) replaceIdentityLocked(certPEM, keyPEM, chainPEM, endpoint string) []*ownedAppConnection {
+	changed := d.ident.certPEM != certPEM || d.ident.keyPEM != keyPEM || d.ident.chainPEM != chainPEM || d.cloudURL != endpoint
+	generation := d.ident.generation
+	if changed {
+		generation++
 	}
+	d.ident = meshIdentity{
+		generation: generation,
+		device:     deviceFromCertPEM(certPEM),
+		certPEM:    certPEM,
+		keyPEM:     keyPEM,
+		chainPEM:   chainPEM,
+	}
+	d.cloudURL = endpoint
 	d.cache = make(map[meshid.Device]lanCacheEntry)
+	var retired []*ownedAppConnection
+	if changed {
+		for flow := range d.appFlows {
+			retired = append(retired, flow)
+		}
+		d.appFlows = nil
+	}
+	return retired
+}
+
+func closeRetiredApplications(retired []*ownedAppConnection) {
+	for _, flow := range retired {
+		_ = flow.Close()
+	}
 }
 
 // identity returns a consistent snapshot of the dialer's identity. The lock is
