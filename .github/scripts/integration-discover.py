@@ -8,6 +8,8 @@ import re
 import subprocess
 import sys
 
+from ci_diagnostics import failure_summary
+
 
 REQUIRED = ("raspberry-pi", "jetson", "qualcomm")
 MAX_DEVICES = 20
@@ -46,24 +48,25 @@ def candidates(discovery):
             continue
         host = device.get("hostname", "")
         if not isinstance(host, str) or len(host) > 253 or not HOSTNAME.fullmatch(host):
-            log(f"SKIPPED invalid hostname: {host!r}")
+            log("SKIPPED invalid hostname [withheld]")
             continue
         hosts.add(host.lower())
     return sorted(hosts)
 
 
 def probe(wendy, host):
+    stage = "info"
     try:
         info = cli_json(wendy, "device", "info", "--device", host)
         # Check an authenticated app RPC as well as hardware info. Discovery
         # advertisements and public version information do not prove access.
+        stage = "apps list"
         cli_json(wendy, "device", "apps", "list", "--device", host)
         family = platform(info.get("deviceType", ""))
-        log(f"ACCESSIBLE: {host} ({info.get('deviceType') or 'unknown platform'})")
+        log(f"ACCESSIBLE: {host} ({family or 'unknown platform'})")
         return host, family
     except (subprocess.SubprocessError, ValueError, AttributeError) as error:
-        # Do not echo CLI stderr, which can contain credential diagnostics.
-        log(f"SKIPPED inaccessible device: {host} ({type(error).__name__})")
+        log(f"SKIPPED inaccessible device: {host}; stage={stage}; {failure_summary(error)}")
         return None
 
 
@@ -78,6 +81,7 @@ def select(accessible, require_platforms):
         else:
             selected.append(host)
     if require_platforms and missing:
+        log("MISSING required platform(s): " + ", ".join(missing))
         raise ValueError("no accessible device for required platform(s): " + ", ".join(missing))
     for host, _ in accessible:
         if host not in selected and len(selected) < MAX_DEVICES:
@@ -97,7 +101,7 @@ def main():
             accessible = list(filter(None, pool.map(lambda host: probe(args.wendy, host), hosts)))
         print(json.dumps(select(accessible, args.require_platforms)))
     except (subprocess.SubprocessError, ValueError, AttributeError, OSError) as error:
-        log(f"ERROR: integration discovery failed: {error}")
+        log(f"ERROR: integration discovery failed: {failure_summary(error)}")
         return 1
     return 0
 
