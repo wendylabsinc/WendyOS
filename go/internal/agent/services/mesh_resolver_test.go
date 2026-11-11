@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -34,7 +35,7 @@ func mustTenant(t *testing.T, tenant string) meshid.Tenant {
 	return parsed
 }
 
-func TestResolverMDNSHitShortCircuits(t *testing.T) {
+func TestLegacyResolverPrefersExistingLANBinding(t *testing.T) {
 	roster := provisionedRoster(t)
 	roster.applyResponse(roster.generation, &cloudpbv2.GetMeshRosterResponse{
 		OrgSlug: "acme",
@@ -44,6 +45,9 @@ func TestResolverMDNSHitShortCircuits(t *testing.T) {
 		MeshName:     "Brave Dolphin",
 		PrincipalURI: certs.DeviceSPIFFEURI(rosterTenant, rosterDeviceB),
 	}))
+	r.SetMeshSnapshot(func() localmesh.NodeSnapshot {
+		return namedMeshSnapshot(t, map[string]string{rosterDevice: "brave-dolphin"})
+	})
 	got, ok := r.Resolve("brave-dolphin")
 	if !ok || got != mustDevice(t, rosterTenant, rosterDeviceB) {
 		t.Fatalf("mDNS hit = %v,%v want the LAN device principal", got, ok)
