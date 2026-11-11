@@ -70,6 +70,11 @@ func newRegistryLab(t *testing.T) *registryLab {
 }
 func (l *registryLab) request(t *testing.T, client *http.Client, method, path, session string, data []byte) *http.Response {
 	t.Helper()
+	return l.requestWithHeaders(t, client, method, path, session, data, nil)
+}
+
+func (l *registryLab) requestWithHeaders(t *testing.T, client *http.Client, method, path, session string, data []byte, headers http.Header) *http.Response {
+	t.Helper()
 	u, err := url.Parse(path)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +86,9 @@ func (l *registryLab) request(t *testing.T, client *http.Client, method, path, s
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+	for key, values := range headers {
+		req.Header[key] = values
+	}
 	if session != "" {
 		req.Header.Set(builddelivery.HTTPHeader, session)
 	}
@@ -167,20 +175,59 @@ func TestRegistryUploadOwnershipAndLeastPrivilege(t *testing.T) {
 	if !strings.HasPrefix(uploadID(t, location), "delivery-"+first+"-") {
 		t.Fatalf("upload missing durable owner binding: %s", location)
 	}
+	for _, tc := range []struct {
+		name    string
+		client  *http.Client
+		session string
+		want    int
+	}{
+		{"own upload", l.builder, first, http.StatusNoContent},
+		{"no grant", l.builder, "", http.StatusForbidden},
+		{"other job", l.builder, second, http.StatusForbidden},
+		{"wrong key", l.rotated, first, http.StatusForbidden},
+	} {
+		t.Run("upload status/"+tc.name, func(t *testing.T) {
+			wantHTTP(t, l.request(t, tc.client, http.MethodGet, location, tc.session, nil), tc.want)
+		})
+	}
 	wantHTTP(t, l.request(t, l.builder, http.MethodPatch, location, second, []byte("wrong job")), http.StatusForbidden)
 	wantHTTP(t, l.request(t, l.rotated, http.MethodPatch, location, first, []byte("wrong key")), http.StatusForbidden)
 	wantHTTP(t, l.request(t, l.builder, http.MethodPatch, strings.Replace(location, "lab/app", "other", 1), first, []byte("wrong repo")), http.StatusForbidden)
 	guessed := location[:strings.LastIndexByte(location, '/')+1] + base64.RawURLEncoding.EncodeToString([]byte("delivery-"+first+"-"+uuid.NewString()))
 	wantHTTP(t, l.request(t, l.builder, http.MethodPatch, guessed, first, []byte("unissued upload")), http.StatusForbidden)
 	payload := []byte("authorized registry upload")
+	blobDigest := digest.FromBytes(payload).String()
 	u, _ := url.Parse(location)
 	query := u.Query()
-	query.Set("digest", digest.FromBytes(payload).String())
+	query.Set("digest", blobDigest)
 	u.RawQuery = query.Encode()
+	manifest := makeManifest(blobDigest)
+	manifestPath := "/v2/lab/app/manifests/" + digest.FromBytes(manifest).String()
+	mountPath := "/v2/lab/app/blobs/uploads/?mount=" + blobDigest
+	for _, route := range []struct {
+		name, method, path string
+		body               []byte
+	}{
+		{"start upload", http.MethodPost, "/v2/lab/app/blobs/uploads/", nil},
+		{"single POST upload", http.MethodPost, "/v2/lab/app/blobs/uploads/?digest=" + blobDigest, payload},
+		{"mount blob", http.MethodPost, mountPath + "&from=lab/app", nil},
+		{"append to upload", http.MethodPatch, location, payload},
+		{"finish upload", http.MethodPut, u.String(), payload},
+		{"publish by tag", http.MethodPut, "/v2/lab/app/manifests/latest", manifest},
+		{"stage manifest by digest", http.MethodPut, manifestPath, manifest},
+	} {
+		t.Run(route.name+" requires grant and key", func(t *testing.T) {
+			wantHTTP(t, l.request(t, l.builder, route.method, route.path, "", route.body), http.StatusForbidden)
+			wantHTTP(t, l.request(t, l.rotated, route.method, route.path, first, route.body), http.StatusForbidden)
+		})
+	}
 	wantHTTP(t, l.request(t, l.builder, http.MethodPut, u.String(), first, payload), http.StatusCreated)
-	blob := "/v2/lab/app/blobs/" + digest.FromBytes(payload).String()
+	wantHTTP(t, l.request(t, l.builder, http.MethodPost, mountPath+"&from=lab/app", first, nil), http.StatusCreated)
+	wantHTTP(t, l.request(t, l.builder, http.MethodPut, manifestPath, first, manifest), http.StatusCreated)
+	wantHTTP(t, l.request(t, l.builder, http.MethodHead, "/v2/lab/app/manifests/latest", first, nil), http.StatusNotFound)
+	blob := "/v2/lab/app/blobs/" + blobDigest
 	wantHTTP(t, l.request(t, l.builder, http.MethodHead, blob, first, nil), http.StatusOK)
-	for _, path := range []string{blob, "/v2/lab/app/tags/list", "/v2/_catalog", "/v2/lab/app/referrers/" + digest.FromBytes(payload).String()} {
+	for _, path := range []string{blob, "/v2/lab/app/tags/list", "/v2/_catalog", "/v2/lab/app/referrers/" + blobDigest} {
 		t.Run(path, func(t *testing.T) {
 			wantHTTP(t, l.request(t, l.builder, http.MethodGet, path, first, nil), http.StatusForbidden)
 		})
@@ -194,11 +241,72 @@ func TestRegistryUploadOwnershipAndLeastPrivilege(t *testing.T) {
 	}
 	// Cross-repository mounts are an ordinary upload fallback, never a read
 	// authority on the source repository or an unrestricted CAS link.
-	mount := l.request(t, l.builder, http.MethodPost, "/v2/lab/app/blobs/uploads/?mount="+digest.FromBytes(payload).String()+"&from=private/source", first, nil)
+	mount := l.request(t, l.builder, http.MethodPost, mountPath+"&from=private/source", first, nil)
 	wantHTTP(t, mount, http.StatusAccepted)
 	if !strings.HasPrefix(uploadID(t, mount.Header.Get("Location")), "delivery-"+first+"-") {
 		t.Fatal("mount fallback escaped upload ownership")
 	}
+}
+
+func TestRegistryReadAndDeleteAuthorization(t *testing.T) {
+	l := newRegistryLab(t)
+	session := l.admit(t, "lab/app:latest")
+	repo := "/v2/lab/app"
+	payload := []byte("published registry blob")
+	blobDigest := digest.FromBytes(payload).String()
+	blob := repo + "/blobs/" + blobDigest
+	manifest := makeManifest(blobDigest)
+	tag := repo + "/manifests/latest"
+	otherTag := repo + "/manifests/other"
+	manifestByDigest := repo + "/manifests/" + digest.FromBytes(manifest).String()
+
+	wantHTTP(t, l.request(t, l.operator, http.MethodPost, repo+"/blobs/uploads/?digest="+blobDigest, "", payload), http.StatusCreated)
+	wantHTTP(t, l.request(t, l.operator, http.MethodPut, tag, "", manifest), http.StatusCreated)
+	wantHTTP(t, l.request(t, l.operator, http.MethodPut, otherTag, "", manifest), http.StatusCreated)
+
+	for _, route := range []struct {
+		name, method, path string
+		headers            http.Header
+		operator, builder  int
+	}{
+		{"read blob", http.MethodGet, blob, nil, http.StatusOK, http.StatusForbidden},
+		{"read blob range", http.MethodGet, blob, http.Header{"Range": {"bytes=0-2"}}, http.StatusPartialContent, http.StatusForbidden},
+		{"probe blob", http.MethodHead, blob, nil, http.StatusOK, http.StatusOK},
+		{"read manifest by tag", http.MethodGet, tag, nil, http.StatusOK, http.StatusForbidden},
+		{"read manifest by digest", http.MethodGet, manifestByDigest, nil, http.StatusOK, http.StatusForbidden},
+		{"probe manifest by tag", http.MethodHead, tag, nil, http.StatusOK, http.StatusOK},
+		{"probe manifest by digest", http.MethodHead, manifestByDigest, nil, http.StatusOK, http.StatusOK},
+		{"probe another tag", http.MethodHead, otherTag, nil, http.StatusOK, http.StatusForbidden},
+		{"delete blob", http.MethodDelete, blob, nil, http.StatusBadRequest, http.StatusBadRequest},
+		{"delete tag", http.MethodDelete, tag, nil, http.StatusBadRequest, http.StatusBadRequest},
+		{"delete manifest by digest", http.MethodDelete, manifestByDigest, nil, http.StatusBadRequest, http.StatusBadRequest},
+	} {
+		for _, caller := range []struct {
+			name    string
+			client  *http.Client
+			session string
+			want    int
+		}{
+			{"operator", l.operator, "", route.operator},
+			{"bound builder", l.builder, session, route.builder},
+			{"no grant", l.builder, "", http.StatusForbidden},
+			{"wrong key", l.rotated, session, http.StatusForbidden},
+		} {
+			t.Run(route.name+"/"+caller.name, func(t *testing.T) {
+				response := l.requestWithHeaders(t, caller.client, route.method, route.path, caller.session, nil, route.headers)
+				wantHTTP(t, response, caller.want)
+				if caller.want == http.StatusBadRequest {
+					body, err := io.ReadAll(response.Body)
+					if err != nil || !bytes.Contains(body, []byte(`"code":"UNSUPPORTED"`)) {
+						t.Fatalf("expected unsupported operation, got %s (%v)", body, err)
+					}
+				}
+			})
+		}
+	}
+	wantHTTP(t, l.request(t, l.operator, http.MethodGet, blob, "", nil), http.StatusOK)
+	wantHTTP(t, l.request(t, l.operator, http.MethodGet, tag, "", nil), http.StatusOK)
+	wantHTTP(t, l.request(t, l.operator, http.MethodGet, manifestByDigest, "", nil), http.StatusOK)
 }
 
 func TestRegistryCASAndBodyBounds(t *testing.T) {

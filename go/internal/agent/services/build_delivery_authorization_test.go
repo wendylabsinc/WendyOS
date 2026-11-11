@@ -117,27 +117,100 @@ func grantContext(session string) context.Context {
 	return metadata.NewOutgoingContext(context.Background(), metadata.Pairs(builddelivery.MetadataKey, session))
 }
 
+func TestBuildDeliveryAdmissionChecksGrantAndCaller(t *testing.T) {
+	l := newDeliveryRPCLab(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	operator := agentpbv2.NewWendyBuildDeliveryServiceClient(l.operator)
+	builder := agentpbv2.NewWendyBuildDeliveryServiceClient(l.builder)
+	other := agentpbv2.NewWendyBuildDeliveryServiceClient(l.rotated)
+	request := &agentpbv2.AdmitDeliveryRequest{AuthorizationJws: l.f.Sign(t, l.f.Claims("lab/app:latest"))}
+
+	capabilities, err := builder.GetDeliveryCapabilities(ctx, &agentpbv2.GetDeliveryCapabilitiesRequest{})
+	if err != nil || capabilities.GetContractVersion() != builddelivery.Version ||
+		capabilities.GetTargetPrincipal() != deliverypki.TargetPrincipal || len(capabilities.GetCertificateChain()) == 0 {
+		t.Fatalf("delivery capabilities: %v %v", capabilities, err)
+	}
+	if _, err := builder.AdmitDelivery(ctx, &agentpbv2.AdmitDeliveryRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("admission accepted empty authorization: %v", err)
+	}
+	if _, err := other.AdmitDelivery(ctx, request); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("admission accepted wrong builder key: %v", err)
+	}
+	admitted, err := operator.AdmitDelivery(ctx, request)
+	if err != nil || admitted.GetSession() == "" {
+		t.Fatalf("operator admission: %v %v", admitted, err)
+	}
+	retry, err := builder.AdmitDelivery(ctx, request)
+	if err != nil || retry.GetSession() != admitted.GetSession() {
+		t.Fatalf("bound builder admission retry: %v %v", retry, err)
+	}
+	if _, err := other.AdmitDelivery(ctx, request); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("admission retry accepted wrong builder key: %v", err)
+	}
+}
+
+func TestChunkDeliveryRejectsInvalidSessionsOnEveryRPC(t *testing.T) {
+	l := newDeliveryRPCLab(t)
+	session := l.admit(t, l.f.Claims("lab/app:latest"))
+	methods := []struct {
+		name string
+		call func(context.Context, agentpb.WendyContainerServiceClient) error
+	}{
+		{"QueryChunks", func(ctx context.Context, client agentpb.WendyContainerServiceClient) error {
+			_, err := client.QueryChunks(ctx, &agentpb.QueryChunksRequest{})
+			return err
+		}},
+		{"QueryLayers", func(ctx context.Context, client agentpb.WendyContainerServiceClient) error {
+			_, err := client.QueryLayers(ctx, &agentpb.QueryLayersRequest{})
+			return err
+		}},
+		{"WriteChunks", func(ctx context.Context, client agentpb.WendyContainerServiceClient) error {
+			stream, err := client.WriteChunks(ctx)
+			if err != nil {
+				return err
+			}
+			_, err = stream.CloseAndRecv()
+			return err
+		}},
+		{"PrepareImage", func(ctx context.Context, client agentpb.WendyContainerServiceClient) error {
+			_, err := client.PrepareImage(ctx, &agentpb.RunContainerLayersRequest{
+				ImageName: "localhost:5000/lab/app:latest", ImageConfig: []byte("config"),
+			})
+			return err
+		}},
+	}
+	sessions := []struct {
+		name string
+		ctx  context.Context
+		conn *grpc.ClientConn
+	}{
+		{"no grant", context.Background(), l.builder},
+		{"unknown session", grantContext(strings.Repeat("A", 43)), l.builder},
+		{"wrong key", grantContext(session), l.rotated},
+		{"duplicate metadata", metadata.NewOutgoingContext(context.Background(),
+			metadata.Pairs(builddelivery.MetadataKey, session, builddelivery.MetadataKey, session)), l.builder},
+	}
+	for _, method := range methods {
+		for _, tc := range sessions {
+			t.Run(method.name+"/"+tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(tc.ctx, 3*time.Second)
+				defer cancel()
+				if err := method.call(ctx, agentpb.NewWendyContainerServiceClient(tc.conn)); status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("got %v, want PermissionDenied", err)
+				}
+			})
+		}
+	}
+	if l.backend.queries.Load() != 0 || l.backend.preparations.Load() != 0 {
+		t.Fatal("denied delivery reached backend")
+	}
+}
+
 func TestChunkDeliveryRequiresAdmittedOperatorGrantOverMTLS(t *testing.T) {
 	l := newDeliveryRPCLab(t)
 	client := agentpb.NewWendyContainerServiceClient(l.builder)
 	session := l.admit(t, l.f.Claims("lab/app:latest"))
-	for _, tc := range []struct {
-		name string
-		ctx  context.Context
-		conn *grpc.ClientConn
-	}{{"no grant", context.Background(), l.builder}, {"forged grant", grantContext(strings.Repeat("A", 43)), l.builder}, {"wrong key", grantContext(session), l.rotated}, {"duplicate grant", metadata.NewOutgoingContext(context.Background(), metadata.Pairs(builddelivery.MetadataKey, session, builddelivery.MetadataKey, session)), l.builder}} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(tc.ctx, 3*time.Second)
-			defer cancel()
-			_, err := agentpb.NewWendyContainerServiceClient(tc.conn).QueryChunks(ctx, &agentpb.QueryChunksRequest{})
-			if status.Code(err) != codes.PermissionDenied {
-				t.Fatalf("query: %v", err)
-			}
-		})
-	}
-	if l.backend.queries.Load() != 0 {
-		t.Fatal("denied query reached backend")
-	}
 	ctx, cancel := context.WithTimeout(grantContext(session), 5*time.Second)
 	defer cancel()
 	if _, err := client.QueryChunks(ctx, &agentpb.QueryChunksRequest{}); err != nil {
@@ -179,6 +252,13 @@ func TestChunkDeliveryRequiresAdmittedOperatorGrantOverMTLS(t *testing.T) {
 	result, err := agentpbv2.NewWendyBuildDeliveryServiceClient(l.builder).GetDeliveryStatus(ctx, &agentpbv2.GetDeliveryStatusRequest{Session: session})
 	if err != nil || !result.GetCompleted() || result.GetOutputDigest() != digest.FromBytes([]byte("config")).String() {
 		t.Fatalf("durable completion: %v %v", result, err)
+	}
+	ref, err := agentpbv2.NewWendyBuildDeliveryServiceClient(l.operator).GetDeliveryReference(ctx, &agentpbv2.GetDeliveryReferenceRequest{Reference: "lab/app:latest"})
+	if err != nil || ref.GetDigest() != result.GetOutputDigest() {
+		t.Fatalf("operator reference lookup: %v %v", ref, err)
+	}
+	if _, err := agentpbv2.NewWendyBuildDeliveryServiceClient(l.rotated).GetDeliveryStatus(ctx, &agentpbv2.GetDeliveryStatusRequest{Session: session}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("status accepted wrong builder key: %v", err)
 	}
 	if _, err = client.PrepareImage(ctx, &agentpb.RunContainerLayersRequest{ImageName: "localhost:5000/lab/app:latest", ImageConfig: []byte("other config")}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("completed grant reopened preparation: %v", err)
