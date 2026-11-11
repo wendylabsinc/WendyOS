@@ -4,6 +4,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -220,6 +222,84 @@ func TestRunRequiresTheRemoteConfirmWhenAsked(t *testing.T) {
 	sum := dropInInbox(t, h.store, "lonely", Incoming{RemoteVia: "lan", Explicit: true})
 	h.start()
 	h.eventually("the unconfirmed trial is rejected", func() bool { return h.state().IsRejected(sum, "build-1") })
+}
+
+// cloudAfterUpload starts the image agent on the cloud, then sends it a LAN
+// upload; trialReachesCloud says whether the new agent gets there too.
+func cloudAfterUpload(t *testing.T, trialReachesCloud bool) (*harness, string, chan struct{}) {
+	h := newHarness(t)
+	var cloud sync.Map
+	h.sup.deps.RemoteSeen = func(pid int, via string) bool {
+		if via != ViaCloud {
+			return true
+		}
+		_, ok := cloud.Load(pid)
+		return ok
+	}
+	wake := make(chan struct{}, 1)
+	h.sup.deps.Wake = wake
+	h.sup.cfg.CloudSettle = time.Minute
+	h.start()
+	h.eventually("the image agent runs", func() bool { s := h.status(); return s.Role == RoleImage && s.PID > 0 })
+	image := h.status().PID
+	cloud.Store(image, true)
+	sum := dropInInbox(t, h.store, "lan", Incoming{Explicit: true, RemoteVia: "lan"})
+	wake <- struct{}{}
+	h.eventually("the trial runs", func() bool { s := h.status(); return s.Role == RoleTrial && s.PID > 0 && s.PID != image })
+	if trialReachesCloud {
+		cloud.Store(h.status().PID, true)
+	}
+	return h, sum, wake
+}
+
+func TestRunRejectsAnUploadThatNeverReachesTheCloudTheReplacedAgentReached(t *testing.T) {
+	h, sum, _ := cloudAfterUpload(t, false)
+	h.eventually("the trial is rejected", func() bool { return h.state().IsRejected(sum, "build-1") })
+	st := h.state()
+	if r := st.Rejected[len(st.Rejected)-1]; !strings.Contains(r.Reason, "cloud") || !r.Unconfirmed {
+		t.Fatalf("the rejection must say the cloud was not reached and allow a retry: %+v", r)
+	}
+	h.eventually("the image agent runs again", func() bool { return h.status().Role == RoleImage })
+}
+
+func TestRunApprovesAnUploadOnceItAlsoReachesTheCloud(t *testing.T) {
+	h, sum, _ := cloudAfterUpload(t, true)
+	h.eventually("the new agent is approved", func() bool {
+		st := h.state()
+		return st.Approved != nil && st.Approved.SHA256 == sum && st.Trial == nil
+	})
+}
+
+func TestRunAsksARetryAfterACloudRejectionToReachTheCloudAgain(t *testing.T) {
+	h, sum, wake := cloudAfterUpload(t, false)
+	h.eventually("the trial is rejected", func() bool { return h.state().IsRejected(sum, "build-1") })
+	h.eventually("the image agent runs again", func() bool { s := h.status(); return s.Role == RoleImage && s.PID > 0 })
+	// The restarted image agent has not reconnected yet when the user retries.
+	dropInInbox(t, h.store, "lan", Incoming{Explicit: true, RemoteVia: "lan"})
+	wake <- struct{}{}
+	h.eventually("the retry runs on trial", func() bool {
+		st := h.state()
+		return st.Trial != nil && st.Trial.SHA256 == sum
+	})
+	if !h.state().Trial.CloudToo {
+		t.Fatal("a retry must still reach the cloud the device had before the rejected trial")
+	}
+}
+
+func TestRunRemembersTheCloudAcrossASupervisorRestart(t *testing.T) {
+	h := newHarness(t)
+	const before = 4242 // the agent the supervisor ran before it restarted
+	os.MkdirAll(filepath.Dir(h.sup.cfg.StatusPath), 0o755)
+	data, _ := json.Marshal(Status{Role: RoleApproved, PID: before})
+	os.WriteFile(h.sup.cfg.StatusPath, data, 0o644)
+	h.sup.deps.RemoteSeen = func(pid int, via string) bool { return via != ViaCloud || pid == before }
+	sum := dropInInbox(t, h.store, "lan", Incoming{Explicit: true, RemoteVia: "lan"})
+	h.start()
+	h.eventually("the upload is rejected for missing the cloud", func() bool { return h.state().IsRejected(sum, "build-1") })
+	st := h.state()
+	if r := st.Rejected[len(st.Rejected)-1]; !strings.Contains(r.Reason, "cloud") {
+		t.Fatalf("want the cloud requirement to survive the restart: %+v", r)
+	}
 }
 
 func TestRunRejectsATrialThatKeepsCrashing(t *testing.T) {

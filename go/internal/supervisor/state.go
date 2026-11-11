@@ -52,6 +52,10 @@ type Trial struct {
 	// approved: "lan" or "relay" for the client that sent it, ViaCloud for an
 	// automatic update.
 	RemoteVia string `json:"remote_via,omitempty"`
+	// CloudToo: the agent it replaced was connected to the cloud, so it must
+	// connect too. A LAN confirm alone would approve an agent that cuts the
+	// device off.
+	CloudToo bool `json:"cloud_too,omitempty"`
 	// Automatic marks a trial the daily update started; no client waits on it.
 	Automatic bool `json:"automatic,omitempty"`
 	// Revalidation re-checks an approved agent on a new OS build.
@@ -85,9 +89,12 @@ type Failure struct {
 // RemoteSeenDir is where the agent marks that a remote client reached it.
 const RemoteSeenDir = "/run/wendy-agent"
 
-// ViaCloud is the agent's own connection to the cloud relay. It confirms an
-// automatic update, which no client is waiting on.
+// ViaCloud is the agent's own connection to the cloud relay, marked while it
+// is up. It confirms an automatic update, and an upload to a connected agent.
 const ViaCloud = "cloud"
+
+// viaRelay is a client that came in through the cloud relay.
+const viaRelay = "relay"
 
 // ReplacesImage is Incoming.Replaces for an update fetched while no agent on
 // /data was approved.

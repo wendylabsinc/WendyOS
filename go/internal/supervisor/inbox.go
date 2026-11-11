@@ -60,6 +60,7 @@ func (s *Supervisor) adoptInbox(ctx context.Context, st *State, build string) (s
 			if in.Explicit && t.Revalidation {
 				// The user sent it again: judge it as their update, with a verdict.
 				t.Revalidation, t.RemoteVia, t.Boots, t.Confirmed = false, in.RemoteVia, nil, false
+				t.CloudToo = s.cloudToo(in)
 				st.ClearFailures(in.SHA256)
 			}
 			return "", commit
@@ -136,7 +137,7 @@ func (s *Supervisor) adoptInbox(ctx context.Context, st *State, build string) (s
 	if in.Explicit {
 		st.ClearFailures(in.SHA256)
 	}
-	st.Trial = &Trial{Agent: Agent{SHA256: in.SHA256, Version: ver}, RemoteVia: in.RemoteVia, Automatic: automatic}
+	st.Trial = &Trial{Agent: Agent{SHA256: in.SHA256, Version: ver}, RemoteVia: in.RemoteVia, CloudToo: s.cloudToo(in), Automatic: automatic}
 	return "", commit
 }
 
@@ -240,4 +241,10 @@ func (s *Supervisor) repairBinary(sha string) {
 	if err := os.Rename(upload, s.cfg.Store.BinPath(sha)); err != nil {
 		s.deps.Log.Warn("could not replace the stored agent", zap.Error(err))
 	}
+}
+
+// cloudToo: a user's upload must also reach the cloud when the agent it
+// replaces was connected, unless its own confirm already comes through it.
+func (s *Supervisor) cloudToo(in Incoming) bool {
+	return s.lastReachedCloud && in.Explicit && in.RemoteVia != viaRelay && in.RemoteVia != ViaCloud
 }
