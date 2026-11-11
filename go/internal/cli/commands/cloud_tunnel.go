@@ -20,6 +20,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -375,7 +376,7 @@ func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool)
 			if err != nil {
 				tunnel.Fail(err)
 				if os.Getenv("WENDY_TLS_DEBUG") != "" {
-					fmt.Fprintf(os.Stderr, "[tunnel-debug] broker stream closed: %v\n", err)
+					fmt.Fprintf(terminaloutput.Stderr, "[tunnel-debug] broker stream closed: %v\n", err)
 				}
 				break
 			}
@@ -609,7 +610,7 @@ func pickCloudDeviceMode(ctx context.Context, auth *config.AuthConfig, deviceNam
 			assets, fetchErr = fetchCloudAssets(ctx, auth)
 			prog.Send(tui.SpinnerDoneMsg{})
 		}()
-		finalModel, err := prog.Run()
+		finalModel, err := tui.RunProgram(prog)
 		if err != nil {
 			return nil, fmt.Errorf("spinner: %w", err)
 		}
@@ -682,7 +683,7 @@ func pickCloudDeviceFromRoster(ctx context.Context, auth *config.AuthConfig, dev
 }
 
 var runCloudDevicePicker = func(m cloudDiscoverModel) (cloudDiscoverModel, error) {
-	finalModel, err := tea.NewProgram(m).Run()
+	finalModel, err := tui.RunProgram(tea.NewProgram(m))
 	if err != nil {
 		return cloudDiscoverModel{}, err
 	}

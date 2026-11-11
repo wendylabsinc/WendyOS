@@ -46,7 +46,6 @@ SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS=(
     "wendy/agent/services/v2/sensor_service.proto"
     "wendy/agent/services/v2/tunnel_service.proto"
     "wendy/agent/services/v2/data_service.proto"
-    "wendy/agent/services/v2/site_model_service.proto"
 )
 SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS=(
     "${SHARED_GRPC_API_CONTRACTS_AGENT_V1_PROTOS[@]}"
@@ -91,6 +90,17 @@ SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
     "cloud/notifications.proto"
     # Older local Cloud v1 organization API differs; remove under WDY-4157.
     "cloud/organizations.proto"
+)
+
+check_shared_grpc_api_contracts_ancestry() (
+    local scratch
+    scratch="$(mktemp -d)" || return $?
+    trap 'rm -rf "$scratch"' EXIT
+    # Policy comes from authoritative master, independently of the schema pin.
+    curl --fail --silent --show-error --location \
+        https://raw.githubusercontent.com/wendylabsinc/service-protos/master/tools/check-pin.sh \
+        --output "$scratch/check-pin.sh" || return $?
+    bash "$scratch/check-pin.sh" "${SHARED_GRPC_API_CONTRACTS_REF:-}"
 )
 
 check_shared_grpc_api_contracts_sources() {

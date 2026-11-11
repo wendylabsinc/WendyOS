@@ -12,6 +12,7 @@
     "fleet-deployment",
     "wendy-net",
     "wendy-net-services",
+    "offline-protocol-services",
     "nvidia-pair"
   ]
 }

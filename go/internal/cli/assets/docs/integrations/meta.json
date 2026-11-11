@@ -12,6 +12,7 @@
     "../installation/unitree-g1-reflash",
     "ros2",
     "robot-diagnostics",
-    "foxglove"
+    "foxglove",
+    "offline-protocol"
   ]
 }

@@ -81,7 +81,7 @@ func pickRefreshingItem(
 
 	model := newRefreshingPickerModel(pollCtx, title, interval, load)
 	p := tea.NewProgram(model)
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return tui.PickerItem{}, fmt.Errorf("picker: %w", err)
 	}

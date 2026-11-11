@@ -220,7 +220,7 @@ func RunChecklist(title string, items []ChecklistItem, programOpts ...tea.Progra
 // ChecklistModel and returns the selected items.
 func RunChecklistModel(m ChecklistModel, programOpts ...tea.ProgramOption) ([]ChecklistItem, error) {
 	p := tea.NewProgram(m, programOpts...)
-	result, err := p.Run()
+	result, err := RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("checklist: %w", err)
 	}

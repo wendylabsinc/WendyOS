@@ -26,6 +26,8 @@ const (
 	errCodeUnsupported       errorCode = "UNSUPPORTED"
 	errCodeInternal          errorCode = "INTERNAL"
 	errCodeDenied            errorCode = "DENIED" // refused by the user's binding policy (wendy cloud mcp)
+	// The call needs the user's agreement first, passed back as an explicit argument.
+	errCodeConfirmationRequired errorCode = "CONFIRMATION_REQUIRED"
 )
 
 // rewriteCLIHints is pluginmode.RewriteCLIHints; a variable so tests can pose

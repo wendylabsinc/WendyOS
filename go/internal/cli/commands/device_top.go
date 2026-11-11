@@ -1318,7 +1318,7 @@ func runTopDashboard(ctx context.Context, conn *grpcclient.AgentConnection, inte
 	defer cancel()
 	m := newTopModel(cctx, conn, interval)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(cctx))
-	_, err := p.Run()
+	_, err := tui.RunProgram(p)
 	return err
 }
 

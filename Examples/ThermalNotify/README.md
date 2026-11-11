@@ -1,10 +1,10 @@
 # ThermalNotify
 
 Monitors supported thermal cameras attached to the device. When valid temperature
-data reports a maximum strictly above **80°C**, it sends a **CRITICAL** Wendy notification to every
+data reports a maximum strictly above **80°C by default**, it sends a **CRITICAL** Wendy notification to every
 organization role: owner, admin, billing manager, member, and viewer. Cloud uses
 the sending device's organization. No recipient IDs or Cloud credentials are
-stored in the app.
+hardcoded in the app.
 
 From this example's directory, deploy to each device whose cameras you want to
 monitor. Use the exact selector from `wendy cloud discover`:
@@ -28,8 +28,8 @@ at zero to share the current capture without conflicting with existing viewers.
 ## Trigger behavior
 
 - Each camera has independent alert state, keyed by its stable ID when available.
-- The first valid reading above 80°C triggers an alert, including at startup.
-- A sustained hot reading sends one alert. A valid maximum of 80°C or below
+- The first valid reading above the configured threshold triggers an alert, including at startup.
+- A sustained hot reading sends one alert. A valid maximum at or below the configured threshold
   rearms that camera. Invalid frames and disconnects do not rearm it.
 - Sends are spaced at least ten seconds apart across all cameras to stay below
   Cloud's per-app rate limit. The cooldown starts when a send completes, even
@@ -64,9 +64,10 @@ Disconnected, malformed, stale, and frozen frames do not trigger alerts.
 Set `THERMAL_NOTIFY_USER_IDS` to comma-separated Cloud organization member `user_id`
 UUIDs (not OIDC subjects or certificate operator IDs) to address
 alerts only to those users. Without it, the original organization-role audience
-applies. The production threshold remains strictly above 80°C.
+applies. The threshold defaults to strictly above 80°C.
 
-With the viewer source and explicit recipients configured, run the deployed
+With explicit recipients and either the viewer source or an exact
+`THERMAL_CAMERA_STABLE_ID` configured, run the deployed
 `/ThermalNotify --test-notification` executable for one informational test push.
 It reads a real fresh temperature, clearly labels the message as a test, and
 exits. It never fabricates a hot reading or changes the monitoring threshold.
@@ -115,3 +116,20 @@ them with `./regenerate-grpc.sh`, which requires `protoc`.
 
 Verify container state and logs after deployment, then verify a real camera
 measurement above the threshold before treating the installation as tested.
+
+## Configurable threshold
+
+Set `THERMAL_NOTIFY_THRESHOLD_CELSIUS` in `wendy.json` environment configuration
+(or pass `--env THERMAL_NOTIFY_THRESHOLD_CELSIUS=30` to `wendy run`) to select a
+finite Celsius threshold. Omitting it preserves the default of 80°C. Invalid,
+NaN, and infinite values fail startup. The configured threshold is included in
+alert titles, bodies, metadata and startup logs for both Agent and viewer sources.
+
+The threshold is independent of recording campaigns; configure their trigger
+separately when both should use the same temperature limit.
+
+For an Agent thermal camera, `--test-notification` reads a fresh decoded maximum
+from the selected stable ID, sends one informational notification to the configured
+users, and exits. It requires Cloud delivery and explicit recipients, even when
+the measured temperature is below the alert threshold. It does not change the
+running monitor's threshold or report Cloud acceptance as phone delivery.

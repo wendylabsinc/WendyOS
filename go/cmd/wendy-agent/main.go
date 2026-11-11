@@ -1051,7 +1051,7 @@ func main() {
 		if !accessPolicy.AllowsNetwork {
 			return
 		}
-		tlsConfig, err := mtls.NewTLSConfig(certPEM, chainPEM, keyPEM, logger, certNotBeforeFloor(certPEM))
+		tlsConfig, err := mtls.NewOperatorTLSConfig(certPEM, chainPEM, keyPEM, logger, certNotBeforeFloor(certPEM), orgMode)
 		if err != nil {
 			logger.Error("Failed to build BLE TLS config", zap.Error(err))
 			return

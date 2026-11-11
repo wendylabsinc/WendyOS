@@ -178,7 +178,7 @@ var pickCloudOrgV2 = func(orgs []*pb.Organization, auth *config.AuthConfig, cfg 
 	picker = model.(tui.PickerModel)
 	model, _ = picker.Update(tui.PickerDoneMsg{})
 	picker = model.(tui.PickerModel)
-	final, err := tea.NewProgram(picker).Run()
+	final, err := tui.RunProgram(tea.NewProgram(picker))
 	if err != nil {
 		return "", err
 	}

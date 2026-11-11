@@ -356,6 +356,30 @@ func TestPickerKeyHintsWrapUnderTheTitleWithoutLosingAKey(t *testing.T) {
 	}
 }
 
+func TestPickerKeepsTheSelectionVisibleOnShortTerminals(t *testing.T) {
+	for height := 4; height <= 10; height++ {
+		m := NewPicker()
+		var items []PickerItem
+		for i := range 30 {
+			items = append(items, PickerItem{Name: fmt.Sprintf("dev-%02d", i), Address: fmt.Sprintf("10.0.0.%d:50051", i), Type: "lan"})
+		}
+		update := func(msg tea.Msg) {
+			updated, _ := m.Update(msg)
+			m = updated.(PickerModel)
+		}
+		update(tea.WindowSizeMsg{Width: 80, Height: height})
+		update(PickerSetMsg{Items: items})
+		update(PickerDoneMsg{})
+		for i := range 30 {
+			view := ansi.Strip(m.View())
+			if !strings.Contains(view, fmt.Sprintf("dev-%02d", i)) || lipgloss.Height(view) > height {
+				t.Fatalf("height=%d cursor=%d: selected row hidden or frame too tall:\n%s", height, i, view)
+			}
+			update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+	}
+}
+
 func TestPickerKeyHintLinesBreakOnlyBetweenEntries(t *testing.T) {
 	keys := []string{"↑/↓ navigate", "enter copy", "d toggle default", "q quit"}
 	if got := pickerKeyHintLines(keys, 0); len(got) != 1 || got[0] != "  ↑/↓ navigate, enter copy, d toggle default, q quit" {

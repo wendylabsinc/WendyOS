@@ -44,6 +44,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/gpu"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -184,11 +185,11 @@ func containerDisplayName(appCfg *appconfig.AppConfig) string {
 // non-interactive, so any status line on stdout can corrupt machine-read output.
 // Real payloads (JSON, listings) print via fmt.Println/encoders and stay on stdout.
 func cliLogln(format string, args ...any) {
-	fmt.Fprintln(os.Stderr, cliStyle.Render(fmt.Sprintf(format, args...)))
+	fmt.Fprintln(terminaloutput.Stderr, cliStyle.Render(fmt.Sprintf(format, args...)))
 }
 
 func cliNotice(format string, args ...any) {
-	fmt.Fprintln(os.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
+	fmt.Fprintln(terminaloutput.Stderr, cliNoticeStyle.Render(fmt.Sprintf(format, args...)))
 }
 
 var cliSuccessStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
@@ -196,7 +197,7 @@ var cliSuccessStyle = lipgloss.NewStyle().Foreground(tui.ColorPrimary)
 // cliSuccess prints a styled success status line. Writes to stderr for the
 // same reason as cliLogln above — it is a status line, not a payload.
 func cliSuccess(format string, args ...any) {
-	fmt.Fprintln(os.Stderr, cliSuccessStyle.Render(fmt.Sprintf(format, args...)))
+	fmt.Fprintln(terminaloutput.Stderr, cliSuccessStyle.Render(fmt.Sprintf(format, args...)))
 }
 
 func unpackProgressTitle(progress *agentpb.CreateContainerProgress) string {
@@ -432,7 +433,7 @@ func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.We
 		}
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-done
@@ -3899,7 +3900,7 @@ func phaseTimer() func(label string) {
 	last := time.Now()
 	return func(label string) {
 		now := time.Now()
-		fmt.Fprintf(os.Stderr, "[timing] %-26s %s\n", label, now.Sub(last).Round(time.Millisecond))
+		fmt.Fprintf(terminaloutput.Stderr, "[timing] %-26s %s\n", label, now.Sub(last).Round(time.Millisecond))
 		last = now
 	}
 }
