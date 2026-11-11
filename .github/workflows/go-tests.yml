@@ -456,6 +456,8 @@ jobs:
   shell-tests:
     name: Install script tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: shellcheck install scripts
@@ -474,6 +476,8 @@ jobs:
         run: bash .github/scripts/agent-package-scripts_test.sh
       - name: integration device selection tests
         run: python3 .github/scripts/integration-discover_test.py
+      - name: integration resource capability tests
+        run: python3 .github/scripts/integration-resources_test.py
       - name: host sensor loopback CI tests
         run: |
           sh -n .github/ci-tests/host-sensor-loopback/check.sh
