@@ -733,3 +733,20 @@ private final class RoomCaptureSessionSpy: SiteRoomCaptureSession {
     func run(configuration: RoomCaptureSession.Configuration) { starts += 1 }
     func stop() { stops += 1 }
 }
+
+final class MobileInventoryPresenceTests: XCTestCase {
+    func testOnlyFreshVerifiedPresenceCanShowOnline() {
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: true, verified: true, fetchedAt: now, now: now), .online)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: false, verified: true, fetchedAt: now, now: now), .offline)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: true, verified: false, fetchedAt: now, now: now), .unknown)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: nil, verified: true, fetchedAt: now, now: now), .unknown)
+        XCTAssertEqual(MobileInventoryPresence.cloud(online: true, verified: true, fetchedAt: nil, now: now), .unknown)
+        for online in [true, false] {
+            XCTAssertEqual(MobileInventoryPresence.cloud(online: online, verified: true, fetchedAt: now.addingTimeInterval(-60), now: now), .unknown)
+        }
+        XCTAssertTrue(MobileInventoryPresence.unknown.muted)
+        XCTAssertTrue(MobileInventoryPresence.offline.muted)
+        XCTAssertLessThan(MobileInventoryPresence.online.rank, MobileInventoryPresence.offline.rank)
+    }
+}
