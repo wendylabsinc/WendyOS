@@ -130,7 +130,7 @@ func mldsaDevice(t *testing.T, uri string) (certPEM, keyPEM string) {
 func TestDeviceEncryptionKeyPersistsPerPrincipal(t *testing.T) {
 	dir := t.TempDir()
 	a := "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/7c1d3e5f-2a4b-4c6d-8e9f-0a1b2c3d4e5f"
-	first, err := loadOrCreateDeviceEncryptionKey(dir, a)
+	first, err := loadOrCreateDeviceEncryptionKey(zap.NewNop(), dir, a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestDeviceEncryptionKeyPersistsPerPrincipal(t *testing.T) {
 	if n := len(first.PublicKey().Bytes()); n != 1216 {
 		t.Fatalf("public key is %d bytes, want 1216", n)
 	}
-	again, err := loadOrCreateDeviceEncryptionKey(dir, a)
+	again, err := loadOrCreateDeviceEncryptionKey(zap.NewNop(), dir, a)
 	if err != nil || !bytes.Equal(again.PublicKey().Bytes(), first.PublicKey().Bytes()) {
 		t.Fatalf("reload returned another key (err %v); a renewal must keep the key", err)
 	}
@@ -161,7 +161,7 @@ func TestDeviceEncryptionKeyPersistsPerPrincipal(t *testing.T) {
 	}
 
 	b := "spiffe://wendy.sh/tenant/22222222-2222-4222-8222-222222222222/device/3f8e2d1c-9b7a-4e6f-8d5c-4b3a2f1e0d9c"
-	other, err := loadOrCreateDeviceEncryptionKey(dir, b)
+	other, err := loadOrCreateDeviceEncryptionKey(zap.NewNop(), dir, b)
 	if err != nil || bytes.Equal(other.PublicKey().Bytes(), first.PublicKey().Bytes()) {
 		t.Fatalf("a new enrollment reused the previous enrollment's key (err %v)", err)
 	}
@@ -173,7 +173,7 @@ func TestDeviceEncryptionKeyUnreadableFileIsNotReplaced(t *testing.T) {
 	if err := os.Mkdir(path, 0o700); err != nil { // reads fail with EISDIR
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreateDeviceEncryptionKey(dir, "spiffe://wendy.sh/tenant/t/device/d"); err == nil {
+	if _, err := loadOrCreateDeviceEncryptionKey(zap.NewNop(), dir, "spiffe://wendy.sh/tenant/t/device/d"); err == nil {
 		t.Fatal("an unreadable key file was replaced")
 	}
 }
@@ -311,6 +311,59 @@ func TestDeviceEncryptionKeyWaitsForMLDSADevice(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(k.configPath, deviceEncryptionKeyFile)); err != nil {
 		t.Fatalf("no key generated at enrollment: %v", err)
+	}
+}
+
+// A legacy (non-SPIFFE) certificate can never register: the agent logs it,
+// writes no key and does not retry.
+func TestDeviceEncryptionKeyIgnoresLegacyIdentity(t *testing.T) {
+	fake := &fakeKeyDirectory{}
+	k, logs := newTestEncryptionKey(t, fake)
+	keyPEM, err := certs.GenerateMLDSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.UpdateIdentity("cloud", leafFor(t, keyPEM, "urn:wendy:legacy-asset:42"), keyPEM, "")
+	if err := k.register(context.Background()); err != nil || fake.count() != 0 {
+		t.Fatalf("legacy identity is retryable (%v) or registered (%d calls)", err, fake.count())
+	}
+	if n := logs.FilterField(zap.String("event", "device_encryption_key_unsupported_identity")).Len(); n != 1 {
+		t.Fatalf("%d unsupported-identity warnings, want 1", n)
+	}
+	if _, err := os.Stat(filepath.Join(k.configPath, deviceEncryptionKeyFile)); !os.IsNotExist(err) {
+		t.Fatalf("key generated for a legacy identity: %v", err)
+	}
+}
+
+// Only a non-ML-DSA key waits silently for renewal; any other signer failure
+// (here a certificate over another key) is an error, so it is retried.
+func TestDeviceEncryptionKeySignerFailureIsRetryable(t *testing.T) {
+	k, logs := newTestEncryptionKey(t, &fakeKeyDirectory{})
+	uri := "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/7c1d3e5f-2a4b-4c6d-8e9f-0a1b2c3d4e5f"
+	certPEM, _ := mldsaDevice(t, uri)
+	_, otherKey := mldsaDevice(t, uri)
+	k.UpdateIdentity("cloud", certPEM, otherKey, "")
+	if err := k.register(context.Background()); err == nil {
+		t.Fatal("a certificate/key mismatch was treated as a P-256 device")
+	}
+	if logs.FilterField(zap.String("event", "device_encryption_key_unsignable")).Len() != 0 {
+		t.Fatal("a certificate/key mismatch was logged as not ML-DSA")
+	}
+}
+
+// A stored key that does not parse is replaced, with a warning: the wraps to it
+// no longer open.
+func TestDeviceEncryptionKeyWarnsWhenReplacingUnparsableKey(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, deviceEncryptionKeyFile), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreateDeviceEncryptionKey(zap.New(core), dir, "spiffe://wendy.sh/tenant/t/device/d"); err != nil {
+		t.Fatal(err)
+	}
+	if logs.FilterField(zap.String("event", "device_encryption_key_replaced")).Len() != 1 {
+		t.Fatal("replacing an unparsable key was not logged")
 	}
 }
 
