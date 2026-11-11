@@ -142,7 +142,10 @@ jobs:
       # The Linux wendy CLI links libusb via cgo (Thor flashing); the harness
       # builds the CLI on this runner.
       - name: Install libusb
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libusb-1.0-0-dev
+        run: |
+          sudo python3 .github/scripts/use-canonical-ubuntu-mirrors.py
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y pkg-config libusb-1.0-0-dev
       - uses: ./.github/actions/swift-e2e-run
         with:
           tests: ${{ inputs.tests || '' }}

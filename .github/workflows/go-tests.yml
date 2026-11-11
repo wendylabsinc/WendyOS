@@ -136,9 +136,9 @@ jobs:
         # Keep the compiler's per-package concurrency workaround for race
         # builds, but let Go build and test packages in parallel. Vet has its
         # own required job, so do not repeat it in every race build.
-        # -timeout is per package: internal/cli/commands alone took 115s of
-        # the former 120s under -race on main (2026-10-06).
-        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
+        # -timeout is per package: internal/cli/commands alone took 296.146s
+        # of the former 300s under -race on main 08a9cb01 (2026-11-11).
+        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 600s
 
       - name: Fuzz stream boundaries and sparse flash ranges
         run: |
@@ -196,7 +196,9 @@ jobs:
         env:
           CONTAINERD_PACKAGE: ${{ matrix.package }}
         run: |
-          sudo apt-get update
+          python3 .github/scripts/use-canonical-ubuntu-mirrors_test.py
+          sudo python3 .github/scripts/use-canonical-ubuntu-mirrors.py
+          sudo apt-get update --error-on=any
           mkdir -p "$RUNNER_TEMP/wendy-runtime"
           cd "$RUNNER_TEMP/wendy-runtime"
           apt-get download "$CONTAINERD_PACKAGE" runc busybox-static
