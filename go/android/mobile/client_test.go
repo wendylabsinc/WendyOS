@@ -3,6 +3,7 @@ package mobile
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -70,5 +71,16 @@ func TestNearbySetupResultKeepsStateWithError(t *testing.T) {
 	}
 	if newNearbySetupResult(state, nil).Error != "" {
 		t.Fatal("success reported an error")
+	}
+}
+
+// Connect carries the discovered device's mTLS requirement, as the iOS bridge does.
+func TestConnectTakesTheMTLSRequirement(t *testing.T) {
+	method := reflect.TypeOf(New().methods["Connect"])
+	if method.NumIn() != 3 || method.In(0).Kind() != reflect.String || method.In(1).Kind() != reflect.Bool || method.In(2).Kind() != reflect.Bool {
+		t.Fatalf("Connect is %v, want func(selector string, forget, requiresMTLS bool)", method)
+	}
+	if _, err := invoke(New().methods["Connect"], []json.RawMessage{json.RawMessage(`"pi.local:50051"`), json.RawMessage(`false`)}); err == nil {
+		t.Fatal("a call without the mTLS requirement must be rejected")
 	}
 }

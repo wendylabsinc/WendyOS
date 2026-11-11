@@ -78,8 +78,10 @@ func New() *Client {
 			state, detail := b.MobileMeshSummary()
 			return map[string]string{"state": state, "detail": detail}
 		},
-		"Connect": func(selector string, forget bool) (any, error) {
-			session, err := b.Connect(selector, forget)
+		// A device discovery marks as mTLS-only is dialed on the authenticated LAN path, as
+		// the iOS bridge's WDConnect does; a later sighting cannot downgrade that requirement.
+		"Connect": func(selector string, forget, requiresMTLS bool) (any, error) {
+			session, err := b.ConnectTargetRequest(selector, forget, b.ReserveConnection(), requiresMTLS)
 			return map[string]any{"session": session, "lite": b.IsLite(session)}, err
 		},
 		"Disconnect": b.Disconnect, "Shutdown": b.Shutdown, "Poll": b.Poll,
