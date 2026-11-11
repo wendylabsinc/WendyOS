@@ -455,6 +455,7 @@ echo ""
 # ── Test loop ────────────────────────────────────────────────────────
 
 MEMORY_PROBE_RC=""
+MEMORY_CAPABILITY=""
 for test_name in "${TESTS[@]}"; do
     test_dir="$TESTS_DIR/$test_name"
 
@@ -463,10 +464,20 @@ for test_name in "${TESTS[@]}"; do
     # when absence is confirmed; transport/read/parse errors remain failures.
     if [[ "$test_name" == "python-resources" || "$test_name" == "python-multiservice-resources" ]]; then
         if [[ -z "$MEMORY_PROBE_RC" ]]; then
-            python3 "$SCRIPT_DIR/probe-memory-controller.py" "$WENDY" "$HOSTNAME"
+            MEMORY_PROBE_OUTPUT=$(python3 "$SCRIPT_DIR/probe-memory-controller.py" "$WENDY" "$HOSTNAME" 2>&1)
             MEMORY_PROBE_RC=$?
+            printf '%s\n' "$MEMORY_PROBE_OUTPUT"
+            # The interpreter itself can exit 2 without running the script.
+            # Require success AND the helper's final explicit result record.
+            if [[ "$MEMORY_PROBE_RC" -eq 0 ]]; then
+                case "${MEMORY_PROBE_OUTPUT##*$'\n'}" in
+                    WENDY_MEMORY_CONTROLLER=absent) MEMORY_CAPABILITY=absent ;;
+                    WENDY_MEMORY_CONTROLLER=available) MEMORY_CAPABILITY=available ;;
+                    *) MEMORY_PROBE_RC=1 ;;
+                esac
+            fi
         fi
-        if [[ "$MEMORY_PROBE_RC" -eq 2 ]]; then
+        if [[ "$MEMORY_PROBE_RC" -eq 0 && "$MEMORY_CAPABILITY" == absent ]]; then
             skip_test "$test_name" "host cgroup v2 memory controller absent; memory/CPU/PID assertions not exercised"
             continue
         elif [[ "$MEMORY_PROBE_RC" -ne 0 ]]; then

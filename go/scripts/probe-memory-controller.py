@@ -1,7 +1,7 @@
 """Read host cgroup v2 capabilities through the existing authenticated shell.
 
-Exit 0 means memory is available, 2 means affirmatively absent, and 1 means
-the probe failed. Only 2 permits skipping positive memory-limit fixtures.
+Exit 0 plus the final WENDY_MEMORY_CONTROLLER record reports a known result;
+any nonzero exit means the probe failed, including interpreter startup errors.
 """
 
 import re
@@ -45,6 +45,10 @@ def main(argv):
     if result.returncode != 0 or lines.count(VERDICT) != 1 or len(records) != 1:
         print("FAIL: host memory-controller probe did not return a unique successful verdict")
         return 1
+    record_index = next(i for i, line in enumerate(lines) if line.startswith(PREFIX))
+    if lines[record_index + 1:] != [VERDICT]:
+        print("FAIL: unexpected lines in host cgroup controller record")
+        return 1
     # A missing/unreadable/non-v2 file must never look like an absent controller.
     # Reject empty or malformed records instead of treating them as capability data.
     if not re.fullmatch(r"[a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*", records[0]):
@@ -56,9 +60,11 @@ def main(argv):
         return 1
     if "memory" in controllers:
         print("Host memory controller: available")
+        print("WENDY_MEMORY_CONTROLLER=available")
         return 0
     print("Host memory controller: absent (positive memory-limit specs unavailable)")
-    return 2
+    print("WENDY_MEMORY_CONTROLLER=absent")
+    return 0
 
 
 if __name__ == "__main__":

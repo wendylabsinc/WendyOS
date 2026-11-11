@@ -42,7 +42,7 @@ def record(controllers):
 
 
 class ResourceGateTests(unittest.TestCase):
-    def run_harness(self, output, **overrides):
+    def run_harness(self, output, harness=SCRIPTS / "test-ci.sh", **overrides):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "wendy"
             binary.write_text(FAKE_WENDY)
@@ -53,7 +53,7 @@ class ResourceGateTests(unittest.TestCase):
             env.pop("WENDY_BUILDX_BUILDER", None)
             env.update(overrides)
             result = subprocess.run(
-                ["bash", str(SCRIPTS / "test-ci.sh"), "-w", str(binary),
+                ["bash", str(harness), "-w", str(binary),
                  "-h", "fixture.invalid", "-t", "python-resources",
                  "-t", "python-multiservice-resources"],
                 env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -94,6 +94,53 @@ class ResourceGateTests(unittest.TestCase):
         self.assertEqual(calls.count("deploy"), 2)
         self.assertIn("2 failed", result.stdout)
         self.assertEqual(result.stdout.count("primary startup error"), 2)
+
+    def test_missing_probe_script_fails_without_skip_or_device_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "go/scripts"
+            scripts.mkdir(parents=True)
+            (root / ".github/ci-tests").mkdir(parents=True)
+            harness = scripts / "test-ci.sh"
+            harness.write_bytes((SCRIPTS / "test-ci.sh").read_bytes())
+            result, calls = self.run_harness(record("cpu memory pids"), harness=harness)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertNotIn("SKIP", result.stdout)
+            self.assertIn("2 failed", result.stdout)
+            self.assertEqual(calls, [])
+
+    def test_multiline_controller_record_fails_without_skip_or_deploy(self):
+        result, calls = self.run_harness(record("cpu\nmemory"))
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("SKIP", result.stdout)
+        self.assertEqual(calls, ["probe"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read mode-000 files")
+    def test_unreadable_probe_script_fails_without_skip_or_device_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "go/scripts"
+            scripts.mkdir(parents=True)
+            (root / ".github/ci-tests").mkdir(parents=True)
+            harness = scripts / "test-ci.sh"
+            harness.write_bytes((SCRIPTS / "test-ci.sh").read_bytes())
+            helper = scripts / "probe-memory-controller.py"
+            helper.write_bytes((SCRIPTS / helper.name).read_bytes())
+            helper.chmod(0)
+            result, calls = self.run_harness(record("cpu memory pids"), harness=harness)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertNotIn("SKIP", result.stdout)
+            self.assertIn("2 failed", result.stdout)
+            self.assertEqual(calls, [])
+
+    def test_real_shell_script_rejects_multiline_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controllers = Path(directory) / "controllers"
+            controllers.write_text("cpu\nmemory\n")
+            script = probe.SCRIPT.replace("/sys/fs/cgroup/cgroup.controllers", str(controllers))
+            result = subprocess.run(["sh", "-c", script], text=True, capture_output=True, check=True)
+            with patch.object(probe.subprocess, "run", return_value=result):
+                self.assertEqual(probe.main(["wendy", "fixture.invalid"]), 1)
 
     def test_timeout_and_launch_error_are_failures(self):
         for error in [subprocess.TimeoutExpired("wendy", 30), OSError("cannot launch")]:
