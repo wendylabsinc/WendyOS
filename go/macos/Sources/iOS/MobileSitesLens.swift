@@ -9,8 +9,8 @@ enum MobileSitesStyle {
 
 private enum SitesTab: String, CaseIterable { case home = "Home", missions = "Missions", activity = "Activity" }
 private enum SitesSheet: Identifiable {
-    case create, edit(UUID), rename(UUID, MobileSiteModelLink), model(UUID)
-    var id: String { switch self { case .create: "create"; case .rename(_, let link): "rename-" + link.id.uuidString; case .edit(let id): "edit-" + id.uuidString; case .model(let id): id.uuidString } }
+    case create, edit(UUID), rename(UUID, MobileSiteModelLink), model(UUID), deviceModels(UUID, MobileSiteModelLink?)
+    var id: String { switch self { case .create: "create"; case .rename(_, let link): "rename-" + link.id.uuidString; case .edit(let id): "edit-" + id.uuidString; case .model(let id): id.uuidString; case .deviceModels(let id, let link): "device-" + id.uuidString + (link?.id.uuidString ?? "load") } }
 }
 
 struct MobileSitesLens: View {
@@ -80,6 +80,8 @@ struct MobileSitesLens: View {
                     MobileRenameSiteModel(store: store, siteID: siteID, link: link)
                 case .model(let siteID):
                     MobileAddSiteModel(store: store, siteID: siteID)
+                case .deviceModels(let siteID, let link):
+                    MobileSiteDeviceModels(model: model, store: store, siteID: siteID, saving: link)
                 } }.tint(MobileLensStyle.accent)
             }
             .fullScreenCover(item: $viewing) { link in
@@ -148,12 +150,14 @@ struct MobileSitesLens: View {
                             Spacer()
                             Menu {
                                 Button("Rename", systemImage: "pencil") { sheet = .rename(site.id, link) }
+                                Button("Save to device", systemImage: "square.and.arrow.up") { sheet = .deviceModels(site.id, link) }
                                 Button("Make default", systemImage: "checkmark") { perform { try store.setDefault(modelID: link.id, siteID: site.id) } }
                             } label: { Image(systemName: "ellipsis.circle").padding(8) }
                             .accessibilityLabel("Options for \(link.name)")
                         }
                     }
                     Button("Add a 3D model", systemImage: "plus") { sheet = .model(site.id) }
+                    Button("Load from device", systemImage: "square.and.arrow.down") { sheet = .deviceModels(site.id, nil) }
                 }
                 if let link = site.models.first(where: { $0.id == site.defaultModel }) ?? site.models.first {
                     MobileSiteLiveCameras(model: model, store: store, site: site, link: link)
@@ -442,6 +446,7 @@ private struct MobileSiteModelViewer: View {
     let siteID: UUID
     let link: MobileSiteModelLink
     @State private var realityPreview = false
+    @State private var savingToDevice = false
     @State private var preview: SiteCamera?
     @State private var placingCameras = false
     @Environment(\.dismiss) private var dismiss
@@ -451,7 +456,7 @@ private struct MobileSiteModelViewer: View {
         NavigationStack {
             Group {
                 if let saved {
-                    MobileSiteCoverageScene(model: model, saved: saved, assets: store.sites.first { $0.id == siteID }?.assets ?? [], active: !placingCameras && preview == nil, realityPreview: realityPreview, placing: nil, select: { id in preview = saved.site.cameras.first { $0.id == id } }, place: { _, _ in })
+                    MobileSiteCoverageScene(model: model, saved: saved, assets: store.sites.first { $0.id == siteID }?.assets ?? [], active: !placingCameras && !savingToDevice && preview == nil, realityPreview: realityPreview, placing: nil, select: { id in preview = saved.site.cameras.first { $0.id == id } }, place: { _, _ in })
                         .id("\(saved.id)-\(saved.site.modelRevision)")
                 } else if let error { ContentUnavailableView("Model unavailable", systemImage: "cube", description: Text(error)) }
                 else { ProgressView("Loading model…") }
@@ -465,10 +470,26 @@ private struct MobileSiteModelViewer: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                     ToolbarItem(placement: .topBarLeading) { Button("Cameras", systemImage: "camera") { placingCameras = true }.disabled(saved == nil) }
                 }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    savingToDevice = true
+                } label: {
+                    Label("Save to device", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(MobileLensStyle.green)
+                .disabled(saved == nil)
+                .accessibilityIdentifier("sites.model.saveToDevice")
+                .padding()
+                .background(.regularMaterial)
+            }
         }.fullScreenCover(isPresented: $placingCameras) {
             MobileSiteCameras(model: model, store: store, siteID: siteID, initialModel: link.id)
         }.sheet(item: $preview) { camera in
             MobileSiteCameraLive(model: model, site: store.sites.first { $0.id == siteID }, camera: camera, calibrationModel: saved, store: store)
+        }.sheet(isPresented: $savingToDevice) {
+            MobileSiteDeviceModels(model: model, store: store, siteID: siteID, saving: link)
         }.task(id: "\(placingCameras)-\(preview?.id.uuidString ?? "none")") {
             guard !placingCameras, preview == nil else { return }
             do { saved = try await store.models.load(id: link.id) } catch { self.error = error.localizedDescription }
