@@ -121,6 +121,7 @@ type AgentConnection struct {
 	UnitreeService       agentpbv2.WendyUnitreeServiceClient
 	RobotArmService      agentpbv2.WendyRobotArmServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
+	McuService           agentpbv2.WendyMcuServiceClient
 	DataService          agentpbv2.DataServiceClient
 	// CalibratedFrameService serves RGB-D frames: colour plus depth aligned to
 	// it, with the scale and intrinsics that make both measurable. Separate
@@ -787,6 +788,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		UnitreeService:       agentpbv2.NewWendyUnitreeServiceClient(conn),
 		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
+		McuService:           agentpbv2.NewWendyMcuServiceClient(conn),
 		DataService:          agentpbv2.NewDataServiceClient(conn),
 
 		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(conn),
