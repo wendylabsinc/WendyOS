@@ -33,13 +33,17 @@ import (
 // Agent owns the authenticated Cloud control connection and an identity-free
 // broker presence stream. Credentials are reloaded on each lease request.
 type Agent struct {
-	dialCloud           func(string, string, string, []byte) (*grpc.ClientConn, error)
-	Endpoint            string
-	Verifier            *Verifier
-	StateDir            string
-	Credentials         func() (string, string, []byte)
-	Logger              *zap.Logger
-	MTLSPort            int
+	dialCloud   func(string, string, string, []byte) (*grpc.ClientConn, error)
+	Endpoint    string
+	Verifier    *Verifier
+	StateDir    string
+	Credentials func() (string, string, []byte)
+	Logger      *zap.Logger
+	MTLSPort    int
+	// ApplicationDial reaches only the dedicated end-to-end authenticated app
+	// admission protocol. An absent callback refuses ApplicationService; it
+	// must never fall through to an administrative or arbitrary local socket.
+	ApplicationDial     func(context.Context) (net.Conn, error)
 	signing, encryption *ecdsa.PrivateKey
 	lease               *pb.IssuePresenceLeaseResponse
 	leaseClaims         claims
@@ -784,8 +788,7 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 	if string(d.ServiceDescriptor) == "wendy-agent" && a.MTLSPort > 0 {
 		port = a.MTLSPort
 	}
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	local, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(d.Host, strconv.Itoa(port)))
+	local, err := a.dialInstruction(ctx, d, port)
 	if err != nil {
 		return err
 	}
@@ -850,6 +853,20 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 		}
 	}
 	return nil
+}
+
+func (a *Agent) dialInstruction(ctx context.Context, instruction *pb.DialInstruction, port int) (net.Conn, error) {
+	if err := validateService(instruction); err != nil {
+		return nil, err
+	}
+	if string(instruction.ServiceDescriptor) == ApplicationService {
+		if a.ApplicationDial == nil {
+			return nil, fmt.Errorf("application relay admission is unavailable")
+		}
+		return a.ApplicationDial(ctx)
+	}
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	return dialer.DialContext(ctx, "tcp", net.JoinHostPort(instruction.Host, strconv.Itoa(port)))
 }
 
 // Admission lasts at most 60 seconds. Files older than the maximum relay

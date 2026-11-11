@@ -25,6 +25,14 @@ const TLSPort = localmesh.AppSessionTLSPort
 // Caller cancellation still applies when a shorter deadline is needed.
 const TLSAppSessionSetupTimeout = 120 * time.Second
 
+// abortTLSConnection is for retirement and cancellation, where old traffic must
+// stop immediately. tls.Conn.Close can wait for close_notify to reach a peer
+// that is no longer reading, including an in-memory Cloud transport.
+func abortTLSConnection(conn *tls.Conn) {
+	_ = conn.NetConn().Close()
+	_ = conn.Close()
+}
+
 // TCP/TLS carries one independently authorized app stream per connection.
 // Its WAS1 port request and ACK are identical to one QUIC app stream. Neither
 // discovery hints nor a failed QUIC connection authorize this transport.
@@ -124,7 +132,11 @@ func DialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, 
 	if dial == nil {
 		return nil, errors.New("missing app network dialer")
 	}
-	return dialTLSWithDialer(ctx, credentials, peer, address, port, nil, dial)
+	conn, err := dialTLSWithDialer(ctx, credentials, peer, address, port, nil, dial)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func dialTLSRequest(ctx context.Context, credentials *localmesh.Credentials, peer meshid.Device, address netip.AddrPort, port uint16, datagrams *uint16) (*tlsAppConn, error) {
@@ -342,7 +354,7 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 		}
 		s.mu.Unlock()
 		for _, conn := range conns {
-			conn.Close()
+			abortTLSConnection(conn)
 		}
 	})
 	defer func() {
@@ -357,7 +369,7 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 		s.tlsListener = nil
 		s.mu.Unlock()
 		for _, conn := range conns {
-			conn.Close()
+			abortTLSConnection(conn)
 		}
 		workers.Wait()
 	}()
@@ -434,7 +446,7 @@ func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, lifetime *se
 	defer cancel()
 	watchDone := lifetime.watch(session.Done(), cancel)
 	defer func() { cancel(); <-watchDone }()
-	stopSession := context.AfterFunc(session, func() { secure.Close() })
+	stopSession := context.AfterFunc(session, func() { abortTLSConnection(secure) })
 	defer stopSession()
 	var hello [6]byte
 	if _, err := io.ReadFull(secure, hello[:]); err != nil {

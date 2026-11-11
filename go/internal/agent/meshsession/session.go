@@ -328,7 +328,7 @@ func (s *Server) Close() error {
 		_ = tlsListener.Close()
 	}
 	for _, conn := range tlsConnections {
-		_ = conn.Close()
+		abortTLSConnection(conn)
 	}
 	var err error
 	if listener != nil {

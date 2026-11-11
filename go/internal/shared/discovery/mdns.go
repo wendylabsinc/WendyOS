@@ -96,6 +96,9 @@ func lanDeviceFromService(svc MDNSService) models.LANDevice {
 	if v, ok := svc.TXTRecords["name"]; ok {
 		dev.MeshName = v
 	}
+	if v, err := strconv.ParseUint(svc.TXTRecords["app-tls"], 10, 16); err == nil && v != 0 && dev.PrincipalURI != "" && dev.IsMTLS {
+		dev.AppTLSPort = uint16(v)
+	}
 	// The agent stamps its board id here so a sighting can be classified
 	// before any probe -- in particular a local VM, whose announcement may
 	// carry an address nothing on the host can reach.

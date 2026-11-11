@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sysextfs"
@@ -33,6 +34,10 @@ var elfMachineByArch = map[string]uint16{
 	"arm64": 0x00B7, // EM_AARCH64
 	"amd64": 0x003E, // EM_X86_64
 }
+
+// Keep listener readiness across the provisioning advertisement rewrite: the
+// app endpoint can become ready before the initial enrolled principal is saved.
+var applicationTLSPort atomic.Uint32
 
 const (
 	configDir          = "/config"
@@ -544,8 +549,68 @@ func updateWendyOSServicePort(content string, port int, tls bool, principal stri
 	}
 
 	block = updatePrincipalTXTRecord(block, principal)
+	if principal == "" {
+		block = updateApplicationTLSTXT(block, 0)
+	} else {
+		block = updateApplicationTLSTXT(block, uint16(applicationTLSPort.Load()))
+	}
 
 	return content[:serviceStart] + block + content[serviceEnd:]
+}
+
+// UpdateAvahiApplicationTLS advertises only a successfully started app-only TLS
+// endpoint. Passing zero withdraws it after shutdown or a bind failure.
+func UpdateAvahiApplicationTLS(logger *zap.Logger, port uint16) {
+	unlock := services.LockAvahiServiceFile()
+	defer unlock()
+	applicationTLSPort.Store(uint32(port))
+	entries, err := os.ReadDir(defaultAvahiServiceDir)
+	if err != nil {
+		logger.Warn("Could not read avahi services for application endpoint", zap.Error(err))
+		return
+	}
+	changed := false
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".service") {
+			continue
+		}
+		path := filepath.Join(defaultAvahiServiceDir, entry.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(raw), "<type>_wendyos._udp</type>") {
+			continue
+		}
+		content := updateApplicationTLSTXT(string(raw), port)
+		if content != string(raw) {
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				logger.Warn("Could not advertise application endpoint", zap.Error(err))
+				continue
+			}
+			changed = true
+		}
+	}
+	if changed {
+		restartAvahiDaemon(logger, nil)
+	}
+}
+
+func updateApplicationTLSTXT(content string, port uint16) string {
+	typeIndex := strings.Index(content, "<type>_wendyos._udp</type>")
+	if typeIndex < 0 {
+		return content
+	}
+	start := strings.LastIndex(content[:typeIndex], "<service")
+	end := strings.Index(content[typeIndex:], "</service>")
+	if start < 0 || end < 0 {
+		return content
+	}
+	end += typeIndex + len("</service>")
+	block := content[start:end]
+	record := regexp.MustCompile(`\s*<txt-record>app-tls=[^<]*</txt-record>`)
+	block = record.ReplaceAllString(block, "")
+	if port != 0 && strings.Contains(block, "<txt-record>principal=") && strings.Contains(block, "<txt-record>tls=true</txt-record>") {
+		block = strings.Replace(block, "</service>", fmt.Sprintf("    <txt-record>app-tls=%d</txt-record>\n  </service>", port), 1)
+	}
+	return content[:start] + block + content[end:]
 }
 
 // updatePrincipalTXTRecord adds, updates, or removes the principal TXT record
