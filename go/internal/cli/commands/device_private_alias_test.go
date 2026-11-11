@@ -3,6 +3,9 @@ package commands
 import (
 	"context"
 	"errors"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -446,5 +449,87 @@ func TestPrivateDeviceAliasLANRefusalDoesNotFallbackToCloud(t *testing.T) {
 				t.Fatalf("refusal changed: %v", err)
 			}
 		})
+	}
+}
+
+func TestPrivateDeviceAliasMeshReadinessFallback(t *testing.T) {
+	readiness := func(reason string) error {
+		s, err := status.New(codes.Unavailable, "local route unavailable").WithDetails(&errdetails.ErrorInfo{Domain: "wendy.sessionbroker", Reason: reason})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Err()
+	}
+	for _, tc := range []struct {
+		name     string
+		failure  error
+		fallback bool
+	}{
+		{"no peers", readiness("OPERATOR_NO_PEERS"), true},
+		{"reconnecting", readiness("OPERATOR_RECONNECTING"), true},
+		{"target pending", readiness("OPERATOR_TARGET_PENDING"), true},
+		{"partial directory", readiness("OPERATOR_OBSERVATION_INCOMPLETE"), false},
+		{"generic outage", status.Error(codes.Unavailable, "outage"), false},
+		{"unauthenticated", status.Error(codes.Unauthenticated, "certificate"), false},
+		{"permission denied", status.Error(codes.PermissionDenied, "denied"), false},
+		{"identity refused", errDeviceIdentityRefused, false},
+		{"joined denial", errors.Join(readiness("OPERATOR_NO_PEERS"), status.Error(codes.PermissionDenied, "denied")), false},
+	} {
+		for _, path := range []string{"LAN", "Cloud", "none", "canceled"} {
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				privateAliasConfig(t, nil)
+				sources := privateAliasSources{mesh: privateAliasTestMesh(t, privateAliasDevice, "jetson")}
+				if path == "LAN" {
+					sources.lan = []models.LANDevice{privateAliasTestLAN(privateAliasDevice, "jetson")}
+				}
+				if path == "Cloud" || path == "canceled" {
+					sources.cloud = []*cloudpbv2.Asset{privateAliasTestCloud(privateAliasDevice, "jetson")}
+				}
+				stubPrivateAliasNetwork(t, sources)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				privateAliasConnectMesh = func(context.Context, string, bool) (*SelectedDevice, bool, error) {
+					if path == "canceled" {
+						cancel()
+					}
+					return nil, true, tc.failure
+				}
+				oldLAN, oldCloud := dialAgentLadderWithCertsFn, connectDefaultCloudAssetV2Fn
+				t.Cleanup(func() { dialAgentLadderWithCertsFn, connectDefaultCloudAssetV2Fn = oldLAN, oldCloud })
+				calls := 0
+				dialAgentLadderWithCertsFn = func(_ context.Context, target dialTarget, _ []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
+					calls++
+					if target.Expected == nil || target.Expected.Principal != certs.DeviceSPIFFEURI(privateAliasTenant, privateAliasDevice) {
+						t.Fatal("fallback lost selected identity")
+					}
+					return &grpcclient.AgentConnection{IsMTLS: true}, nil, nil
+				}
+				connectDefaultCloudAssetV2Fn = func(_ context.Context, _ *config.AuthConfig, asset *cloudpbv2.Asset, _ string) (*grpcclient.AgentConnection, error) {
+					calls++
+					if asset.GetId() != privateAliasDevice {
+						t.Fatal("fallback changed device")
+					}
+					return &grpcclient.AgentConnection{IsMTLS: true}, nil
+				}
+				_, _, err := connectPrivateDeviceAlias(ctx, "jetson.wendy.internal", true)
+				want := tc.fallback && (path == "LAN" || path == "Cloud")
+				if want {
+					if calls != 1 || err != nil {
+						t.Fatalf("fallback calls=%d err=%v", calls, err)
+					}
+				} else {
+					if calls != 0 {
+						t.Fatal("refusal triggered fallback")
+					}
+					expected := tc.failure
+					if path == "canceled" {
+						expected = context.Canceled
+					}
+					if !errors.Is(err, expected) {
+						t.Fatalf("lost original failure: %v", err)
+					}
+				}
+			})
+		}
 	}
 }
