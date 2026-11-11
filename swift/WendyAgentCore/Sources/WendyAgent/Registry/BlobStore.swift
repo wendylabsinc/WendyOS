@@ -2,9 +2,8 @@ import Crypto
 import Foundation
 
 /// On-disk content store shared by the registry and the WriteLayer RPC.
-/// Blobs live at `<root>/blobs/sha256/<hex>`; manifests at
-/// `<root>/manifests/<repo>/<tag>`, with digest entries in a distinct
-/// `@digests` directory so an immutable digest cannot alias a mutable tag.
+/// Blobs live at `<root>/blobs/sha256/<hex>`. Repository and tag filenames
+/// hash their exact spelling, with immutable digests under `@digests`.
 struct BlobStore: Sendable {
     let root: URL
 
@@ -101,16 +100,37 @@ struct BlobStore: Sendable {
         }
         let url = manifestPath(repository: repository, reference: reference)
         if FileManager.default.fileExists(atPath: url.path) { return url }
-        // Read existing installations without writing ambiguous legacy names.
-        let legacy = root.appendingPathComponent("manifests").appendingPathComponent(repository)
-            .appendingPathComponent(reference.replacingOccurrences(of: ":", with: "_"))
-        guard FileManager.default.fileExists(atPath: legacy.path) else { return nil }
+        return legacyManifestURL(repository: repository, reference: reference)
+    }
+
+    private func legacyManifestURL(repository: String, reference: String) -> URL? {
+        let manifests = root.appendingPathComponent("manifests")
+        // Look up the stored spelling before opening a legacy path. A direct
+        // lookup on a case-insensitive volume can resolve a different OCI name.
+        guard let directory = Self.exactEntry(repository, in: manifests) else { return nil }
         if Self.isValidSHA256Digest(reference) {
+            let hex = String(reference.dropFirst("sha256:".count))
+            let byDigest = directory.appendingPathComponent("@digests").appendingPathComponent(hex)
+            if FileManager.default.fileExists(atPath: byDigest.path) { return byDigest }
+            guard
+                let legacy = Self.exactEntry(
+                    reference.replacingOccurrences(of: ":", with: "_"),
+                    in: directory
+                )
+            else { return nil }
             guard let data = try? Data(contentsOf: legacy), data.count <= 4 * 1024 * 1024,
                 Self.contentDigest(data) == reference
             else { return nil }
+            return legacy
         }
-        return legacy
+        return Self.exactEntry(reference, in: directory)
+    }
+
+    private static func exactEntry(_ name: String, in directory: URL) -> URL? {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path),
+            entries.contains(name)
+        else { return nil }
+        return directory.appendingPathComponent(name)
     }
 
     static func contentDigest(_ data: Data) -> String {
@@ -144,9 +164,7 @@ struct BlobStore: Sendable {
                 withIntermediateDirectories: true
             )
         }
-        let repositoryDirectory = root.appendingPathComponent("manifests").appendingPathComponent(
-            repository
-        )
+        let repositoryDirectory = manifestDirectory(repository: repository)
         try ProvisioningStore.synchronizeDirectory(repositoryDirectory)
         try ProvisioningStore.synchronizeDirectory(repositoryDirectory.deletingLastPathComponent())
         try ProvisioningStore.synchronizeDirectory(root)
@@ -158,12 +176,21 @@ struct BlobStore: Sendable {
     }
 
     private func manifestPath(repository: String, reference: String) -> URL {
-        let directory = root.appendingPathComponent("manifests").appendingPathComponent(repository)
+        let directory = manifestDirectory(repository: repository)
         if Self.isValidSHA256Digest(reference) {
             return directory.appendingPathComponent("@digests").appendingPathComponent(
                 String(reference.dropFirst("sha256:".count))
             )
         }
-        return directory.appendingPathComponent(reference)
+        return directory.appendingPathComponent(Self.nameKey(reference))
+    }
+
+    private func manifestDirectory(repository: String) -> URL {
+        root.appendingPathComponent("manifests").appendingPathComponent(Self.nameKey(repository))
+    }
+
+    private static func nameKey(_ name: String) -> String {
+        // '@' keeps new keys disjoint from all legacy names.
+        "@" + contentDigest(Data(name.utf8)).dropFirst("sha256:".count)
     }
 }

@@ -84,6 +84,40 @@ import Testing
         #expect(store.manifestURL(repository: "app", reference: wrong) == nil)
     }
 
+    @Test func registryNamesKeepTheirExactCaseAcrossLegacyAndCurrentStorage() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BlobStore(root: root)
+        let legacy = root.appendingPathComponent("manifests/App")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let original = Data("legacy publication".utf8)
+        try original.write(to: legacy.appendingPathComponent("Latest"))
+        let originalDigest = BlobStore.contentDigest(original)
+        #expect(try store.manifestDigest(repository: "App", reference: "Latest") == originalDigest)
+        #expect(store.manifestURL(repository: "App", reference: "latest") == nil)
+        #expect(store.manifestURL(repository: "app", reference: "Latest") == nil)
+
+        let lowerRepo = Data("publication in app".utf8)
+        let lowerTag = Data("publication to latest".utf8)
+        let upperTag = Data("publication to Latest".utf8)
+        try store.writeManifest(lowerRepo, repository: "app", reference: "Latest")
+        try store.writeManifest(lowerTag, repository: "App", reference: "latest")
+        #expect(try store.manifestDigest(repository: "App", reference: "Latest") == originalDigest)
+        try store.writeManifest(upperTag, repository: "App", reference: "Latest")
+        #expect(
+            try store.manifestDigest(repository: "App", reference: "Latest")
+                == BlobStore.contentDigest(upperTag)
+        )
+        #expect(
+            try store.manifestDigest(repository: "App", reference: "latest")
+                == BlobStore.contentDigest(lowerTag)
+        )
+        #expect(
+            try store.manifestDigest(repository: "app", reference: "Latest")
+                == BlobStore.contentDigest(lowerRepo)
+        )
+    }
+
     // MARK: - Digest validation (path traversal fix)
 
     @Test func isValidSHA256DigestAcceptsRealDigest() {
