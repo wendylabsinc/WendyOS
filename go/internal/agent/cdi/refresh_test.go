@@ -81,6 +81,31 @@ func TestRefreshAppliedEdits_ReplacesMountsTheHostNoLongerLists(t *testing.T) {
 	}
 }
 
+// nvidia-ctk writes the device major it saw when it generated the list, and
+// several of those are allocated at module load, so the same list carries
+// different numbers from one boot to the next. That is not a change of list:
+// treating it as one rewrites every GPU container's spec on every boot.
+func TestRefreshAppliedEdits_IgnoresDeviceNumbersThatMovedBetweenBoots(t *testing.T) {
+	list := func(major int) *CDISpecification {
+		return vendorSpec(CDIContainerEdits{
+			Mounts:      []CDIMount{vendorMount("/usr/lib/libnvinfer.so.10")},
+			DeviceNodes: []CDIDeviceNode{{Path: "/dev/host1x-fence", HostPath: os.DevNull, Major: &major}},
+		})
+	}
+	spec := oci.DefaultSpec("rootfs", nil)
+	if err := ApplyCDIDevice(spec, list(495), "all"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := RefreshAppliedEdits(spec, list(496), "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Changed {
+		t.Errorf("a moved device number was treated as a new list: %+v", got)
+	}
+}
+
 // The record is what makes the refresh independent of how the vendor writes
 // its mounts. A toolkit update that changes the options leaves the old mounts
 // with nothing in common with the new ones except the record.

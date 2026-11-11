@@ -60,9 +60,24 @@ func recordAppliedEdits(spec *oci.Spec, edits *CDIContainerEdits) {
 	spec.Annotations[appliedEditsAnnotation] = string(raw)
 }
 
-// digestEdits fingerprints everything a CDI device contributes.
+// digestEdits fingerprints what a CDI device contributes, leaving out device
+// numbers. nvidia-ctk writes the major it saw when it generated the spec, and
+// several of those are allocated at module load, so an unchanged host lists
+// different numbers from one boot to the next. Keeping numbers current is
+// oci.RefreshHostDeviceNumbers' job; here they would only make every boot look
+// like a new list.
 func digestEdits(edits *CDIContainerEdits) string {
-	raw, err := json.Marshal(edits)
+	type deviceNode struct{ Path, HostPath, Type string }
+	stable := struct {
+		DeviceNodes []deviceNode
+		Mounts      []CDIMount
+		Env         []string
+		Hooks       []CDIHook
+	}{Mounts: edits.Mounts, Env: edits.Env, Hooks: edits.Hooks}
+	for _, node := range edits.DeviceNodes {
+		stable.DeviceNodes = append(stable.DeviceNodes, deviceNode{node.Path, node.HostPath, node.Type})
+	}
+	raw, err := json.Marshal(stable)
 	if err != nil {
 		return ""
 	}
