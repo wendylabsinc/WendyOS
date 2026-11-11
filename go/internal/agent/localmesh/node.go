@@ -21,6 +21,7 @@ import (
 	quic "github.com/quic-go/quic-go"
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 )
 
 type nodePeer struct {
@@ -115,6 +116,7 @@ type Node struct {
 	nextLink         babel.LinkID
 	capacityRetiring babel.LinkID // Actor-owned: one global-capacity retirement pending removal.
 	advertisement    Manifest
+	nameSource       func() string // callback is protected by gate; results are actor-owned
 	publicationDirty bool
 	nextPublication  time.Time
 	view             atomic.Pointer[NodeSnapshot]
@@ -248,6 +250,42 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 
 func (n *Node) ControlHub() *ControlHub { return n.controlHub }
 
+// SetNameSource supplies the current friendly device label. The node reads it
+// at startup and on its existing maintenance tick, so a live rename is signed
+// without restarting carriers. The source must be bounded and nonblocking.
+func (n *Node) SetNameSource(source func() string) {
+	n.gate.Lock()
+	defer n.gate.Unlock()
+	n.nameSource = source
+}
+
+// refreshName runs only in the node's serialized actor. Publication uses the
+// same durable revision and coalescing gate as service and route changes.
+func (n *Node) refreshName() error {
+	n.gate.RLock()
+	source := n.nameSource
+	n.gate.RUnlock()
+	if source == nil {
+		return nil
+	}
+	name, valid := meshname.FriendlyLabel(source())
+	if !valid || name == n.advertisement.Name {
+		return nil
+	}
+	previous := n.advertisement.Name
+	n.advertisement.Name = name
+	// Before the initial Babel checkpoint, the first route publication will
+	// sign the name together with the address claim.
+	if n.state.Babel == nil {
+		return nil
+	}
+	if err := n.publish(); err != nil {
+		n.advertisement.Name = previous
+		return err
+	}
+	return nil
+}
+
 func (n *Node) Snapshot() NodeSnapshot {
 	v := n.view.Load()
 	if v == nil {
@@ -351,6 +389,9 @@ func (n *Node) Run() error {
 		_ = n.kernel.Close()
 		_ = n.cache.Flush(time.Now())
 	}()
+	if err := n.refreshName(); err != nil {
+		return err
+	}
 	// NetworkManager can race dummy creation before its unmanaged-device policy
 	// takes effect. Verify the base state once before originating Babel routes,
 	// then keep repairing it as the agent runs.
@@ -395,6 +436,9 @@ func (n *Node) Run() error {
 			}
 		case <-maintenance.C:
 			n.sweepAnnouncements(time.Now())
+			if err := n.refreshName(); err != nil {
+				return err
+			}
 			n.gate.Lock()
 			err := n.kernel.ReconcileBase()
 			n.gate.Unlock()

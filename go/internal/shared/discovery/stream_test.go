@@ -797,6 +797,64 @@ func TestCollectLANSettlesEarly(t *testing.T) {
 	}
 }
 
+func TestCollectLANUntilTimeoutKeepsDelayedConflictsAndRetractions(t *testing.T) {
+	for _, retract := range []bool{false, true} {
+		t.Run(map[bool]string{false: "conflict", true: "retraction"}[retract], func(t *testing.T) {
+			shrinkDuration(t, &collectSettle, 20*time.Millisecond)
+			pause := func(ctx context.Context) bool {
+				select {
+				case <-time.After(60 * time.Millisecond):
+					return true
+				case <-ctx.Done():
+					return false
+				}
+			}
+			backend := func(ctx context.Context, _ string, emit func(MDNSService)) error {
+				// A quick self answer must not end a targeted name scan before
+				// slower remote answers, including a conflicting name, arrive.
+				emit(wendyService("self", "self", "self.local", "192.0.2.1", 50052))
+				if !pause(ctx) {
+					return nil
+				}
+				emit(wendyService("camera-a", "camera", "a.local", "192.0.2.2", 50052))
+				if !pause(ctx) {
+					return nil
+				}
+				other := wendyService("camera-b", "camera", "b.local", "192.0.2.3", 50052)
+				emit(other)
+				if retract && pause(ctx) {
+					retracted := wendyService("camera-b", "camera", "b.local", "192.0.2.3", 50052)
+					retracted.TXTRecords["devicetype"] = "vm-arm64"
+					emit(retracted)
+				}
+				<-ctx.Done()
+				return nil
+			}
+			useStreamSeams(t, backend, nil)
+			started := time.Now()
+			got, err := CollectLANUntilTimeout(context.Background(), StreamOptions{Exclude: &testFilter{exclude: excludeVMBoards}}, 240*time.Millisecond)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if elapsed := time.Since(started); elapsed < 200*time.Millisecond {
+				t.Fatalf("scan settled after %s before the full window", elapsed)
+			}
+			want := 3
+			if retract {
+				want = 2
+			}
+			if len(got) != want {
+				t.Fatalf("confirmed rows = %+v, want %d", got, want)
+			}
+			for _, dev := range got {
+				if retract && dev.ID == "camera-b" {
+					t.Fatal("retracted conflicting name survived the full-window scan")
+				}
+			}
+		})
+	}
+}
+
 func TestCollectLANConfirmedOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.json")
 	seedCache(t, path, discoverycache.Entry{ID: "dev-22", DisplayName: "orin", Hostname: "orin.local", IP: "10.0.0.22", Port: 50051})

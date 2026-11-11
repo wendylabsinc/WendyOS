@@ -295,6 +295,7 @@ func (f fakeResolver) Resolve(name string) (meshid.Device, bool) {
 	device, ok := f.byName[name]
 	return device, ok
 }
+func (f fakeResolver) ResolveExact(name string) (meshid.Device, bool) { return f.Resolve(name) }
 
 func answerA(t *testing.T, s *DNSServer, qname string) (rcode int, ip string) {
 	t.Helper()
@@ -461,4 +462,74 @@ func TestFriendlyNameDoubledHyphenNormalizes(t *testing.T) {
 	if rcode != dns.RcodeSuccess || ip != "10.99.0.1" {
 		t.Fatalf("doubled hyphen: got rcode=%d ip=%q, want SUCCESS 10.99.0.1", rcode, ip)
 	}
+}
+
+func TestDNSShortUUIDAndExistingAliasesShareAllocation(t *testing.T) {
+	_, addr, table := startTestDNS(t, "")
+	for _, suffix := range []string{"wendy.internal", "mesh.wendy.internal", "cloud.wendy.dev"} {
+		name := "device-" + deviceUUID + "." + suffix + "."
+		wantSingleA(t, query(t, addr, name, dns.TypeA), name, "10.99.0.1")
+	}
+	if got := table.Stats().Allocated; got != 1 {
+		t.Fatalf("aliases allocated %d entries, want one", got)
+	}
+}
+
+func TestDNSShortFriendlyNeedsNoCloudSlug(t *testing.T) {
+	s, addr, _ := startTestDNS(t, "")
+	s.SetResolver(fakeResolver{byName: map[string]meshid.Device{"jetson": deviceForIndex(t, mustTenant(t, tenantA), 1)}})
+	wantSingleA(t, query(t, addr, "JETSON.wendy.internal.", dns.TypeA), "JETSON.wendy.internal.", "10.99.0.1")
+	resp := query(t, addr, "jetson.wendy.internal.", dns.TypeAAAA)
+	if resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 0 {
+		t.Fatalf("short name AAAA = %v", resp)
+	}
+	// The compatibility form still requires its explicit tenant slug.
+	if resp := query(t, addr, "jetson.acme.mesh.wendy.internal.", dns.TypeA); resp.Rcode != dns.RcodeNameError {
+		t.Fatalf("legacy form without slug = %v", resp)
+	}
+}
+
+func TestDNSShortFriendlyPreservesRepeatedHyphens(t *testing.T) {
+	s, addr, _ := startTestDNS(t, "")
+	tenant := mustTenant(t, tenantA)
+	s.SetResolver(fakeResolver{byName: map[string]meshid.Device{
+		"jetson-a":  deviceForIndex(t, tenant, 1),
+		"jetson--a": deviceForIndex(t, tenant, 2),
+	}})
+	for i, name := range []string{"jetson-a.wendy.internal.", "jetson--a.wendy.internal."} {
+		wantSingleA(t, query(t, addr, name, dns.TypeA), name, fmt.Sprintf("10.99.0.%d", i+1))
+	}
+}
+
+func TestDNSShortFriendlyRejectsForeignTenantAndInvalidShapes(t *testing.T) {
+	s, addr, table := startTestDNS(t, "")
+	s.SetResolver(fakeResolver{byName: map[string]meshid.Device{"jetson": deviceForIndex(t, mustTenant(t, tenantB), 1)}})
+	for _, name := range []string{"jetson.wendy.internal.", "-jetson.wendy.internal.", "jetson-.wendy.internal.", "jetson.other.wendy.internal.", "jetson.a.b.wendy.internal.", "Ketson.wendy.internal.", "wendy.internal."} {
+		if resp := query(t, addr, name, dns.TypeA); resp.Rcode != dns.RcodeNameError {
+			t.Fatalf("%s = %v, want NXDOMAIN", name, resp)
+		}
+	}
+	if got := table.Stats().Allocated; got != 0 {
+		t.Fatalf("rejected names allocated %d VIPs", got)
+	}
+}
+
+// Old Resolver implementations remain valid for their org-qualified aliases,
+// but cannot opt into exact short labels by silently reusing normalization.
+type legacyOnlyNameResolver struct{ device meshid.Device }
+
+func (r legacyOnlyNameResolver) OrgSlug() string                      { return "acme" }
+func (r legacyOnlyNameResolver) Resolve(string) (meshid.Device, bool) { return r.device, true }
+
+func TestDNSShortFriendlyRequiresExactResolver(t *testing.T) {
+	s, addr, table := startTestDNS(t, "")
+	s.SetResolver(legacyOnlyNameResolver{deviceForIndex(t, mustTenant(t, tenantA), 1)})
+	if response := query(t, addr, "jetson--a.wendy.internal.", dns.TypeA); response.Rcode != dns.RcodeNameError {
+		t.Fatalf("normalizing resolver answered short exact name: %v", response)
+	}
+	if table.Stats().Allocated != 0 {
+		t.Fatal("unsupported exact lookup allocated a VIP")
+	}
+	name := "jetson--a.acme.mesh.wendy.internal."
+	wantSingleA(t, query(t, addr, name, dns.TypeA), name, "10.99.0.1")
 }

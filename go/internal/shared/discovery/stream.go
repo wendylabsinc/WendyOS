@@ -182,13 +182,25 @@ var collectSettle = 500 * time.Millisecond
 // confirmed *something*: arming it on an empty cache would conclude an empty
 // scan long before mDNS has had a chance to answer.
 func CollectLAN(ctx context.Context, opts StreamOptions, timeout time.Duration) ([]models.LANDevice, error) {
+	return collectLAN(ctx, opts, timeout, true)
+}
+
+// CollectLANUntilTimeout collects confirmed LAN sightings for the entire
+// bounded window, without settling when an unrelated device answers first.
+// Name resolvers need this window to observe delayed conflicting name claims.
+// Cache-only rows remain excluded, and retracted sightings are removed.
+func CollectLANUntilTimeout(ctx context.Context, opts StreamOptions, timeout time.Duration) ([]models.LANDevice, error) {
+	return collectLAN(ctx, opts, timeout, false)
+}
+
+func collectLAN(ctx context.Context, opts StreamOptions, timeout time.Duration, batch bool) ([]models.LANDevice, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	out := make(chan LANEvent, streamEventBuffer)
 	go func() {
 		defer close(out)
-		runLANStream(sessionCtx, opts, out, true)
+		runLANStream(sessionCtx, opts, out, batch)
 	}()
 
 	devices := make(map[string]models.LANDevice)

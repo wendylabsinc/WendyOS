@@ -531,6 +531,16 @@ Application services derive from the same verified manifest directory.
 Internet-sharing overlays and physical LAN service projection retain their own
 policy and runtime layers.
 
+## Application names and direct app paths
+
+The app DNS resolver accepts `device-<uuid>.wendy.internal` and one-label
+`<device-name>.wendy.internal` within the enrolled tenant. UUID names pin a local
+VIP; exact friendly labels merge currently known signed device manifests, LAN
+mDNS sightings and Cloud roster entries. Conflicting principals fail closed.
+Valid enrolled names retain repeated hyphens; compatibility org-qualified aliases
+keep their legacy normalization. Signed device manifests publish the installed
+friendly label and republish live renames through the durable revision gate.
+
 ## Cloud relay presence
 
 Cloud relay presence checks its TCP source address every ten seconds. If that
