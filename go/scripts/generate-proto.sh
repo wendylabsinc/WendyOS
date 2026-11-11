@@ -156,8 +156,7 @@ done
 # ---- Wendy Agent v2 protos ----
 V2_AGENT_PKG="$MODULE/go/proto/gen/agentpb/v2"
 
-# Site model storage is local to WendyOS until published in service-protos.
-V2_AGENT_PROTOS=("${SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS[@]}" "wendy/agent/services/v2/site_model_service.proto")
+V2_AGENT_PROTOS=("${SHARED_GRPC_API_CONTRACTS_AGENT_V2_PROTOS[@]}")
 
 V2_AGENT_M_OPTS=""
 for p in "${V2_AGENT_PROTOS[@]}"; do
