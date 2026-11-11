@@ -3,8 +3,6 @@ package services
 import (
 	"context"
 	"crypto/hpke"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,12 +14,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -39,7 +39,8 @@ import (
 //	registry refuses (NOT_FOUND: no live assignment, also when it is removed
 //	mid-pull; PERMISSION_DENIED, FAILED_PRECONDITION, ...)   PULL_REFUSED
 //	assignment check could not be made (UNAVAILABLE), attempt
-//	timed out or blob stream cut                             retried with backoff,
+//	timed out, stream reset or cut (INTERNAL, CANCELLED,
+//	ABORTED), rate limited (RESOURCE_EXHAUSTED)              retried with backoff,
 //	                                                         resumed at the offset held;
 //	                                                         PULL_REFUSED once the
 //	                                                         assignment expires
@@ -53,7 +54,9 @@ import (
 
 const (
 	// registryPullDir stages one pull's ciphertext and plaintext under the
-	// agent config directory; it is emptied before and after every pull.
+	// agent config directory. It is emptied before and after every pull, when
+	// the postbox starts and on reset; a kill or power loss mid-pull leaves it
+	// until the next of those.
 	registryPullDir = "registry-pull"
 	// materialTimeout bounds GetDeploymentMaterial; blobAttemptTimeout bounds
 	// one GetBlob stream, which a later attempt resumes.
@@ -129,6 +132,13 @@ func dialDeviceArtifacts(cloudURL, certPEM, keyPEM, chainPEM string) (cloudpbv2.
 func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
 	if a.GetDesiredState() == cloudpbv2.Running_ABSENT {
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+	}
+	// Checks that need no download (the containerd import repeats them).
+	if err := appconfig.ValidateAppID(a.GetAppId()); err != nil {
+		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", fmt.Errorf("invalid app ID: %w", err)
+	}
+	if u, err := uuid.Parse(a.GetAppReleaseId()); err != nil || u.String() != a.GetAppReleaseId() {
+		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", errors.New("invalid release id: want a canonical lowercase UUID")
 	}
 	dir := filepath.Join(p.configPath, registryPullDir)
 	// The postbox applies one entry at a time: anything here is an
@@ -221,7 +231,8 @@ func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *clou
 
 // pullRetry runs call until it succeeds or fails for good. A transient
 // failure (the registry could not make the assignment check, an attempt timed
-// out, a stream was cut) backs off with jitter and retries until the
+// out, a stream was reset or cut, a rate limit) backs off with jitter and
+// retries until the
 // assignment's signed validity ends: availability degrades, the check is
 // never skipped. An attempt that made progress starts the backoff again.
 // Any other registry status is its refusal.
@@ -240,7 +251,7 @@ func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, 
 			return err
 		case ctx.Err() != nil:
 			return pullFailed("pull", err)
-		case status.Code(err) != codes.Unavailable && status.Code(err) != codes.DeadlineExceeded && !errors.Is(err, errStreamCut):
+		case !retryablePull(err):
 			return pullRefused("pull", err)
 		case !p.trustedNow().Before(a.GetExpiresAt().AsTime()):
 			return pullRefused("unavailable", fmt.Errorf("assignment expired while the registry was unavailable: %w", err))
@@ -256,6 +267,19 @@ func (p *Postbox) pullRetry(ctx context.Context, a *cloudpbv2.DeviceAssignment, 
 		case <-time.After(wait):
 		}
 	}
+}
+
+// retryablePull reports a failure a later attempt can get past. grpc-go
+// reports most HTTP/2 stream resets (e.g. a proxy resetting a long GetBlob) as
+// INTERNAL or CANCELLED; pullRetry already returned for the agent's own
+// cancellation, so CANCELLED here came from the connection. Explicit refusals
+// (NOT_FOUND, PERMISSION_DENIED, FAILED_PRECONDITION, ...) are final.
+func retryablePull(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Internal, codes.ResourceExhausted, codes.Aborted, codes.Canceled:
+		return true
+	}
+	return errors.Is(err, errStreamCut)
 }
 
 // releaseBlobs checks the served manifest against the signed assignment
@@ -401,25 +425,15 @@ func stagedSize(path string) int64 {
 	return info.Size()
 }
 
-// decryptStaged checks the staged ciphertext's digest, then decrypts it to pt
-// (which DecryptBlob checks against the plaintext digest and size), and drops
-// the ciphertext.
+// decryptStaged decrypts the staged ciphertext to pt, which DecryptBlob checks
+// against the ciphertext and plaintext digests and sizes, and drops the
+// ciphertext. On a refusal the caller's staging cleanup removes pt.
 func decryptStaged(ct, pt string, contentKey []byte, b *cloudpbv2.EncryptedBlob, chunkSize int) error {
 	in, err := os.Open(ct)
 	if err != nil {
 		return pullFailed("stage", err)
 	}
 	defer func() { _ = in.Close() }()
-	h := sha256.New()
-	if _, err := io.Copy(h, in); err != nil {
-		return pullFailed("stage", err)
-	}
-	if got := "sha256:" + hex.EncodeToString(h.Sum(nil)); got != b.GetCiphertextDigest() {
-		return digestRefused(fmt.Errorf("blob ciphertext is %s, the manifest names %s", got, b.GetCiphertextDigest()))
-	}
-	if _, err := in.Seek(0, io.SeekStart); err != nil {
-		return pullFailed("stage", err)
-	}
 	out, err := os.OpenFile(pt, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return pullFailed("stage", err)

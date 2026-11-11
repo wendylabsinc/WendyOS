@@ -709,7 +709,7 @@ func TestPostboxAssignmentHeldWhenThePullIsRefused(t *testing.T) {
 	dep := uuid.NewString()
 	resource := "org/" + f.tenant + "/deployment/" + dep + "/device/" + f.uuid
 	assign := &cloudpbv2.DeviceAssignment{
-		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: "rel",
+		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: uuid.NewString(),
 		ManifestDigest: "sha256:ab", DeploymentKeyId: "k1", DesiredState: cloudpbv2.Running_RUNNING,
 		ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
 	}

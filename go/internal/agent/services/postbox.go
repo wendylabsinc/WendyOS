@@ -226,6 +226,11 @@ func (p *Postbox) Nudge(head int64) {
 // Run pulls until ctx is done: on a nudge, on an identity change and on the
 // poll timer, backing off with jitter after a failure.
 func (p *Postbox) Run(ctx context.Context) {
+	// A pull killed mid-way (crash, power loss) left its staged ciphertext and
+	// decrypted layers; no pull runs yet, so nothing here is in use.
+	if err := os.RemoveAll(filepath.Join(p.configPath, registryPullDir)); err != nil {
+		p.logger.Warn("clearing registry pull staging failed", zap.Error(err))
+	}
 	failures := 0
 	for {
 		wait := p.poll

@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,7 +57,7 @@ func randomBytes(n int) []byte {
 // layers in manifest order.
 func (f *pbFixture) releaseOf(t *testing.T, layers ...[]byte) *testRelease {
 	t.Helper()
-	priv, err := loadOrCreateDeviceEncryptionKey(f.dir, f.uri)
+	priv, err := loadOrCreateDeviceEncryptionKey(zap.NewNop(), f.dir, f.uri)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +145,7 @@ type fakeArtifacts struct {
 	materialErr func(call int) error
 	blobErr     func(call int, req *cloudpbv2.GetBlobRequest) error
 	cut         map[string]int
+	cutErr      error // the cut stream's error; nil: UNAVAILABLE
 
 	mu            sync.Mutex
 	materialCalls int
@@ -190,6 +192,9 @@ func (a *fakeArtifacts) GetBlob(_ context.Context, in *cloudpbv2.GetBlobRequest,
 	s := &blobStream{data: data[in.GetOffset():], piece: 1000}
 	if cutNow {
 		s.data, s.end = s.data[:cut], status.Error(codes.Unavailable, "connection reset")
+		if a.cutErr != nil {
+			s.end = a.cutErr
+		}
 	}
 	return s, nil
 }
@@ -354,7 +359,7 @@ func TestRegistryPullRefusesBeforeImport(t *testing.T) {
 			if err := os.Remove(filepath.Join(f.dir, deviceEncryptionKeyFile)); err != nil {
 				f.t.Fatal(err)
 			}
-			if _, err := loadOrCreateDeviceEncryptionKey(f.dir, f.uri); err != nil {
+			if _, err := loadOrCreateDeviceEncryptionKey(zap.NewNop(), f.dir, f.uri); err != nil {
 				f.t.Fatal(err)
 			}
 		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_UNWRAP},
@@ -430,6 +435,67 @@ func TestRegistryPullRetriesUnavailableUntilTheCheckRuns(t *testing.T) {
 	f.cycle()
 	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || arts.materialCalls != 3 || len(rec.imported) != 1 {
 		t.Fatalf("outcome %v after %d calls, %d imports: want APPLIED on the third", o.Outcome, arts.materialCalls, len(rec.imported))
+	}
+}
+
+// A stream reset (INTERNAL, CANCELLED from the connection), a rate limit or an
+// aborted call is transient like UNAVAILABLE: retried, not a refusal.
+func TestRegistryPullRetriesTransientStatuses(t *testing.T) {
+	for _, code := range []codes.Code{codes.Internal, codes.ResourceExhausted, codes.Aborted, codes.Canceled} {
+		t.Run(code.String(), func(t *testing.T) {
+			f := newPBFixture(t)
+			r := f.release(t)
+			big := r.material.GetManifest().GetBlobs()[1]
+			arts := &fakeArtifacts{r: r, cut: map[string]int{big.GetCiphertextDigest(): 5000}, cutErr: status.Error(code, "stream reset"),
+				materialErr: func(call int) error {
+					if call == 1 {
+						return status.Error(code, "transient")
+					}
+					return nil
+				}}
+			rec := f.withArtifacts(arts)
+			f.assignEntry(r.assign)
+			f.cycle()
+			if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || arts.materialCalls != 2 || len(rec.imported) != 1 {
+				t.Fatalf("outcome %v after %d material calls, %d imports: want APPLIED after a retry", o.Outcome, arts.materialCalls, len(rec.imported))
+			}
+			if got := arts.offsets[big.GetCiphertextDigest()]; !slices.Equal(got, []uint64{0, 5000}) {
+				t.Fatalf("GetBlob offsets = %v, want a resume after the reset [0 5000]", got)
+			}
+		})
+	}
+}
+
+// Checks that need no download run first: an invalid release id costs no
+// registry call.
+func TestRegistryPullChecksIDsBeforeTheDownload(t *testing.T) {
+	f := newPBFixture(t)
+	r := f.release(t)
+	r.assign.AppReleaseId = "rel"
+	arts := &fakeArtifacts{r: r}
+	f.withArtifacts(arts)
+	f.assignEntry(r.assign)
+	f.cycle()
+	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED || arts.materialCalls != 0 || arts.blobCalls != 0 {
+		t.Fatalf("outcome %v after %d material and %d blob calls: want APPLY_FAILED before any", o.Outcome, arts.materialCalls, arts.blobCalls)
+	}
+}
+
+// The postbox clears a killed pull's staging when it starts.
+func TestPostboxStartClearsRegistryPullStaging(t *testing.T) {
+	f := newPBFixture(t)
+	dir := filepath.Join(f.dir, registryPullDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "0"), []byte("decrypted layer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.p.Run(ctx)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("staging survived the postbox start: %v", err)
 	}
 }
 
