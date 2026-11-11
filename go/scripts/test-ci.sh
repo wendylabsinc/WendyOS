@@ -116,7 +116,20 @@ run_test() {
         ((PASS_COUNT++))
     else
         echo -e "${RED}FAIL${RESET} (exit $rc)"
-        printf '    Output:\n%s\n' "$output"
+        printf '    Output:\n'
+        # Keep the initial error and final verdict without burying FAIL lines
+        # under build logs. Up to 30 lines are printed once, without overlap.
+        printf '%s\n' "$output" | awk '
+            NR <= 20 { print; next }
+            { tail[(NR - 21) % 10] = $0 }
+            END {
+                start = 21
+                if (NR > 30) {
+                    printf "... [%d lines omitted; first 20 and last 10] ...\n", NR - 30
+                    start = NR - 9
+                }
+                for (i = start; i <= NR; i++) print tail[(i - 21) % 10]
+            }'
         ((FAIL_COUNT++))
     fi
     return $rc
@@ -478,7 +491,7 @@ for test_name in "${TESTS[@]}"; do
             fi
         fi
         if [[ "$MEMORY_PROBE_RC" -eq 0 && "$MEMORY_CAPABILITY" == absent ]]; then
-            skip_test "$test_name" "host cgroup v2 memory controller absent; memory/CPU/PID assertions not exercised"
+            skip_test "$test_name" "host memory controller absent; memory/CPU/PID assertions not exercised"
             continue
         elif [[ "$MEMORY_PROBE_RC" -ne 0 ]]; then
             memory_probe_failed() { echo "Host memory-controller capability is unknown; refusing to skip or deploy the resource fixture"; return 1; }

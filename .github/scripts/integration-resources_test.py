@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -133,14 +134,109 @@ class ResourceGateTests(unittest.TestCase):
             self.assertIn("2 failed", result.stdout)
             self.assertEqual(calls, [])
 
-    def test_real_shell_script_rejects_multiline_file(self):
+    def run_real_probe(self, files, directories=(), unreadable=()):
+        """Run the real Python -> CLI argv -> sh producer/parser boundary."""
         with tempfile.TemporaryDirectory() as directory:
-            controllers = Path(directory) / "controllers"
-            controllers.write_text("cpu\nmemory\n")
-            script = probe.SCRIPT.replace("/sys/fs/cgroup/cgroup.controllers", str(controllers))
-            result = subprocess.run(["sh", "-c", script], text=True, capture_output=True, check=True)
-            with patch.object(probe.subprocess, "run", return_value=result):
-                self.assertEqual(probe.main(["wendy", "fixture.invalid"]), 1)
+            root = Path(directory) / "cgroup"
+            root.mkdir()
+            for name in directories:
+                (root / name).mkdir(parents=True, exist_ok=True)
+            for name, content in files.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            cli = Path(directory) / "shell-cli"
+            cli.write_text('''#!/usr/bin/env python3
+import os, sys
+args = sys.argv[sys.argv.index("--") + 1:]
+assert args[:2] == ["sh", "-c"]
+args[2] = args[2].replace("/sys/fs/cgroup", os.environ["CGROUP_FIXTURE"])
+os.execvp(args[0], args)
+''')
+            cli.chmod(0o755)
+            modes = []
+            try:
+                for name in unreadable:
+                    path = root / name
+                    modes.append((path, path.stat().st_mode & 0o777))
+                    path.chmod(0)
+                return subprocess.run(
+                    [sys.executable, str(SCRIPTS / "probe-memory-controller.py"),
+                     str(cli), "fixture.invalid"],
+                    stdin=subprocess.DEVNULL, text=True, capture_output=True,
+                    env=dict(os.environ, CGROUP_FIXTURE=str(root)), timeout=10,
+                )
+            finally:
+                for path, mode in sorted(modes, key=lambda item: len(item[0].parts)):
+                    path.chmod(mode)
+
+    def test_real_shell_v1_v2_and_hybrid(self):
+        for files, expected in [
+            ({"memory/memory.limit_in_bytes": "9223372036854771712\n"}, "available"),
+            ({"cgroup.controllers": "cpuset cpu io memory pids\n"}, "available"),
+            ({"cgroup.controllers": "cpuset cpu io pids\n"}, "absent"),
+            ({"unified/cgroup.controllers": "cpu pids\n",
+              "memory/memory.limit_in_bytes": "123456\n"}, "available"),
+            ({"cgroup.controllers": "cpu pids\n",
+              "memory/memory.limit_in_bytes": "123456\n"}, "available"),
+        ]:
+            with self.subTest(files=files):
+                result = self.run_real_probe(files)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.splitlines()[-1], f"WENDY_MEMORY_CONTROLLER={expected}")
+
+    def test_real_shell_malformed_and_unknown_are_failures(self):
+        for files, directories in [
+            ({}, ()),
+            ({"cgroup.controllers": "cpu\nmemory\n"}, ()),
+            ({"cgroup.controllers": ""}, ()),
+            ({"cgroup.controllers": "cpu cpu"}, ()),
+            ({"cgroup.controllers": "cpu ???"}, ()),
+            ({"memory/memory.limit_in_bytes": "max"}, ()),
+            ({"memory/memory.limit_in_bytes": ""}, ()),
+            ({"memory/memory.limit_in_bytes": "123\n456"}, ()),
+            ({"cgroup.controllers": "cpu memory pids"}, ("memory",)),
+            ({"memory": "not a hierarchy", "cgroup.controllers": "cpu pids"}, ()),
+        ]:
+            with self.subTest(files=files):
+                result = self.run_real_probe(files, directories)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("WENDY_MEMORY_CONTROLLER=", result.stdout)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read mode-000 files")
+    def test_real_shell_unreadable_is_unknown_not_absence(self):
+        for files, unreadable in [
+            ({"cgroup.controllers": "cpu pids"}, ("cgroup.controllers",)),
+            ({"cgroup.controllers": "cpu pids"}, (".",)),
+            ({"memory/memory.limit_in_bytes": "123456"}, ("memory",)),
+            ({"memory/memory.limit_in_bytes": "123456"}, ("memory/memory.limit_in_bytes",)),
+            ({"cgroup.controllers": "cpu pids",
+              "memory/memory.limit_in_bytes": "123456"}, ("memory",)),
+            ({"cgroup.controllers": "cpu memory pids",
+              "memory/memory.limit_in_bytes": "123456"}, ("memory/memory.limit_in_bytes",)),
+        ]:
+            with self.subTest(unreadable=unreadable):
+                result = self.run_real_probe(files, unreadable=unreadable)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("WENDY_MEMORY_CONTROLLER=", result.stdout)
+
+    def test_v1_result_deploys_original_fixtures(self):
+        result, calls = self.run_harness(f"{probe.V1_PREFIX}123456\n{probe.VERDICT}")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(calls, ["probe", "deploy", "deploy"])
+
+    def test_failure_output_is_bounded_without_short_output_overlap(self):
+        for count in [1, 20, 21, 30, 31, 60]:
+            with self.subTest(count=count):
+                lines = [f"fixture-line-{i:02d}" for i in range(1, count + 1)]
+                result, _ = self.run_harness(record("cpu memory pids"),
+                                              DEPLOY_RC="1", DEPLOY_OUTPUT="\n".join(lines))
+                self.assertNotEqual(result.returncode, 0)
+                for i, line in enumerate(lines, 1):
+                    expected = 2 if count <= 30 or i <= 20 or i > count - 10 else 0
+                    self.assertEqual(result.stdout.splitlines().count(line), expected, result.stdout)
+                marker = f"... [{count - 30} lines omitted; first 20 and last 10] ..."
+                self.assertEqual(result.stdout.count(marker), 2 if count > 30 else 0)
 
     def test_timeout_and_launch_error_are_failures(self):
         for error in [subprocess.TimeoutExpired("wendy", 30), OSError("cannot launch")]:
