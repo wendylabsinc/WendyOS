@@ -116,7 +116,7 @@ run_test() {
         ((PASS_COUNT++))
     else
         echo -e "${RED}FAIL${RESET} (exit $rc)"
-        echo "    Output: $(echo "$output" | tail -10)"
+        printf '    Output:\n%s\n' "$output"
         ((FAIL_COUNT++))
     fi
     return $rc
@@ -454,8 +454,27 @@ echo ""
 
 # ── Test loop ────────────────────────────────────────────────────────
 
+MEMORY_PROBE_RC=""
 for test_name in "${TESTS[@]}"; do
     test_dir="$TESTS_DIR/$test_name"
+
+    # Probe the host, not a container's delegated controller view. Older images
+    # can disable memory at boot. Skip only the two positive memory-limit specs
+    # when absence is confirmed; transport/read/parse errors remain failures.
+    if [[ "$test_name" == "python-resources" || "$test_name" == "python-multiservice-resources" ]]; then
+        if [[ -z "$MEMORY_PROBE_RC" ]]; then
+            python3 "$SCRIPT_DIR/probe-memory-controller.py" "$WENDY" "$HOSTNAME"
+            MEMORY_PROBE_RC=$?
+        fi
+        if [[ "$MEMORY_PROBE_RC" -eq 2 ]]; then
+            skip_test "$test_name" "host cgroup v2 memory controller absent; memory/CPU/PID assertions not exercised"
+            continue
+        elif [[ "$MEMORY_PROBE_RC" -ne 0 ]]; then
+            memory_probe_failed() { echo "Host memory-controller capability is unknown; refusing to skip or deploy the resource fixture"; return 1; }
+            run_test "$test_name" memory_probe_failed
+            continue
+        fi
+    fi
 
     # This checks the device host through authenticated mTLS, not a container's
     # /lib/modules or device mounts. Missing required image support is a failure.
@@ -568,9 +587,11 @@ for test_name in "${TESTS[@]}"; do
         # stdout, and per-service exit codes are not reported by the device, so
         # assert on the verdict lines.
         per_service_limits_enforced() {
-            local out
+            local out rc
             out=$("$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --no-restart 2>&1)
+            rc=$?
             echo "$out"
+            [[ $rc -eq 0 ]] || return "$rc"
             if grep -qE "(db|api): FAIL" <<<"$out"; then
                 return 1
             fi
