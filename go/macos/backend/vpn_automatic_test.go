@@ -5,13 +5,103 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshsharing"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
 )
+
+func TestAutomaticVPNTruncatedDirectoryWithholdsFriendlyAliases(t *testing.T) {
+	const tenant = "11111111-1111-4111-8111-111111111111"
+	const first = "22222222-2222-4222-8222-222222222222"
+	const second = "33333333-3333-4333-8333-333333333333"
+	device := func(id, name string) sessionbroker.OperatorTargetInfo {
+		return sessionbroker.OperatorTargetInfo{Selector: "mesh://" + tenant + "/" + id,
+			Principal: "spiffe://wendy.sh/tenant/" + tenant + "/device/" + id, Name: name}
+	}
+	a, controller, err := newAutomaticVPN()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	var snapshotMu sync.Mutex
+	var snapshot sessionbroker.OperatorDirectory
+	a.discover = func(context.Context) (sessionbroker.OperatorDirectory, error) {
+		snapshotMu.Lock()
+		defer snapshotMu.Unlock()
+		return snapshot, nil
+	}
+	answer := func(name string, routes []vpn.Route) *dns.Msg {
+		t.Helper()
+		query := new(dns.Msg)
+		query.SetQuestion(dns.Fqdn(name), dns.TypeA)
+		wire, err := query.Pack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, err = vpn.AnswerDNS(wire, routes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reply := new(dns.Msg)
+		if err := reply.Unpack(wire); err != nil {
+			t.Fatal(err)
+		}
+		return reply
+	}
+	var firstAddress string
+	for _, phase := range []struct {
+		name      string
+		truncated bool
+		devices   []sessionbroker.OperatorTargetInfo
+		friendly  bool
+	}{
+		{"initial partial", true, []sessionbroker.OperatorTargetInfo{device(first, "jetson")}, false},
+		{"complete unique", false, []sessionbroker.OperatorTargetInfo{device(first, "jetson")}, true},
+		{"partial after complete", true, []sessionbroker.OperatorTargetInfo{device(first, "jetson")}, false},
+		{"complete with omitted duplicate", false, []sessionbroker.OperatorTargetInfo{device(first, "jetson"), device(second, "JETSON")}, false},
+		{"complete after rename", false, []sessionbroker.OperatorTargetInfo{device(first, "jetson"), device(second, "camera")}, true},
+	} {
+		t.Run(phase.name, func(t *testing.T) {
+			snapshotMu.Lock()
+			snapshot = sessionbroker.OperatorDirectory{State: "ready", Truncated: phase.truncated, Devices: phase.devices}
+			snapshotMu.Unlock()
+			cfg, err := vpn.Refresh(context.Background(), controller, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reply := answer("jetson.wendy.internal", cfg.Routes)
+			if phase.friendly {
+				if reply.Rcode != dns.RcodeSuccess || len(reply.Answer) != 1 {
+					t.Fatalf("complete unique name did not recover: %s", reply)
+				}
+			} else if reply.Rcode != dns.RcodeNameError || len(reply.Answer) != 0 {
+				t.Fatalf("incomplete or conflicting name became DNS authority: %s", reply)
+			}
+			for _, device := range phase.devices {
+				id := first
+				if device.Selector != "mesh://"+tenant+"/"+first {
+					id = second
+				}
+				reply := answer("device-"+id+".wendy.internal", cfg.Routes)
+				if reply.Rcode != dns.RcodeSuccess || len(reply.Answer) != 1 {
+					t.Fatalf("verified UUID route lost: %s", reply)
+				}
+				if id == first {
+					address := reply.Answer[0].(*dns.A).A.String()
+					if firstAddress != "" && address != firstAddress {
+						t.Fatal("snapshot completeness changed the stable UUID address")
+					}
+					firstAddress = address
+				}
+			}
+		})
+	}
+}
 
 func TestAutomaticVPNRoutesAllDevicesAndRecoversInternet(t *testing.T) {
 	a, controller, err := newAutomaticVPN()
