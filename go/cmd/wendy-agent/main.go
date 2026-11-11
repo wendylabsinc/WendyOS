@@ -1279,11 +1279,10 @@ func main() {
 			if meshCtx.Err() != nil {
 				return
 			}
-			name, _ := os.Hostname()
 			launch(func() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
-						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
+						Name: services.FriendlyDeviceName(), NameSource: services.FriendlyDeviceName, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
 						Agent:        services.MeshAgentMetadata(),
 						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
 						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
@@ -1411,7 +1410,7 @@ func main() {
 		logger.Warn("net UDP proxy failed to start; UDP VIP egress disabled", zap.Error(udpErr))
 	}
 
-	// Hybrid friendly-name resolver: <devicename>.<org-slug>.cloud.wendy.dev.
+	// The friendly-name resolver serves short names and org-qualified aliases.
 	// Mirrors the meshDialer construction just above — not gated on
 	// alreadyProvisioned. On an unenrolled device certPEM/keyPEM are empty, so
 	// MeshRoster has no device principal to authenticate with and Sync simply
@@ -1421,7 +1420,7 @@ func main() {
 	meshBrowse := func(ctx context.Context) ([]models.LANDevice, error) {
 		col, err := discovery.Discover(ctx, discovery.DiscoveryOptions{
 			Types:   []models.InterfaceType{models.InterfaceLAN},
-			Timeout: 1 * time.Second,
+			Timeout: time.Second,
 		})
 		if err != nil {
 			return nil, err
@@ -1429,8 +1428,16 @@ func main() {
 		return col.LANDevices, nil
 	}
 	meshResolver := services.NewMeshResolver(logger, meshRoster, meshBrowse)
-	// The tenant mesh names resolve under follows the roster's provisioned
-	// identity; unset until provisioning completes.
+	meshResolver.SetMeshSnapshot(func() localmesh.NodeSnapshot {
+		localMeshMu.RLock()
+		snapshot := localMeshSnapshot
+		localMeshMu.RUnlock()
+		if snapshot == nil {
+			return localmesh.NodeSnapshot{}
+		}
+		return snapshot()
+	})
+	// The roster's provisioned identity scopes names to the enrolled tenant.
 	var meshTenant meshid.Tenant
 	if tenant, ok := meshRoster.OwnTenant(); ok {
 		meshTenant = tenant
