@@ -43,7 +43,7 @@ Depending on the language, a test directory contains:
 .github/ci-tests/<name>/
   wendy.json          # App identity and entitlements
   main.py             # Test application
-  Dockerfile          # FROM python:3.11-slim
+  Dockerfile          # FROM public.ecr.aws/docker/library/python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
 ```
 
 **Swift tests:**
