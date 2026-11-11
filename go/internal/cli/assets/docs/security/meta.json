@@ -1,4 +1,9 @@
 {
   "title": "Security",
-  "pages": ["index", "verification", "threat-model"]
+  "pages": [
+    "index",
+    "verification",
+    "threat-model",
+    "operator-permissions"
+  ]
 }

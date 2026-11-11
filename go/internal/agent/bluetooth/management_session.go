@@ -3,8 +3,10 @@ package bluetooth
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/shared/operatorpermission"
 	"io"
 	"net"
 
@@ -18,6 +20,12 @@ const maxFrameSize = 65536
 // serveManagementStream is the production command loop, independent of the
 // radio socket adapter so its TLS admission and framing can be tested directly.
 func serveManagementStream(ctx context.Context, rawConn net.Conn, logger *zap.Logger, d *Dispatcher, tlsConfig *tls.Config) {
+	policy, err := operatorpermission.FromTLS(tlsConfig, logger)
+	if err != nil {
+		logger.Error("BLE operator policy unavailable", zap.Error(err))
+		_ = rawConn.Close()
+		return
+	}
 	tlsConn := tls.Server(rawConn, tlsConfig)
 	defer tlsConn.Close()
 
@@ -56,6 +64,14 @@ func serveManagementStream(ctx context.Context, rawConn net.Conn, logger *zap.Lo
 			return
 		}
 
+		var leaf *x509.Certificate
+		if peers := tlsConn.ConnectionState().PeerCertificates; len(peers) > 0 {
+			leaf = peers[0]
+		}
+		if err := policy.Check(leaf, bluetoothPermission(&cmd), "ble:"+string(cmd.ProtoReflect().Descriptor().FullName())); err != nil {
+			writeErrFrameToConn(tlsConn, logger, err.Error())
+			continue
+		}
 		resp := d.Dispatch(ctx, &cmd)
 		respBytes, err := proto.Marshal(resp)
 		if err != nil {
@@ -106,5 +122,25 @@ func writeErrFrameToConn(w io.Writer, logger *zap.Logger, msg string) {
 		if wErr := writeFrameToConn(w, b); wErr != nil {
 			logger.Debug("l2cap write error frame failed", zap.Error(wErr))
 		}
+	}
+}
+
+// Keep BLE commands aligned with the RPC policy. Unknown oneofs deny by default.
+func bluetoothPermission(cmd *agentpb.BluetoothCommand) string {
+	switch cmd.Command.(type) {
+	case *agentpb.BluetoothCommand_WifiList, *agentpb.BluetoothCommand_WifiStatus,
+		*agentpb.BluetoothCommand_AppsList, *agentpb.BluetoothCommand_AgentVersion,
+		*agentpb.BluetoothCommand_HardwareList, *agentpb.BluetoothCommand_BluetoothList:
+		return "device:read"
+	case *agentpb.BluetoothCommand_WifiConnect, *agentpb.BluetoothCommand_WifiDisconnect,
+		*agentpb.BluetoothCommand_BluetoothConnect, *agentpb.BluetoothCommand_BluetoothDisconnect,
+		*agentpb.BluetoothCommand_BluetoothForget:
+		return "device:network"
+	case *agentpb.BluetoothCommand_AppsStop:
+		return "deployment:control-container"
+	case *agentpb.BluetoothCommand_AppsRemove:
+		return "deployment:create"
+	default:
+		return ""
 	}
 }

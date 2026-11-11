@@ -585,7 +585,7 @@ func detectNvidiaGPUArch() string {
 }
 
 func detectFeatureset() []string {
-	features := []string{"data-inference-classification"}
+	features := []string{"data-inference-classification", "operator-permissions-v1"}
 
 	if _, err := os.Stat("/dev/nvidia0"); err == nil {
 		features = append(features, "gpu")

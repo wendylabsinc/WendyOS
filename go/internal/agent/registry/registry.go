@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/shared/operatorpermission"
 	"io"
 	"net"
 	"net/http"
@@ -90,7 +91,15 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 		Interface: reg,
 	}
 
-	ociHandler := newOCIHandler(backend)
+	var ociHandler http.Handler = newOCIHandler(backend)
+	if tlsConfig != nil {
+		policy, err := operatorpermission.FromTLS(tlsConfig, logger)
+		if err != nil {
+			client.Close()
+			return nil, err
+		}
+		ociHandler = operatorAuthorization(policy, ociHandler)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", readyzHandler(client, logger))

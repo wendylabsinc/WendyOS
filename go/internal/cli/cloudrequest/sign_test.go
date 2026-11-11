@@ -608,3 +608,26 @@ func TestEnrollmentRequestBindsClassC(t *testing.T) {
 		t.Fatal("unknown class accepted")
 	}
 }
+
+func TestEntitledIssuanceUsesX5CAndTenantBoundResource(t *testing.T) {
+	auth, _, _ := testAuth(t)
+	method := cloudpbv2.OperatorCertificateService_RequestEntitledCertificate_FullMethodName
+	if !x5cOnly[method] {
+		t.Fatal("issuance must carry x5c to PKI")
+	}
+	req := &cloudpbv2.RequestEntitledCertificateRequest{OrganizationId: testTenant, TargetType: cloudpbv2.AccessTargetType_ACCESS_TARGET_TYPE_DEVICE, TargetRef: "22222222-2222-4222-8222-222222222222", CsrPem: "test-csr"}
+	resource, ok := signedResources[method](testTenant, req)
+	if !ok || resource != "org/"+testTenant+"/entitled-certificate" {
+		t.Fatalf("resource=%s ok=%v", resource, ok)
+	}
+	if _, ok := signedResources[method]("different-tenant", req); ok {
+		t.Fatal("cross-tenant request signed")
+	}
+	conn := &fakeCloud{t: t}
+	if err := Invoke(context.Background(), conn, auth, method, req, &cloudpbv2.RequestEntitledCertificateResponse{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(conn.calls) != 1 || conn.calls[0] != method+" x5c" {
+		t.Fatalf("unexpected registration or kid call: %v", conn.calls)
+	}
+}

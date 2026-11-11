@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/operatorpermission"
 	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -67,8 +68,9 @@ const (
 var tlsDebugWriter io.Writer = terminaloutput.Stderr
 
 type AgentConnection struct {
-	Conn *grpc.ClientConn
-	Host string // hostname or IP of the connected agent
+	operatorPermissions *operatorPermissionDialer
+	Conn                *grpc.ClientConn
+	Host                string // hostname or IP of the connected agent
 	// MeshHost is the device's stable mesh DNS name
 	// (device-<assetID>.mesh.wendy.internal). Cloud transports populate it so
 	// developer-side traffic can use the desktop VPN when it is active instead
@@ -564,6 +566,23 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 	}
 	dialOpts, tcpDial := agentTCPDialOptions(address)
 	opts = append(opts, dialOpts...)
+	var permissionDialer *operatorPermissionDialer
+	if RequestOperatorCertificate != nil && expected != nil && expected.TenantUUID != "" && certInfo != nil {
+		leaves, parseErr := certs.ParseCertsFromPEM([]byte(certInfo.PemCertificate))
+		if parseErr == nil && len(leaves) == 1 {
+			_, present, claimErr := operatorpermission.Parse(leaves[0])
+			if claimErr != nil {
+				return nil, claimErr
+			}
+			if !present {
+				permissionDialer = &operatorPermissionDialer{login: certInfo, target: *expected, request: RequestOperatorCertificate}
+				permissionDialer.dial = func(ctx context.Context, cert *config.CertificateInfo) (*AgentConnection, error) {
+					return ConnectWithTLSExpecting(ctx, address, cert, pins, expected, extraOpts...)
+				}
+				opts = append(opts, grpc.WithChainUnaryInterceptor(permissionDialer.unary), grpc.WithChainStreamInterceptor(permissionDialer.stream))
+			}
+		}
+	}
 	conn, err := grpc.NewClient(grpcTarget(address), append(opts, extraOpts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s with TLS: %w", address, err)
@@ -574,6 +593,10 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 	ac.Addr = address
 	ac.IsMTLS = true
 	ac.CertInfo = certInfo
+	ac.operatorPermissions = permissionDialer
+	if permissionDialer != nil {
+		ac.ExtraClosers = append(ac.ExtraClosers, permissionDialer)
+	}
 	ac.observedServerOrg = observedOrg
 	ac.observedServerTenant = observedTenant
 	ac.observedServerIdentity = observedIdentity
