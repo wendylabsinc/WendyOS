@@ -2,8 +2,10 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
@@ -19,17 +21,35 @@ func PrepareVPNRoutes(ctx context.Context, input []vpn.Route) ([]vpn.Route, erro
 func prepareVPNRoutes(ctx context.Context, input []vpn.Route, lookup func(context.Context, []string) (map[string]commands.DesktopCloudRouteIdentity, error)) ([]vpn.Route, error) {
 	routes := append([]vpn.Route(nil), input...)
 	var selectors []string
+	hasMesh := false
 	for i := range routes {
 		if strings.HasPrefix(routes[i].Selector, "cloud://") {
 			routes[i].Principal = ""
 			selectors = append(selectors, routes[i].Selector)
+		} else if strings.HasPrefix(routes[i].Selector, "mesh:") {
+			hasMesh = true
 		}
 	}
 	if len(selectors) == 0 {
 		return routes, nil
 	}
-	identities, err := lookup(ctx, selectors)
+	// A mixed configuration must still work offline. Bound inventory refresh
+	// separately; retain route selectors/addresses so retrying does not recycle
+	// VIPs. Missing principals withhold private aliases and Cloud forwarding.
+	lookupCtx := ctx
+	if hasMesh {
+		var cancel context.CancelFunc
+		lookupCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+	identities, err := lookup(lookupCtx, selectors)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil {
+		if hasMesh {
+			return routes, nil
+		}
 		return nil, err
 	}
 	for i := range routes {
@@ -47,6 +67,9 @@ func desktopRouteDial(routes []vpn.Route) vpn.DialFunc {
 		principals[route.Selector] = route.Principal
 	}
 	return func(ctx context.Context, selector string, port uint16) (net.Conn, error) {
+		if strings.HasPrefix(selector, "cloud://") && strings.Contains(selector, "/tenant/") && principals[selector] == "" {
+			return nil, errors.New("Cloud route identity is unavailable; reconnect the VPN when Cloud inventory is reachable")
+		}
 		return desktopDialExpected(ctx, selector, port, principals[selector])
 	}
 }
