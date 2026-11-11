@@ -156,6 +156,7 @@ func run() int {
 		},
 		Self:           self,
 		TrialDeadline:  3 * time.Minute,
+		CloudSettle:    3 * time.Minute,
 		MinTrialUptime: 10 * time.Second,
 		ProbeEvery:     5 * time.Second,
 		LivenessEvery:  time.Minute,

@@ -665,6 +665,113 @@ func TestAdoptInboxJudgesAReCheckAgainWhenTheUserSendsIt(t *testing.T) {
 	}
 }
 
+func TestAdoptInboxAsksAnUploadToReachTheCloudTheReplacedAgentReached(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs an ELF test binary")
+	}
+	for _, tc := range []struct {
+		name    string
+		in      Incoming
+		reached bool
+		want    bool
+	}{
+		{"lan upload, the agent had the cloud", Incoming{Explicit: true, RemoteVia: "lan"}, true, true},
+		{"local upload, the agent had the cloud", Incoming{Explicit: true}, true, true},
+		{"lan upload, the agent never had the cloud", Incoming{Explicit: true, RemoteVia: "lan"}, false, false},
+		{"relay upload proves the cloud itself", Incoming{Explicit: true, RemoteVia: "relay"}, true, false},
+		{"online update confirmed through the cloud", Incoming{Explicit: true, RemoteVia: ViaCloud}, true, false},
+		{"seed keeps its local checks", Incoming{Seed: true}, true, false},
+		{"automatic update keeps its own rule", Incoming{Replaces: ReplacesImage, Version: "2026.11.02-101010", Build: "build-1"}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newInboxSupervisor(t, printsVersion("2026.11.02-101010"))
+			s.cfg.ImageVersion = "2026.10.01-000000" // so the seed is newer and runs
+			s.lastReachedCloud = tc.reached
+			dropInInbox(t, s.cfg.Store, "a", tc.in)
+			var st State
+			reason, commit := s.adoptInbox(context.Background(), &st, "build-1")
+			if reason != "" {
+				t.Fatalf("unexpected rejection: %s", reason)
+			}
+			commit()
+			if st.Trial == nil || st.Trial.CloudToo != tc.want {
+				t.Fatalf("CloudToo: want %v, got trial %+v", tc.want, st.Trial)
+			}
+		})
+	}
+}
+
+func TestAdoptInboxAsksAReSentAgentToReachTheCloudToo(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs an ELF test binary")
+	}
+	s := newInboxSupervisor(t, printsVersion("2026.11.05-000000"))
+	s.lastReachedCloud = true
+	sum := dropInInbox(t, s.cfg.Store, "a", Incoming{Explicit: true, RemoteVia: "lan"})
+	st := State{Trial: &Trial{Agent: Agent{SHA256: sum, Version: "2026.11.05-000000"}, Revalidation: true, Confirmed: true, Build: "build-1"}}
+	s.adoptInbox(context.Background(), &st, "build-1")
+	if st.Trial == nil || !st.Trial.CloudToo {
+		t.Fatalf("a re-sent agent replaces one that had the cloud: %+v", st.Trial)
+	}
+}
+
+func TestNoteCloudKeepsTheDevicesCloudStateAcrossShortRunsAndTrials(t *testing.T) {
+	const settle = 3 * time.Minute
+	for _, tc := range []struct {
+		name   string
+		before bool
+		marked bool
+		trial  bool
+		ran    time.Duration
+		want   bool
+	}{
+		{"an agent on the cloud", false, true, false, time.Second, true},
+		{"a trial that reached the cloud", false, true, true, time.Second, true},
+		{"a settled agent off the cloud", true, false, false, settle, false},
+		{"a short run off the cloud may not have reconnected yet", true, false, false, time.Second, true},
+		{"a trial off the cloud is the suspect, not the device", true, false, true, settle, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Supervisor{cfg: Config{CloudSettle: settle}, deps: Deps{RemoteSeen: func(int, string) bool { return tc.marked }}}
+			s.lastReachedCloud = tc.before
+			s.noteCloud(42, tc.trial, tc.ran)
+			if s.lastReachedCloud != tc.want {
+				t.Fatalf("want %v, got %v", tc.want, s.lastReachedCloud)
+			}
+		})
+	}
+}
+
+func TestRecoverCloudAfterASupervisorRestart(t *testing.T) {
+	dir := t.TempDir()
+	statusPath := filepath.Join(dir, "status.json")
+	data, _ := json.Marshal(Status{Role: RoleApproved, PID: 4242})
+	if err := os.WriteFile(statusPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{cfg: Config{StatusPath: statusPath}, deps: Deps{RemoteSeen: func(pid int, via string) bool { return pid == 4242 && via == ViaCloud }}}
+	s.recoverCloud()
+	if !s.lastReachedCloud {
+		t.Fatal("the agent the supervisor ran before its restart was on the cloud")
+	}
+	s = &Supervisor{cfg: Config{StatusPath: filepath.Join(dir, "missing.json")}, deps: Deps{RemoteSeen: func(int, string) bool { return true }}}
+	s.recoverCloud()
+	if s.lastReachedCloud {
+		t.Fatal("without a status there is no earlier agent to go by")
+	}
+}
+
+func TestStateKeepsATrialsCloudRequirement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := SaveState(path, State{Trial: &Trial{Agent: Agent{SHA256: "a"}, RemoteVia: "lan", CloudToo: true}}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := LoadState(path)
+	if err != nil || st.Trial == nil || !st.Trial.CloudToo {
+		t.Fatalf("a reboot must keep the cloud requirement: %+v, %v", st.Trial, err)
+	}
+}
+
 func TestAdoptInboxSkipsASeedThatIsNotNewer(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("needs an ELF test binary")

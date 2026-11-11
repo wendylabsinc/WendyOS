@@ -29,17 +29,20 @@ Agent updated successfully (agent reports 2026.07.01-223311).
 
 On WendyOS images that run the agent supervisor, a new agent runs on trial
 first. After the upload, the command waits until the supervisor approves or
-rejects it: usually about 15 seconds. A new agent that hangs can take up to about
-7 minutes to be rejected, because the device first gives it 3 minutes and then
-time to stop. If in its first
-3 minutes the agent keeps crashing, stops answering after a restart, or
-restarts the device more than once, the device still goes back to its previous
-agent. The command's own calls to the device are
-the "client reached it again" check the trial needs, so keep it running until
-it finishes. If the upload never reached the device, for example because it
-restarted during the upload, the command stops after about 30 seconds and asks
-you to run it again. If the supervisor rejects the agent, the device goes back to its
-previous agent, and the command exits non-zero with the reason:
+rejects it: usually about 15 seconds. A new agent that hangs can take up to
+about 7 minutes to be rejected, because the device first gives it 3 minutes and
+then time to stop. If in its first 3 minutes the agent keeps crashing, stops
+answering after a restart, or restarts the device more than once, the device
+still goes back to its previous agent. The command's own calls to the device are
+the "client reached it again" check the trial needs, so keep it running until it
+finishes. If the previous agent was connected to Wendy Cloud, the new agent must
+reach the cloud too before it is approved, so an update sent over the LAN cannot
+cut the device off from the cloud. A device that has been off the cloud for a
+few minutes is updated on the LAN check alone. If the upload never reached the
+device, for example because it restarted during the upload, the command stops
+after about 30 seconds and asks you to run it again. If the supervisor rejects
+the agent, the device goes back to its previous agent, and the command exits
+non-zero with the reason:
 
 ```
 the new agent failed its checks: <reason>; the device went back to agent <version> from <source>

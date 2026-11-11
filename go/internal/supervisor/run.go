@@ -33,6 +33,9 @@ type Config struct {
 	Self string
 
 	TrialDeadline time.Duration
+	// CloudSettle is how long an agent runs off the cloud before the device
+	// counts as offline, and a LAN update no longer has to reach the cloud.
+	CloudSettle time.Duration
 	// MinTrialUptime keeps an agent that passes its checks and then crashes
 	// from being approved.
 	MinTrialUptime time.Duration
@@ -98,6 +101,9 @@ type Supervisor struct {
 	lastUpdate    UpdateState
 	lastUpdateSHA string
 	lastReason    string
+	// lastReachedCloud: the device was on the cloud with its last trusted agent,
+	// so an upload must connect too. See noteCloud.
+	lastReachedCloud bool
 	// agentStarted is the boot-clock time the running agent started.
 	agentStarted time.Duration
 	// imageRestarts counts liveness restarts of the image agent.
@@ -117,6 +123,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	} else {
 		s.gateDone = true
 	}
+	s.recoverCloud()
 	for ctx.Err() == nil {
 		d, trial := s.next(ctx)
 		if ctx.Err() != nil {
@@ -326,6 +333,7 @@ func (s *Supervisor) runChild(ctx context.Context, d Decision, t *Trial) runResu
 	}
 	pid := cmd.Process.Pid
 	defer s.reapGroup(pid)
+	defer func() { s.noteCloud(pid, d.Role == RoleTrial, s.deps.Uptime()-s.agentStarted) }()
 	s.writeStatus(d, pid)
 
 	exited := make(chan error, 1)
@@ -477,6 +485,9 @@ func (s *Supervisor) judge(ctx context.Context, pid int, t *Trial, up time.Durat
 			return notReached("the new agent has not reached the cloud yet")
 		}
 		return notReached("the client that sent the update has not reached the new agent yet")
+	}
+	if t.CloudToo && !s.deps.RemoteSeen(pid, ViaCloud) {
+		return notReached("the new agent has not reached the cloud yet")
 	}
 	if up < s.cfg.MinTrialUptime {
 		return fmt.Errorf("the new agent has run for %s, less than %s", up.Round(time.Second), s.cfg.MinTrialUptime)
@@ -831,4 +842,23 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// noteCloud keeps the device's cloud state rather than one sample: a trial is
+// the suspect, and an agent that just started may not have reconnected yet.
+func (s *Supervisor) noteCloud(pid int, trial bool, ran time.Duration) {
+	switch {
+	case s.deps.RemoteSeen(pid, ViaCloud):
+		s.lastReachedCloud = true
+	case !trial && ran >= s.cfg.CloudSettle:
+		s.lastReachedCloud = false
+	}
+}
+
+// recoverCloud picks the cloud state up again after a supervisor restart: the
+// agent it ran last is still in the status, and its mark still in /run.
+func (s *Supervisor) recoverCloud() {
+	if st, err := ReadStatus(s.cfg.StatusPath); err == nil && st.PID > 0 {
+		s.lastReachedCloud = s.deps.RemoteSeen(st.PID, ViaCloud)
+	}
 }
