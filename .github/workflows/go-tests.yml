@@ -475,6 +475,8 @@ jobs:
         run: bash .github/scripts/agent-package-scripts_test.sh
       - name: integration device selection tests
         run: python3 .github/scripts/integration-discover_test.py
+      - name: gate credential refresh tests
+        run: python3 .github/scripts/refresh-gate-auth_test.py
       - name: host sensor loopback CI tests
         run: |
           sh -n .github/ci-tests/host-sensor-loopback/check.sh
