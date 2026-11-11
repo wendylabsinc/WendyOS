@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
@@ -78,4 +79,21 @@ func MarkRemoteSeen(dir, via string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "remote-seen."+via), []byte(strconv.Itoa(os.Getpid())), 0o644)
+}
+
+// ClearRemoteSeen takes back this agent's mark, for a path it can no longer
+// be reached on. Another agent's mark is left alone.
+func ClearRemoteSeen(dir, via string) error {
+	path := filepath.Join(dir, "remote-seen."+via)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(string(data)) != strconv.Itoa(os.Getpid()) {
+		return nil
+	}
+	return os.Remove(path)
 }

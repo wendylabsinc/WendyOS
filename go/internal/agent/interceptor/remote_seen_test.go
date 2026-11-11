@@ -70,3 +70,24 @@ func TestMarkRemoteSeenNamesThisAgent(t *testing.T) {
 		t.Fatalf("the mark must carry this agent's pid, got %q, %v", got, err)
 	}
 }
+
+func TestClearRemoteSeenRemovesOnlyThisAgentsMark(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	mark := filepath.Join(dir, "remote-seen.cloud")
+	if err := MarkRemoteSeen(dir, "cloud"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearRemoteSeen(dir, "cloud"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(mark); !os.IsNotExist(err) {
+		t.Fatalf("this agent's mark must be gone, stat err = %v", err)
+	}
+	os.WriteFile(mark, []byte("1"), 0o644)
+	if err := ClearRemoteSeen(dir, "cloud"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(mark); string(got) != "1" {
+		t.Fatalf("another agent's mark must stay, got %q", got)
+	}
+}
