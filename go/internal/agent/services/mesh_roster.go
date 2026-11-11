@@ -12,6 +12,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -45,27 +46,31 @@ type MeshRoster struct {
 	keyPEM   string
 	chainPEM string
 
-	mu         sync.RWMutex
-	generation uint64
-	identity   string        // proof identity read from the leaf cert; "" until provisioned
-	tenant     meshid.Tenant // tenant that identity authenticates; valid when hasTenant
-	hasTenant  bool
-	slug       string
-	byName     map[string]RosterEntry
-	byAsset    map[string]RosterEntry // canonical asset UUID -> entry
-	ambiguous  map[string]struct{}
+	mu             sync.RWMutex
+	generation     uint64
+	identity       string        // proof identity read from the leaf cert; "" until provisioned
+	tenant         meshid.Tenant // tenant that identity authenticates; valid when hasTenant
+	hasTenant      bool
+	slug           string
+	byName         map[string]RosterEntry
+	byAsset        map[string]RosterEntry // canonical asset UUID -> entry
+	ambiguous      map[string]struct{}
+	byExactName    map[string]RosterEntry
+	exactAmbiguous map[string]struct{}
 }
 
 func NewMeshRoster(logger *zap.Logger, cloudURL, certPEM, keyPEM, chainPEM string) *MeshRoster {
 	r := &MeshRoster{
-		logger:    logger,
-		cloudURL:  cloudURL,
-		certPEM:   certPEM,
-		keyPEM:    keyPEM,
-		chainPEM:  chainPEM,
-		byName:    make(map[string]RosterEntry),
-		byAsset:   make(map[string]RosterEntry),
-		ambiguous: make(map[string]struct{}),
+		logger:         logger,
+		cloudURL:       cloudURL,
+		certPEM:        certPEM,
+		keyPEM:         keyPEM,
+		chainPEM:       chainPEM,
+		byName:         make(map[string]RosterEntry),
+		byAsset:        make(map[string]RosterEntry),
+		ambiguous:      make(map[string]struct{}),
+		byExactName:    make(map[string]RosterEntry),
+		exactAmbiguous: make(map[string]struct{}),
 	}
 	r.loadIdentity()
 	return r
@@ -127,6 +132,8 @@ func (r *MeshRoster) UpdateIdentity(cloudURL, certPEM, keyPEM, chainPEM string) 
 	r.byName = make(map[string]RosterEntry)
 	r.byAsset = make(map[string]RosterEntry)
 	r.ambiguous = make(map[string]struct{})
+	r.byExactName = make(map[string]RosterEntry)
+	r.exactAmbiguous = make(map[string]struct{})
 }
 
 // Lookup returns the roster entry for a normalized device name. Unknown and
@@ -139,6 +146,32 @@ func (r *MeshRoster) Lookup(name string) (RosterEntry, bool) {
 	}
 	entry, ok := r.byName[name]
 	return entry, ok
+}
+
+// LookupExact looks up a short private DNS name. Valid device labels are
+// compared without changing hyphens. Legacy display names may still have a
+// sanitized alias, but collisions with either legacy or exact names fail closed.
+func (r *MeshRoster) LookupExact(name string) (RosterEntry, bool) {
+	entry, found, ambiguous := r.lookupExact(name)
+	return entry, found && !ambiguous
+}
+
+func (r *MeshRoster) lookupExact(name string) (RosterEntry, bool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ambiguous := r.exactAmbiguous[name]
+	entry, found := r.byExactName[name]
+	return entry, found, ambiguous
+}
+
+// shortDeviceLabel preserves current enrolled labels, and normalizes only
+// names from before the DNS-label enrollment contract. The reserved UUID form
+// is never treated as a friendly alias.
+func shortDeviceLabel(name string) (string, bool) {
+	if label, ok := meshname.FriendlyLabel(name); ok {
+		return label, true
+	}
+	return meshname.FriendlyLabel(mesh.Normalize(name))
 }
 
 // LookupAsset returns the roster entry for a Cloud asset UUID. Asset UUIDs
@@ -186,6 +219,8 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 	byName := make(map[string]RosterEntry, len(resp.GetEntries()))
 	byAsset := make(map[string]RosterEntry, len(resp.GetEntries()))
 	ambiguous := make(map[string]struct{})
+	byExactName := make(map[string]RosterEntry, len(resp.GetEntries()))
+	exactAmbiguous := make(map[string]struct{})
 	for _, e := range resp.GetEntries() {
 		n := mesh.Normalize(e.GetName())
 
@@ -199,6 +234,13 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 			continue
 		}
 		byAsset[entry.AssetUUID] = entry
+		if exact, valid := shortDeviceLabel(e.GetName()); valid {
+			if existing, ok := byExactName[exact]; ok && existing.AssetUUID != entry.AssetUUID {
+				exactAmbiguous[exact] = struct{}{}
+			} else {
+				byExactName[exact] = entry
+			}
+		}
 		if n == "" {
 			continue
 		}
@@ -212,6 +254,8 @@ func (r *MeshRoster) applyResponse(generation uint64, resp *cloudpbv2.GetMeshRos
 	r.byName = byName
 	r.byAsset = byAsset
 	r.ambiguous = ambiguous
+	r.byExactName = byExactName
+	r.exactAmbiguous = exactAmbiguous
 }
 
 func canonicalRosterUUID(text string) bool {

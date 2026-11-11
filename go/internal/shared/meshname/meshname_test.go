@@ -1,6 +1,7 @@
 package meshname
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -23,8 +24,22 @@ func TestDeviceFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "device-00000001-4000-8000-0000-000000000001.mesh.wendy.internal"
+	want := "device-00000001-4000-8000-0000-000000000001.wendy.internal"
 	if got := DeviceFor(device); got != want {
 		t.Fatalf("DeviceFor = %q, want %q", got, want)
+	}
+}
+
+func TestFriendlyPreservesLabelsAndReservesIdentityNames(t *testing.T) {
+	for _, name := range []string{"jetson", "Jetson--A", "a"} {
+		host, ok := Friendly(name)
+		if !ok || host != strings.ToLower(name)+".wendy.internal" {
+			t.Fatalf("Friendly(%q) = %q,%v", name, host, ok)
+		}
+	}
+	for _, name := range []string{"", "jetson.local", " jetson", "1jetson", "jetson-", "jetson_a", "Kelvin", strings.Repeat("a", 64), "device-00000001-4000-8000-0000-000000000001"} {
+		if host, ok := Friendly(name); ok {
+			t.Fatalf("accepted %q as %q", name, host)
+		}
 	}
 }
