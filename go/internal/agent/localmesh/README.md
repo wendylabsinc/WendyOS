@@ -562,6 +562,14 @@ The UUID form uses the enrolled identity and
 VIP table. All supported UUID hostname spellings for a device share one VIP
 allocation.
 
+The device-originated Cloud relay uses the symbolic `wendy-app` service. Cloud
+restricts that lane to live same-tenant device identities, and the destination
+agent dispatches the signed descriptor only to its in-memory application TLS
+listener. It never falls back to an arbitrary loopback TCP socket. An operator's
+management relay permissions do not come from this device-only service. This
+path requires the coordinated Cloud backend and agent updates; older Cloud
+backends report the missing capability rather than downgrade admission.
+
 ## Cloud relay presence
 
 Cloud relay presence checks its TCP source address every ten seconds. If that

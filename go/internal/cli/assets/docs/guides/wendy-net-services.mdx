@@ -179,8 +179,21 @@ name, use its UUID or local hostname where supported. A missing, invalid, or
 ambiguous Cloud label leaves the local advertisement unchanged.
 
 One unambiguous binding from either source is enough. If both sources bind the
-name, they must identify the same device. Follow the
-[Wendy Net setup guide](/docs/guides/wendy-net) to establish an application route.
+name, they must identify the same device.
+
+Wendy Net uses a local mesh route when available. It tries Cloud only when
+the local route is missing. An identity or published-port refusal ends the
+connection attempt.
+
+Cloud app connections require `wendy-app` on the Cloud backend and on both the
+source and destination agents. Check the installed versions with
+`wendy device info` on each device and look for Cloud app connection support in
+the [WendyOS release notes](https://github.com/wendylabsinc/WendyOS/releases).
+An unsupported-service error means the Cloud backend needs `wendy-app` support.
+An administrator assigns the source device a role with
+`tunnel:request` covering the destination device. If Cloud reports a permission
+error, check that this device grant is active and covers the destination UUID.
+Operator tunnel permissions govern a separate connection path.
 
 The calling host allocates virtual IPs from the app's `serviceCIDR`, the
 `10.99.0.0/16` range configured in [step 1](#1-give-the-publishing-app-wendy-net-access).
