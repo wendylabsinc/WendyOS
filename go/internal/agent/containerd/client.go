@@ -2105,8 +2105,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 // same injection. A warning naming a GPU would send someone debugging a
 // display-only app looking for an entitlement it never declared.
 func (c *Client) applyNvidiaCDI(spec *localoci.Spec) error {
-	mgr := cdi.NewManager()
-	cdiSpec, specPath, err := mgr.LoadNVIDIACDISpec()
+	cdiSpec, specPath, err := loadNvidiaCDISpec()
 	if err != nil {
 		// No nvidia-ctk-generated CDI spec. On Tegra/L4T this is expected when the
 		// device's nvidia-container-toolkit predates `nvidia-ctk cdi generate`
@@ -2245,10 +2244,15 @@ func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.
 	if err != nil {
 		return fmt.Errorf("encoding refreshed spec for %q: %w", appName, err)
 	}
-	// A field mask preserves labels/snapshot metadata updated by another
-	// lifecycle operation since Info was read.
-	_, err = c.client.ContainerService().Update(ctx, containers.Container{
-		ID: container.ID(), Spec: &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: newSpecJSON},
+	return c.persistSpecJSON(ctx, container, info, newSpecJSON)
+}
+
+// persistSpecJSON replaces the stored spec of a container that has no task
+// yet. A field mask preserves labels/snapshot metadata updated by another
+// lifecycle operation since Info was read.
+func (c *Client) persistSpecJSON(ctx context.Context, container containerd.Container, info containers.Container, specJSON []byte) error {
+	_, err := c.client.ContainerService().Update(ctx, containers.Container{
+		ID: container.ID(), Spec: &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: specJSON},
 	}, "spec")
 	return err
 }
@@ -2413,6 +2417,13 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		}
 		nanStartLease.finishStart()
 	}()
+
+	// OS-update resilience for NVIDIA driver files: the stored spec bind-mounts
+	// each one by the exact name it had when the container was created, and an
+	// OS update renames them. Bring the spec in line with the host's current
+	// list before anything below reads it, so that later steps which write the
+	// spec back carry the refreshed mounts instead of overwriting them.
+	c.refreshNvidiaCDIForStart(ctx, container, appName, containerLabels)
 
 	// Reboot resilience for wendy-managed DNS files: host-network and meshed
 	// containers bind-mount /etc/resolv.conf from tmpfs paths written once at
