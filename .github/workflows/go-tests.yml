@@ -255,6 +255,56 @@ jobs:
       - name: Exercise the native BLE bridge without a radio
         run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
 
+  linux-install-host:
+    name: Linux install safety
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: install-host
+      - name: Install disposable block-device tools
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y dosfstools parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Compile host fixtures
+        run: go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
+      - name: Require loop-device and actual sudo ownership regressions
+        env:
+          WENDY_INSTALL_HOST_TESTS: '1'
+        run: |
+          "$RUNNER_TEMP/install.test" -test.run '^(TestInstallLoopRetriesDelayedPartitionDiscovery|TestInstallLoopReconnectNeverWritesReplacementDisk|TestSudoHandBackRealOwnership)$' -test.v -test.count=1 -test.timeout=180s | tee "$RUNNER_TEMP/install-host.log"
+          for test in TestInstallLoopRetriesDelayedPartitionDiscovery TestInstallLoopReconnectNeverWritesReplacementDisk TestSudoHandBackRealOwnership; do
+            grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
+          done
+
+  darwin-install-host:
+    name: macOS install safety
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Test direct and nested USB disk discovery
+        run: |
+          go test ./go/internal/cli/tegraflash/t234 -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/disk-discovery.log"
+          grep -q '^--- PASS: TestParseUMSDisksNestedHub ' "$RUNNER_TEMP/disk-discovery.log"
+          grep -q '^--- PASS: TestParseUMSDisksDirect ' "$RUNNER_TEMP/disk-discovery.log"
+      - name: Install CLI native dependencies
+        run: brew install libusb pkg-config
+      - name: Compile raw-device and target-scoped preparation tests
+        run: go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
+      - name: Require disposable disk image regressions
+        run: |
+          sudo env WENDY_E2E_DISKIMAGE=1 "$RUNNER_TEMP/install.test" -test.run '^(TestRelocateGPTDarwinRawDiskImage|TestMarkFATVolumes_DiskImage|TestStopTargetIndexing|TestStopTargetIndexingNoMountedFAT|TestUnmountDarwinDisk)$' -test.v -test.count=1 -test.timeout=180s | tee "$RUNNER_TEMP/install-host.log"
+          for test in TestRelocateGPTDarwinRawDiskImage TestMarkFATVolumes_DiskImage TestStopTargetIndexing TestStopTargetIndexingNoMountedFAT TestUnmountDarwinDisk; do
+            grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
+          done
+
   native-app-regressions:
     name: Native app regressions (${{ matrix.platform }})
     runs-on: macos-26
@@ -469,6 +519,24 @@ jobs:
           test "$(grep -c '^--- PASS: TestWindowsSerialPendingIO ' "$RUNNER_TEMP/serial.log")" = 3
           test "$(grep -c '^--- PASS: TestWindowsSerialCloseCancelsPendingIO ' "$RUNNER_TEMP/serial.log")" = 3
 
+      - name: Test USB driver helpers and EDL framing without hardware
+        shell: bash
+        run: |
+          go test ./go/internal/cli/commands -run '^TestUSBDriver' -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/usb-helpers.log"
+          grep -q '^--- PASS: TestUSBDriverSetupPreservesTargetAndVerifiesHelperResult ' "$RUNNER_TEMP/usb-helpers.log"
+          grep -q '^--- PASS: TestUSBDriverHelperRegistration ' "$RUNNER_TEMP/usb-helpers.log"
+          go test ./go/internal/cli/tegraflash/winusb ./go/internal/cli/qdl -run '^Test(Windows|Signing|Usable|Driver|Compatible|Version|Parse|Instance)' -v -count=1 -timeout 120s
+
+      - name: Rebuild embedded skill tests from a CRLF checkout
+        shell: bash
+        run: |
+          git -c core.autocrlf=true -c core.eol=crlf checkout-index --force --all
+          python -c "from pathlib import Path; p=Path('go/internal/cli/mcp/skills_test.go'); assert b'\r\n' in p.read_bytes(), 'checkout did not exercise CRLF'"
+          go test ./go/internal/cli/mcp -run '^Test(SkillFrontmatter.*|BundledSkill.*|SkillsImportOverStdio)$' -v -count=1 -timeout 120s | tee "$RUNNER_TEMP/skill-lines.log"
+          for test in TestSkillFrontmatterWindowsLineEndings TestSkillFrontmatterPreservesAllFields TestSkillFrontmatterLineEndingsPreserveResourceBytes TestSkillsImportOverStdio; do
+            grep -q "^--- PASS: $test " "$RUNNER_TEMP/skill-lines.log"
+          done
+
   # The agent embeds this Python worker and runs it on devices for campaign
   # inference. Its unit tests need no GPU: TensorRT and CUDA are faked.
   inference-worker:
@@ -521,7 +589,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -541,6 +609,8 @@ jobs:
           NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
           AUTOMATION_RESULT: ${{ needs.automation-regressions.result }}
           DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
+          LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
+          DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -561,6 +631,8 @@ jobs:
           test "$NATIVE_APP_RESULT" = success
           test "$AUTOMATION_RESULT" = success
           test "$DEPENDENCY_SECURITY_RESULT" = success
+          test "$LINUX_INSTALL_RESULT" = success
+          test "$DARWIN_INSTALL_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
