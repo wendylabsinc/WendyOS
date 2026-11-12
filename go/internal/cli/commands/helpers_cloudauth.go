@@ -172,7 +172,11 @@ func oidcReloginOptions(auth *config.AuthConfig) oidcLoginOptions {
 // may proceed or retry with the new credentials. Non-interactive or JSON runs
 // never prompt (they surface the original error to the caller unchanged).
 func offerReloginOnUnauthenticated(ctx context.Context, auth *config.AuthConfig, err error) bool {
-	if !isUnauthenticatedCloudError(err) {
+	if auth != nil && auth.OAuthIssuer != "" {
+		if !isOIDCSignInRefused(err) {
+			return false
+		}
+	} else if !isUnauthenticatedCloudError(err) {
 		return false
 	}
 	if jsonOutput || !isInteractiveTerminal() {

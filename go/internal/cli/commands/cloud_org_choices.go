@@ -93,7 +93,7 @@ var pickCloudOrgChoice = func(cfg *config.Config, choices []cloudOrgChoice) (str
 	model, _ = picker.Update(tui.PickerDoneMsg{})
 	picker = model.(tui.PickerModel)
 	picker.FocusItem(picker.DefaultKey)
-	final, err := tea.NewProgram(picker).Run()
+	final, err := tui.RunProgram(tea.NewProgram(picker))
 	if err != nil {
 		return "", err
 	}

@@ -34,12 +34,16 @@ func briefStep(n int, text string) string {
 	return "    " + briefNum.Render(fmt.Sprintf("%d.", n)) + " " + text
 }
 
-// Production EVKs use different EDL poles. Qualcomm's board-specific guide:
-// https://github.com/qualcomm-linux/qcom-linux-skills/blob/main/skills/qcom-flash-qdl/references/entering-edl.md
-func dipSwitch3Guide() edlGuide   { return dipSwitchGuide("SW2-3") }
-func iq8275SwitchGuide() edlGuide { return dipSwitchGuide("S2-8") }
+// IQ9 instructions use the MODE bank's visible 1–4 labels. IQ8 keeps its
+// board-specific EDL pole.
+func iq9075SwitchGuide() edlGuide {
+	return dipSwitchGuide("MODE switch 3", "up (ON)", "down (OFF)",
+		"  The MODE switch bank is labelled 1–4; use switch 3.")
+}
 
-func dipSwitchGuide(pole string) edlGuide {
+func iq8275SwitchGuide() edlGuide { return dipSwitchGuide("S2-8", "ON", "OFF", "") }
+
+func dipSwitchGuide(pole, on, off, bankHint string) edlGuide {
 	return edlGuide{
 		storage:  "UFS",
 		rewrites: "the board's UFS",
@@ -54,33 +58,33 @@ func dipSwitchGuide(pole string) edlGuide {
 			briefSection("Entering EDL mode"),
 			"  EDL is selected by a " + briefKey.Render("DIP switch") + ", not a button, so it stays set until",
 			"  you move it back.",
-			"  These steps are for production EVKs. IQ-8/IQ-9 Beta EVKs use S5-4; check your board revision.",
+			bankHint,
 			"",
 			briefStep(1, "Power the board "+briefDim.Render("off")+"."),
-			briefStep(2, "Set "+briefKey.Render(pole)+" to "+briefKey.Render("ON")+"."),
+			briefStep(2, "Flip "+briefKey.Render(pole)+" "+briefKey.Render(on)+"."),
 			briefStep(3, "Power the board on. It boots straight into EDL and shows no"),
 			"       display output — that is expected.",
 			"",
-			"  " + briefDim.Render("After flashing, set "+pole+" back to OFF and power-cycle,"),
+			"  " + briefDim.Render("After flashing, move "+pole+" "+off+" and power-cycle,"),
 			"  " + briefDim.Render("otherwise the board will keep booting into EDL."),
 		},
-		ready: pole + " ON",
+		ready: pole + " " + on,
 		hints: recoveryWaitHints{
 			label:       "Dragonwing",
 			family:      "Dragonwing",
 			mode:        "EDL mode",
 			cablingLine: "the USB-C cable is in the " + briefPort.Render("USB0 port"),
-			buttonLine:  briefKey.Render(pole) + " is " + briefKey.Render("ON") + ", and the board was power-cycled after setting it",
+			buttonLine:  briefKey.Render(pole) + " is " + briefKey.Render(on) + ", and the board was power-cycled after setting it",
 		},
 		done: []string{
-			"  Now set " + briefKey.Render(pole) + " back to " + briefKey.Render("OFF") +
+			"  Now move " + briefKey.Render(pole) + " " + briefKey.Render(off) +
 				" and power-cycle the board.",
-			"  " + briefDim.Render("Left ON, it will boot into EDL again instead of WendyOS."),
+			"  " + briefDim.Render("Left "+on+", it will boot into EDL again instead of WendyOS."),
 		},
-		retry: "  Set " + briefKey.Render(pole) + " back to " + briefKey.Render("OFF") +
-			" and power-cycle, or leave it ON to retry.",
+		retry: "  Move " + briefKey.Render(pole) + " " + briefKey.Render(off) +
+			" and power-cycle, or leave it " + on + " to retry.",
 		reenter: []string{
-			"  Leave " + briefKey.Render(pole) + " set to ON, power-cycle the board to",
+			"  Leave " + briefKey.Render(pole) + " " + on + ", power-cycle the board to",
 			"  re-enter EDL, and run the same command again.",
 		},
 	}
@@ -117,7 +121,8 @@ func confirmDragonwingReady(board dragonwingBoard, version string, force bool) e
 		return nil
 	}
 	fmt.Println()
-	ok, err := tui.Confirm("Is the target board connected and in EDL mode (" + board.guide().ready + ")?")
+	ok, err := confirmInstallStep("flashing the "+humanReadableDeviceType(board.deviceType),
+		"Is the target board connected and in EDL mode ("+board.guide().ready+")?", false, force)
 	if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 		return ErrUserCancelled
 	}

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # One immutable source pin for Go and embedded Swift generation.
-SHARED_GRPC_API_CONTRACTS_REF="1fceb41cdf10c3d4136e74991d2e18efe22c88cf"
+SHARED_GRPC_API_CONTRACTS_REF="8969fd04df45583bb99d4d40a03556990c76ba1d"
 # Canonical root files are staged under cloud/ to preserve existing descriptors.
 SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS=(
     "apps.proto"
@@ -90,6 +90,17 @@ SHARED_GRPC_API_CONTRACTS_LOCAL_EXCEPTIONS=(
     "cloud/notifications.proto"
     # Older local Cloud v1 organization API differs; remove under WDY-4157.
     "cloud/organizations.proto"
+)
+
+check_shared_grpc_api_contracts_ancestry() (
+    local scratch
+    scratch="$(mktemp -d)" || return $?
+    trap 'rm -rf "$scratch"' EXIT
+    # Policy comes from authoritative master, independently of the schema pin.
+    curl --fail --silent --show-error --location \
+        https://raw.githubusercontent.com/wendylabsinc/service-protos/master/tools/check-pin.sh \
+        --output "$scratch/check-pin.sh" || return $?
+    bash "$scratch/check-pin.sh" "${SHARED_GRPC_API_CONTRACTS_REF:-}"
 )
 
 check_shared_grpc_api_contracts_sources() {

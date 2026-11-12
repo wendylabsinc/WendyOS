@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -12,7 +14,7 @@ import (
 )
 
 func (s *mcpServer) registerInstallationJobTools(srv *server.MCPServer) {
-	start := append([]mcpgo.ToolOption{mcpgo.WithDescription("Create a persistent installation job and return physical setup instructions. Does not erase anything. Resume after the user completes the step; only supported image installs can execute.")}, installationOptionSchema()...)
+	start := append([]mcpgo.ToolOption{mcpgo.WithDescription("Create a persistent installation job and return physical setup instructions. Does not erase anything. Optional device_name and wifi are written for first boot; without them the image is written as published, so the board gets an auto-generated name and no Wi-Fi (Ethernet or USB). Resume after the user completes the step; only supported image installs can execute.")}, installationStartSchema()...)
 	start = append(start, mutating()...)
 	start = append(start, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("os_install_start", start...), s.handleInstallStart)
@@ -38,16 +40,139 @@ func (s *mcpServer) registerInstallationJobTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("os_install_resume", resume...), s.handleInstallResume)
 }
 
+// installationStartSchema adds optional first-boot inputs to the plan schema.
+// Old relay catalogs stay valid: nothing is required and nothing has a default.
+func installationStartSchema() []mcpgo.ToolOption {
+	return append(installationOptionSchema(),
+		mcpgo.WithString("device_name", mcpgo.Description("First-boot device name: 3-55 of a-z, 0-9 and -, starting with a letter. Omitted: auto-generated")),
+		mcpgo.WithArray("wifi", mcpgo.Description("First-boot Wi-Fi networks. Omitted: no Wi-Fi. Hosted chats cannot send passwords"), mcpgo.Items(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ssid":     map[string]any{"type": "string"},
+				"password": map[string]any{"type": "string", "description": "Omit for an open network"},
+				"priority": map[string]any{"type": "integer", "description": "Higher connects first"},
+				"hidden":   map[string]any{"type": "boolean"},
+				"security": map[string]any{"type": "string", "description": "For example wpa2, wpa3 or open; omitted detects it"},
+			},
+			"required":             []string{"ssid"},
+			"additionalProperties": false,
+		})),
+		mcpgo.WithBoolean("no_wifi", mcpgo.Description("Explicitly no first-boot Wi-Fi; the same as omitting wifi")),
+	)
+}
+
 func (s *mcpServer) handleInstallStart(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if s.installation.Start == nil || os.Getenv("WENDY_AGENT_SOCKET") != "" {
 		return errResult(errCodeUnsupported, "installation jobs require a host MCP session with the installation backend"), nil
+	}
+	if s.bindingPolicy() != nil {
+		if _, refused := relayCredentialArgument("os_install_start", req.GetArguments()); refused {
+			return errResult(errCodeDenied, relayWiFiPasswordRefusal), nil
+		}
 	}
 	opts, err := installationOptions(req)
 	if err != nil {
 		return errResult(errCodeInvalidArgument, err.Error()), nil
 	}
-	job, err := s.installation.Start(ctx, onboarding.StartOptions{Options: opts})
+	prov, err := installationProvisioning(req.GetArguments())
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	job, err := s.installation.Start(ctx, onboarding.StartOptions{Options: opts, Provisioning: prov})
 	return installJobResult(job, err), nil
+}
+
+const relayWiFiPasswordRefusal = "Wi-Fi passwords cannot be sent through a hosted chat. Run 'wendy install jobs start --wifi ssid=<name>,password=<password> ...' in a terminal on this host and continue with its job_id, or use a local MCP server (wendy mcp serve). device_name, no_wifi and open networks (networks that have no password) work here."
+
+// relayCredentialArgument names an argument that carries a credential. A
+// hosted chat must never collect one, so the relay refuses it before any prompt.
+func relayCredentialArgument(tool string, args map[string]any) (string, bool) {
+	if tool != "os_install_start" {
+		return "", false
+	}
+	networks, _ := args["wifi"].([]any)
+	for _, n := range networks {
+		network, _ := n.(map[string]any)
+		if v, ok := network["password"]; ok && v != nil && v != "" {
+			return "wifi[].password", true
+		}
+	}
+	return "", false
+}
+
+// installationProvisioning reads the optional first-boot arguments. Errors
+// name fields, never values, because a password can be in any of them.
+func installationProvisioning(args map[string]any) (*onboarding.Provisioning, error) {
+	p := &onboarding.Provisioning{}
+	if v, ok := args["device_name"]; ok && v != nil {
+		name, valid := v.(string)
+		if !valid {
+			return nil, errors.New("device_name must be a string")
+		}
+		p.DeviceName = name
+	}
+	if v, ok := args["no_wifi"]; ok && v != nil {
+		noWiFi, valid := v.(bool)
+		if !valid {
+			return nil, errors.New("no_wifi must be a boolean")
+		}
+		p.NoWiFi = noWiFi
+	}
+	if v, ok := args["wifi"]; ok && v != nil {
+		networks, valid := v.([]any)
+		if !valid {
+			return nil, errors.New("wifi must be an array of networks")
+		}
+		for i, item := range networks {
+			n, err := installationWiFiNetwork(item)
+			if err != nil {
+				return nil, fmt.Errorf("wifi[%d]: %w", i, err)
+			}
+			p.WiFi = append(p.WiFi, n)
+		}
+	}
+	return p, nil
+}
+
+func installationWiFiNetwork(item any) (onboarding.WiFiNetwork, error) {
+	var n onboarding.WiFiNetwork
+	fields, ok := item.(map[string]any)
+	if !ok {
+		return n, errors.New("must be an object with ssid")
+	}
+	for key, v := range fields {
+		switch key {
+		case "ssid", "password", "security":
+			text, ok := v.(string)
+			if !ok {
+				return n, fmt.Errorf("%s must be a string", key)
+			}
+			switch key {
+			case "ssid":
+				n.SSID = text
+			case "password":
+				n.Password = text
+			default:
+				n.Security = text
+			}
+		case "priority":
+			f, ok := v.(float64)
+			if !ok || f != math.Trunc(f) || f < math.MinInt32 || f > math.MaxInt32 {
+				return n, errors.New("priority must be an integer")
+			}
+			n.Priority = int32(f)
+		case "hidden":
+			hidden, ok := v.(bool)
+			if !ok {
+				return n, errors.New("hidden must be a boolean")
+			}
+			n.Hidden = hidden
+		default:
+			// A misspelled password field would otherwise seed an open network.
+			return n, errors.New("unknown field; use ssid, password, priority, hidden or security")
+		}
+	}
+	return n, nil
 }
 
 func (s *mcpServer) handleInstallStatus(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

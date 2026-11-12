@@ -345,7 +345,7 @@ func brewPackageWithSpinner(ctx context.Context, action, formula, label string) 
 		prog.Send(tui.SpinnerDoneMsg{})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-doneCh

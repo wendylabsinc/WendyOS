@@ -333,3 +333,28 @@ func TestRPCLegacyUserGrace(t *testing.T) {
 	}
 	assertRPCDecisionInMode(t, rpcIdentityContext(leaf), "/future.AdminService/NewMethod", scope, OrgModeGrace, codes.PermissionDenied)
 }
+
+func TestOperatorCertificateGateDoesNotInheritDeviceExceptions(t *testing.T) {
+	scope := certs.Scope{TenantUUID: rpcTestTenant}
+	for _, mode := range []OrgMode{OrgModeStrict, OrgModeGrace, OrgModeOff} {
+		for _, tc := range []struct {
+			name  string
+			leaf  *x509.Certificate
+			allow bool
+		}{
+			{"missing", nil, false},
+			{"tenant operator", rpcIdentityLeaf(t, "operator", "spiffe://wendy.sh/tenant/"+rpcTestTenant+"/operator/alice"), true},
+			{"unknown tenant", rpcIdentityLeaf(t, "operator", "spiffe://wendy.sh/tenant/22222222-2222-4222-8222-222222222222/operator/alice"), false},
+			{"legacy user", rpcIdentityLeaf(t, "wendy/user/alice"), mode == OrgModeGrace},
+			{"device misleading CN", rpcIdentityLeaf(t, "wendy/user/alice", "spiffe://wendy.sh/tenant/"+rpcTestTenant+"/device/peer"), false},
+			{"ambiguous identity", rpcIdentityLeaf(t, "wendy/user/alice", "spiffe://wendy.sh/tenant/"+rpcTestTenant+"/operator/alice", "spiffe://wendy.sh/tenant/"+rpcTestTenant+"/device/peer"), false},
+		} {
+			t.Run(mode.String()+"/"+tc.name, func(t *testing.T) {
+				err := CheckOperatorCertificate(tc.leaf, scope, mode)
+				if (err == nil) != tc.allow {
+					t.Fatalf("err=%v allow=%v", err, tc.allow)
+				}
+			})
+		}
+	}
+}
