@@ -9,12 +9,14 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 // Keep the transport cause inspectable without using its wrapper as the
 // diagnosis. A failed stream does not establish that the application exited.
 type runStreamFailure struct {
+	phase   string // completes "run failed ...": when the stream failed
 	message string
 	cause   error
 }
@@ -26,15 +28,28 @@ func diagnoseRunStreamFailure(ctx context.Context, conn *grpcclient.AgentConnect
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	phase := "while receiving app output"
 	message := "The app output connection ended. App state could not be verified."
 	steps := []string{"Check the device connection, then inspect the app before deploying again."}
+	detail, lost := runStreamCause(cause)
 	var category error
 	if !started {
+		phase = "during app start"
+		if !lost {
+			// The device answered with an error. That is the failure, not a
+			// lost connection, so report it rather than a network check.
+			return withNextSteps(&runStreamFailure{phase: phase, cause: cause,
+				message: "The run failed before the device confirmed app start. " + detail},
+				"Resolve the reported error, then run again.")
+		}
 		message = "The connection ended before the device confirmed app start. App state is unknown."
 	} else if conn != nil && conn.ContainerService != nil {
-		probe, cancel := context.WithTimeout(ctx, appExitLookupTimeout)
-		defer cancel()
-		c, err := lookupAppContainer(probe, conn, cfg.AppID)
+		// The lookup and the confirmation below are bounded separately: a
+		// shared deadline lets a slow lookup expire the confirmation window
+		// and turn a recorded crash into "could not be confirmed".
+		lookup, cancel := context.WithTimeout(ctx, appExitLookupTimeout)
+		c, err := lookupAppContainer(lookup, conn, cfg.AppID)
+		cancel()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -49,7 +64,7 @@ func diagnoseRunStreamFailure(ctx context.Context, conn *grpcclient.AgentConnect
 				// A replacement can briefly expose the previous app's exit record.
 				// A lost stream does not prove that the task ended, so confirm the
 				// observation using the same conservative rules as a log follower.
-				verdict, _, last, confirmErr := appReplaced(probe, conn, cfg, startedAppBaseline(cfg), c, nil)
+				verdict, _, last, confirmErr := appReplaced(ctx, conn, cfg, startedAppBaseline(cfg), c, nil)
 				if confirmErr == nil && followedExitStands(verdict != appOwn, last) {
 					message = appCrashedError(cfg.AppID, last).Error()
 					category = errAppCrashed
@@ -67,15 +82,26 @@ func diagnoseRunStreamFailure(ctx context.Context, conn *grpcclient.AgentConnect
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	detail := cause.Error()
-	if st, ok := status.FromError(cause); ok {
-		detail = st.Message()
-	}
-	err := error(&runStreamFailure{message: message + "\nConnection detail: " + detail, cause: cause})
+	err := error(&runStreamFailure{phase: phase, message: message + "\n" + detail, cause: cause})
 	if category != nil {
 		err = classifyCommandError(category, err)
 	}
 	return withNextSteps(err, steps...)
+}
+
+// runStreamCause describes the error that ended a run stream and reports
+// whether it is a lost connection. Any other gRPC status is an answer: the
+// stream ended because of the error it names.
+func runStreamCause(cause error) (detail string, lost bool) {
+	st, ok := status.FromError(cause)
+	if !ok {
+		return "Connection detail: " + cause.Error(), true
+	}
+	switch st.Code() {
+	case codes.Unavailable, codes.Canceled, codes.DeadlineExceeded:
+		return "Connection detail: " + st.Message(), true
+	}
+	return fmt.Sprintf("Reported error (%s): %s", st.Code(), st.Message()), false
 }
 
 // A bounded tail prevents an attached process from growing CLI memory or
@@ -117,6 +143,35 @@ func (r *recentRunOutput) failure(err error) error {
 	return withNextSteps(err, steps...)
 }
 
+// runPhaseError names the phase a failure belongs to when the failing code
+// knows it. The activation step is an analytics marker that some paths never
+// advance (Compose stays on "connect", the no-build fast path on "build"), so
+// it is only the fallback.
+type runPhaseError struct {
+	phase string
+	err   error
+}
+
+func (e *runPhaseError) Error() string { return e.err.Error() }
+func (e *runPhaseError) Unwrap() error { return e.err }
+
+// inRunPhase marks err as having failed in phase, unless a more specific
+// phase is already recorded.
+func inRunPhase(phase string, err error) error {
+	var marked *runPhaseError
+	if err == nil || errors.As(err, &marked) {
+		return err
+	}
+	return &runPhaseError{phase: phase, err: err}
+}
+
+// runStepPhases names the activation steps of `wendy run`. A step that is not
+// listed is internal and is left out of the message.
+var runStepPhases = map[string]string{
+	"project": "project setup", "connect": "device connection", "auth": "registry sign-in",
+	"build": "build", "deploy": "deploy", "readiness": "readiness check",
+}
+
 func runPhaseFailure(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
@@ -126,11 +181,15 @@ func runPhaseFailure(ctx context.Context, err error) error {
 		return err
 	}
 	var streamFailure *runStreamFailure
-	if errors.As(err, &streamFailure) {
-		return fmt.Errorf("run failed while receiving app output: %w", err)
-	}
-	if errors.Is(err, errAppCrashed) {
+	var marked *runPhaseError
+	switch {
+	// A confirmed crash also carries the stream failure that revealed it.
+	case errors.Is(err, errAppCrashed):
 		return fmt.Errorf("run failed during app execution: %w", err)
+	case errors.As(err, &streamFailure):
+		return fmt.Errorf("run failed %s: %w", streamFailure.phase, err)
+	case errors.As(err, &marked):
+		return fmt.Errorf("run failed during %s: %w", marked.phase, err)
 	}
 	progress, ok := ctx.Value(activationKey{}).(*activationProgress)
 	if !ok {
@@ -139,8 +198,9 @@ func runPhaseFailure(ctx context.Context, err error) error {
 	progress.Lock()
 	step := progress.properties["step"]
 	progress.Unlock()
-	if step == "" {
+	phase, ok := runStepPhases[step]
+	if !ok {
 		return err
 	}
-	return fmt.Errorf("run failed during %s: %w", step, err)
+	return fmt.Errorf("run failed during %s: %w", phase, err)
 }

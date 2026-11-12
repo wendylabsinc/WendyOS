@@ -673,7 +673,8 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		opts.detachedOutput = false
 	}
 	if err := startAndStreamServices(ctx, conn, appCfg.AppID, ordered, preservedLifecycle, opts, createService, svcCfgs, svcLifecycleCfgs, appLevelCfg); err != nil {
-		return err
+		// The activation step is still "build" here.
+		return inRunPhase("deploy", err)
 	}
 	if ctx.Err() == nil {
 		for _, name := range ordered {

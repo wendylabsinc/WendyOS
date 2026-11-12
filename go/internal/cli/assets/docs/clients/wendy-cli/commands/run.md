@@ -703,6 +703,10 @@ build, Wendy reports independent host disk, device disk, and applicable Docker
 Buildx problems together. Existing project, target, and builder-specific checks
 still apply. The no-build path does not require build tools.
 
+If the device returns an error before it confirms app start, Wendy reports
+that error and its gRPC code as the failure. Only a lost connection is reported
+as one, with the app state unknown.
+
 If an attached output stream fails after the device confirmed app start, Wendy
 makes a bounded, read-only app-state check. It distinguishes a running app, a
 confirmed crash, a clean exit, and an unknown or replaced app. A running app is

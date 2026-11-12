@@ -2916,10 +2916,10 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return inRunPhase("app start", fmt.Errorf("starting container: %w", err))
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return inRunPhase("app start", fmt.Errorf("waiting for container start: %w", err))
 		}
 		opts.reportDeployStarted()
 		if !isRobotTour(ctx) {
@@ -2945,10 +2945,10 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return inRunPhase("app start", fmt.Errorf("starting container: %w", err))
 		}
 		if err := awaitStarted(stream); err != nil {
-			return fmt.Errorf("waiting for container start: %w", err)
+			return inRunPhase("app start", fmt.Errorf("waiting for container start: %w", err))
 		}
 		opts.reportDeployStarted()
 		startCancel()
@@ -2969,7 +2969,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 
 	outStream, stdinAttempted, err := openContainerStream(runCtx, conn.ContainerService, appCfg.ContainerName(), appCfg)
 	if err != nil {
-		return err
+		return inRunPhase("app start", err)
 	}
 
 	cliLogln("Application %s started.", containerDisplayName(appCfg))
@@ -3007,7 +3007,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 					AppName: appCfg.ContainerName(),
 				})
 				if startErr != nil {
-					return fmt.Errorf("starting container: %w", startErr)
+					return inRunPhase("app start", fmt.Errorf("starting container: %w", startErr))
 				}
 				outStream = startStream
 				stdinAttempted = false

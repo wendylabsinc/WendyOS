@@ -14,7 +14,7 @@ import (
 
 // appExitLookupTimeout bounds the ListContainers call an attached run makes
 // after its output stream ends, so a wedged agent cannot hang the exit.
-const appExitLookupTimeout = 5 * time.Second
+var appExitLookupTimeout = 5 * time.Second
 
 // appReplaceConfirmWindow and appReplaceConfirmPoll pace appReplaced's
 // re-check of a record before a crash is reported. Variables so tests can

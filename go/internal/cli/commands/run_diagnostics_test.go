@@ -132,3 +132,106 @@ func TestRecentRuntimeOutputIsBoundedPrivateAndFailureOnly(t *testing.T) {
 		t.Fatal("missing recent stderr")
 	}
 }
+
+// runContextAtStep is a `wendy run` context whose last activation step is step.
+func runContextAtStep(t *testing.T, step string) context.Context {
+	t.Helper()
+	ctx, finish := startActivationOperation(context.Background(), "run", "wendy run")
+	t.Cleanup(func() { finish(nil) })
+	activationStep(ctx, step, nil)
+	return ctx
+}
+
+// A status the device returned before confirming start is the failure itself,
+// not a lost connection: say what it reported and do not send the user to
+// check the network.
+func TestRunStreamFailureReportsADeviceErrorBeforeStart(t *testing.T) {
+	cause := status.Error(codes.Internal, "failed to create container: bad entrypoint")
+	err := diagnoseRunStreamFailure(context.Background(), nil, &appconfig.AppConfig{AppID: "app"}, false, cause)
+	text := err.Error()
+	if !strings.Contains(text, "failed to create container: bad entrypoint") || !strings.Contains(text, "Internal") {
+		t.Fatalf("device error or its code missing: %v", err)
+	}
+	if strings.Contains(strings.ToLower(text), "connection") {
+		t.Fatalf("device-reported failure described as a connection problem: %v", err)
+	}
+	if !errors.Is(err, cause) || ExecutionErrorClass(err) != "grpc_internal" {
+		t.Fatalf("cause or class lost: %v (%s)", err, ExecutionErrorClass(err))
+	}
+	if got := runPhaseFailure(context.Background(), err).Error(); !strings.HasPrefix(got, "run failed during app start: ") {
+		t.Fatalf("wrong phase: %s", got)
+	}
+}
+
+// The crash confirmation window must not share a deadline with the lookup
+// before it: a slow first lookup would otherwise expire the window and turn a
+// recorded crash into "could not be confirmed".
+func TestRunStreamFailureConfirmsACrashAfterASlowLookup(t *testing.T) {
+	oldLookup, oldWindow, oldPoll := appExitLookupTimeout, appReplaceConfirmWindow, appReplaceConfirmPoll
+	appExitLookupTimeout, appReplaceConfirmWindow, appReplaceConfirmPoll = 400*time.Millisecond, 300*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() {
+		appExitLookupTimeout, appReplaceConfirmWindow, appReplaceConfirmPoll = oldLookup, oldWindow, oldPoll
+	})
+	client := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "oom_killed", 0)}}
+	client.onList = func(call int) {
+		if call == 1 {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	err := diagnoseRunStreamFailure(context.Background(), &grpcclient.AgentConnection{ContainerService: client}, &appconfig.AppConfig{AppID: "app"}, true, status.Error(codes.Unavailable, "lost"))
+	if !errors.Is(err, errAppCrashed) || ExecutionErrorClass(err) != "app_crashed" {
+		t.Fatalf("recorded crash not confirmed: %v (%s)", err, ExecutionErrorClass(err))
+	}
+}
+
+func TestRunPhaseNamesAConfirmedCrashAsAppExecution(t *testing.T) {
+	shortenReplaceConfirm(t, 5*time.Millisecond)
+	client := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "oom_killed", 0)}}
+	err := diagnoseRunStreamFailure(context.Background(), &grpcclient.AgentConnection{ContainerService: client}, &appconfig.AppConfig{AppID: "app"}, true, status.Error(codes.Unavailable, "lost"))
+	if got := runPhaseFailure(context.Background(), err).Error(); !strings.HasPrefix(got, "run failed during app execution: ") {
+		t.Fatalf("wrong phase: %s", got)
+	}
+}
+
+// The activation step is an analytics marker and can lag behind the work. A
+// failure that knows its own phase must not be named after a stale step.
+func TestRunPhasePrefersTheFailuresOwnPhaseOverTheStep(t *testing.T) {
+	ctx := runContextAtStep(t, "build")
+	err := inRunPhase("app start", errors.New("starting container: no such image"))
+	if got := runPhaseFailure(ctx, err).Error(); got != "run failed during app start: starting container: no such image" {
+		t.Fatal(got)
+	}
+	if got := runPhaseFailure(ctx, errors.New("compile error")).Error(); got != "run failed during build: compile error" {
+		t.Fatal(got)
+	}
+}
+
+func TestRunPhaseOmitsStepsItCannotName(t *testing.T) {
+	cause := errors.New("no device selected")
+	if got := runPhaseFailure(runContextAtStep(t, "select_target"), cause); got != cause {
+		t.Fatalf("internal step leaked into the message: %v", got)
+	}
+}
+
+// The no-build fast path starts an existing container while the step is still
+// "build".
+func TestFastPathStartFailureIsNotNamedBuild(t *testing.T) {
+	ctx := runContextAtStep(t, "build")
+	client := &scriptedContainerClient{stream: &deploymentAckStream{err: status.Error(codes.NotFound, "no such container")}}
+	err := startExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: client}, &appconfig.AppConfig{AppID: "app"}, runOptions{detach: true})
+	if got := runPhaseFailure(ctx, err).Error(); !strings.HasPrefix(got, "run failed during app start: ") {
+		t.Fatalf("wrong phase: %s", got)
+	}
+}
+
+// Compose runs never advance the step past "connect".
+func TestComposeBuildRefusalIsNotNamedConnect(t *testing.T) {
+	fakeAllBuildDisks(t, 1<<20)
+	conn, dir, _ := startComposeBuildProject(t)
+	cacheLinuxDeviceWithFree(conn, 100<<30)
+	ctx := runContextAtStep(t, "connect")
+	err := runComposeWithAgent(ctx, conn, dir, runOptions{deploy: true})
+	if got := runPhaseFailure(ctx, err).Error(); !strings.HasPrefix(got, "run failed during build: ") {
+		t.Fatalf("wrong phase: %s", got)
+	}
+}
