@@ -19,6 +19,21 @@ const (
 // Incarnations and traffic classes have independent HTTP/2 connections. Grants,
 // proofs and stream contexts are never cached. The enclosing Verifier isolates
 // issuers and custom browser transports; no process-global connection is shared.
+//
+// SECURITY: Transport policy belongs to the enclosing Verifier for its entire
+// lifetime, including idle entries, so a second policy never uses this pool.
+// Production construction was audited: cli/commands/tunnel_session.go creates
+// owners from a full credential/issuer snapshot and reuses an owner only for
+// that exact cache key; cli/browserauth/device.go creates a new owner capturing
+// one verified browser dial function per identity snapshot; cmd/wendy-agent/main.go
+// creates an owner for its configured issuer. Other CLI/MCP opens create fresh
+// owners. None changes Issuer, HTTP or RelayDial after use. Policy/account changes
+// require Close plus a new Verifier; Close permanently disables the former pool.
+// TestRelayPoolIdlePolicyReplacement covers that boundary with distinct captured
+// dial policies. Adding a function code pointer to this key would not distinguish
+// closures' captured policy and would create a false isolation guarantee. This
+// invariant must be retained by future constructors; mutating an existing owner's
+// policy is unsupported, rather than a separately keyed operation within it.
 type relayPoolKey struct {
 	endpoint, audience string
 	role               pb.JoinRole
