@@ -15,22 +15,26 @@ import (
 )
 
 type Session struct {
-	stream pb.TunnelBrokerV2Service_JoinSessionClient
-	cancel context.CancelFunc
-	conn   *grpc.ClientConn
-	mu     sync.Mutex
-	closed bool
+	stream    pb.TunnelBrokerV2Service_JoinSessionClient
+	cancel    context.CancelFunc
+	conn      *grpc.ClientConn
+	release   func()
+	closeOnce sync.Once
+	mu        sync.Mutex
+	closed    bool
 }
 
-func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c claims, key *ecdsa.PrivateKey, role pb.JoinRole, dial func(string) (*grpc.ClientConn, error)) (*Session, error) {
+func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c claims, key *ecdsa.PrivateKey, role pb.JoinRole, verifier *Verifier, service string) (*Session, error) {
 	ctx, cancel := context.WithDeadline(ctx, time.Unix(c.RelayExp, 0))
 	ctx = metadata.NewOutgoingContext(ctx, metadata.MD{})
-	conn, err := dial(broker.Endpoint)
+	conn, release, err := verifier.relays.acquire(ctx, relayPoolKey{endpoint: broker.Endpoint, audience: broker.Audience, role: role, management: service == "wendy-agent"}, verifier.dialRelay)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	s := &Session{cancel: cancel, conn: conn}
+	s := &Session{cancel: cancel, conn: conn, release: release}
+	// Release abandoned leases at cancellation or grant expiry as well as Close.
+	context.AfterFunc(ctx, func() { _ = s.Close() })
 	ok := false
 	defer func() {
 		if !ok {
@@ -44,6 +48,7 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 	if err != nil {
 		return nil, err
 	}
+	context.AfterFunc(s.stream.Context(), func() { _ = s.Close() })
 	if err = s.stream.Send(&pb.JoinSessionRequest{Message: &pb.JoinSessionRequest_Open{Open: &pb.JoinOpen{SessionGrantJws: artifact, Role: role}}}); err != nil {
 		return nil, err
 	}
@@ -73,7 +78,13 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 	ok = true
 	return s, nil
 }
-func (s *Session) Close() error { s.cancel(); return s.conn.Close() }
+func (s *Session) Close() error {
+	s.closeOnce.Do(func() {
+		s.cancel()
+		s.release()
+	})
+	return nil
+}
 func (s *Session) Send(payload []byte, halfClose bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,7 +127,8 @@ func (s *Session) Recv() ([]byte, bool, error) {
 }
 
 // Conn adapts the admitted byte stream to net.Conn. Closing either direction
-// tears down the owned gRPC connection, canceling blocked send/receive calls.
+// cancels this RPC and releases its pooled transport lease. Sibling sessions
+// retain their streams and connection.
 func (s *Session) Conn() net.Conn {
 	local, remote := net.Pipe()
 	go func() {

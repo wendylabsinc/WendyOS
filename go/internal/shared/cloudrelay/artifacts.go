@@ -106,7 +106,10 @@ type jwk struct {
 
 // Verifier obtains keys only from the configured Cloud issuer, never from a
 // lease, a broker-supplied URL, or a JWS header. Unknown kids refresh the cache.
+// Configure a Verifier before use; do not change its issuer or transport while
+// sessions are active. Close releases its session transports at owner shutdown.
 type Verifier struct {
+	relays relayPool
 	// RelayDial optionally carries broker gRPC over a TLS-verified browser transport.
 	RelayDial func(string) (*grpc.ClientConn, error)
 	relayDial func(string) (*grpc.ClientConn, error)

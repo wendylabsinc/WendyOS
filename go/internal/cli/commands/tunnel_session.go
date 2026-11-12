@@ -46,6 +46,7 @@ func (s *TunnelSession) SetActive(active bool) {
 		g.mu.Lock()
 		g.closed = true
 		for _, entry := range g.entries {
+			entry.verifier.Close()
 			entry.conn.Close()
 		}
 		g.entries = nil
