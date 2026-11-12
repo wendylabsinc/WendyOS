@@ -249,6 +249,41 @@ jobs:
             grep -F -- "--- PASS: $test (" "$RUNNER_TEMP/rtps-results"
           done
 
+      - name: Install resolver fixtures
+        run: sudo apt-get install -y systemd-resolved dbus iproute2 util-linux
+      - name: Require container DNS recovery through the real resolved stub
+        shell: bash
+        run: |
+          runtime="$RUNNER_TEMP/wendy-runtime/root"
+          sudo env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
+            bash .github/scripts/test-host-network-dns.sh "$RUNNER_TEMP/containerd.test" | tee "$RUNNER_TEMP/host-dns-positive.log"
+          grep -q '^--- PASS: TestHostNetworkDNSOutage ' "$RUNNER_TEMP/host-dns-positive.log"
+      - name: Reject a resolver pinned to the old upstream
+        env:
+          CGO_ENABLED: '0'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path('go/internal/agent/containerd/host_dns.go').resolve()
+          text = source.read_text()
+          old = 'nameserver 127.0.0.53'
+          assert text.count(old) == 1
+          root = Path(os.environ['RUNNER_TEMP'])
+          mutation = root / 'host_dns_pinned.go'
+          mutation.write_text(text.replace(old, 'nameserver 192.0.2.53'))
+          (root / 'host-dns-overlay.json').write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
+          PY
+          go test -overlay "$RUNNER_TEMP/host-dns-overlay.json" -c -o "$RUNNER_TEMP/host-dns-pinned.test" ./go/internal/agent/containerd
+          runtime="$RUNNER_TEMP/wendy-runtime/root"
+          if sudo env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
+            bash .github/scripts/test-host-network-dns.sh "$RUNNER_TEMP/host-dns-pinned.test" 2>&1 | tee "$RUNNER_TEMP/host-dns-negative.log"; then
+            echo 'Pinned resolver mutation unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'container DNS did not recover for after-upstream-replacement' "$RUNNER_TEMP/host-dns-negative.log"
+
   darwin-regressions:
     name: Darwin BLE regressions
     runs-on: macos-15
