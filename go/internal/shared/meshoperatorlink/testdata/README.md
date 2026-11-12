@@ -10,12 +10,16 @@ subsequent credits cannot exceed the receiver's initial grant.
 `lite_agent_window.c` checks the existing Wendy Lite production CBOR parser with
 an independent legacy hello, the same hello extended by `w = 262144`, every
 truncation of the extended hello, and Lite's unchanged ready response. It was
-validated against Wendy Lite revision `e7148ffc8b`. On macOS, from the WendyOS
-repository root, set `lite_components` to the sibling Lite components directory:
+validated against Wendy Lite revision `e7148ffc8b`. From the WendyOS repository
+root, set `lite_components` to the sibling Lite components directory. The linker
+must discard unused sections, because `control.c` also references PSA crypto
+symbols the fixture never calls; macOS and Linux spell that flag differently. On
+Linux without an esp-pqc checkout, the system Mbed TLS PSA headers also work:
 
 ```sh
 lite_components=../wendy-lite/components
-clang -std=c11 -Wall -Wextra -Werror -ffunction-sections -fdata-sections -Wl,-dead_strip \
+case "$(uname)" in Darwin) gc=-Wl,-dead_strip ;; *) gc=-Wl,--gc-sections ;; esac
+clang -std=c11 -Wall -Wextra -Werror -ffunction-sections -fdata-sections "$gc" \
   -I "$lite_components/wendy_net_peer/include" \
   -I "$lite_components/wendy_net_gossip/include" \
   -I "$lite_components/wendy_net_common/include" \
