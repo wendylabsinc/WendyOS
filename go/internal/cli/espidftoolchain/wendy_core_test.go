@@ -131,7 +131,7 @@ func TestApplyWendyCore(t *testing.T) {
 			}
 			want := [][]string{{"eim", "run", "idf.py reconfigure", DefaultVersion}}
 			if !existing {
-				want = append([][]string{{"eim", "run", "idf.py add-dependency --component main --git " + wendyCoreGitURL + " --git-path components/wendy_core wendy_core", DefaultVersion}}, want...)
+				want = append([][]string{{"eim", "run", "idf.py add-dependency --component main --git " + WendyLiteGitURL + " --git-path components/wendy_core wendy_core", DefaultVersion}}, want...)
 			}
 			if !reflect.DeepEqual(*calls, want) {
 				t.Fatalf("commands = %v, want %v", *calls, want)
@@ -168,7 +168,7 @@ func TestApplyWendyCoreUsesProjectToolchain(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{image, "idf.py", "add-dependency", "--component", "main", "--git", wendyCoreGitURL, "--git-path", "components/wendy_core", "wendy_core"},
+		{image, "idf.py", "add-dependency", "--component", "main", "--git", WendyLiteGitURL, "--git-path", "components/wendy_core", "wendy_core"},
 		{image, "idf.py", "reconfigure"},
 	}
 	if len(*calls) != len(want) {

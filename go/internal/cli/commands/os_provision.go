@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // PreProvisionedState is written to the config partition during imaging.
@@ -360,6 +362,21 @@ func buildWendyConf(creds []wendyconf.WifiCredential, deviceName string, state *
 	}
 
 	return conf, nil
+}
+
+// wendyConfPayload returns the content of the wendy_conf partition of a
+// Wendy Lite flash image: the magic "WYC0", the length of the protobuf
+// (uint32, little endian), then the protobuf-encoded conf.
+func wendyConfPayload(conf *litepb.WendyConf) ([]byte, error) {
+	pb, err := proto.Marshal(conf)
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, 8+len(pb))
+	copy(payload[0:4], "WYC0")
+	binary.LittleEndian.PutUint32(payload[4:8], uint32(len(pb)))
+	copy(payload[8:], pb)
+	return payload, nil
 }
 
 // pemBlockToDER decodes the first PEM block from s and returns its raw DER bytes.

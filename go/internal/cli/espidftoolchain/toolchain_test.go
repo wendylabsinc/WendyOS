@@ -416,3 +416,41 @@ func TestIdfCommandContext(t *testing.T) {
 		t.Errorf("calls = %v, want %v", *calls, want)
 	}
 }
+
+func TestEnsureIDF_InstallsRequestedVersion(t *testing.T) {
+	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) > 0 && args[0] == "list" {
+			return exec.CommandContext(ctx, "echo", "- "+DefaultVersion+" (selected) [/x]")
+		}
+		return exec.CommandContext(ctx, "true")
+	})
+
+	if err := EnsureIDF(context.Background(), "v6.1"); err != nil {
+		t.Fatalf("EnsureIDF() unexpected error: %v", err)
+	}
+	want := [][]string{{"eim", "--version"}, {"eim", "list"}, {"eim", "install", "-i", "v6.1", "-n", "true"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("calls = %v, want %v", *calls, want)
+	}
+}
+
+func TestEIMCommandContext(t *testing.T) {
+	calls := stubExecCommandContext(t, func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	})
+
+	EIMCommandContext(context.Background(), "v6.1", "python", "tools/configure.py", "board=seeed_xiao", "name=a b")
+
+	want := [][]string{{"eim", "run", `python tools/configure.py board=seeed_xiao 'name=a b'`, "v6.1"}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("calls = %v, want %v", *calls, want)
+	}
+}
+
+func TestEIMVersion(t *testing.T) {
+	for in, want := range map[string]string{"6.0.3": "v6.0.3", "6.1": "v6.1", "v6.1": "v6.1"} {
+		if got := EIMVersion(in); got != want {
+			t.Errorf("EIMVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

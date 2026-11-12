@@ -60,6 +60,6 @@ func installMissingEIM(ctx context.Context, assumeYes bool) (bool, error) {
 		return false, errors.New("EIM was installed via Homebrew but is not yet on PATH; " +
 			"open a new terminal or run: eval \"$(brew shellenv)\"")
 	}
-	cliLogln("EIM installed. Retrying the build...")
+	cliLogln("EIM installed.")
 	return true, nil
 }

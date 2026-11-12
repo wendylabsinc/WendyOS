@@ -2046,6 +2046,7 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 		if !installed {
 			return app, err
 		}
+		cliLogln("Retrying the build...")
 		app, err = p.Build(ctx, device, projectPath, projectType, product, opts.debug)
 	}
 	var missingCore *providers.MissingWendyCoreError

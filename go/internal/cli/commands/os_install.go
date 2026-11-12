@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
@@ -33,6 +30,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
+	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
 type preEnrollMode int
@@ -194,7 +192,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringVar(&storageOverride, "storage", "", "Force image storage variant: nvme or sd (default: auto-detect — real NVMe drives use nvme; a USB-attached drive uses the device's published image, SD for Raspberry Pi / NVMe for Jetson SSD enclosures). For jetson-agx-orin, emmc flashes the onboard eMMC over USB recovery instead of writing a drive")
 	cmd.Flags().BoolVar(&yesOverwriteInternal, "yes-overwrite-internal", false, "Required to wipe an internal (non-removable) drive in non-interactive mode")
 	cmd.Flags().StringVar(&deviceType, "device-type", "", "Device type from manifest (e.g. raspberry-pi-5)")
-	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted)")
+	cmd.Flags().StringVar(&versionFlag, "version", "", "WendyOS version to install (interactive if omitted); for the ESP* configurator entry, the wendy-lite tag or branch")
 	cmd.Flags().StringVar(&driveFlag, "drive", "", "Target drive path (e.g. /dev/disk4)")
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")
@@ -570,6 +568,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 				Value:   "wlite_target_" + t.Name,
 			})
 		}
+		items = append(items, liteBuildPickerItem())
 
 		items = append(items, tui.PickerItem{
 			Name:        "Linux Desktop",
@@ -634,6 +633,10 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 				return err
 			}
 		}
+	}
+
+	if selected == liteBuildValue {
+		return runLiteBuild(ctx, nightly, flagVersion, wifi, deviceName, preOpts)
 	}
 
 	// Thor flashes over USB recovery via its flashpack, never to a drive. The
@@ -2960,80 +2963,16 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return err
 	}
 
-	provCreds, err := resolveWiFiCredentialsList(wifi)
+	prov, err := resolveLiteProvisioning(wifi, deviceName, preOpts)
 	if err != nil {
 		return err
 	}
 
-	provDeviceName, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-
-	var enrollmentAuth *config.AuthConfig
-	if preOpts.mode != preEnrollSkip {
-		cfg, cfgErr := config.Load()
-		if cfgErr != nil {
-			if preOpts.mode == preEnrollForced {
-				return fmt.Errorf("--pre-enroll: loading config: %w", cfgErr)
-			}
-			cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
-		}
-		var resolveErr error
-		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(cfg, preOpts, isInteractiveTerminal())
-		if resolveErr != nil {
-			return resolveErr
-		}
-	}
-
-	wendyConf, err := buildWendyConf(provCreds, provDeviceName, nil)
-	if err != nil {
-		return fmt.Errorf("building Wendy config: %w", err)
-	}
-
-	if wendyConf.Wifi != nil && len(wendyConf.Wifi.Networks) > 1 {
-		return fmt.Errorf("this device only supports one Wi-Fi network")
-	}
-
-	// An explicitly supplied device is used verbatim on every attempt. For
-	// discovered devices, preserve the selected port across retries and ask
-	// again if it disappears, since a different port may be another board.
-	autoDiscoverPort := serialDevice.Port == ""
 	interactive := !jsonOutput && isInteractiveTerminal()
-	if autoDiscoverPort {
-		fmt.Println("\nScanning for ESP32 devices...")
-
-		// A device that's rebooting on its own can drop off and reappear on
-		// the USB bus as it re-enumerates, so a single scan can miss it.
-		// Retry briefly rather than failing on the very first attempt.
-		deadline := time.Now().Add(1 * time.Second)
-		var devices []discovery.SerialPortInfo
-		for {
-			devices, err = discovery.ResolveESP32InstallSerialPorts()
-			if err == nil && len(devices) == 0 {
-				err = fmt.Errorf("no ESP32 serial port found")
-			}
-			if err == nil || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if err != nil {
-			fmt.Println("\nNo ESP32 device detected.")
-			fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
-			fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
-			return fmt.Errorf("ESP32 not found: %w", err)
-		}
-		serialDevice, err = selectESP32InstallDevice(devices, discovery.SerialPortInfo{}, interactive, pickFromItems)
-		if err != nil {
-			return err
-		}
+	serialDevice, autoDiscoverPort, err := detectLiteInstallPort(serialDevice, prov, interactive)
+	if err != nil {
+		return err
 	}
-
-	if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
-		return fmt.Errorf("ESP32 enrollment requires native USB after flashing; connect the board's native USB port, or install with --pre-enroll=false and run 'wendy device enroll' over native USB later")
-	}
-	fmt.Println(esp32InstallCandidateMessage(serialDevice))
 
 	fmt.Println("Fetching latest Wendy Lite firmware...")
 	firmwareID, err := WendyLiteFirmwareID(board)
@@ -3060,18 +2999,119 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 	if err != nil {
 		return fmt.Errorf("loading firmware image: %w", err)
 	}
-
-	confBytes, err := proto.Marshal(wendyConf)
+	payload, err := wendyConfPayload(prov.conf)
 	if err != nil {
 		return fmt.Errorf("serializing device config: %w", err)
 	}
-	payload := make([]byte, 8+len(confBytes))
-	copy(payload[0:4], "WYC0")
-	binary.LittleEndian.PutUint32(payload[4:8], uint32(len(confBytes)))
-	copy(payload[8:], confBytes)
 	if err := img.SetPartition("wendy_conf", payload); err != nil {
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
+
+	return flashLiteImage(ctx, img, expectedChip, serialDevice, autoDiscoverPort, prov, asset.Version)
+}
+
+// liteProvisioning is the device configuration of a Wendy Lite install: the
+// content of the wendy_conf partition, and the Cloud account to enroll with
+// after flashing.
+type liteProvisioning struct {
+	conf  *litepb.WendyConf
+	creds []wendyconf.WifiCredential
+	name  string             // the device name; empty: the device makes one
+	auth  *config.AuthConfig // nil: no enrollment
+}
+
+// resolveLiteProvisioning gets the Wi-Fi networks, the device name and the
+// Cloud enrollment of a Wendy Lite install from the flags, else asks for
+// them. Enrollment itself runs after flashing (see flashLiteImage).
+func resolveLiteProvisioning(wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) (*liteProvisioning, error) {
+	creds, err := resolveWiFiCredentialsList(wifi)
+	if err != nil {
+		return nil, err
+	}
+
+	name, err := resolveDeviceName(deviceName)
+	if err != nil {
+		return nil, err
+	}
+
+	var auth *config.AuthConfig
+	if preOpts.mode != preEnrollSkip {
+		cfg, cfgErr := config.Load()
+		if cfgErr != nil {
+			if preOpts.mode == preEnrollForced {
+				return nil, fmt.Errorf("--pre-enroll: loading config: %w", cfgErr)
+			}
+			cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
+		}
+		auth, err = resolveLiteInstallEnrollment(cfg, preOpts, isInteractiveTerminal())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	conf, err := buildWendyConf(creds, name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building Wendy config: %w", err)
+	}
+	if conf.Wifi != nil && len(conf.Wifi.Networks) > 1 {
+		return nil, fmt.Errorf("this device only supports one Wi-Fi network")
+	}
+	return &liteProvisioning{conf: conf, creds: creds, name: name, auth: auth}, nil
+}
+
+// detectLiteInstallPort returns the serial port to flash Wendy Lite to. An
+// empty serialDevice scans the install-capable ESP32 ports and asks which one
+// to use when there are several; autoDiscover then reports true, so that a
+// retry can scan again.
+func detectLiteInstallPort(serialDevice discovery.SerialPortInfo, prov *liteProvisioning, interactive bool) (port discovery.SerialPortInfo, autoDiscover bool, err error) {
+	// An explicitly supplied device is used verbatim on every attempt. For
+	// discovered devices, preserve the selected port across retries and ask
+	// again if it disappears, since a different port may be another board.
+	autoDiscover = serialDevice.Port == ""
+	if autoDiscover {
+		fmt.Println("\nScanning for ESP32 devices...")
+
+		// A device that's rebooting on its own can drop off and reappear on
+		// the USB bus as it re-enumerates, so a single scan can miss it.
+		// Retry briefly rather than failing on the very first attempt.
+		deadline := time.Now().Add(1 * time.Second)
+		var devices []discovery.SerialPortInfo
+		for {
+			devices, err = discovery.ResolveESP32InstallSerialPorts()
+			if err == nil && len(devices) == 0 {
+				err = fmt.Errorf("no ESP32 serial port found")
+			}
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			fmt.Println("\nNo ESP32 device detected.")
+			fmt.Println("Make sure your ESP32 is connected via USB and in bootloader mode.")
+			fmt.Println("To enter bootloader mode: hold the BOOT button, press RESET, then release BOOT.")
+			return discovery.SerialPortInfo{}, false, fmt.Errorf("ESP32 not found: %w", err)
+		}
+		serialDevice, err = selectESP32InstallDevice(devices, discovery.SerialPortInfo{}, interactive, pickFromItems)
+		if err != nil {
+			return discovery.SerialPortInfo{}, false, err
+		}
+	}
+
+	if prov.auth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+		return discovery.SerialPortInfo{}, false, fmt.Errorf("ESP32 enrollment requires native USB after flashing; connect the board's native USB port, or install with --pre-enroll=false and run 'wendy device enroll' over native USB later")
+	}
+	fmt.Println(esp32InstallCandidateMessage(serialDevice))
+	return serialDevice, autoDiscover, nil
+}
+
+// flashLiteImage flashes a Wendy Lite flash image to serialDevice, with the
+// retry prompts, then enrolls the device when prov has an account. version
+// names the firmware in the messages and in the enrollment; it can be empty.
+func flashLiteImage(ctx context.Context, img *EspFlashImage, expectedChip chipModel, serialDevice discovery.SerialPortInfo, autoDiscoverPort bool, prov *liteProvisioning, version string) error {
+	interactive := !jsonOutput && isInteractiveTerminal()
+	enrollmentAuth := prov.auth
+	provCreds := prov.creds
 
 	// Flash with progress bar. Retries on failure: a busy port gets an extra
 	// offer to identify and kill whatever holds it; any other failure just
@@ -3151,10 +3191,14 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
-	fmt.Printf("\nSuccessfully flashed Wendy Lite %s!\n", asset.Version)
+	if version != "" {
+		fmt.Printf("\nSuccessfully flashed Wendy Lite %s!\n", version)
+	} else {
+		fmt.Println("\nSuccessfully flashed Wendy Lite!")
+	}
 	fmt.Println("The device will reboot automatically.")
 	if enrollmentAuth != nil {
-		return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, provDeviceName, asset.Version, interactive)
+		return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, prov.name, version, interactive)
 	}
 	return nil
 }

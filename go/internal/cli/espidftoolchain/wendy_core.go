@@ -14,7 +14,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const wendyCoreGitURL = "https://github.com/wendylabsinc/wendy-lite.git"
+// WendyLiteGitURL is the git repository of the Wendy Lite firmware: the
+// source of the wendy_core component and of the firmware that `wendy install`
+// builds.
+const WendyLiteGitURL = "https://github.com/wendylabsinc/wendy-lite.git"
 
 // HasBuildComponent checks ESP-IDF's generated list of linked components.
 func HasBuildComponent(projectPath, name string) (bool, error) {
@@ -132,7 +135,7 @@ func (s *WendyCoreSetup) Apply(ctx context.Context) error {
 		return err
 	}
 	if !s.hasDependency {
-		if err := s.runIDF(ctx, "add-dependency", "--component", "main", "--git", wendyCoreGitURL, "--git-path", "components/wendy_core", "wendy_core"); err != nil {
+		if err := s.runIDF(ctx, "add-dependency", "--component", "main", "--git", WendyLiteGitURL, "--git-path", "components/wendy_core", "wendy_core"); err != nil {
 			return err
 		}
 	}
