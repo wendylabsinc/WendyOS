@@ -2,6 +2,7 @@
 """Exercise workflow failure/concurrency behavior with local command fixtures."""
 
 import json
+import fnmatch
 import os
 from pathlib import Path
 import shlex
@@ -119,6 +120,12 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
         self.assertIn("pull_request", config["on"])
         self.assertIn(".github/scripts/**", config["on"]["pull_request"]["paths"])
         self.assertIn(".github/dependabot.yml", config["on"]["pull_request"]["paths"])
+        for event in ("push", "pull_request"):
+            for filename in (".github/ci-tests/python-gpu/main.py", ".github/ci-tests/python-onnx-gpu/main.py",
+                             ".github/regression-coverage/manual/jetson-display-rehearsal.py",
+                             ".github/regression-coverage/manual/fixtures/jetson-display/main.c"):
+                self.assertTrue(any(fnmatch.fnmatchcase(filename, pattern) for pattern in config["on"][event]["paths"]),
+                                f"{event} omits accelerator fixture {filename}")
         self.assertTrue(any("api-snapshot-smoke.py" in s.get("run", "")
                             for s in config["jobs"]["vet"]["steps"]))
         self.assertIn("automation-regressions", config["jobs"]["test"]["needs"])
