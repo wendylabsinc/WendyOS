@@ -737,7 +737,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2248",
       "title": "fix: point Dependabot's gomod updates at the repository root",
       "package": "01",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Dependabot now points at the root module; no configuration test verifies that every Go module is included.",
       "required_follow_up": "Check configured update directories against discovered go.mod files.",
       "evidence": [
@@ -746,15 +746,22 @@
           "command": "python .github/scripts/ci_execution_test.py -v",
           "runner": "local macOS",
           "result": "5 tests passed. Dependabot directories equal all tracked Go modules, including Babel. Race tests retain a 2-CPU runner, per-package timeout and compiler concurrency guard, with a new 30-minute job deadline. A failed package index refresh prevents installation."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "Configured modules and race-job limits are checked by the required automation gate, which passed in CI."
     },
     {
       "key": "2829",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2829",
       "title": "ci: repair Ubuntu dependency mirrors and bound race test headroom",
       "package": "01",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Workflow changes repair package mirrors and adjust test resources; no failure fixture proves mirror retry behavior or prevents unbounded race-test resource use.",
       "required_follow_up": "Exercise the setup step against an unavailable mirror and keep explicit per-job/per-package resource and timeout assertions.",
       "evidence": [
@@ -763,8 +770,15 @@
           "command": "python .github/scripts/ci_execution_test.py -v",
           "runner": "local macOS",
           "result": "5 tests passed. Dependabot directories equal all tracked Go modules, including Babel. Race tests retain a 2-CPU runner, per-package timeout and compiler concurrency guard, with a new 30-minute job deadline. A failed package index refresh prevents installation."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "Configured modules and race-job limits are checked by the required automation gate, which passed in CI."
     },
     {
       "key": "2679",
@@ -851,10 +865,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2181",
       "title": "cli: reject an ESP32 --device-type before fetching manifests",
       "package": "02",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The ESP32 guard was moved before manifest fetching. Related install flag validation exists, but no exact no-network ordering test was found for this correction.",
       "required_follow_up": "Invoke os install with an ESP32 type and assert the manifest fetcher is never called.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": "go/internal/cli/commands/os_install_esp32_preflight_test.go:TestOSInstallESP32RefusesBeforeAnyManifestFetch",
+          "runner": "local macOS",
+          "command": "go test ./go/internal/cli/commands -run \"^(TestOSInstallESP32RefusesBeforeAnyManifestFetch|TestApplyDeviceTypeAlias|TestInstallPlanResolvesAlias|TestOSInstallDriversPreparePinsImageKernel|TestResolveInstallDeviceType)\" -count=1",
+          "result": "All 15 target/mode combinations failed before the fix because alias resolution fetched a manifest. After moving refusal before alias/driver resolution, all cases and adjacent alias/driver tests pass. New CI execution pending."
+        }
+      ]
     },
     {
       "key": "2568",
@@ -2371,7 +2392,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2819",
       "title": "Update Go to 1.27.4 to fix govulncheck failure",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The Go version bump addresses a vulnerability-scan failure. The security workflow is the recurring check, but this audit did not rerun the advisory scan.",
       "required_follow_up": "Require govulncheck to pass with the pinned release toolchain and preserve the compiler minimum across build jobs.",
       "evidence": [
@@ -2384,15 +2405,22 @@
         {
           "test": ".github/workflows/security.yml:govulncheck",
           "result": "Required Go Tests dependency-security invokes the same hosted scan with the root Go version. New CI execution pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2769",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2769",
       "title": "ci: run govulncheck on GitHub-hosted Ubuntu",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "govulncheck now runs on hosted Ubuntu. The test files changed in the same PR concern MCP discovery and do not test vulnerability-runner setup.",
       "required_follow_up": "Require the security workflow and assert its toolchain/setup commands independently of MCP tests.",
       "evidence": [
@@ -2405,15 +2433,22 @@
         {
           "test": ".github/workflows/security.yml:govulncheck",
           "result": "Required Go Tests dependency-security invokes the same hosted scan with the root Go version. New CI execution pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2479",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2479",
       "title": "Build docs: resolve npm audit high (zod GHSA-mrhx-c7xc-m3w5)",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "A dependency lock update addresses the named advisory. The recurring protection is npm audit rather than an exploit reproducer; the scan was not rerun in this audit.",
       "required_follow_up": "Keep the high/critical audit gate and confirm it checks the shipped lockfile.",
       "evidence": [
@@ -2433,15 +2468,22 @@
           "command": "node --test tests/*.test.mjs; npx --no-install vinext build",
           "runner": "local macOS",
           "result": "105 tests passed without skips, production build passed; local Wrangler served generated HTML with HTTP 200."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2472",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2472",
       "title": "fix: bump next for GHSA-2464-fhr4-w9xw (docs, web-client)",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Next versions were updated in both apps. Lockfiles and builds do not independently demonstrate that the advisory behavior remains fixed.",
       "required_follow_up": "Keep both dependency audit gates and a focused upstream advisory regression where practical.",
       "evidence": [
@@ -2461,15 +2503,22 @@
           "command": "node --test tests/*.test.mjs; npx --no-install vinext build",
           "runner": "local macOS",
           "result": "105 tests passed without skips, production build passed; local Wrangler served generated HTML with HTTP 200."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2471",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2471",
       "title": "fix: patch Node.js for CVE-2026-111497",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Node versions were updated across workflows, but this change has no runtime advisory reproducer.",
       "required_follow_up": "Validate the Node version in each build/runtime entry point and keep the dependency security gate.",
       "evidence": [
@@ -2489,15 +2538,22 @@
           "command": "node --test tests/*.test.mjs; npx --no-install vinext build",
           "runner": "local macOS",
           "result": "105 tests passed without skips, production build passed; local Wrangler served generated HTML with HTTP 200."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2426",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2426",
       "title": "build: update Go to 1.27.3",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The Go patch update addresses a crypto/x509 advisory; coverage depends on the vulnerability scan and upstream tests.",
       "required_follow_up": "Keep the compiler security minimum and require govulncheck on the shipped graph.",
       "evidence": [
@@ -2510,15 +2566,22 @@
         {
           "test": ".github/workflows/security.yml:govulncheck",
           "result": "Required Go Tests dependency-security invokes the same hosted scan with the root Go version. New CI execution pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2280",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2280",
       "title": "Keep Go vulnerability scans working",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The vulnerability workflow was repaired, but the change contains no regression test for its setup or tool invocation.",
       "required_follow_up": "Keep a required scan job and test its setup/version contract.",
       "evidence": [
@@ -2531,15 +2594,22 @@
         {
           "test": ".github/workflows/security.yml:govulncheck",
           "result": "Required Go Tests dependency-security invokes the same hosted scan with the root Go version. New CI execution pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2201",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2201",
       "title": "fix(docs): update sharp past librsvg advisory",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Sharp was updated past the librsvg advisory. No exploit reproducer was found; dependency scanning is the available recurring control.",
       "required_follow_up": "Keep the production dependency audit and confirm the packaged Sharp/libvips versions.",
       "evidence": [
@@ -2559,15 +2629,22 @@
           "command": "node --test tests/*.test.mjs; npx --no-install vinext build",
           "runner": "local macOS",
           "result": "105 tests passed without skips, production build passed; local Wrangler served generated HTML with HTTP 200."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2190",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2190",
       "title": "fix(docs): update vulnerable source-map-js resolution",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The vulnerable source-map-js resolution was updated. The source fix itself is upstream.",
       "required_follow_up": "Keep an audit of the resolved lockfile and prevent reintroduction of the vulnerable resolution.",
       "evidence": [
@@ -2587,15 +2664,22 @@
           "command": "node --test tests/*.test.mjs; npx --no-install vinext build",
           "runner": "local macOS",
           "result": "105 tests passed without skips, production build passed; local Wrangler served generated HTML with HTTP 200."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "1995",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1995",
       "title": "fix: bump grpc to v1.83.2 for GO-2026-6443 and GO-2026-6348",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "gRPC was upgraded for two advisories. govulncheck is the recurring security check; no local advisory reproducer was found.",
       "required_follow_up": "Keep the vulnerability gate against the shipped module graph.",
       "evidence": [
@@ -2608,15 +2692,22 @@
         {
           "test": ".github/workflows/security.yml:govulncheck",
           "result": "Required Go Tests dependency-security invokes the same hosted scan with the root Go version. New CI execution pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "1989",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1989",
       "title": "fix(docs): clear npm audit high/critical vulns in Fumadocs",
       "package": "17",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Fumadocs dependency updates address audit findings. No local reproducer is expected for every upstream defect, but builds alone are insufficient.",
       "required_follow_up": "Require the high/critical production dependency audit on the docs lockfile.",
       "evidence": [
@@ -2636,8 +2727,15 @@
           "command": "node --test tests/*.test.mjs; npx --no-install vinext build",
           "runner": "local macOS",
           "result": "105 tests passed without skips, production build passed; local Wrangler served generated HTML with HTTP 200."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43210579806",
+          "head": "e898c8c64ce2388c1493839a2df30ea648c6f044",
+          "runner": "GitHub Actions",
+          "result": "Required reusable security workflow passed both full-lockfile npm audits and govulncheck; Browser WASM job passed all fixture tests and vinext build; offline automation passed security/version/configuration fixtures."
         }
-      ]
+      ],
+      "resolution": "The stack now requires the actual scans against the shipped lockfiles and release toolchain. High/critical npm findings are cleared; 19 moderate web tooling findings remain outside this gate threshold."
     },
     {
       "key": "2799",
