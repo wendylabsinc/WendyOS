@@ -68,6 +68,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Verify shared contract pin is on service-protos master
         run: |
           source Proto/shared-grpc-api-contracts.sh
@@ -93,6 +95,8 @@ jobs:
         run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
 
   babel:
+    permissions:
+      contents: read
     name: Babel tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -101,6 +105,8 @@ jobs:
         working-directory: go/babel
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -118,10 +124,14 @@ jobs:
         run: go vet ./...
 
   unit-tests:
+    permissions:
+      contents: read
     name: Race tests
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
@@ -170,6 +180,8 @@ jobs:
           python3 scripts/package-chatgpt-plugin.py --check
 
   containerd-regressions:
+    permissions:
+      contents: read
     name: Containerd lifecycle regressions (${{ matrix.runtime }})
     runs-on: ubuntu-24.04
     strategy:
@@ -183,6 +195,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-go-ci
         with:
           cache-name: containerd-regressions
@@ -218,6 +232,8 @@ jobs:
           done
 
   darwin-regressions:
+    permissions:
+      contents: read
     name: Darwin BLE regressions
     runs-on: macos-15
     timeout-minutes: 15
@@ -225,6 +241,8 @@ jobs:
       CGO_ENABLED: '1'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -233,10 +251,14 @@ jobs:
         run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
 
   windows:
+    permissions:
+      contents: read
     name: Windows CLI
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
@@ -260,11 +282,15 @@ jobs:
           go test -c -o /dev/null ./internal/cli/commands
 
   wasm:
+    permissions:
+      contents: read
     name: Browser WASM
     runs-on: runs-on,runner=2cpu-linux-x64
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go and Node
         uses: ./.github/actions/setup-go-ci
@@ -297,6 +323,8 @@ jobs:
         run: go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth ./go/internal/shared/flock -count=1 -timeout 120s
 
   windows-telemetry:
+    permissions:
+      contents: read
     name: Windows telemetry
     runs-on: windows-latest
     timeout-minutes: 20
@@ -304,6 +332,8 @@ jobs:
       CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -351,6 +381,8 @@ jobs:
         working-directory: go/internal/agent/inference
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -364,11 +396,30 @@ jobs:
       - name: Run worker unit tests
         run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
 
+  workflow-security:
+    name: Workflow security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Audit workflow trust boundaries
+        run: |
+          python3 .github/scripts/ci_security_test.py
+          python3 -m venv "$RUNNER_TEMP/workflow-audit"
+          "$RUNNER_TEMP/workflow-audit/bin/pip" install --disable-pip-version-check zizmor==1.32.0
+          "$RUNNER_TEMP/workflow-audit/bin/zizmor" --offline --no-config --no-ignores --min-severity high --min-confidence high .github
+
   # Preserve the existing required "Test" check after splitting its work.
   test:
+    permissions:
+      contents: read
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, workflow-security]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -384,6 +435,7 @@ jobs:
           DARWIN_RESULT: ${{ needs.darwin-regressions.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
+          WORKFLOW_SECURITY_RESULT: ${{ needs.workflow-security.result }}
         run: |
           test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
           test "$BABEL_RESULT" = success
@@ -396,13 +448,18 @@ jobs:
           test "$INFERENCE_WORKER_RESULT" = success
           test "$CONTAINERD_RESULT" = success
           test "$DARWIN_RESULT" = success
+          test "$WORKFLOW_SECURITY_RESULT" = success
 
   agent-startup:
+    permissions:
+      contents: read
     name: Agent setup startup
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
         with:
@@ -413,10 +470,14 @@ jobs:
         run: python3 .github/scripts/integration-agent-startup.py --agent /tmp/wendy-agent
 
   vet:
+    permissions:
+      contents: read
     name: Vet
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: ./.github/actions/setup-go-ci
@@ -431,10 +492,14 @@ jobs:
         run: go vet ./...
 
   format:
+    permissions:
+      contents: read
     name: Format Check
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -455,10 +520,14 @@ jobs:
           fi
 
   shell-tests:
+    permissions:
+      contents: read
     name: Install script tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: shellcheck install scripts
         run: shellcheck go/internal/cli/assets/docs/agent.sh go/internal/cli/assets/docs/cli.sh
       - name: shellcheck agent package scripts

@@ -53,11 +53,12 @@ concurrency:
 permissions:
   contents: read
   actions: read
-  issues: write
-  pull-requests: write
 
 jobs:
   swift-e2e-local-macos:
+    permissions:
+      contents: read
+      actions: read
     name: 'Local: macOS 26'
     # Re-enable once Joannis sets up self-hosted Mac runners.
     if: false
@@ -72,6 +73,8 @@ jobs:
       GOCACHE: ${{ github.workspace }}/swift/Build/Go/cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Capture Xcode version
         id: xcode
@@ -127,6 +130,9 @@ jobs:
           if-no-files-found: error
 
   swift-e2e-local-ubuntu:
+    permissions:
+      contents: read
+      actions: read
     name: 'Local: Ubuntu 24'
     if: ${{ inputs.target_group == '' || inputs.target_group == 'all' || inputs.target_group == 'local' }}
     runs-on: ubuntu-24.04
@@ -139,6 +145,15 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # This job is required by the default-branch ruleset and runs on every PR.
+      - name: Audit workflow trust boundaries
+        run: |
+          python3 .github/scripts/ci_security_test.py
+          python3 -m venv "$RUNNER_TEMP/workflow-audit"
+          "$RUNNER_TEMP/workflow-audit/bin/pip" install --disable-pip-version-check zizmor==1.32.0
+          "$RUNNER_TEMP/workflow-audit/bin/zizmor" --offline --no-config --no-ignores --min-severity high --min-confidence high .github
       # The Linux wendy CLI links libusb via cgo (Thor flashing); the harness
       # builds the CLI on this runner.
       - name: Install libusb
@@ -470,6 +485,10 @@ jobs:
 
   swift-e2e-analyze:
     name: Analyze E2E Results
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
     # Failed or cancelled jobs need a diagnosis, a rerun's flake outcome needs
     # every attempt's artifacts, and a manual run's input promises a review. A
     # green first attempt goes to swift-e2e-passed instead. .github/scripts/
@@ -494,6 +513,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # Review tools run trusted base code; downloaded attempts are data.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Ensure Swift toolchain
@@ -591,7 +613,7 @@ jobs:
             "${{ steps.e2e-run.outputs.run_dir }}"
 
       - name: Download Swift E2E attempts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: ${{ runner.temp }}/wendy-raw/${{ github.run_id }}
           pattern: swift-e2e-tests.gh${{ github.run_id }}.*
@@ -609,7 +631,7 @@ jobs:
           #   <raw_dir>/<attempt-id>/attempt.json
           if [[ -f "${raw_dir}/attempt.json" ]]; then
             attempt_id="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["attemptID"])' "${raw_dir}/attempt.json")"
-            if [[ -z "${attempt_id}" || "${attempt_id}" == *"/"* ]]; then
+            if [[ ! "${attempt_id}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$ ]]; then
               echo "ERROR: invalid Swift E2E attempt ID: ${attempt_id}" >&2
               exit 1
             fi
@@ -799,6 +821,8 @@ jobs:
         shell: bash
         env:
           DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           # Expose exactly one credential, chosen by the auth probe above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.review-auth.outputs.auth_mode == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           ANTHROPIC_API_KEY: ${{ steps.review-auth.outputs.auth_mode == 'api-key' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -827,7 +851,10 @@ jobs:
           }
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            review_args+=(--diff "origin/main...HEAD")
+            # Read the proposed diff without checking out or running its scripts.
+            [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ && "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags origin "$PR_HEAD_SHA"
+            review_args+=(--diff "${PR_BASE_SHA}...${PR_HEAD_SHA}")
           elif [[ -n "${DIFF_BASE_REF}" ]]; then
             resolved_base="$(resolve_diff_base_ref "${DIFF_BASE_REF}" || true)"
             if [[ -z "${resolved_base}" ]]; then
@@ -861,7 +888,7 @@ jobs:
       - name: Upload Swift E2E Report
         id: upload_e2e_report
         if: always()
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.e2e-run.outputs.run_artifact_id }}
           path: ${{ steps.e2e-run.outputs.run_dir }}/**
@@ -870,7 +897,7 @@ jobs:
 
       - name: Post Swift E2E PR Review
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
@@ -1119,6 +1146,10 @@ jobs:
 
   swift-e2e-passed:
     name: Record E2E Pass
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
     # The exact complement of swift-e2e-analyze for a normal green run. Without
     # it, a fixed failure's review comment and main's last Failed post would
     # outlive the failure.
