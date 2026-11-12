@@ -1577,7 +1577,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2420",
       "title": "Request signed Wendy Net announcements from one neighbour",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The mesh PR contains many codec, lease and gossip tests, but coverage is spread across kernel, transport and recovery suites with different runtime requirements.",
       "required_follow_up": "Require the four-node current-leaf publication-loss recovery gate and both controls in the existing Linux network job. No kernel-TUN, radio or GUI claim.",
       "evidence": [
@@ -1588,8 +1588,14 @@
             ".github/scripts/test-publication-loss-packets.sh"
           ],
           "result": "Four real TLS/gVisor runtimes form a diamond. The durable publisher restarts with a new signing key while primary DATA is dropped. The receiver withdraws old-key publication authority, keeps unrelated TCP working, and retrieves the exact signed envelope from the alternate supplier after the full production 30-second idle deadline. Local race gate and native Linux capability-free execution pass. Retained timed-out claim and obsolete-leaf-authority controls fail at their intended assertions. Required hosted execution remains pending."
+        },
+        {
+          "head": "d6548a219db321d135bdec5ef6f3be1005df7220",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43324678652/job/131554041888",
+          "result": "Hosted four-node TLS/gVisor publication-loss gate passed TestPublicationLossDiamondRecoversWithCurrentLeaf in35.09s, including the full30-second production retry interval and alternate-supplier current-leaf recovery. Both retained-timed-out-claim and obsolete-leaf-authority controls failed their named behavior assertions. Complete normal/control logs are retained in publication-loss-packets. No physical radio or kernel-TUN coverage is claimed."
         }
-      ]
+      ],
+      "resolution": "Required hosted regression assertions and negative-control outcomes were inspected and passed."
     },
     {
       "key": "2524",
@@ -2850,9 +2856,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/commit/d11d2e983ddfb1a592e86468bd73458c875082d0",
       "title": "cli: report the config partition written only once it is released",
       "package": "10",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Write, close, unmount, retry and error aggregation have direct tests. The full Orin install rehearsal is opt-in rather than ordinary CI.",
-      "required_follow_up": "Register and execute the full three-pass Orin seed rehearsal and flashed-seed omission control on the existing Nano/NVMe producer row. The full archive, real arm64 Agent and private 128 GiB sparse target remain required; portable checks alone do not close the entry.",
+      "required_follow_up": "Execute the registered full three-pass Orin seed rehearsal and seed-omission control in the existing Nano/NVMe producer row of companion WendyOS-Builder PR356. Preserve full producer archive, real arm64 Agent and private128GiB sparse target; verify complete writer/readback evidence before closure.",
       "evidence": [
         {
           "tests": [
@@ -2863,6 +2869,17 @@
             "go/internal/cli/commands/os_install_orin_seed_sim_test.go"
           ],
           "result": "Prepared full producer-archive rehearsal with streamed hash/header/XML accounting before allocation, explicit arm64 Agent bytes, private cache and three actual writer passes. Seed-omission control must fail after a complete write and flashed readback. Four portable tests and both actual-file producer helper tests pass locally. Full producer execution and companion workflow registration remain pending; local free capacity is below the preflight minimum. No payload or iteration was removed, and no physical first-boot claim is made."
+        },
+        {
+          "head": "a18e383c36a3aac9eb74d012c7ab4578b67d2a1b",
+          "url": "https://github.com/wendylabsinc/WendyOS-Builder/pull/356",
+          "tests": [
+            "scripts/test-orin-seed-producer.py",
+            "scripts/orin_seed_producer_test.py",
+            ".github/workflows/build.yml",
+            ".github/workflows/scripts-ci.yml"
+          ],
+          "result": "Companion PR356 registers the full writer gate after the existing Nano flashpack build, before upload, using pinned CLI b3af32266cb6c889db7bb42b2a580b5905e2f0cf and the producer artifact on its private job disk. Process-local Go and pinned private libusb preserve publisher setup. Twelve combined producer/manifest checks and an ordinary-user Linux static libusb smoke passed. Hosted Scripts CI passed; actual Nano image/rehearsal job131563455197 is running and full writer proof remains pending. No new job or matrix row was introduced."
         }
       ]
     },
@@ -3074,7 +3091,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2352",
       "title": "Keep wendy-agent running after an apt or dnf upgrade",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Package-script tests mock the service manager and cover upgrade script behavior. They do not install and upgrade the actual DEB/RPM in a running service-manager environment.",
       "required_follow_up": "Require actual installed Agent health and successful normal/control upgrades in fresh booted Ubuntu 22.04, Ubuntu 24.04 and Fedora 44 guests. Verify the current candidate packages, configuration retention and stopped service after removal. Native arm64 release execution remains separate from the amd64 PR gate.",
       "evidence": [
@@ -3092,8 +3109,14 @@
           "head": "751a26298cf2a1986442de1ba291138432bd892f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43319307528/job/131535787788",
           "result": "Actual Ubuntu22 normal and negative-control package journeys passed. Candidate CLI/Agent2099.01.04-regression-package amd64 served real RPCs before and after a successful upgrade; PID/start identity changed, five-second stable health and retained configuration passed, and removal stayed inactive for eight samples. The successful negative-control upgrade left the service inactive for eight samples as required. Cleanup reported no errors. Ubuntu24 stopped in dependency provisioning because nspawn host timezone synchronization prevented tzdata replacing /etc/localtime; --timezone=off fixture correction is prepared. Ubuntu24/Fedora and nativearm64 remain pending; this is partial distribution evidence, not full2352 closure."
+        },
+        {
+          "head": "d6548a219db321d135bdec5ef6f3be1005df7220",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43324678652/job/131554042279",
+          "result": "All six amd64 Ubuntu22, Ubuntu24 and Fedora44 normal/control systemd guest journeys passed using actual candidate CLI/Agent packages. Each normal install and upgrade served real RPCs, changed the service PID/start identity, retained configuration and remained healthy for five seconds; removal stayed inactive for eight samples. Each negative-control upgrade succeeded as a package operation but left the service inactive for eight samples. Guest cleanup reported no errors. Artifact13991699338 retains exact package hashes, transaction logs and observations. This verifies package/service upgrade behavior; native arm64 release and actual GCP upload/consumption are separate acceptance boundaries."
         }
-      ]
+      ],
+      "resolution": "Required hosted regression assertions and negative-control outcomes were inspected and passed."
     },
     {
       "key": "2251",
