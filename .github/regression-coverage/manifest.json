@@ -3057,10 +3057,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2406",
       "title": "Support Mosaico with wendy run and wendy install",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "ESP-IDF/toolchain tests cover preparation and target selection. The rootful Linux ownership fix needs a real root-to-user build-output check.",
-      "required_follow_up": "Run a containerized ESP-IDF build as root and assert generated files are owned by the invoking user afterward.",
-      "evidence": []
+      "required_follow_up": "Require real ESP-IDF rootful Linux compilation and ownership after success, configuration failure and cancellation, plus an omitted-ownership-restoration control. Reuse the containerd job with a bounded step; no device flash or Mosaico application acceptance is claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/espidftoolchain/project_docker_linux_test.go",
+            ".github/scripts/test-esp-idf-ownership.py",
+            ".github/scripts/esp_idf_ownership_test.py",
+            ".github/scripts/fixtures/esp-idf-ownership-2406.md"
+          ],
+          "result": "Actual pinned ESP-IDF image built the minimal ESP32-C6 app on native arm64: CMake observed UID0, 404 build steps produced a real RISC-V ELF and ESP binary. Intentional configure failure, package tests, Linux normal/control compilation and three cleanup-scope checks pass. The actual non-root Linux caller/rootful Docker ownership assertions and omitted-restore control require hosted execution; macOS Docker execution is not host-ownership proof."
+        }
+      ]
     },
     {
       "key": "1764",

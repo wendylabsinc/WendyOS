@@ -25,6 +25,7 @@ SUITES = (
     "release_provenance_test.py",
     "release_policy_test.py",
     "runtime_guest_bootstrap_test.py",
+    "esp_idf_ownership_test.py",
     "janitor_report_test.py",
     "runner_cleanup_test.py",
     "gpu_fixture_selection_test.py",
