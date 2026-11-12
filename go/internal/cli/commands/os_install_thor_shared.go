@@ -219,7 +219,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		case thorIsUSBAccessErr(err):
 			// Stage 1 re-opens the device (it can re-enumerate between the scan
 			// and the flash); a denied re-open gets the same guidance as the scan.
-			fmt.Println("\n" + usbAccessHint())
+			fmt.Println("\n" + usbAccessHintBox())
 		case errors.Is(err, errGadgetUnreachable):
 			// Stage-1 booted but the gadget never re-enumerated; nothing was written.
 			printThorGadgetUnreachableHint(os.Stdout)
@@ -489,16 +489,16 @@ const (
 	usbUdevRule     = `SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
 )
 
-// usbAccessHint explains how to regain USB access to the Jetson when the OS
+// usbAccessHintBox explains how to regain USB access to the Jetson when the OS
 // refuses to open it: on Linux, udev permissions; on macOS, its own kernel driver
 // bound to the recovery device (root needed to seize it). Keep the hint unbordered
 // and commands on single logical lines so terminal selections remain executable.
-func usbAccessHint() string {
+func usbAccessHintBox() string {
 	return strings.Join(usbAccessHintLines(runtime.GOOS), "\n")
 }
 
 // usbAccessHintLines builds the body of the USB-access-denied hint for the given
-// GOOS. Split out from usbAccessHint so both OS branches are testable without
+// GOOS. Split out from usbAccessHintBox so both OS branches are testable without
 // depending on the runner's platform.
 func usbAccessHintLines(goos string) []string {
 	lines := []string{
@@ -513,13 +513,11 @@ func usbAccessHintLines(goos string) []string {
 			"echo '"+usbUdevRule+"' | sudo tee "+usbUdevRulePath,
 			"sudo udevadm control --reload-rules && sudo udevadm trigger",
 			"",
-			"If your distro has no plugdev group, create it first:",
-			"sudo groupadd --system plugdev",
+			"Add your user to the plugdev group — if your distro has none, create it:",
 			"",
-			"Add your user to the plugdev group, then log in again:",
-			"sudo usermod -aG plugdev $USER",
+			"sudo groupadd plugdev && sudo usermod -aG plugdev $USER",
 			"",
-			"Replug the USB-C cable and rescan. Or re-run the flash with sudo.",
+			"Then log in again, replug the USB-C cable and rescan. Or re-run the flash with sudo.",
 		)
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own

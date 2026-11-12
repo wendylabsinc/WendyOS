@@ -54,7 +54,7 @@ func pickUnixRecoveryDevice(hints recoveryWaitHints, match func(rcm.RecoveryDevi
 		devs, err := scan()
 		switch {
 		case errors.Is(err, rcm.ErrUSBAccess) && len(devs) == 0:
-			fmt.Println("\n" + usbAccessHint())
+			fmt.Println("\n" + usbAccessHintBox())
 			if promptRescan("Press Enter to rescan, or 'q' to quit: ") {
 				return rcm.RecoveryDevice{}, fmt.Errorf("cannot open the Jetson's USB device: permission denied")
 			}
@@ -111,7 +111,7 @@ func filterRecoveryDevices(devs []rcm.RecoveryDevice, match func(rcm.RecoveryDev
 }
 
 // thorIsUSBAccessErr reports whether err is the OS denying wendy access to the
-// Jetson's USB device, which routes into usbAccessHint. This covers both the
+// Jetson's USB device, which routes into usbAccessHintBox. This covers both the
 // recovery-device scan (rcm.ErrUSBAccess) and opening the re-enumerated flashing
 // gadget (adb.ErrUSBAccess) — the gadget has its own PID, so a udev rule covering
 // only the recovery PIDs fails here even after a clean stage 1.
