@@ -221,6 +221,7 @@ An Arduino sketch for the board's microcontroller (Arduino UNO Q). `wendy run` c
 - The board needs a WendyOS and agent that can flash it; otherwise `wendy run` stops and asks you to run `wendy device update`.
 - One board per run: `wendy run` refuses a project with `mcu` when `--device` lists several devices.
 - With `--watch`, the sketch is compiled and flashed again only when a file in the sketch folder changes.
+- The board holds one sketch. Deploying a second app with a sketch replaces the first app's sketch and stops that app. `wendy device apps start <app>` puts an app's own sketch back and stops the other. Removing an app also removes its sketch from the board. Stopping an app leaves its sketch running.
 - `wendy build` compiles the sketch too; it needs no device.
 - A `sketch.yaml` from Arduino App Lab works as it is. When it names no board, does not pin `arduino:zephyr`, or lists no libraries for a sketch that uses the Bridge, Wendy fills these in on a copy and prints a notice for each. Your file is not changed.
 - To talk to the sketch from the app, add the [`arduino-bridge`](#arduino-bridge) entitlement.

@@ -62,12 +62,20 @@ func preflightHostPorts(ctx context.Context, conn *grpcclient.AgentConnection, a
 	if appCfg == nil || conn == nil || conn.ContainerService == nil || !usesHostNetwork(appCfg.Entitlements) {
 		return nil
 	}
+	// Flashing this app's sketch stops the app whose sketch is on the chip, so
+	// that app's port is free by the time this one starts.
+	replaced := ""
+	if appCfg.MCU != nil {
+		if v, err := agentVersionForRun(ctx, conn); err == nil {
+			replaced = mcuSketchOwner(v)
+		}
+	}
 	for _, e := range appCfg.Entitlements {
 		if (e.Type != appconfig.EntitlementHTTP && e.Type != appconfig.EntitlementMCP) || e.Port <= 0 {
 			continue
 		}
 		holder := hostPortHolderFn(ctx, conn, appCfg.AppID, e.Port)
-		if holder == "" {
+		if holder == "" || holder == replaced {
 			continue
 		}
 		answers, checked := hostPortAnswersFn(ctx, conn, appCfg, e.Port)

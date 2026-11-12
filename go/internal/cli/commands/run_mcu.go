@@ -24,8 +24,10 @@ import (
 
 const (
 	mcuFeaturePrefix = "mcu-flash:"
-	mcuChunkSize     = 1 << 20
-	mcuLogTailLines  = 20
+	// mcuOwnerPrefix names the app whose sketch is on the chip now.
+	mcuOwnerPrefix  = "mcu-sketch-owner:"
+	mcuChunkSize    = 1 << 20
+	mcuLogTailLines = 20
 )
 
 var errMCUNeedsUnoQ = commandErrorf(errProjectTargetMismatch, `this project has a microcontroller sketch (wendy.json "mcu"); only Arduino UNO Q supports it`)
@@ -368,7 +370,7 @@ func mcuSummary(c *agentpbv2.FlashFirmwareResponse_Completed, appID string) stri
 	}
 	s := fmt.Sprintf("Microcontroller: sketch %s, loader %s", state(c.GetSketchWritten()), state(c.GetLoaderWritten()))
 	if prev := c.GetPreviousAppId(); prev != "" && prev != appID {
-		s += "; replaced the sketch of " + prev
+		s += fmt.Sprintf("; replaced the sketch of %s and stopped it (one sketch fits on the board; `wendy device apps start %s` puts it back)", prev, prev)
 	}
 	return s
 }
@@ -381,4 +383,14 @@ func invalidAppConfigError(err error) error {
 		return withNextSteps(out, "If the project uses a newer entitlement, this wendy ("+version.Version+") is too old for it: run `wendy update`.")
 	}
 	return out
+}
+
+// mcuSketchOwner returns the app whose sketch is on the device's chip, or "".
+func mcuSketchOwner(v *agentpb.GetAgentVersionResponse) string {
+	for _, f := range v.GetFeatureset() {
+		if owner, ok := strings.CutPrefix(f, mcuOwnerPrefix); ok {
+			return owner
+		}
+	}
+	return ""
 }

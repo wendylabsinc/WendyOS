@@ -265,7 +265,7 @@ func TestDeployMCU_SummaryNamesReplacedApp(t *testing.T) {
 	if h.version.calls != 1 {
 		t.Errorf("version queries = %d, want 1", h.version.calls)
 	}
-	for _, want := range []string{"sketch written", "loader unchanged", "replaced the sketch of old.app"} {
+	for _, want := range []string{"sketch written", "loader unchanged", "replaced the sketch of old.app and stopped it", "wendy device apps start old.app"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output %q lacks %q", out, want)
 		}

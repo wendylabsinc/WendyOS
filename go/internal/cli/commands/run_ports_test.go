@@ -10,6 +10,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 func stubHostPorts(t *testing.T, holder string, answers, checked bool) *int {
@@ -68,6 +69,20 @@ func TestPreflightHostPortsSkipsAppsOffTheHostNetwork(t *testing.T) {
 	cfg.Entitlements[0].Mode = "mesh"
 	if err := preflightHostPorts(context.Background(), conn, cfg); err != nil || *lookups != 0 {
 		t.Fatalf("err = %v, lookups = %d; want no check for a mesh app", err, *lookups)
+	}
+}
+
+func TestPreflightHostPortsIgnoresTheSketchOwnerAboutToBeStopped(t *testing.T) {
+	stubHostPorts(t, "other.app", true, true)
+	conn, cfg := hostWebApp()
+	cfg.MCU = &appconfig.MCUConfig{Sketch: "sketch"}
+	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Featureset: []string{"mcu-flash:zephyr-1", "mcu-sketch-owner:other.app"}})
+	if err := preflightHostPorts(context.Background(), conn, cfg); err != nil {
+		t.Fatalf("refused over the app this deploy stops: %v", err)
+	}
+	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Featureset: []string{"mcu-flash:zephyr-1", "mcu-sketch-owner:third.app"}})
+	if err := preflightHostPorts(context.Background(), conn, cfg); err == nil {
+		t.Fatal("a clash with an app that keeps running was not refused")
 	}
 }
 
