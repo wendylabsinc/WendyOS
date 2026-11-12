@@ -62,6 +62,9 @@ permissions:
   contents: read
 
 jobs:
+  dependency-security:
+    uses: ./.github/workflows/security.yml
+
   automation-regressions:
     name: Offline automation regressions
     runs-on: ubuntu-24.04
@@ -390,13 +393,16 @@ jobs:
       - name: Build browser WASM assets
         run: npm --prefix web-client run build:wasm
 
-      # The worker and credential store as a page loads them. Lifecycle
-      # scripts are skipped: only fake-indexeddb is needed, not Electron.
+      # These suites use local protocol and process fixtures. They do not launch
+      # Electron or contact live devices, so native install scripts are unnecessary.
       - name: Run browser bridge tests
         run: |
           npm --prefix web-client ci --ignore-scripts --no-audit --no-fund
-          node web-client/tests/credential-store.test.mjs
-          node web-client/tests/wendy-web-bridge.test.mjs
+          node --test web-client/tests/*.test.mjs
+
+      - name: Build the web client with its resolved tooling
+        working-directory: web-client
+        run: npx --no-install vinext build
 
       - name: Run WASM tests in Node
         env:
@@ -514,7 +520,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -533,6 +539,7 @@ jobs:
           SIMULATOR_PYTHON_RESULT: ${{ needs.simulator-python310.result }}
           NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
           AUTOMATION_RESULT: ${{ needs.automation-regressions.result }}
+          DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -552,6 +559,7 @@ jobs:
           test "$SIMULATOR_PYTHON_RESULT" = success
           test "$NATIVE_APP_RESULT" = success
           test "$AUTOMATION_RESULT" = success
+          test "$DEPENDENCY_SECURITY_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
