@@ -2156,10 +2156,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1987",
       "title": "agent: offer a thermal camera's 16-bit data to raw subscribers, not its preview",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "A test checks that deeper raw formats win over preview formats. It does not verify the actual bytes delivered to raw subscribers.",
-      "required_follow_up": "Stream a known 16-bit thermal frame and assert depth, dimensions and unmodified samples at the subscriber.",
-      "evidence": []
+      "required_follow_up": "Reconcile required Linux media execution of the actual 16-bit raw tap and both preview/depth-reduction controls at the final PR head.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/video_thermal_capture_integration_test.go",
+            ".github/scripts/test-thermal-raw-capture.sh"
+          ],
+          "result": "Real GStreamer raw branch, fd3 pump and hub deliver all 19,200 16-bit samples unchanged to two subscribers with Y16 metadata, 160x120 dimensions and 320-byte stride. Later frames cannot overwrite a retained frame. Three local race runs and the full script passed; first-advertised UYVY preference and actual GRAY8 conversion fail targeted assertions. Hardware discovery/source bytes are fixtures; hosted Linux execution remains pending."
+        }
+      ]
     },
     {
       "key": "2130",

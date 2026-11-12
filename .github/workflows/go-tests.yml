@@ -634,6 +634,8 @@ jobs:
 
       - name: Decode H264 without a producer parser and require regression controls
         run: bash .github/scripts/test-gstreamer-no-parser.sh
+      - name: Preserve 16-bit thermal samples through the real raw tap
+        run: bash .github/scripts/test-thermal-raw-capture.sh
       - name: Decode shared SensorLink capture and reject loopback opens
         run: bash .github/scripts/test-sensorlink-capture.sh
 
