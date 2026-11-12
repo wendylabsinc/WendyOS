@@ -1080,20 +1080,42 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2429",
       "title": "Fix Lite UUID enrollment and USB identity recovery",
       "package": "03",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Extensive UUID, serial, trust and enrollment tests exist. Flashing/recovery and older firmware compatibility still depend on live Lite devices.",
       "required_follow_up": "Run enroll, restart, relay access and USB recovery against both current and supported older firmware.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/lite-identity-rehearsal.py",
+          "validation": "Syntax and help checked; generated eight not_run cases for distinct current/supported-older boards. Verified explicit environment selection, duplicate-target refusal and certificate-only export refusal. No hardware or Cloud account was accessed.",
+          "hardware_execution": "not_run"
+        },
+        {
+          "command": "go test -race ./go/internal/cli/commands -run '^Test(LiteEnrollment|LiteUnenroll|CloudLiteDeviceInfo|LiteCloudBroker|LegacyLiteDeviceInfo|DPoP|RequestPKIIdentityCertificate|LiteBLEResolves)' -count=1",
+          "result": "Passed on macOS in 7.853s. Existing portable assertions cover enrollment preconditions, stale identity, USB reset, ML-DSA requests and authenticated relay fixtures; the full commands package runs in required Race tests."
+        }
+      ],
+      "resolution": "Portable fixtures pass locally. The remaining live firmware/USB/relay journey has an exact-target human procedure for current and supported older firmware, with native-host repetitions, public certificate checks, recovery, bounded waits and cleanup. Hardware execution remains unverified."
     },
     {
       "key": "2263",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2263",
       "title": "Request the Lite operator certificate over the ML-DSA login",
       "package": "03",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover Lite certificate/session selection and related identity contracts. The PR has several cross-component changes and does not establish complete live Lite enrollment/relay interoperability.",
       "required_follow_up": "Run an ML-DSA login followed by Lite certificate issuance, enrollment and authenticated access.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/lite-identity-rehearsal.py",
+          "validation": "Syntax and help checked; generated eight not_run cases for distinct current/supported-older boards. Verified explicit environment selection, duplicate-target refusal and certificate-only export refusal. No hardware or Cloud account was accessed.",
+          "hardware_execution": "not_run"
+        },
+        {
+          "command": "go test -race ./go/internal/cli/commands -run '^Test(LiteEnrollment|LiteUnenroll|CloudLiteDeviceInfo|LiteCloudBroker|LegacyLiteDeviceInfo|DPoP|RequestPKIIdentityCertificate|LiteBLEResolves)' -count=1",
+          "result": "Passed on macOS in 7.853s. Existing portable assertions cover enrollment preconditions, stale identity, USB reset, ML-DSA requests and authenticated relay fixtures; the full commands package runs in required Race tests."
+        }
+      ],
+      "resolution": "Portable fixtures pass locally. The remaining live firmware/USB/relay journey has an exact-target human procedure for current and supported older firmware, with native-host repetitions, public certificate checks, recovery, bounded waits and cleanup. Hardware execution remains unverified."
     },
     {
       "key": "2596",
