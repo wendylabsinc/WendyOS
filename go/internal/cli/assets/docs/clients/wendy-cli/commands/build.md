@@ -78,7 +78,7 @@ Up to 4 service images build in parallel by default. Override with `--max-concur
 
 `--builder`, `--gpu-arch`, and `--debug` behave exactly as in a single-image build and are applied per service. Docker loads each result into its local image store, Apple Container uses its implicit store, and BuildKit stores each verification result in its private worker. As with single-image builds, `wendy build` passes no build-args, so a hand-written Dockerfile's `ARG WENDY_PLATFORM` / `ARG WENDY_DEBUG` take their declared defaults here.
 
-With no device selected, the target platform defaults to `linux/arm64`; selecting a device uses that device's own platform instead, same as single-image builds.
+An explicit `platform` in `wendy.json`, such as `linux/amd64`, also applies when no device is reachable. Without an explicit platform or a reachable device, the target defaults to `linux/arm64`. A reachable device supplies the architecture unless the configured platform specifies one. These rules apply to both single-image and multi-service builds.
 
 A `services` map takes precedence over any root-level build marker present in the same project — see [Manifest detection](#manifest-detection).
 
