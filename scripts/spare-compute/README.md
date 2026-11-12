@@ -1,228 +1,170 @@
-# Spare compute worker
+# Spare compute on Wendy Cloud devices
 
-Run bounded Go fuzzing, mutation testing, shuffled race tests, and local Qwen code
-reviews while a self-hosted CI machine is idle. The worker runs as UID 10001,
-without a Docker socket, host checkout, credentials, or device access. The optional
-NVIDIA model server and review worker run separately, so GPU inference can
-continue while the CPU worker tests. Nothing creates issues, sends messages, edits
-the source repository, or applies model suggestions.
+From this directory, deploy the app to a device returned by `wendy discover`:
 
-The CPU worker builds for Linux amd64 and arm64, including Linux VMs on Docker
-Desktop. The NVIDIA configuration requires Linux, compatible GPUs/drivers, and
-NVIDIA Container Toolkit. This is opt-in infrastructure, not an automatically
-installed runner service. Install the hooks on **every runner sharing the host**
-before leaving it running unattended.
+```sh
+wendy run --device <device-selector> --detach --yes
+```
 
-## Workloads
+Wendy builds and deploys four services: a host-activity supervisor, a Go testing
+worker, a Qwen reviewer, and a local NVIDIA model server. There is no GitHub
+Actions workflow, runner hook, Docker daemon requirement on the device, or manual
+source-archive step. For CPU-only work, deploy `--service worker`; Wendy includes
+its supervisor dependency and skips the model images.
 
-| Mode | Work | Results |
+The worker fetches the public WendyOS repository's `main` revision after receiving
+permission to work. Each attempt records the exact commit. Work sessions recycle after six hours
+to fetch a new revision; completed review sweeps check again after an hour. Change
+`SOURCE_REPOSITORY` and `SOURCE_REF` in `wendy.json` to select another trusted
+repository or pin a commit. No GitHub token is needed. Only run trusted code;
+tests execute inside the worker container.
+
+## How spare capacity is measured
+
+The supervisor reads host CPU, memory, cgroup and [NVIDIA process information](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
+through the Wendy Agent's local socket. It never executes the test workload on
+the host. The fixed probe needs Linux cgroup v2 and host Python 3. Missing CPU,
+memory, app-cgroup or host-probe information denies permission to work.
+
+The defaults wait for 60 seconds of idle observations before admitting work:
+
+- Host CPU consumption outside this app must stay below 0.25 CPU cores.
+  The probe subtracts all this app's service cgroup CPU usage, so fuzzing and
+  inference do not make the app mistake itself for competing work.
+- CPU work needs 12 GiB of available host RAM to start and yields below a
+  4 GiB reserve. Per-service cgroup limits independently cap RAM and CPU.
+- GPU work also requires the selected GPU to be idle and have enough free
+  memory for the configured checkpoint. A foreign compute, graphics or other GPU process revokes all
+  work, even when that process currently reports zero utilization.
+- Display-active GPUs and MIG configurations are excluded. Losing NVIDIA
+  visibility on a host with an NVIDIA driver revokes work; a CPU-only host can
+  still run CPU tests.
+
+The supervisor writes permissions valid for eight seconds. Each workload monitor
+checks every 250 ms. Withdrawal or expiry sends SIGTERM to all workload-UID
+processes in that service's private PID namespace, then SIGKILL after four
+seconds. This kills inference and releases its allocations instead of merely
+pausing the model. The monitors wait at least 60 seconds before trying again.
+Supervisor failure, a disconnected host probe, old permissions after reboot,
+and malformed permission files all stop work automatically.
+
+This is **reactive preemption**, not a reservation or admission lock. Another
+application can start between samples and briefly overlap with this one.
+A probe normally samples every two seconds plus its bounded NVIDIA queries;
+permissions expire if observations stop. Idle applications that are not using
+CPU/GPU and have not put memory under pressure do not block work. Strict zero
+interference requires scheduling cooperation from every foreground workload.
+The initial `wendy run` build and image transfer happen before this governor can
+control its own workloads, so deploy during a suitable maintenance window.
+
+## Resource and model configuration
+
+Edit `wendy.json` before deployment:
+
+| Setting | Default | Purpose |
 | --- | --- | --- |
-| `fuzz` | Rotate the existing H264 fragment and sparse flash extent targets in 120-second campaigns | Logs, Go coverage corpus cache, crash inputs |
-| `mutation` | Run Gremlins v0.6.0 on selected packages once per source/configuration | Machine-readable mutations and execution log |
-| `review` | Ask Qwen about numbered Go source excerpts, once per source/configuration | Validated JSON hypotheses with evidence and proposed regression tests |
-| `race` | Repeat selected packages with `-race -shuffle=on` | Logs including replayable shuffle seeds |
+| Worker `resources` | 2 CPUs, 4 GiB RAM | Hard test-container ceiling, no extra swap |
+| Reviewer `resources` | 1 CPU, 1 GiB RAM | Bound source review overhead |
+| Model `resources` | 4 CPUs, 128 GiB RAM | Hard serving-container ceiling |
+| `IDLE_SECONDS` | 60 | Continuous idle period before admission |
+| `MAX_FOREIGN_CORES` | 0.25 | CPU usage outside this app that triggers a yield |
+| `START_FREE_GIB` / `RESERVE_GIB` | 12 / 4 | Host RAM thresholds for CPU work |
+| `MODEL_START_FREE_GIB` | 140 | Available host RAM required before loading the model |
+| `MODEL_START_FREE_MIB` | 180000 | Free GPU memory required before loading the model |
+| `GPU_INDEX` / `CUDA_VISIBLE_DEVICES` | 0 / 0 | Must identify the same physical GPU |
 
-Edit `config.json` to choose packages and budgets. Workloads take turns; a large
-review queue cannot starve fuzzing. Jobs have a wall-clock deadline, a log-size
-cutoff, and a disk reserve check. Model requests have a separate
-`MODEL_TIMEOUT_SECONDS` limit, defaulting to 600 seconds. Tests are run with a bounded Go process count.
-A killed job terminates its process group, and the next attempt starts with fresh
-source. Only regular files and directories from the archive are extracted; links
-are omitted. Use trusted source commits because test code executes in the worker.
+The supplied model command serves `Qwen/Qwen3.8-Flash-Next-FP8` using vLLM
+v0.30.0. Qwen's [model card](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)
+distinguishes the open-weight Flash-Next model from hosted Qwen3.8-Flash. The
+[vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) lists the hardware
+requirements and supported quantizations.
 
-Mutation testing measures which code changes your tests detect. A surviving
-mutant is a test-gap candidate, not proof of a product bug. Qwen results are always
-marked `unverified`; this version does not execute generated reproductions. Each
-review sees up to 240 lines from one file, with 40-line overlap. It can miss bugs
-that require wider context. Generated Go files and test files are excluded.
+The full FP8 checkpoint is about 173 GiB and needs a high-memory accelerator.
+The conservative default **will leave GPU work idle on smaller devices**. For
+those devices, select a supported quantized checkpoint and adjust the model
+command, RAM ceiling and admission thresholds together. Devices with unavailable
+GPU memory reporting, including some unified-memory configurations, fail closed;
+they need a verified memory accounting strategy before enabling inference.
+No model is silently substituted. Model image/driver compatibility, first model
+load and VRAM release must be validated on the target NVIDIA hardware.
 
-## Build and try the CPU worker
+The model binds inside its bridge network, not the host network. The reviewer
+uses `http://model:8000/v1`. First startup downloads weights into the
+persistent model cache. Source downloads, test compilation and model loading
+all happen under expiring permission. Changing these defaults does not create
+extra physical RAM or VRAM.
 
-From the repository root:
+## Permissions and storage
 
-```sh
-docker build -t wendy-spare-compute:local scripts/spare-compute
-git archive --format=tar --output=/tmp/wendy-spare-source.tar HEAD
-cd scripts/spare-compute
-cp .env.example .env
-# Set SOURCE_ARCHIVE=/tmp/wendy-spare-source.tar in .env.
-docker compose run --rm worker --list
-docker compose run --rm worker --once
-```
+Only the supervisor has the sensitive `admin` entitlement. It grants full local
+Agent authority, although this supervisor uses only a fixed read-only host
+probe. Keep its image and source trusted. Test, review and model services have
+no admin socket. Their monitors run as root, but launch workloads with UID/GID
+10001, an empty supplementary-group list, and no admin socket environment.
+Only the root supervisor writes permission files; workload users cannot renew
+them. The monitors require private PID namespaces and must not use host PID mode.
 
-`--once` runs one job and writes its outcome to the persistent state volume. A
-process exit of zero means the scheduler completed; inspect `result.json` for the
-job's actual result. `--list` prints the jobs assigned to this worker. Neither
-command starts the NVIDIA services.
+Wendy persistent volumes store source snapshots, reports, corpus inputs, build
+caches and model weights. Temporary Go executables and mutation work directories
+live in `/work` on the container filesystem, because Wendy persistence mounts
+are `noexec`. Inference JIT caches also use `/work`; only model data stays
+in the persistent model volume. Stopping a process discards its RAM while preserving reports and
+corpora. The next attempt extracts pristine source.
 
-The default worker has a 2-CPU ceiling and 4 GiB RAM ceiling, with no swap beyond
-that RAM limit. CPU shares of 128 and nice level 19 lower its scheduling priority.
-Set `WORKER_CPUS` and `WORKER_MEMORY` to the host's spare capacity; the defaults do
-not attempt to consume the entire machine. Memory is used for test/build caches
-and, when enabled, model weights and inference. No synthetic memory filler runs.
+The testing and review state volumes contain `reports/<timestamp>-<mode>/` with
+`result.json`, `output.log`, and any mutation/review/crash artifacts. Results
+include the source commit, command, duration, exit code and shard. `corpus/`
+preserves crash inputs; Go's `cache/build/fuzz/` preserves interesting inputs.
+Reports rotate at 200 directories. Export findings before retention removes them.
+Caches, corpora and model weights are not automatically deleted. The worker
+pauses below its 10 GiB disk reserve; use filesystem quotas for a hard bound.
+The model cache needs its own disk budget.
 
-For multiple machines, give each a unique `WORKER_INDEX` from zero through
-`WORKER_COUNT - 1`. Keep the archive, config, and count identical. Job hashes assign
-each target/excerpt to one worker. There is no central coordinator or automatic
-failover, so work assigned to an offline worker waits. Each worker needs its own
-state volume. With many workers, only the shards assigned fuzz/race jobs continue
-indefinitely after their finite jobs finish.
-
-## Local Qwen on NVIDIA
-
-Qwen's [model card](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) distinguishes the
-open-weight `Qwen3.8-Flash-Next` from the hosted `Qwen3.8-Flash`. This stack serves
-the local model through a private Compose network. The worker supports an
-OpenAI-compatible `/v1/chat/completions` endpoint, with no API credentials or
-public port by default.
-
-The [vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) requires v0.30.0
-or newer and lists hardware-specific configurations. The full FP8 checkpoint is
-about 173 GiB; its host-memory offload also needs substantial RAM. The default
-single-GPU example therefore needs a high-memory accelerator. It is **not** a
-configuration for an arbitrary 24 GiB runner GPU. Choose a compatible smaller
-quantization or a shared local model server when the full weights do not fit.
-
-Create `MODEL_CACHE` on the host, owned by UID/GID 10001. Set the NVIDIA variables
-in `.env` after checking the machine's RAM, VRAM and disk capacity:
-
-- `VLLM_IMAGE` selects the serving runtime. Pin a tested image digest for deployment.
-- `MODEL_WEIGHTS` selects the checkpoint; the default is the official FP8 release.
-- `GPU_ID` selects one GPU. For multiple GPUs, edit `device_ids` in
-  `compose.nvidia.yaml` to an explicit list and set `MODEL_TENSOR_PARALLEL` to match.
-- `MODEL_MEMORY` is a hard RAM ceiling, defaulting to 128 GiB.
-- `MODEL_GPU_MEMORY_FRACTION` defaults to 0.80. This is a server allocation target,
-  not a GPU scheduling priority or a guarantee of free VRAM.
+Inspect lifecycle and admission decisions through Wendy:
 
 ```sh
-docker compose -f compose.yaml -f compose.nvidia.yaml pull model
-docker compose -f compose.yaml -f compose.nvidia.yaml create
-docker compose -f compose.yaml -f compose.nvidia.yaml start
-docker compose -f compose.yaml -f compose.nvidia.yaml logs -f model
+wendy --json device apps list --device <device-selector>
+wendy --json device logs --app sh.wendy.spare-compute --tail 50 --no-follow --device <device-selector>
+wendy device apps stop sh.wendy.spare-compute --device <device-selector>
 ```
 
-The first model startup downloads weights. Do this during maintenance and check
-that the server becomes ready. Unavailable endpoints leave the excerpt pending
-and retry after other work, with a delay. Invalid/truncated responses create failed
-reports. Model startup, inference throughput, and VRAM release must be checked on
-the destination NVIDIA host; the local smoke tests do not establish those facts.
+## Workloads and distribution
 
-A previously configured model endpoint can be used without the NVIDIA override:
-set `MODEL_BASE_URL`, `MODEL_NAME`, and `MODES=fuzz,mutation,review,race`. Stopping
-this worker does not unload an external model server. Integrate that server with
-the host's job hooks too if it shares CI resources.
+`config.json` selects packages and budgets. CPU jobs alternate between 120-second
+fuzz campaigns, Gremlins mutation testing, and shuffled race tests. Mutation
+sweeps run once per source/configuration; interrupted jobs retry from pristine
+source. Failed or timed-out jobs are retained as failures and advance the queue.
+They do not count as successful tests. Remove a stopped worker's
+`checkpoint.json` to repeat a finite sweep after fixing its cause.
 
-## Yield to CI
+The reviewer checks overlapping numbered Go excerpts independently of CPU tests.
+Results contain evidence and proposed regression tests, and are always marked
+`unverified`. This version neither executes model-generated commands nor applies
+patches or opens issues. Cross-file bugs may require more context than an excerpt.
+A surviving mutation similarly identifies a possible test gap, not a proven bug.
 
-CPU priority cannot free RAM or VRAM. The host hooks stop **all** services before
-a runner job begins and restart existing containers only after the last local job
-ends. They serialize concurrent hooks with a file lock and retain one busy marker
-per runner. Containers have no automatic restart policy, so a Docker restart does
-not bypass the hooks. Stopping unloads the model; resuming pays the model load cost.
+For multiple devices, set a different `WORKER_INDEX` from zero through
+`WORKER_COUNT - 1` in each deployment. Keep the source revision, job configuration
+and count identical. Hashes assign each target/excerpt to one device; there is no
+central queue or automatic failover. Leave the defaults for independent full
+sweeps on each device. Corpus exploration remains useful across independent runs.
 
-Copy this directory to a stable installation path such as `/srv/wendy-spare`,
-outside any CI workspace that gets cleaned. Prepare its `.env`, source archive,
-images, cache, and containers before installing hooks. Use the same Docker daemon,
-Compose project, directory, control path, and `--nvidia` setting for all runners.
-The runner service account needs Docker access and write access to the control
-directory. Host hooks require Python 3.9 or later and Docker Compose v2.
-
-Create two executable shell wrappers outside the checkout:
+## Local checks
 
 ```sh
-# /srv/wendy-spare/job-started.sh
-#!/bin/sh
-exec python3 /srv/wendy-spare/runner_hook.py started \
-  --directory /srv/wendy-spare --control /srv/wendy-spare/control --nvidia
-```
-
-```sh
-# /srv/wendy-spare/job-completed.sh
-#!/bin/sh
-exec python3 /srv/wendy-spare/runner_hook.py completed \
-  --directory /srv/wendy-spare --control /srv/wendy-spare/control --nvidia
-```
-
-Omit `--nvidia` for a CPU-only installation. Set these in each runner's `.env`,
-then restart its runner service during maintenance:
-
-```dotenv
-ACTIONS_RUNNER_HOOK_JOB_STARTED=/srv/wendy-spare/job-started.sh
-ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/srv/wendy-spare/job-completed.sh
-```
-
-GitHub documents [job hooks](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/run-scripts).
-If hooks already exist, call these wrappers from them and propagate failures.
-`RUNNER_NAME` must uniquely identify each runner on the host. Stop errors fail the
-start hook and keep a busy marker; allowing CI to proceed would risk contention.
-After a crash or a missing completion hook, inspect `control/*.busy`, confirm that
-runner has no active job, and remove only its stale marker. Then resume:
-
-```sh
-python3 /srv/wendy-spare/runner_hook.py resume \
-  --directory /srv/wendy-spare --control /srv/wendy-spare/control --nvidia
-```
-
-Do not use `docker compose up` or `start` to bypass busy markers on an active CI
-host. Initially activate the worker and install hooks only when all runners are
-idle. The hooks track local runner assignments, not arbitrary host processes or
-queued GitHub jobs. Use a dedicated runner pool or scheduler integration for
-other workloads. Frequent short idle gaps may be unsuitable for loading this model.
-
-## Results, recovery, and source updates
-
-The CPU worker uses the `state` volume. The concurrent NVIDIA reviewer uses
-`review-state` with the same layout:
-
-- `reports/<timestamp>-<mode>/result.json`, with source commit, shard, command,
-  exit code, duration, and outcome. Logs and workload reports sit beside it.
-- `corpus/`, with crash/regression inputs copied out of the disposable workspace.
-- `cache/build/fuzz/`, maintained by Go for coverage-increasing inputs.
-- `checkpoint.json`, recording completed finite work and the next scheduled job.
-
-Inspect or export without starting the worker:
-
-```sh
-docker compose cp worker:/state/reports ./reports
-docker compose cp worker:/state/corpus ./corpus
-# When using the NVIDIA override, also export reviewer:/state/reports.
-```
-
-Report directories rotate at `MAX_REPORTS`, default 200. Export findings before
-retention removes them. Crashes remain in `corpus` and may reproduce on later
-campaigns. Caches, corpora and downloaded model weights are not deleted
-automatically. A worker pauses below `MIN_FREE_GIB`, default 10 GiB. Use a host
-filesystem quota for a hard disk limit; the reserve is polled, not reserved, and
-the model downloader has a separate cache. Clear build/module caches or increase
-the quota while stopped if the worker runs out of space. Keep crash corpora.
-
-Failed/timed-out mutation jobs and invalid review responses remain visible but
-advance the queue; they do not count as successful testing. Stop the stack and
-remove `checkpoint.json` to repeat a sweep after fixing its cause. Interrupted
-jobs retry; a mutation campaign starts again rather than resuming mid-package.
-Reduce the selected package scope if campaigns cannot finish within the budget.
-
-For a new revision, stop the stack during maintenance, export a new archive of a
-trusted commit, and recreate the workers so their read-only bind mounts see the new
-file. The commit/configuration hash resets scheduling while retaining corpora and
-caches. The worker never fetches branches or runs untrusted PR submissions.
-
-## Verification
-
-```sh
+wendy project validate scripts/spare-compute
 python3 -m unittest discover -s scripts/spare-compute -p 'test_*.py' -v
 docker build -t wendy-spare-compute:local scripts/spare-compute
 python3 scripts/spare-compute/smoke_test.py
 ```
 
-The smoke test uses a temporary Go module and real fuzzing, Gremlins, and race
-tests in the restricted image, then stops and resumes a real Compose worker
-through overlapping runner hooks. It removes its own temporary volumes. The unit
-suite covers process termination, disk pressure, archive boundaries, report
-validation, restart checkpoints, retention, and overlapping runner hooks.
+Docker is only used here as a local test environment. Production deployment uses
+Wendy. Tests cover admission hysteresis, foreign and own CPU/GPU work, memory
+pressure, stale permissions, worker interruption, report retention and model
+responses. The smoke test runs real fuzzing, race tests and mutations with both
+killed and surviving mutants.
 
-Useful next workloads include parser differential tests against an independent
-implementation, long container/network lifecycle soak tests on dedicated device
-fixtures, and replay of captured failures against new revisions. Prioritize new
-fuzz oracles for wire formats and state transitions; extra CPU cannot improve a
-fuzzer whose assertions do not detect incorrect behavior.
+Further workloads worth adding are differential parser tests, replay of captured
+failures against new commits, and long network/container lifecycle soak tests on
+dedicated fixtures. New fuzz oracles for protocol and state-machine invariants
+will often find more than simply extending the same campaigns.

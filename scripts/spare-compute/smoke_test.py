@@ -48,15 +48,25 @@ func FuzzPositive(f *testing.F) {
     config.write_text(json.dumps({"fuzz_seconds": 2, "job_seconds": 120,
         "fuzz": [{"package": "sample", "target": "FuzzPositive"}],
         "mutation": ["sample"], "race": ["sample"]}))
+    # Wendy persist mounts are noexec; Go must execute from /work instead.
+    run("docker", "run", "--rm", "--init", "--user=10001:10001", "--read-only",
+        "--entrypoint=python3", "--tmpfs", "/state:rw,noexec,mode=1777",
+        "--tmpfs", "/work:rw,exec,mode=1777", "--cpus=2", "--memory=2g",
+        "-e", "MIN_FREE_GIB=0", "-e", "MODES=fuzz",
+        "-v", f"{archive}:/input/source.tar:ro", "-v", f"{config}:/opt/worker/config.json:ro",
+        IMAGE, "-c", "import sys,json,pathlib; sys.path.insert(0,'/opt/worker'); import worker; "
+        "sys.argv=['worker','--once']; worker.main(); "
+        "r=next(pathlib.Path('/state/reports').glob('*/result.json')); "
+        "assert json.loads(r.read_text())['status']=='completed'; print('PASS: noexec persistence')")
     volume = "wendy-spare-smoke-" + uuid.uuid4().hex[:8]
     run("docker", "volume", "create", volume, stdout=subprocess.DEVNULL)
     try:
         for mode in ("fuzz", "mutation", "race"):
-            run("docker", "run", "--rm", "--init", "--read-only", "--cap-drop=ALL",
+            run("docker", "run", "--rm", "--init", "--user=10001:10001", "--entrypoint=python3", "--read-only", "--cap-drop=ALL",
                 "--security-opt=no-new-privileges", "--cpus=2", "--memory=2g", "--pids-limit=512",
-                "-e", "MIN_FREE_GIB=0", "-e", "MODES=" + mode,
+                "-e", "MIN_FREE_GIB=0", "-e", "WORK_ROOT=/state/work", "-e", "WORK_TMP=/state/tmp", "-e", "MODES=" + mode,
                 "-v", f"{archive}:/input/source.tar:ro", "-v", f"{config}:/opt/worker/config.json:ro",
-                "-v", volume + ":/state", IMAGE, "--once")
+                "-v", volume + ":/state", IMAGE, "/opt/worker/worker.py", "--once")
         script = '''import json,pathlib
 reports = [json.loads(p.read_text()) for p in pathlib.Path('/state/reports').glob('*/result.json')]
 assert len(reports) == 3, reports
@@ -69,37 +79,9 @@ print('PASS: real fuzz, mutation report, and race test in container')
 '''
         run("docker", "run", "--rm", "--entrypoint", "python3", "-v", volume + ":/state",
             IMAGE, "-c", script)
-        # Exercise the host hooks against an actual running Compose worker.
-        install = root / "install"
-        install.mkdir()
-        shutil.copy(HERE / "compose.yaml", install)
-        shutil.copy(config, install / "config.json")
-        (install / ".env").write_text(f"SOURCE_ARCHIVE={archive}\nCOMPOSE_PROJECT_NAME={volume}\n"
-                                     "MIN_FREE_GIB=0\nMODES=fuzz\n")
-        compose = ["docker", "compose", "--project-directory", str(install),
-                   "--env-file", str(install / ".env"), "-f", str(install / "compose.yaml")]
-        hook = ["python3", str(HERE / "runner_hook.py")]
-        flags = ["--directory", str(install), "--control", str(install / "control")]
-        try:
-            run(*compose, "create", "--no-build")
-            run(*hook, "resume", *flags)
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                logs = run(*compose, "logs", "--no-color", stdout=subprocess.PIPE).stdout
-                if "job_started" in logs:
-                    break
-                time.sleep(0.2)
-            else:
-                raise AssertionError("worker did not start a job")
-            run(*hook, "started", *flags, "--runner", "one")
-            assert not run(*compose, "ps", "--status", "running", "-q", stdout=subprocess.PIPE).stdout.strip()
-            run(*hook, "started", *flags, "--runner", "two")
-            run(*hook, "completed", *flags, "--runner", "one")
-            assert not run(*compose, "ps", "--status", "running", "-q", stdout=subprocess.PIPE).stdout.strip()
-            run(*hook, "completed", *flags, "--runner", "two")
-            assert run(*compose, "ps", "--status", "running", "-q", stdout=subprocess.PIPE).stdout.strip()
-            print("PASS: real CI hook stop, overlapping runners, and resume")
-        finally:
-            run(*compose, "down", "--volumes", "--timeout", "10")
     finally:
         run("docker", "volume", "rm", volume, stdout=subprocess.DEVNULL)
+
+run("docker", "run", "--rm", "--init", "--entrypoint=python3",
+    "-v", str(HERE / "lease_smoke.py") + ":/tests/lease_smoke.py:ro",
+    IMAGE, "/tests/lease_smoke.py")

@@ -14,7 +14,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 
 import review
-import runner_hook
 import worker
 
 
@@ -88,30 +87,6 @@ class WorkerTests(unittest.TestCase):
                                      self.root, os.environ.copy(), self.root, 5, 0)
         self.assertEqual(outcome["status"], "failed")
         self.assertEqual(outcome["exit_code"], 7)
-
-    def test_two_runners_do_not_resume_early(self):
-        with patch("runner_hook.subprocess.run") as run:
-            for action, runner in [("started", "one"), ("started", "two"), ("completed", "one")]:
-                runner_hook.transition(action, runner, self.root, ["compose"])
-            self.assertEqual(run.call_count, 2)
-            runner_hook.transition("completed", "two", self.root, ["compose"])
-            self.assertEqual(run.call_args.args[0], ["compose", "start"])
-            self.assertFalse(list(self.root.glob("*.busy")))
-
-    def test_failed_stop_leaves_busy_marker(self):
-        with patch("runner_hook.subprocess.run", side_effect=subprocess.CalledProcessError(1, "stop")):
-            with self.assertRaises(subprocess.CalledProcessError):
-                runner_hook.transition("started", "one", self.root, ["compose"])
-        with patch("runner_hook.subprocess.run") as run:
-            runner_hook.transition("resume", "manual", self.root, ["compose"])
-            run.assert_not_called()
-        self.assertEqual(len(list(self.root.glob("*.busy"))), 1)
-
-    def test_unmatched_completion_fails_closed(self):
-        with patch("runner_hook.subprocess.run") as run:
-            with self.assertRaises(RuntimeError):
-                runner_hook.transition("completed", "unknown", self.root, ["compose"])
-            run.assert_not_called()
 
     def test_review_schema_and_provenance(self):
         finding = {"file": "file.go", "line": 2, "title": "Bug", "evidence": "Evidence",

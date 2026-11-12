@@ -1,5 +1,7 @@
 *
 !Dockerfile
-!worker.py
-!review.py
+!*.py
 !config.json
+!host_shell.proto
+!model/
+!model/lease_runner.py

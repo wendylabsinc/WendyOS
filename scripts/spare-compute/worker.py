@@ -186,7 +186,8 @@ def main():
         revision = source.pax_headers.get("comment", "")
     if not re.fullmatch(r"[a-f0-9]{40,64}", revision):
         raise ValueError("source must be a git archive of a commit, with its revision header")
-    root = state / "work"
+    root = Path(os.environ.get("WORK_ROOT", str(state / "work")))
+    scratch = Path(os.environ.get("WORK_TMP", str(state / "tmp")))
     results = state / "reports"
     for path in (results, state / "home", state / "cache", state / "corpus"):
         path.mkdir(exist_ok=True)
@@ -204,7 +205,7 @@ def main():
         progress = {"key": key, "turn": 0, "cursors": {}}
     env = {**os.environ, "GOMAXPROCS": str(cpus), "GOFLAGS": f"-p={cpus}",
            "GOCACHE": str(state / "cache/build"), "GOMODCACHE": str(state / "cache/mod"),
-           "GOTMPDIR": str(state / "tmp"), "TMPDIR": str(state / "tmp"),
+           "GOTMPDIR": str(scratch), "TMPDIR": str(scratch),
            "HOME": str(state / "home"), "SOURCE_REVISION": revision}
     print(json.dumps({"event": "started", "revision": revision, "shard": [index, count]}), flush=True)
     while not STOP:
@@ -225,8 +226,8 @@ def main():
         job = jobs[mode][cursor % len(jobs[mode])]
         # Every attempt gets pristine source, including after a killed mutant.
         extract(args.archive, root)
-        shutil.rmtree(state / "tmp", ignore_errors=True)
-        (state / "tmp").mkdir()
+        shutil.rmtree(scratch, ignore_errors=True)
+        scratch.mkdir(parents=True)
         for old in sorted(results.iterdir())[:max(0, len(list(results.iterdir())) - keep + 1)]:
             shutil.rmtree(old)
         report = results / f"{time.time_ns()}-{mode}"
