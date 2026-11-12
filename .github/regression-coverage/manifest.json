@@ -1564,15 +1564,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1743",
       "title": "Let a fleet member be reached over the cloud tunnel",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Later tests cover explicitly named targets taking the Cloud fallback branch. They do not exercise a complete multi-member fleet deployment through the tunnel.",
-      "required_follow_up": "Verify real local Cloud tunnel fallback and requested-target assertions in the existing required commands race suite at the final PR head.",
+      "required_follow_up": "Retain the actual command/RPC regression cases in the required race CI suite.",
       "evidence": [
         {
           "tests": [
             "go/internal/cli/commands/buildhost_cloud_transport_test.go"
           ],
           "result": "Real loopback TCP, outer broker mTLS and inner Agent mTLS carry distinct fleet requests and a build-host capability/BuildImage spec, log and terminal result after genuine refused direct TCP. Explicit names select the correct target while a primary-device decoy stays unused. Four direct-only/wrong-name controls fail as expected. Normal local tests pass; optional local race compilation stopped for disk pressure, with no race result claimed. Hosted race execution remains pending. No real BuildKit compilation or physical delivery is claimed."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
+          "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
       ]
     },
@@ -1581,15 +1586,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1729",
       "title": "Give the build-host connection the cloud fallback its doc claims",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests check fallback target-name selection, but not a complete remote build-host connection through the Cloud tunnel.",
-      "required_follow_up": "Verify real local Cloud tunnel fallback and requested-target assertions in the existing required commands race suite at the final PR head.",
+      "required_follow_up": "Retain the actual command/RPC regression cases in the required race CI suite.",
       "evidence": [
         {
           "tests": [
             "go/internal/cli/commands/buildhost_cloud_transport_test.go"
           ],
           "result": "Real loopback TCP, outer broker mTLS and inner Agent mTLS carry distinct fleet requests and a build-host capability/BuildImage spec, log and terminal result after genuine refused direct TCP. Explicit names select the correct target while a primary-device decoy stays unused. Four direct-only/wrong-name controls fail as expected. Normal local tests pass; optional local race compilation stopped for disk pressure, with no race result claimed. Hosted race execution remains pending. No real BuildKit compilation or physical delivery is claimed."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
+          "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
       ]
     },
@@ -2955,15 +2965,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1726",
       "title": "Check the Docker daemon before the build progress UI starts",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Later Docker-daemon tests cover hangs, timeouts and noninteractive behavior. They do not establish that every build entry point performs preflight before starting the progress UI.",
-      "required_follow_up": "Verify new direct command/connection assertions in the existing required commands and MCP race suites at the final PR head.",
+      "required_follow_up": "Retain the actual command/RPC regression cases in the required race CI suite.",
       "evidence": [
         {
           "tests": [
             "go/internal/cli/commands/docker_preflight_pipeline_test.go"
           ],
           "result": "Eight actual runWithAgent/local Agent-version/subprocess cases cover directory/tar Docker builds, automatic/forced chunking and stopped/hung daemon probes. Each refuses before progress output, image build or deployment; removing the preflight fails at premature progress. Local tests pass, hosted CI pending."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
+          "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
       ]
     },
@@ -2997,9 +3012,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1918",
       "title": "Integrate the optional BuildKit service with the CLI",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Legacy address/Cloud identity tests accompany BuildKit integration. Compatibility across old directory clients and live relay endpoints needs an explicit version matrix.",
-      "required_follow_up": "Verify new direct command/connection assertions in the existing required commands and MCP race suites at the final PR head.",
+      "required_follow_up": "Retain the actual command/RPC regression cases in the required race CI suite.",
       "evidence": [
         {
           "tests": [
@@ -3007,6 +3022,11 @@
             "go/internal/cli/mcp/cloud_mesh_host_constructor_test.go"
           ],
           "result": "Full merge ancestry confirms this BuildKit change also included legacy/v2 Cloud identity fixes. Existing BuildKit/relay/TLS suites cover their own behavior; six new real lazy-connection constructor cases assert legacy numeric MeshHost versus empty MeshHost for UUID v2 assets, including MCP reconnect. Numeric-v2 mutations fail in both constructors. These are constructor/address checks, not a new relay-handshake claim. Local tests pass, hosted CI pending."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106958",
+          "result": "Required Linux race job passed the full commands and MCP suites at the published head. These include real Docker preflight command paths, legacy/v2 Cloud target constructors, and fleet/build-host fallback across real mTLS Agent connections. Local negative controls previously rejected bypassed preflight, wrong target names and direct-only fallback. All PR checks passed; PR2873 is ready for review."
         }
       ]
     },

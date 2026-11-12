@@ -35,6 +35,7 @@ SUITES = (
     "signing_ci_test.py",
     "stagefile_images_test.py",
     "sensorlink_audio_loopback_test.py",
+    "lite_camera_cleanup_test.py",
     "integration-discover_test.py",
 )
 
