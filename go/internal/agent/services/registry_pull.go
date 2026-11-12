@@ -113,7 +113,9 @@ const (
 	// does not cover: tiny chunks would let the registry inflate a download
 	// (17x at 1 byte) past the sizes the operator signed. At the floor the
 	// tags add under 0.4 %.
-	minChunkSize      = 4096
+	minChunkSize = 4096
+	// startStepTimeout bounds a start the pull's stop does not cut.
+	startStepTimeout  = 5 * time.Minute
 	mediaTypeDockerV2 = "application/vnd.docker.distribution.manifest.v2+json"
 )
 
@@ -221,8 +223,17 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 			}
 		}
 	}
+	if err == nil && ctx.Err() != nil {
+		err = pullFailed("pull", ctx.Err()) // stopped before the start began
+	}
 	if err == nil {
-		err = p.startRelease(ctx, a)
+		// A start once begun is not cut by the pull's stop: it ends started
+		// or with the last applied app put back, never between the two.
+		// ponytail: a fixed bound on a hung create or start; make it a
+		// setting if large images need longer.
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startStepTimeout)
+		err = p.startRelease(sctx, a)
+		cancel()
 	}
 	if err != nil {
 		var f *pullFailure
@@ -348,9 +359,6 @@ func (p *Postbox) finishPull(ctx context.Context, a *cloudpbv2.DeviceAssignment,
 		done := *held
 		done.Pulled = true
 		done.Applied = outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED
-		if done.Applied {
-			undetach(st, a.GetAppId()) // the new deployment replaced the direct run
-		}
 		st.Assignments = maps.Clone(st.Assignments)
 		st.Assignments[a.GetDeploymentId()] = &done
 		if o := st.Outcomes[a.GetAppId()]; o == nil || o.EntryID <= entryID {
@@ -416,7 +424,7 @@ func (p *Postbox) removeReleases(ctx context.Context, app string) error {
 		}
 	}
 	// A detached app runs on as a direct run: never removed from here.
-	detached := slices.Contains(p.state.Detached, app)
+	_, detached := p.state.Detached[app]
 	p.mu.Unlock()
 	slices.Sort(keep)
 	remove := p.control.RemoveReleases
