@@ -1312,10 +1312,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2675",
       "title": "Use persisted clock trust and monotonic mesh announcement lifetimes",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Clock/announcement tests cover monotonic lifetimes, recovery and persisted trust; this broad change also touches several transport and route state machines.",
-      "required_follow_up": "Add a repeatable suspend/reboot/clock-jump scenario across two communicating nodes and verify expiry and recovery.",
-      "evidence": []
+      "required_follow_up": "Require the two-node packet/runtime restart gate and wall-clock scheduling control in Linux CI. The full production receiver lease advances through existing injectable clocks; actual OS suspend, radio and kernel-TUN execution are not claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/clock_packet_restart_test.go",
+            "go/internal/agent/localmesh/clock_runtime_fixture_test.go",
+            ".github/scripts/test-clock-packet-restart.sh"
+          ],
+          "result": "Two real TLS/Babel/gVisor nodes preserve bidirectional TCP across forward/backward certificate-wall jumps, expire the unchanged 15-minute receiver lease while transport remains connected, then stop/join and reconstruct from persisted clock/certificate/origin files to recover traffic. Two local race runs and an isolated capability-free Linux run pass; UTC-coupled scheduling control fails the actual TCP assertion. Hosted required gate remains pending."
+        }
+      ]
     },
     {
       "key": "2674",
