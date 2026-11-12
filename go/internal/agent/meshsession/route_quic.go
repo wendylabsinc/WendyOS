@@ -24,15 +24,12 @@ func quicConfigForRoute(snapshot localmesh.NodeSnapshot, peer meshid.Device, now
 		}
 		for _, link := range snapshot.Links {
 			// A LAN first hop to another device says nothing about downstream BLE.
-			if link.ID != route.Link || link.Device != peer || !link.ForwardingReady || link.Retiring {
+			if link.ID != route.Link || link.Device != peer || !link.ForwardingReady || link.Retiring || !link.DirectLAN() {
 				continue
 			}
-			switch link.Transport {
-			case "ethernet", "infrastructure-wifi":
-				config.InitialRTT = 100 * time.Millisecond
-				config.InitialCongestionWindowPackets = 10
-				return config
-			}
+			config.InitialRTT = 100 * time.Millisecond
+			config.InitialCongestionWindowPackets = 10
+			return config
 		}
 	}
 	return config

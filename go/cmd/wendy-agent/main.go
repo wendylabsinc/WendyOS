@@ -1069,6 +1069,21 @@ func main() {
 	go func() { defer wg.Done(); logUDPMessageState(ctx, logger, appUDPMessages) }()
 	var localMeshLife meshLifetime
 	var localMeshAppClient *meshsession.Client
+	// currentAppRoutes reads the live node view at call time, never a view
+	// saved at dial start. It reports no routes once appClient's runtime has
+	// been replaced or stopped, so a late recheck fails closed.
+	currentAppRoutes := func(appClient *meshsession.Client) func() localmesh.NodeSnapshot {
+		return func() localmesh.NodeSnapshot {
+			localMeshMu.RLock()
+			snapshot := localMeshSnapshot
+			sameClient := localMeshAppClient == appClient
+			localMeshMu.RUnlock()
+			if snapshot == nil || !sameClient {
+				return localmesh.NodeSnapshot{}
+			}
+			return snapshot()
+		}
+	}
 	// Persistent VIP table shared by DNS answers, the proxy's reverse
 	// lookup, and every allocation: (tenant UUID, device UUID) ↔ VIP. A
 	// corrupt table file refuses to open rather than silently re-allocating
@@ -1254,16 +1269,7 @@ func main() {
 		if address.Transport == localmesh.AppTLS {
 			return appClient.DialTLS(dialCtx, peer, address.Address, port)
 		}
-		return appClient.DialWithRouteSnapshot(dialCtx, peer, address.Address, port, func() localmesh.NodeSnapshot {
-			localMeshMu.RLock()
-			currentSnapshot := localMeshSnapshot
-			sameClient := localMeshAppClient == appClient
-			localMeshMu.RUnlock()
-			if currentSnapshot == nil || !sameClient {
-				return localmesh.NodeSnapshot{}
-			}
-			return currentSnapshot()
-		})
+		return appClient.DialWithRouteSnapshot(dialCtx, peer, address.Address, port, currentAppRoutes(appClient))
 	})
 	meshDialer.SetLocalServiceDialer(func(dialCtx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {
 		localMeshMu.RLock()
@@ -1316,16 +1322,7 @@ func main() {
 		if address.Transport != localmesh.AppQUIC {
 			return nil, meshsession.ErrUDPUnsupported
 		}
-		return appClient.DialUDPWithRouteSnapshot(dialCtx, peer, address.Address, port, func() localmesh.NodeSnapshot {
-			localMeshMu.RLock()
-			currentSnapshot := localMeshSnapshot
-			sameClient := localMeshAppClient == appClient
-			localMeshMu.RUnlock()
-			if currentSnapshot == nil || !sameClient {
-				return localmesh.NodeSnapshot{}
-			}
-			return currentSnapshot()
-		}, options)
+		return appClient.DialUDPWithRouteSnapshot(dialCtx, peer, address.Address, port, currentAppRoutes(appClient), options)
 	}), meshIngress, meshVIPs, appUDPMessages)
 	if udpErr == nil {
 		udpErr = udpProxy.Start(fmt.Sprintf(":%d", mesh.UDPProxyPort))
