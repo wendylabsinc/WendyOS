@@ -8,12 +8,82 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // logStreamReceiver is the part of a StreamLogs client stream that
 // consumeLogStream reads. Tests substitute a scripted fake.
 type logStreamReceiver interface {
 	Recv() (*agentpb.StreamLogsResponse, error)
+}
+
+// A reconnected stream that stayed open this long has recovered, even when a
+// quiet app sent nothing over it. A var so tests can shrink it.
+var logRetryStableAfter = 30 * time.Second
+
+// Reopen only the log subscription on the caller's existing connection. Never
+// rediscover a device or replay a mutating operation. A resumed stream has no
+// reliable cursor, so skip replay frames and explicitly report the possible gap.
+//
+// delays is the retry budget for one interruption. It starts over once a
+// reopened stream delivers a frame or stays open for logRetryStableAfter, so a
+// long follow survives any number of separate interruptions.
+func consumeLogStreamWithRetry(ctx context.Context, open func(context.Context) (logStreamReceiver, error), follow bool, handle func(*agentpb.StreamLogsResponse), notify func(string), delays []time.Duration) (logReplayResult, error) {
+	received := false
+	failures := 0 // consecutive failed attempts since the stream last worked
+	for {
+		streamCtx, cancel := context.WithCancel(ctx)
+		opened := time.Now()
+		stream, err := open(streamCtx)
+		var result logReplayResult
+		if err != nil {
+			err = fmt.Errorf("starting log stream: %w", err)
+			// Nothing was read, so a cancelled open is a cancelled replay
+			// rather than an empty one.
+			result.end = replayEndedCancelled
+		} else {
+			skipHistory, reconnected := received, failures > 0
+			result, err = consumeLogStream(streamCtx, stream, follow, func(frame *agentpb.StreamLogsResponse) {
+				received = true
+				failures = 0
+				if reconnected {
+					reconnected = false
+					if notify != nil {
+						notify("Log connection restored.")
+					}
+				}
+				if skipHistory && frame.GetIsHistory() {
+					return
+				}
+				handle(frame)
+			})
+			if time.Since(opened) >= logRetryStableAfter {
+				failures = 0
+			}
+		}
+		cancel()
+		if ctx.Err() != nil {
+			return result, nil
+		}
+		if err == nil || !follow || status.Code(err) != codes.Unavailable {
+			return result, err
+		}
+		if failures >= len(delays) {
+			return result, withNextSteps(err, "The log connection is still unavailable. Check the same device's connection before retrying; app state is unknown.")
+		}
+		if notify != nil {
+			notify(fmt.Sprintf("Log connection lost. Reconnecting to the same device (%d/%d); some logs may be missing.", failures+1, len(delays)))
+		}
+		timer := time.NewTimer(delays[failures])
+		failures++
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return logReplayResult{end: replayEndedCancelled}, nil
+		case <-timer.C:
+		}
+	}
 }
 
 // How `wendy device logs --no-follow` decides the agent's history replay is

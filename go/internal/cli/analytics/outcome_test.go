@@ -26,11 +26,11 @@ func TestNonFailureOutcomesOnTheWire(t *testing.T) {
 		{"user cancellation", "command_executed", "", "user_cancelled", false, true, "cancelled"},
 		{"MCP cancellation result", "command_executed", "", "cancelled", false, true, "cancelled"},
 		{"cancelled deploy", "deploy_completed", "", "context_canceled", false, true, "cancelled"},
-		{"deadline", "command_executed", "", "context_deadline", false, false, ""},
-		{"usage error", "command_executed", "", "cli_usage", false, false, ""},
-		{"device unreachable", "command_executed", "", "device_unreachable", false, false, ""},
-		{"unknown error", "command_executed", "", "other", false, false, ""},
-		{"panic", "command_executed", "", "internal_error", false, false, ""},
+		{"deadline", "command_executed", "", "context_deadline", false, false, "failed"},
+		{"usage error", "command_executed", "", "cli_usage", false, false, "failed"},
+		{"device unreachable", "command_executed", "", "device_unreachable", false, false, "failed"},
+		{"unknown error", "command_executed", "", "other", false, false, "failed"},
+		{"panic", "command_executed", "", "internal_error", false, false, "failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bodies := make(chan eventPayload, 1)

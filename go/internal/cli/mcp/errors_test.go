@@ -32,6 +32,8 @@ func TestErrResult_StructuredAndText(t *testing.T) {
 func TestCodeFromGRPC(t *testing.T) {
 	cases := map[codes.Code]errorCode{
 		codes.Unavailable:      errCodeDeviceUnreachable,
+		codes.DeadlineExceeded: errCodeTimeout,
+		codes.Canceled:         errCodeCancelled,
 		codes.PermissionDenied: errCodeEntitlementDenied,
 		codes.NotFound:         errCodeNotFound,
 		codes.InvalidArgument:  errCodeInvalidArgument,
@@ -105,5 +107,25 @@ func TestCodeFromGRPCDistinguishesRPCIdentityDenial(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRecoveryMetadataDoesNotReplayMutations(t *testing.T) {
+	for _, code := range []errorCode{errCodeDeviceUnreachable, errCodeTimeout, errCodeAuthRequired, errCodeRPCIdentityDenied, errCodeInvalidArgument, errCodeCancelled} {
+		fields := structuredMap(t, errResult(code, "failure"))
+		if fields["retryable"] != false {
+			t.Fatalf("generic operation is retryable: %v", fields)
+		}
+		if len(fields["next_steps"].([]string)) == 0 {
+			t.Fatal("missing recovery guidance")
+		}
+		read := structuredMap(t, readOnlyErrResult(code, "failure"))
+		want := code == errCodeDeviceUnreachable || code == errCodeTimeout
+		if read["retryable"] != want {
+			t.Fatalf("wrong retry decision: %v", read)
+		}
+		if want && (read["retry_after_ms"] != 1000 || read["max_retries"] != 2) {
+			t.Fatalf("missing retry budget: %v", read)
+		}
 	}
 }

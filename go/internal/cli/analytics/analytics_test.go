@@ -674,7 +674,7 @@ func TestTrackSendsOnlyAllowedProperties(t *testing.T) {
 	Track("deploy_completed", map[string]string{"command_name": "wendy run", "duration_ms": "1234", "success": "true", "deploy_transport": "chunk", "deploy_build_ms": "123", "private_path": "/Users/alice/secret", "deploy_device_type": "alice-private-device", "deploy_push_ms": "secret", "deploy_fallback": strings.Repeat("x", 200)})
 	Close()
 	body := <-bodies
-	if len(body.Properties) != 2 || body.Properties["deploy_transport"] != "chunk" || body.Properties["deploy_build_ms"] != "123" {
+	if len(body.Properties) != 3 || body.Properties["deploy_transport"] != "chunk" || body.Properties["deploy_build_ms"] != "123" {
 		t.Fatalf("unsafe or missing properties: %v", body.Properties)
 	}
 	if body.SchemaVersion != 2 || body.EventID == "" || body.AttemptID == "" || body.OccurredAt.IsZero() {
@@ -685,7 +685,7 @@ func TestTrackSendsOnlyAllowedProperties(t *testing.T) {
 	}
 }
 
-func TestTrackOmitsPropertiesForCoreOnlyEvents(t *testing.T) {
+func TestTrackIncludesOutcomeForCommandEvents(t *testing.T) {
 	bodies := make(chan map[string]any, 1)
 	enableTestDelivery(t, func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -694,7 +694,8 @@ func TestTrackOmitsPropertiesForCoreOnlyEvents(t *testing.T) {
 	})
 	Track("command_executed", map[string]string{"command_name": "wendy run", "success": "true"})
 	Close()
-	if _, ok := (<-bodies)["properties"]; ok {
-		t.Fatal("a command event without extra properties must not send a properties object")
+	props, ok := (<-bodies)["properties"].(map[string]any)
+	if !ok || props["outcome"] != "completed" {
+		t.Fatal("command completion must have an explicit outcome")
 	}
 }

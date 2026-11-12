@@ -132,7 +132,7 @@ func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolR
 
 	stream, err := conn.TelemetryService.StreamLogs(ctx, logsReq)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return readOnlyErrResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 	result, err := collectProtoStream(ctx, func() (*agentpb.StreamLogsResponse, error) {
 		for {
@@ -143,7 +143,7 @@ func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolR
 		}
 	}, maxBatches)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return readOnlyErrResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 	return telemetryResult("logs", result, opts), nil
 }
@@ -197,7 +197,7 @@ func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallTo
 
 	stream, err := conn.TelemetryService.StreamMetrics(ctx, metricsReq)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return readOnlyErrResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 	historyBatches := 0
 	result, err := collectProtoStream(ctx, func() (*agentpb.StreamMetricsResponse, error) {
@@ -220,7 +220,7 @@ func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallTo
 	}, maxBatches)
 	cancel()
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return readOnlyErrResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 	if lastN > 0 {
 		return telemetryMetricsHistoryResult(result, opts, lastN, historyBatches), nil
@@ -274,13 +274,13 @@ func (s *mcpServer) handleTelemetryTraces(ctx context.Context, req mcpgo.CallToo
 
 	stream, err := conn.TelemetryService.StreamTraces(ctx, tracesReq)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return readOnlyErrResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 	result, err := collectProtoStream(ctx, func() (*agentpb.StreamTracesResponse, error) {
 		return stream.Recv()
 	}, maxBatches)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return readOnlyErrResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 	return telemetryResult("traces", result, opts), nil
 }
