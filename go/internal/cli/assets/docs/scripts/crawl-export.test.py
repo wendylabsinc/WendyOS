@@ -90,6 +90,21 @@ class ExportContractTests(unittest.TestCase):
                 (self.root / "sitemap.xml").write_text(xml)
                 self.assertIn("sitemap has no URL set", {f["reason"] for f in self.failures()})
 
+    def test_source_markdown_file_and_real_http_anchor_references(self):
+        self.fixture()
+        readme = self.root / "README.md"
+        local = self.root / "example.py"
+        local.write_text("print('example')\n")
+        readme.write_text('[source](example.py)\n[guide](https://docs.wendy.dev/latest/guide/#section)\n')
+        report = module.crawl(self.root, self.base, self.contract, "G-FIXTURE", [readme])
+        self.assertEqual(report["failures"], [])
+        self.assertEqual(report["source_references"], 2)
+        local.unlink()
+        readme.write_text(readme.read_text().replace("#section", "#removed"))
+        reasons = {f["reason"] for f in module.crawl(self.root, self.base, self.contract, "G-FIXTURE", [readme])["failures"]}
+        self.assertIn("source reference does not exist", reasons)
+        self.assertIn("missing HTML anchor", reasons)
+
     def test_canonical_and_sitemap_wrong_base_fail(self):
         self.fixture()
         self.page("/guide/", '<h1 id="section">Guide</h1>', canonical="https://docs.wendy.dev/guide/")

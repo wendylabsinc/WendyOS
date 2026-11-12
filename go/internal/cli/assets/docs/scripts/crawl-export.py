@@ -4,6 +4,7 @@
 import argparse
 from contextlib import contextmanager
 from html.parser import HTMLParser
+from html import unescape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -81,7 +82,18 @@ def serve_export(root, base):
         worker.join(timeout=3)
 
 
-def crawl(root, base, contract, analytics_id):
+def source_references(path):
+    raw = path.read_text()
+    # Match inline Markdown links, including image targets, and actual HTML
+    # links. Code fences are removed so shell/JSON examples cannot invent links.
+    raw = re.sub(r"(?ms)^```.*?^```[^\n]*", "", raw)
+    links = set(Page(raw).links)
+    links.update(unescape(m[1]) for m in re.findall(r"\[([^\]\n]*)\]\(([^\s)]+)(?:\s+[^)]*)?\)", raw))
+    links.update(unescape(m) for m in re.findall(r'<(?:img|source)\b[^>]*\b(?:src|srcset)=["\']([^"\']+)["\']', raw))
+    return links
+
+
+def crawl(root, base, contract, analytics_id, sources=()):
     if not re.fullmatch(r"/[a-z0-9][a-z0-9._-]{0,200}", base):
         raise ValueError("base must be one explicit deployment prefix")
     root = Path(root).resolve(strict=True)
@@ -169,6 +181,26 @@ def crawl(root, base, contract, analytics_id):
             fail("static redirect cycle", url, source)
             return None, url
 
+        source_count = 0
+        for source in sources:
+            source = Path(source).resolve(strict=True)
+            links = source_references(source)
+            if not links:
+                fail("source document has no references", str(source), str(source))
+            for href in links:
+                source_count += 1
+                parts = urlsplit(href)
+                if parts.scheme or parts.netloc:
+                    linked = local_url(href, "/")
+                    if linked is not None:
+                        destination(linked, str(source))
+                elif parts.path:
+                    target = source.parent / unquote(parts.path)
+                    if not target.exists():
+                        fail("source reference does not exist", str(target), str(source))
+                # Local Markdown fragments require the hosting platform's
+                # Markdown renderer. They are deliberately outside this check.
+
         analytics_pages = 0
         for route in routes:
             url = origin + base + route
@@ -217,7 +249,7 @@ def crawl(root, base, contract, analytics_id):
         if "Disallow: /branch-" not in (root / "robots.txt").read_text():
             fail("robots.txt does not exclude transient previews", base, "robots.txt")
     return {"base": base, "html_routes": len(routes), "http_destinations": len(requested),
-            "historical_redirects": len(contract["redirects"]), "external_links": sorted(external),
+            "historical_redirects": len(contract["redirects"]), "source_references": source_count, "external_links": sorted(external),
             "failures": [{"reason": reason, "target": target, "sources": sources}
                          for (reason, target), sources in sorted(failures.items())]}
 
@@ -229,8 +261,9 @@ if __name__ == "__main__":
     parser.add_argument("--analytics-id", required=True)
     parser.add_argument("--contract", type=Path, default=Path(__file__).with_name("legacy-route-contract.json"))
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--source-markdown", type=Path, action="append", default=[])
     args = parser.parse_args()
-    report = crawl(args.root, args.base, json.loads(args.contract.read_text()), args.analytics_id)
+    report = crawl(args.root, args.base, json.loads(args.contract.read_text()), args.analytics_id, args.source_markdown)
     args.report.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Crawled {report['html_routes']} HTML routes, {report['http_destinations']} HTTP destinations, "
           f"{report['historical_redirects']} historical redirects at {args.base}; {len(report['failures'])} failures")
