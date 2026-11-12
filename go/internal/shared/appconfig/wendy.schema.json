@@ -67,6 +67,24 @@
     "python": {
       "$ref": "#/$defs/python"
     },
+    "mcu": {
+      "type": "object",
+      "description": "Arduino sketch for the board's microcontroller (Arduino UNO Q). `wendy run` compiles it with its sketch.yaml profile and flashes it before the app starts.",
+      "properties": {
+        "sketch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sketch directory relative to the project, holding the .ino and a sketch.yaml that pins the Arduino platform."
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "description": "sketch.yaml profile to build. Default: the file's default_profile."
+        }
+      },
+      "required": ["sketch"],
+      "additionalProperties": false
+    },
     "run": {
       "$ref": "#/$defs/run"
     },
@@ -590,6 +608,14 @@
           ],
           "additionalProperties": false,
           "description": "Record application data through private sockets. Legacy JSON events remain supported; declared streams accept raw payloads or durable Protobuf envelopes. No sensor read access or administrative API access."
+        },
+        {
+          "properties": {
+            "type": { "const": "arduino-bridge" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Talk to the board microcontroller's sketch through Arduino's router (Arduino UNO Q). Mounts /run/arduino-router and sets APP_SOCKET for Arduino's Bridge client."
         },
         {
           "properties": {
