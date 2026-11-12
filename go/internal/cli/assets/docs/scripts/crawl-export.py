@@ -82,6 +82,42 @@ def serve_export(root, base):
         worker.join(timeout=3)
 
 
+def wildcard_robots_disallows(raw, path):
+    """Evaluate wildcard-group allow/disallow rules for one preview path.
+
+    The most specific matching rule wins; Allow wins a specificity tie.
+    Comments and unrelated user-agent groups cannot establish exclusion.
+    """
+    groups, agents, rules = [], [], []
+    for line in raw.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if ":" not in line:
+            continue
+        key, value = (part.strip() for part in line.split(":", 1))
+        key = key.lower()
+        if key == "user-agent":
+            if rules:
+                groups.append((agents, rules))
+                agents, rules = [], []
+            agents.append(value.lower())
+        elif key in ("allow", "disallow") and agents:
+            rules.append((key, value))
+    groups.append((agents, rules))
+    matches = []
+    for agents, rules in groups:
+        if "*" not in agents:
+            continue
+        for key, value in rules:
+            if not value:
+                continue
+            end = value.endswith("$")
+            pattern = value[:-1] if end else value
+            regex = "^" + ".*".join(re.escape(part) for part in pattern.split("*")) + ("$" if end else "")
+            if re.search(regex, path):
+                matches.append((len(pattern.replace("*", "")), key == "allow"))
+    return bool(matches) and not max(matches)[1]
+
+
 def source_references(path):
     raw = path.read_text()
     # Match inline Markdown links, including image targets, and actual HTML
@@ -246,7 +282,7 @@ def crawl(root, base, contract, analytics_id, sources=()):
                 fail("sitemap escaped deployment prefix", element.text, "sitemap.xml")
                 continue
             destination(origin + element.text.removeprefix(PUBLIC_ORIGIN), "sitemap.xml")
-        if "Disallow: /branch-" not in (root / "robots.txt").read_text():
+        if not wildcard_robots_disallows((root / "robots.txt").read_text(), (base if preview else "/branch-regression-check") + "/"):
             fail("robots.txt does not exclude transient previews", base, "robots.txt")
     return {"base": base, "html_routes": len(routes), "http_destinations": len(requested),
             "historical_redirects": len(contract["redirects"]), "source_references": source_count, "external_links": sorted(external),
