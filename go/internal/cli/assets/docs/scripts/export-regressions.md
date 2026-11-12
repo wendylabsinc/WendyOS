@@ -69,3 +69,32 @@ These checks establish source provenance and path validity; they do not compile,
 flash, execute the examples, or assert that GitHub's current main branch is the
 pinned revision. Refresh the pins deliberately when the documented examples
 change.
+
+To check the root README and PAIR example's local files and docs URLs, add these
+arguments to the crawler invocation from the docs directory:
+
+```sh
+--source-markdown ../../../../../README.md \
+--source-markdown ../../../../../Examples/NvidiaPAIR/README.md
+```
+
+Local file references must exist. docs.wendy.dev destinations and fragments use
+the same real HTTP export crawl. Other external sites and local Markdown heading
+fragments remain outside the check.
+
+From the repository root, validate the selected README, mesh, PAIR, discovery,
+debugging, and FAQ command snippets with the actual CLI parser:
+
+```sh
+go test -race ./go/internal/cli/commands -run '^TestDocumentationCommand' -count=1
+```
+
+This parses 73 current documented command lines with the real Cobra command tree
+and typed flags, including hidden compatibility commands that the public CLI
+reference omits. It does not call Execute or any deployment, discovery, sign-in,
+installation, or device handler. It verifies command/flag existence and flag
+value types, not runtime prerequisites, positional-argument requirements in
+abbreviated inline mentions, non-Wendy shell commands, or remote PAIR RPC results.
+Negative controls reject unknown commands/options, invalid durations, and invalid
+booleans. OS image, service-manager, firmware, and platform capability claims
+still require their own build/runtime evidence.
