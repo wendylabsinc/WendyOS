@@ -33,6 +33,8 @@ SUITES = (
     "tensorrt_restart_test.py",
     "oci_retry_test.py",
     "signing_ci_test.py",
+    "stagefile_images_test.py",
+    "sensorlink_audio_loopback_test.py",
     "integration-discover_test.py",
 )
 
