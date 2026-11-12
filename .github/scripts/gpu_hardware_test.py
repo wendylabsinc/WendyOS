@@ -207,5 +207,56 @@ class GPURehearsalTests(unittest.TestCase):
                 self.assertFalse((root / "bundle").exists())
 
 
+class DisplayRehearsalTests(unittest.TestCase):
+    setUp = GPURehearsalTests.setUp
+    inventory = GPURehearsalTests.inventory
+
+    def test_generates_display_only_and_denied_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = json.loads(self.inventory(root).read_text())
+            inventory = root / "display-inventory.json"
+            raw["board"] = raw.pop("boards")[0]
+            inventory.write_text(json.dumps(raw))
+            path = ROOT / ".github/regression-coverage/manual/jetson-display-rehearsal.py"
+            spec = importlib.util.spec_from_file_location("display_rehearsal", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            out = root / "display-bundle"
+            evidence = module.generate(inventory, out)
+            self.assertEqual(evidence["audit_entries"], ["1666"])
+            self.assertEqual(evidence["hardware_execution"], "not_run")
+            self.assertEqual(len(evidence["cases"]), 4)
+            commands = json.loads((out / "commands.json").read_text())
+            self.assertEqual(len({c["app_id"] for c in evidence["cases"]}), 4)
+            for case in evidence["cases"]:
+                self.assertEqual(case["status"], "not_run")
+                command = commands[case["id"]]["deploy"]
+                self.assertEqual(command[command.index("--device") + 1], raw["board"]["selector"])
+                project = Path(command[command.index("--prefix") + 1])
+                cfg = json.loads((project / "wendy.json").read_text())
+                self.assertEqual(cfg["entitlements"], [] if case["expect"] == "denied" else [{"type": "display"}])
+                self.assertEqual(cfg["appId"], case["app_id"])
+            self.assertIn("compute-only OS CDI list is insufficient", (out / "procedure.txt").read_text())
+
+    def test_refuses_non_nvidia_hardware(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = json.loads(self.inventory(root).read_text())
+            raw["board"] = raw.pop("boards")[0]
+            info = Path(raw["board"]["device_info"])
+            data = json.loads(info.read_text()); data["gpuVendor"] = "qualcomm"
+            info.write_text(json.dumps(data))
+            inventory = root / "display-inventory.json"
+            inventory.write_text(json.dumps(raw))
+            path = ROOT / ".github/regression-coverage/manual/jetson-display-rehearsal.py"
+            spec = importlib.util.spec_from_file_location("display_rehearsal", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with self.assertRaisesRegex(ValueError, "NVIDIA Jetson"):
+                module.generate(inventory, root / "bundle")
+            self.assertFalse((root / "bundle").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
