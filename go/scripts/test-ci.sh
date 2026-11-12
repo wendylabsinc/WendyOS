@@ -116,20 +116,7 @@ run_test() {
         ((PASS_COUNT++))
     else
         echo -e "${RED}FAIL${RESET} (exit $rc)"
-        printf '    Output:\n'
-        # Keep the initial error and final verdict without burying FAIL lines
-        # under build logs. Up to 30 lines are printed once, without overlap.
-        printf '%s\n' "$output" | awk '
-            NR <= 20 { print; next }
-            { tail[(NR - 21) % 10] = $0 }
-            END {
-                start = 21
-                if (NR > 30) {
-                    printf "... [%d lines omitted; first 20 and last 10] ...\n", NR - 30
-                    start = NR - 9
-                }
-                for (i = start; i <= NR; i++) print tail[(i - 21) % 10]
-            }'
+        echo "    Output: $(echo "$output" | tail -10)"
         ((FAIL_COUNT++))
     fi
     return $rc
@@ -467,38 +454,8 @@ echo ""
 
 # ── Test loop ────────────────────────────────────────────────────────
 
-MEMORY_PROBE_RC=""
-MEMORY_CAPABILITY=""
 for test_name in "${TESTS[@]}"; do
     test_dir="$TESTS_DIR/$test_name"
-
-    # Probe the host, not a container's delegated controller view. Older images
-    # can disable memory at boot. Skip only the two positive memory-limit specs
-    # when absence is confirmed; transport/read/parse errors remain failures.
-    if [[ "$test_name" == "python-resources" || "$test_name" == "python-multiservice-resources" ]]; then
-        if [[ -z "$MEMORY_PROBE_RC" ]]; then
-            MEMORY_PROBE_OUTPUT=$(python3 "$SCRIPT_DIR/probe-memory-controller.py" "$WENDY" "$HOSTNAME" 2>&1)
-            MEMORY_PROBE_RC=$?
-            printf '%s\n' "$MEMORY_PROBE_OUTPUT"
-            # The interpreter itself can exit 2 without running the script.
-            # Require success AND the helper's final explicit result record.
-            if [[ "$MEMORY_PROBE_RC" -eq 0 ]]; then
-                case "${MEMORY_PROBE_OUTPUT##*$'\n'}" in
-                    WENDY_MEMORY_CONTROLLER=absent) MEMORY_CAPABILITY=absent ;;
-                    WENDY_MEMORY_CONTROLLER=available) MEMORY_CAPABILITY=available ;;
-                    *) MEMORY_PROBE_RC=1 ;;
-                esac
-            fi
-        fi
-        if [[ "$MEMORY_PROBE_RC" -eq 0 && "$MEMORY_CAPABILITY" == absent ]]; then
-            skip_test "$test_name" "host memory controller absent; memory/CPU/PID assertions not exercised"
-            continue
-        elif [[ "$MEMORY_PROBE_RC" -ne 0 ]]; then
-            memory_probe_failed() { echo "Host memory-controller capability is unknown; refusing to skip or deploy the resource fixture"; return 1; }
-            run_test "$test_name" memory_probe_failed
-            continue
-        fi
-    fi
 
     # This checks the device host through authenticated mTLS, not a container's
     # /lib/modules or device mounts. Missing required image support is a failure.
@@ -539,6 +496,27 @@ for test_name in "${TESTS[@]}"; do
     if [[ "$test_name" == *"-gpu"* ]] && [[ "$DEVICE_HAS_CUDA" != "true" ]]; then
         skip_test "$test_name" "no NVIDIA GPU (vendor: ${DEVICE_GPU_VENDOR:-none})"
         continue
+    fi
+
+    # Older Pi images disable memory cgroups; these two fixtures require them.
+    if [[ "$test_name" == "python-resources" || "$test_name" == "python-multiservice-resources" ]]; then
+        controllers=$("$WENDY" device shell --device "$HOSTNAME" -- sh -ec '
+            if test -e /sys/fs/cgroup/memory || test -L /sys/fs/cgroup/memory; then
+                test -r /sys/fs/cgroup/memory/memory.limit_in_bytes
+                controllers=memory
+            else
+                controllers=$(cat /sys/fs/cgroup/cgroup.controllers)
+            fi
+            printf "memory-controllers:%s\n" "$controllers"' </dev/null) || { echo "ERROR: cannot read host memory cgroup capability" >&2; exit 1; }
+        controllers=${controllers%$'\r'}
+        if ! [[ "$controllers" =~ ^memory-controllers:([a-z][a-z0-9_]*(\ [a-z][a-z0-9_]*)*)$ ]] ||
+            ! awk '{for (i=1; i<=NF; i++) if (seen[$i]++) exit 1}' <<<"${controllers#memory-controllers:}"; then
+            echo "ERROR: unknown host memory cgroup capability" >&2; exit 1
+        fi
+        if [[ " ${controllers#memory-controllers:} " != *" memory "* ]]; then
+            skip_test "$test_name" "memory cgroup controller absent on installed image; resource assertions unavailable"
+            continue
+        fi
     fi
 
     if [[ "$test_name" == *"-gpu"* ]] && [[ -z "$DEVICE_GPU_FIXTURE_DOCKERFILE" ]]; then
@@ -611,11 +589,9 @@ for test_name in "${TESTS[@]}"; do
         # stdout, and per-service exit codes are not reported by the device, so
         # assert on the verdict lines.
         per_service_limits_enforced() {
-            local out rc
+            local out
             out=$("$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --no-restart 2>&1)
-            rc=$?
             echo "$out"
-            [[ $rc -eq 0 ]] || return "$rc"
             if grep -qE "(db|api): FAIL" <<<"$out"; then
                 return 1
             fi

@@ -184,7 +184,7 @@ jobs:
                               'Integration test structure:\n'
                               '  .github/ci-tests/<name>/\n'
                               '    wendy.json         # {"appId":"sh.wendy.ci.<name>","version":"1.0.0","language":"python"|"swift"[,"entitlements":[...]]}\n'
-                              '    main.py + Dockerfile   # for Python tests (FROM public.ecr.aws/docker/library/python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535)\n'
+                              '    main.py + Dockerfile   # for Python tests (FROM python:3.11-slim)\n'
                               '    Package.swift + Sources/<Target>/main.swift  # for Swift tests\n'
                               '    docker-compose.yml  # for compose tests (omit wendy.json)\n'
                               'Register a test by adding its name to the ALL_TESTS array in\n'
