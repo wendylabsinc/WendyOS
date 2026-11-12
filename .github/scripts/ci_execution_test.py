@@ -72,6 +72,9 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
 
     def test_race_budget_remains_bounded_and_vet_is_separate(self):
         jobs = workflow("go-tests.yml")["jobs"]
+        self.assertEqual(jobs["unit-tests"]["runs-on"], "runs-on,runner=2cpu-linux-x64")
+        self.assertGreater(int(jobs["unit-tests"]["timeout-minutes"]), 0)
+        self.assertLessEqual(int(jobs["unit-tests"]["timeout-minutes"]), 30)
         command = next(s["run"] for s in jobs["unit-tests"]["steps"] if s.get("name") == "Run tests")
         self.assertIn("-race", command)
         self.assertIn("-gcflags=all=-c=1", command)
@@ -93,12 +96,18 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
         self.assertIn('test "$AUTOMATION_RESULT" = success', config["jobs"]["test"]["steps"][0]["run"])
         self.assertTrue(any("run-automation-regressions.py" in s.get("run", "") for s in job["steps"]))
 
-    def test_dependabot_tracks_the_real_root_module(self):
+    def test_dependabot_tracks_every_repository_module(self):
         config = load_yaml(ROOT / ".github/dependabot.yml")
-        directories = [u["directory"] for u in config["updates"] if u["package-ecosystem"] == "gomod"]
-        self.assertIn("/", directories)
-        for directory in directories:
-            self.assertTrue((ROOT / directory.lstrip("/") / "go.mod").is_file(), directory)
+        directories = []
+        for update in config["updates"]:
+            if update["package-ecosystem"] == "gomod":
+                directories.extend(update.get("directories", [update.get("directory")]))
+        # Git's tracked files exclude downloaded dependencies and temporary fixtures.
+        tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
+        discovered = {"/" if p == "go.mod" else "/" + str(Path(p).parent)
+                      for p in tracked if p == "go.mod" or p.endswith("/go.mod")}
+        self.assertEqual(set(directories), discovered)
+        self.assertEqual(len(directories), len(set(directories)))
 
 
 if __name__ == "__main__":
