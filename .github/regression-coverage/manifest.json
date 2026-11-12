@@ -3357,9 +3357,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2673",
       "title": "Correct mesh discovery and NVIDIA PAIR documentation",
       "package": "16",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Documentation corrects mesh discovery and PAIR usage; no command-transcript or example validation was found for the corrected instructions.",
-      "required_follow_up": "Verify documented Wendy command parsing and README routes in CI; verify the documented PAIR paired-versus-member invitation state through the actual pinned upstream service.",
+      "required_follow_up": "Require hosted documented CLI argument checks and the actual pinned PAIR invitation/member-state process transcript, including restart and both incorrect-documentation controls. No GPU, mesh discovery, attach transport or Unix pairctl-hop execution is claimed by the PAIR fixture.",
       "evidence": [
         {
           "tests": [
@@ -3367,6 +3367,13 @@
             "go/internal/cli/assets/docs/scripts/crawl-export.py"
           ],
           "result": "Local race checks validate73 actual documented argv across7files through Cobra command resolution and typed flags, including hidden aliases, without executing handlers. Local actual export crawl resolves22 source README references. Parser exposed and fixed invalid wendy apps list instruction. These checks do not execute installers, prove PAIR remote semantics, or establish OS/platform prose claims."
+        },
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/test-pair-docs.py",
+            ".github/workflows/fumadocs.yml"
+          ],
+          "result": "Pinned upstream cluster-manager with the example production patch completes a real PIN invitation between two loopback processes, observes paired invitation versus member entries, and retains identity/membership after restart. Both ambiguous and incorrect documentation controls fail against the actual transcript. Local execution passed; required hosted execution pending."
         }
       ]
     },
