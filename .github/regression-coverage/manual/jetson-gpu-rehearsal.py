@@ -44,7 +44,11 @@ def artifact(value):
     path = Path(line(value, "artifact")).expanduser().resolve(strict=True)
     if not path.is_file() or not path.stat().st_size:
         raise ValueError("artifact must be a nonempty regular file")
-    return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"path": str(path), "sha256": digest.hexdigest()}
 
 
 def write(path, text):
@@ -238,7 +242,11 @@ if not re.fullmatch(r"[A-Za-z0-9_-]+", label): sys.exit("invalid label")
 evidence = json.loads((root / "evidence.json").read_text())
 if evidence["dirty_preview"]: sys.exit("regenerate from a clean committed checkout")
 for item in evidence["artifacts"]:
-    if hashlib.sha256(Path(item["path"]).read_bytes()).hexdigest() != item["sha256"]:
+    digest = hashlib.sha256()
+    with Path(item["path"]).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != item["sha256"]:
         sys.exit("artifact changed: " + item["path"])
 argv = json.loads((root / "commands.json").read_text())[case][stage]
 limit = 1200 if stage == "deploy" else 30

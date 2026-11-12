@@ -237,6 +237,7 @@ jobs:
           changes = {
               'cdi-display-omitted': ('return appCfg.HasEntitlement(appconfig.EntitlementDisplay) && boardDetect().IsJetson()', 'return false'),
               'cdi-refresh-omitted': ('c.refreshNvidiaCDIForStart(ctx, container, appName, containerLabels)', '// regression mutation: retain stale driver mounts'),
+              'device-refresh-omitted': ('refresh := localoci.RefreshHostDeviceNumbers(&spec)', 'refresh := localoci.DeviceRefresh{}'),
           }
           for name, (old, new) in changes.items():
               assert text.count(old) == 1, name
@@ -244,7 +245,7 @@ jobs:
               mutation.write_text(text.replace(old, new))
               (root / (name + '.json')).write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
           PY
-          for mutation in cdi-display-omitted cdi-refresh-omitted; do
+          for mutation in cdi-display-omitted cdi-refresh-omitted device-refresh-omitted; do
             go test -overlay "$RUNNER_TEMP/$mutation.json" -c -o "$RUNNER_TEMP/$mutation.test" ./go/internal/agent/containerd
           done
       - name: Compile the uncapped-swap negative control

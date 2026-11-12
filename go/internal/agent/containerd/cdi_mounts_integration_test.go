@@ -67,7 +67,7 @@ func TestIntegrationDisplayCDIMountsAndRestart(t *testing.T) {
 			if tc.display {
 				cfg.Entitlements = []appconfig.Entitlement{{Type: appconfig.EntitlementDisplay}}
 			}
-			if err := c.CreateContainerWithProgress(ctx, &agentpb.CreateContainerRequest{AppName: tc.name, ImageName: replaceTestImage}, cfg, nil); err != nil {
+			if err := c.CreateContainerWithProgress(ctx, &agentpb.CreateContainerRequest{AppName: tc.name, ImageName: replaceTestImage, Cmd: "/bin/sh", UserArgs: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"}}, cfg, nil); err != nil {
 				t.Fatal(err)
 			}
 			ctr, err := c.client.LoadContainer(ctx, tc.name)

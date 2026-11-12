@@ -258,5 +258,85 @@ class DisplayRehearsalTests(unittest.TestCase):
             self.assertFalse((root / "bundle").exists())
 
 
+class DriverUpdateRehearsalTests(unittest.TestCase):
+    setUp = GPURehearsalTests.setUp
+    inventory = GPURehearsalTests.inventory
+
+    def driver_inventory(self, root):
+        raw = json.loads(self.inventory(root).read_text())
+        raw["board"] = raw.pop("boards")[1]
+        for name in ("agent_binary", "os_artifact", "recovery_record"):
+            path = root / name
+            path.write_text("local fixture for " + name)
+            raw[name] = str(path)
+        raw.update(artifact_url="https://artifacts.invalid/os-0.21.0.mender", target_os_version="0.21.0",
+                   old_driver_path="/usr/lib/libcuda.so.100", new_driver_path="/usr/lib/libcuda.so.101")
+        path = root / "driver-inventory.json"
+        path.write_text(json.dumps(raw))
+        spec = importlib.util.spec_from_file_location("driver_update", ROOT / ".github/regression-coverage/manual/jetson-driver-update.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return path, module
+
+    def test_keeps_existing_apps_across_update_and_bounds_explicit_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory, generator = self.driver_inventory(root)
+            out = root / "bundle"
+            evidence = generator.generate(inventory, out)
+            self.assertEqual(evidence["hardware_execution"], "not_run")
+            self.assertEqual(len(evidence["cases"]), 6)
+            self.assertEqual(len({c["app_id"] for c in evidence["cases"]}), 2)
+            self.assertTrue(all(c["status"] == "not_run" for c in evidence["cases"]))
+            commands = json.loads((out / "commands.json").read_text())
+            for group, stages in commands.items():
+                for argv in stages.values():
+                    self.assertEqual(argv[argv.index("--device") + 1], evidence["board"]["selector"])
+                if group != "board":
+                    self.assertNotIn("--detach", stages["restart"])
+                    self.assertIn("--no-restart", stages["deploy"])
+                    apps = {c["app_id"] for c in evidence["cases"] if c["command_group"] == group}
+                    self.assertEqual(apps, {stages["restart"][5]})
+            for phase in ("before", "after"):
+                console = out / f"console-{phase}.sh"
+                subprocess.run(["sh", "-n", str(console)], check=True, timeout=5)
+                self.assertEqual(console.read_text().count("containers info"), 2)
+                self.assertNotIn("containers delete", console.read_text())
+            update = commands["board"]["os-update"]
+            self.assertIn("--binary", update)
+            self.assertIn("--artifact-url", update)
+            evidence["dirty_preview"] = False
+            (out / "evidence.json").write_text(json.dumps(evidence))
+            result = subprocess.run([sys.executable, str(out / "run-command.py"), "board", "os-update", "fixture"],
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 99)
+            record = json.loads((out / "board-os-update-fixture.result.json").read_text())
+            self.assertEqual(record["timeout_seconds"], 1800)
+            self.assertEqual(record["argv"], update)
+            raw = json.loads(inventory.read_text())
+            Path(raw["os_artifact"]).write_text("changed artifact")
+            refused = subprocess.run([sys.executable, str(out / "run-command.py"), "board", "os-update", "changed"],
+                                     capture_output=True, text=True, timeout=5)
+            self.assertIn("artifact changed", refused.stderr)
+            self.assertFalse((out / "board-os-update-changed.result.json").exists())
+
+    def test_rejects_updates_that_do_not_exercise_the_target(self):
+        for defect in ("same-version", "same-path", "latest-url", "unsupported-os"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                inventory, generator = self.driver_inventory(root)
+                raw = json.loads(inventory.read_text())
+                if defect == "same-version": raw["target_os_version"] = "fixture"
+                if defect == "same-path": raw["new_driver_path"] = raw["old_driver_path"]
+                if defect == "latest-url": raw["artifact_url"] = "https://artifacts.invalid/latest.mender"
+                if defect == "unsupported-os":
+                    path = Path(raw["board"]["device_info"])
+                    info = json.loads(path.read_text()); info["os"] = "linux"; path.write_text(json.dumps(info))
+                inventory.write_text(json.dumps(raw))
+                with self.assertRaises(ValueError):
+                    generator.generate(inventory, root / "bundle")
+                self.assertFalse((root / "bundle").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

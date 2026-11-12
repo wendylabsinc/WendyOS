@@ -1754,15 +1754,29 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2828",
       "title": "fix(agent): keep GPU apps starting after an OS update renames driver files",
       "package": "07",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover renamed CDI mounts, moved device numbers and startup refresh. They exercise specification repair; an OS-update/restart cycle with the vendor driver stack is not demonstrated.",
-      "required_follow_up": "Reconcile the real containerd rename/restart and skip-refresh mutation, then provide an actual vendor-driver OS-update/restart procedure and verify GPU output. The physical portion remains open.",
+      "required_follow_up": "Execute the prepared physical OS-update/rename procedure, retaining original container identities and proving CUDA computation after restart. Hardware remains unexecuted.",
       "evidence": [
         {
           "test": "go/internal/agent/containerd/cdi_mounts_integration_test.go",
           "result": "Added a production StartContainer regression that replaces a CDI file source/destination and environment, removes the old source, and reads the new mounted file inside the restarted task while retaining the container/snapshot identity. The old source is genuinely absent. Normal and skip-refresh binaries compile; hosted runtime execution remains pending. This uses a vendor-document/file fixture, not an actual GPU driver or OS update."
+        },
+        {
+          "head": "2302c8cba21c7e3de08642056c80639e62b632d4",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43286816536/job/131422524513",
+          "result": "Both containerd 1.7 and current passed the display-only creation and renamed-mount restart test, plus unentitled/non-Jetson controls. Omitting display injection failed on missing mounts; omitting refresh failed when runc tried to mount the deleted old source. The container/snapshot identity was retained."
+        },
+        {
+          "script": ".github/regression-coverage/manual/jetson-driver-update.py",
+          "tests": [
+            ".github/scripts/gpu_hardware_test.py"
+          ],
+          "result": "Generated and inspected six before/after/second-restart CUDA observations for two existing apps, with a pinned OS update, candidate Agent binary, approved recovery record, exact driver paths, console metadata captures and cleanup. Tests reject non-renaming/non-updating inventories, check command timeouts and refuse changed OS artifact bytes. Generator and preview do not contact devices.",
+          "hardware_execution": "not_run"
         }
-      ]
+      ],
+      "resolution": "Real containerd mount repair and the skip-refresh mutation passed on both versions. The vendor-driver OS-update portion has a target-specific human procedure; script readiness does not claim a hardware pass."
     },
     {
       "key": "2549",
@@ -1884,9 +1898,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1666",
       "title": "fix(agent): apply NVIDIA CDI mounts for a display-only entitlement, not just gpu",
       "package": "07",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "Tests exercise the needs-NVIDIA-CDI predicate for display-only grants. They do not inspect the full resulting mounts or start a display-only app.",
-      "required_follow_up": "Require the new real-container CDI creation/restart test and both mutations on containerd 1.7/current. Retain the prepared physical EGL procedure; its hardware execution remains not_run.",
+      "required_follow_up": "Retain the required CDI runtime/mutation checks and execute the prepared physical display-only EGL procedure on a reserved Jetson with graphics CDI provisioning.",
       "evidence": [
         {
           "tests": [
@@ -1896,8 +1910,18 @@
           "script": ".github/regression-coverage/manual/jetson-display-rehearsal.py",
           "result": "Real-container test compiles with display-only, no-entitlement and non-Jetson controls, followed by a renamed driver-file fixture restart of the same container/snapshot. Both remove-injection and remove-refresh mutants compile. A four-case physical NVIDIA EGL procedure was generated and inspected. The actual EGL image built and rejected CPU/Mesa fallback; 327 offline tests passed. Containerd runtime execution and hosted CI remain pending.",
           "hardware_execution": "not_run"
+        },
+        {
+          "head": "2302c8cba21c7e3de08642056c80639e62b632d4",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43286816536/job/131422524513",
+          "result": "Both containerd 1.7 and current passed the display-only creation and renamed-mount restart test, plus unentitled/non-Jetson controls. Omitting display injection failed on missing mounts; omitting refresh failed when runc tried to mount the deleted old source. The container/snapshot identity was retained."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43286816536/job/131422524390",
+          "result": "The required media job compiled the physical EGL probe and confirmed that a CPU-only runner cannot pass NVIDIA rendering verification. Required offline automation passed 327 tests in job 131422523690."
         }
-      ]
+      ],
+      "resolution": "Automatable CDI mount/restart behavior passed in required CI. Four exact-target physical EGL cases are prepared separately; hardware execution remains not_run."
     },
     {
       "key": "1988",
@@ -1934,20 +1958,30 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2540",
       "title": "Refresh NPU device permissions before container restarts",
       "package": "07",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "The cgroup permission refresh test checks renumbered NPU device IDs. It does not start a container against a changed real node.",
-      "required_follow_up": "Add a runtime test that recreates the node with another device number and restarts the container.",
-      "evidence": []
+      "required_follow_up": "Reconcile both-runtime node-recreation/cgroup enforcement and the omit-refresh mutation. Prepare physical vendor-accelerator restart/renumbering cases with actual model output; kernel fixture success alone does not prove vendor access.",
+      "evidence": [
+        {
+          "test": "go/internal/agent/containerd/device_numbers_integration_test.go",
+          "result": "Added a real-kernel device-number test for a persisted NPU entitlement. Private character nodes move from tun 10:200 to loop-control 10:237; the restarted container must open the new node through its cgroup and report the new numbers without recreation. A missing node must prevent start. The omit-refresh mutation must fail. Normal and mutant Linux binaries compile; hosted execution is pending. This does not execute a Qualcomm or NVIDIA vendor driver."
+        }
+      ]
     },
     {
       "key": "1888",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1888",
       "title": "agent: stop pinning device numbers for a container's lifetime, and name a missing device",
       "package": "07",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Device-spec refresh, missing-node and monitor behavior are tested; current containerd integration adds persistence coverage. Actual vendor GPU/NPU device access after renumbering remains a hardware gap.",
-      "required_follow_up": "Run an app restart after device-node recreation and verify real accelerator access.",
-      "evidence": []
+      "required_follow_up": "Reconcile both-runtime node-recreation/cgroup enforcement and the omit-refresh mutation. Prepare physical vendor-accelerator restart/renumbering cases with actual model output; kernel fixture success alone does not prove vendor access.",
+      "evidence": [
+        {
+          "test": "go/internal/agent/containerd/device_numbers_integration_test.go",
+          "result": "Added a real-kernel device-number test for a persisted NPU entitlement. Private character nodes move from tun 10:200 to loop-control 10:237; the restarted container must open the new node through its cgroup and report the new numbers without recreation. A missing node must prevent start. The omit-refresh mutation must fail. Normal and mutant Linux binaries compile; hosted execution is pending. This does not execute a Qualcomm or NVIDIA vendor driver."
+        }
+      ]
     },
     {
       "key": "2770",
