@@ -231,6 +231,33 @@ type importRecorder struct {
 	err       error
 	removed   []removal
 	removeErr error
+	// The start step: releases already on the device, the app definition
+	// every release carries (default {"appId":"web"}), and each start.
+	present   map[string]bool
+	appConfig []byte
+	starts    []ReleaseStart
+	startErr  func(ReleaseStart) error
+	digests   []string // the manifest digests the definition was read for
+}
+
+func (r *importRecorder) HasRelease(_ context.Context, _, release, _ string) bool {
+	return r.present[release]
+}
+
+func (r *importRecorder) ReleaseAppConfig(_ context.Context, app, _, digest string) ([]byte, error) {
+	r.digests = append(r.digests, digest)
+	if r.appConfig != nil {
+		return r.appConfig, nil
+	}
+	return []byte(`{"appId":"` + app + `"}`), nil
+}
+
+func (r *importRecorder) StartRelease(_ context.Context, s ReleaseStart) error {
+	r.starts = append(r.starts, s)
+	if r.startErr != nil {
+		return r.startErr(s)
+	}
+	return nil
 }
 
 // removal is one RemoveReleases call, or a PruneReleases call (prune).

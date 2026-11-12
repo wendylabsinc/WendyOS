@@ -131,3 +131,13 @@ func TestReleasesInUse(t *testing.T) {
 		t.Fatalf("in use %v, want [r1]", got)
 	}
 }
+
+// The app definition is read only from the image the operator signed.
+func TestCheckReleaseDigest(t *testing.T) {
+	if checkReleaseDigest("sha256:aa", "sha256:aa") != nil {
+		t.Fatal("the signed image refused")
+	}
+	if checkReleaseDigest("sha256:bb", "sha256:aa") == nil || checkReleaseDigest("sha256:aa", "") == nil {
+		t.Fatal("another image, or an empty signed digest, accepted")
+	}
+}

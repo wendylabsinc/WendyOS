@@ -3264,11 +3264,7 @@ var posixEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // reserved by Wendy (WENDY_*); a compromised or malicious caller could use
 // them to preload arbitrary code or override Wendy internals
 // (SOC2-CC6, ISO27001-A.8, NIST-SI-10).
-var blockedEnvPrefixes = []string{
-	"LD_",    // LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT, LD_DEBUG, etc.
-	"DYLD_",  // macOS dynamic linker (defense-in-depth for cross-platform images)
-	"WENDY_", // Wendy-internal variables must not be overrideable by callers
-}
+var blockedEnvPrefixes = appconfig.ReservedEnvPrefixes // LD_*, DYLD_* (linker injection), WENDY_* (agent-set)
 
 // maxUserEnvEntries is the maximum number of caller-supplied env entries accepted.
 // Prevents OCI spec bloat / DoS via unbounded env injection (SOC2-CC6, NIST-SI-10).
