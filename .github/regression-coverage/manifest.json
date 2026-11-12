@@ -1352,20 +1352,36 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2582",
       "title": "[WN8] Join CLI mesh peers automatically over LAN and BLE",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Registry-proxy and carrier tests exist, but full lock/lifetime behavior across cached proxy reuse and cancellation needs a direct deadlock regression.",
-      "required_follow_up": "Use barriers to race proxy registration, cache eviction and connection cancellation; require bounded completion under -race.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required Linux job and targeted regression controls at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/registry_lifetime_traffic_test.go",
+            ".github/scripts/test-management-lifetime.sh"
+          ],
+          "result": "Live HTTP registry and Agent RPC traffic reproduced an active transfer surviving owning connection closure. The proxy now cancels both owned sockets and joins its relays. Forced late closer registration tests the cache-lock boundary; fresh connections recover. Twenty native race runs passed and restoring lock order or removing relay cancellation failed the intended assertions."
+        }
+      ]
     },
     {
       "key": "2581",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2581",
       "title": "[WN7] Keep a full CLI mesh router running behind the broker",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Management-client retirement, broker identities and bounds have unit tests. End-to-end native broker transit and lifecycle behavior is not fully established by the portable suite.",
-      "required_follow_up": "Test carrier loss with live management requests and verify clients retire, pending calls finish and reconnect succeeds.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required Linux job and targeted regression controls at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/sessionbroker/operator_test.go",
+            ".github/scripts/test-management-lifetime.sh"
+          ],
+          "result": "Real TLS management RPC is held across carrier loss. The request and remote handler must cancel, retired gRPC connection must reach Shutdown, and the same IPC client recovers with a fresh management client. Final broker teardown closes the replacement too. Three native race runs passed; omitting retired-client Close fails its Shutdown assertion."
+        }
+      ]
     },
     {
       "key": "2577",
@@ -2092,10 +2108,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2650",
       "title": "feat(camera): list network cameras only once they are paired",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests check unpaired camera filtering, credentials and cleanup. They do not prove all hardware cameras stop being probed before pairing.",
-      "required_follow_up": "Use a fake ONVIF/RTSP server that records every connection and exercise list/pair/unpair through the service.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required Linux job and targeted regression controls at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/ipcam_admission_integration_test.go",
+            "go/internal/agent/services/ipcam_admission_server_test.go",
+            ".github/scripts/test-camera-pairing-admission.sh"
+          ],
+          "result": "Real discovery/ONVIF/RTSP endpoints count connections before pairing and after forgetting/restart, and actual authenticated RTP/H264 capture decodes expected pixels after pairing and persisted-state restart. Three native race runs passed; removing either ONVIF or liveness admission opens unexpected connections. Host discovery/ports and physical loopback are fixture boundaries. A regression-only build tag exposes discovery seams without adding shipped API."
+        }
+      ]
     },
     {
       "key": "2542",

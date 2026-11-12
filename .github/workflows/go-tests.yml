@@ -455,6 +455,8 @@ jobs:
               test -z "$(git status --porcelain)"
             )
           done
+      - name: Require live registry and management connection lifetimes
+        run: bash .github/scripts/test-management-lifetime.sh "$RUNNER_TEMP/management-lifetime"
       - name: Require TLS UDP admission and recovery under a stalled stream
         run: bash .github/scripts/test-tls-udp-admission.sh "$RUNNER_TEMP/tls-udp-admission"
       - name: Require duplicate rejection with an incumbent forwarding route
@@ -634,6 +636,8 @@ jobs:
 
       - name: Decode H264 without a producer parser and require regression controls
         run: bash .github/scripts/test-gstreamer-no-parser.sh
+      - name: Require camera pairing before ONVIF and RTSP connections
+        run: bash .github/scripts/test-camera-pairing-admission.sh
       - name: Preserve 16-bit thermal samples through the real raw tap
         run: bash .github/scripts/test-thermal-raw-capture.sh
       - name: Decode shared SensorLink capture and reject loopback opens
