@@ -7,15 +7,16 @@ No Go compilation, devices, deployment, shared-builder pruning or default change
 """
 import argparse
 import base64
+import contextlib
 import hashlib
 import inspect
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import signal
-import subprocess
 import sys
 import tarfile
 import uuid
@@ -26,6 +27,7 @@ import zipfile
 BASE_REF = 'python:3.11-slim'
 BASE_DIGEST = 'sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff'
 MODULE = 'usr/local/lib/python3.11/site-packages/stagefixture/__init__.py'
+GUARDIAN = Path(__file__).resolve().with_name('run-owned-media-test.py')
 
 
 def wheel(directory, version, nonce=None):
@@ -178,21 +180,18 @@ class Harness:
 
     def run(self, argv, label, cwd=None, check=True, timeout=300):
         log = self.output/(label+'.log')
+        spec = importlib.util.spec_from_file_location('stagefile_owned_command', GUARDIAN)
+        owner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(owner)
         with log.open('w') as stream:
-            process = subprocess.Popen([str(a) for a in argv], cwd=cwd, env=self.env,
-                                       stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
-                                       start_new_session=True)
-            try:
-                code = process.wait(timeout=timeout)
-            except BaseException:
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
-                raise
+            # The shared guardian owns all group signals, stays unreaped until
+            # its final kill and handles INT/TERM in this process. There is no
+            # second supervisor whose early reap could invalidate ownership.
+            with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                code = owner.run([str(a) for a in argv], timeout, cwd=cwd, env=self.env, stdout=stream)
         output = log.read_text()
+        if code in (128+signal.SIGINT, 128+signal.SIGTERM):
+            raise InterruptedError(f'{label} interrupted with exit {code}')
         if check and code:
             raise RuntimeError(f'{label} exited {code}: {output[-6000:]}')
         return code, output
@@ -360,13 +359,19 @@ def main():
         parser.error('CLI is not executable')
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=False)
     harness = Harness(cli, output)
+    def interrupted(signum, frame):
+        raise InterruptedError('Stagefile fixture interrupted by signal '+str(signum))
+    previous_term = signal.signal(signal.SIGTERM, interrupted)
     try:
         harness.execute()
-    except Exception as error:
+    except BaseException as error:
         harness.evidence.update(status='failed', error=str(error))
         raise
     finally:
-        harness.cleanup()
+        try:
+            harness.cleanup()
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
     print('PASS Stagefile release binary: both backends, inheritance, rebuilds and failure controls')
 
 
