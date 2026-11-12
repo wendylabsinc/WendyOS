@@ -7,7 +7,7 @@ set -euo pipefail
 if [[ $# == 0 ]]; then
   result=0
   for runtime_version in 1.7 current; do
-    echo "::group::Containerd $runtime_version lifecycle, DNS and DDS"
+    echo "::group::Containerd $runtime_version lifecycle, DNS, DDS and memory"
     if bash "$0" --version "$runtime_version"; then
       echo "Containerd $runtime_version: all required checks passed"
     else
@@ -43,3 +43,13 @@ if sudo env PATH="$runtime_path" bash .github/scripts/test-host-network-dns.sh "
   exit 1
 fi
 grep -q 'container DNS did not recover for after-upstream-replacement' "$logs/dns-negative.log"
+
+sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+  bash .github/scripts/test-memory-budget.sh "$RUNNER_TEMP/containerd.test" "$RUNNER_TEMP/memory-workload" | tee "$logs/memory-positive.log"
+grep -q '^--- PASS: TestContainerCombinedMemoryBudget ' "$logs/memory-positive.log"
+if sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+  bash .github/scripts/test-memory-budget.sh "$RUNNER_TEMP/memory-uncapped.test" "$RUNNER_TEMP/memory-workload" 2>&1 | tee "$logs/memory-negative.log"; then
+  echo 'Uncapped swap mutation unexpectedly passed' >&2
+  exit 1
+fi
+grep -q 'combined memory budget was exceeded without OOM enforcement' "$logs/memory-negative.log"
