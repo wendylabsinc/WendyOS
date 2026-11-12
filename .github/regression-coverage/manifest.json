@@ -939,7 +939,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2181",
       "title": "cli: reject an ESP32 --device-type before fetching manifests",
       "package": "02",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The ESP32 guard was moved before manifest fetching. Related install flag validation exists, but no exact no-network ordering test was found for this correction.",
       "required_follow_up": "Invoke os install with an ESP32 type and assert the manifest fetcher is never called.",
       "evidence": [
@@ -952,23 +952,35 @@
         {
           "test_file": "go/internal/cli/commands/os_install_esp32_preflight_test.go",
           "result": "All 15 cases pass locally; all failed before the preflight fix. The install-session fixture now uses a supported manifest path and passes with -race. New aggregate execution pending."
+        },
+        {
+          "head": "e4b4c275f7b3a6d075628d738aa96feb48f3204a",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43217773132/job/131181278097",
+          "result": "Required Go race job passed the complete CLI commands package, including the ESP32 no-manifest-fetch matrix, Dragonwing progress replay and USB guidance fixture. Native Windows MCP CRLF/stdio import and all installation host jobs also passed at this head."
         }
-      ]
+      ],
+      "resolution": "Required CI passed with the individual regression assertions included. Verified in the PR stack; merge remains pending."
     },
     {
       "key": "2568",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2568",
       "title": "cli: guide Dragonwing IQ8 USB2 runtime connection",
       "package": "02",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The PR includes a CRLF frontmatter parser correction as well as USB guidance. Current skill line-ending tests cover parsing, but native Windows MCP execution is not in its CI filter.",
       "required_follow_up": "Run the MCP line-ending suite on Windows and keep the USB command guidance fixture.",
       "evidence": [
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165367646",
           "result": "Windows MCP CRLF and stdio import passed. Linux USB notice fixture remains selected by the ordinary race suite; aggregate rerun pending after correcting the install-session fixture."
+        },
+        {
+          "head": "e4b4c275f7b3a6d075628d738aa96feb48f3204a",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43217773132/job/131181278097",
+          "result": "Required Go race job passed the complete CLI commands package, including the ESP32 no-manifest-fetch matrix, Dragonwing progress replay and USB guidance fixture. Native Windows MCP CRLF/stdio import and all installation host jobs also passed at this head."
         }
-      ]
+      ],
+      "resolution": "Required CI passed with the individual regression assertions included. Verified in the PR stack; merge remains pending."
     },
     {
       "key": "2589",
@@ -993,25 +1005,41 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2790",
       "title": "fix(cli): clarify Dragonwing flash percentages and IQ9 switch wording",
       "package": "02",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Existing Dragonwing tests check wording fields, but they do not exercise a full progress sequence or validate every percentage shown during flashing.",
       "required_follow_up": "Replay a flash progress trace and assert bounded, correctly labelled percentages and IQ9 instructions.",
       "evidence": [
         {
           "test_file": "go/internal/cli/commands/os_install_dragonwing_progress_test.go",
           "result": "Actual Firehose session replay passes with two partitions, bounded percentage labels and ACK/NAK completion behavior. IQ9 instructions checked locally; required CI pending."
+        },
+        {
+          "head": "e4b4c275f7b3a6d075628d738aa96feb48f3204a",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43217773132/job/131181278097",
+          "result": "Required Go race job passed the complete CLI commands package, including the ESP32 no-manifest-fetch matrix, Dragonwing progress replay and USB guidance fixture. Native Windows MCP CRLF/stdio import and all installation host jobs also passed at this head."
         }
-      ]
+      ],
+      "resolution": "Required CI passed with the individual regression assertions included. Verified in the PR stack; merge remains pending."
     },
     {
       "key": "2282",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2282",
       "title": "Keep enrolled device identities stable across restarts",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests protect identity persistence and refusal of inconsistent state. The change spans Go and Swift enrollment/storage paths; real interruption during key-store repair is not fully verified.",
       "required_follow_up": "Add process-crash/restart tests at each credential/state write boundary for both agents.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/provisioning_crash_test.go",
+            "swift/WendyAgentCore/Tests/WendyAgentTests/ProvisioningStoreCrashTests.swift"
+          ],
+          "runner": "local macOS",
+          "result": "Both agents exercise 12 real process exits: before and after durable key/state writes during initial enrollment, permission repair and legacy migration. Two fresh child processes recover and verify the same enrollment/key, honest initial commit state, stripped legacy key, private file modes and unchanged subsequent-start metadata. Swift also signs a challenge with the recovered key. Premature legacy-key removal mutations fail in both languages. Go provisioning tests pass under -race; all 26 Swift provisioning tests pass. Required CI pending."
+        }
+      ],
+      "resolution": "Process-crash coverage is implemented and locally verified. This tests process interruption, not physical power-loss behavior. Required Go and Swift CI must pass before verification."
     },
     {
       "key": "2478",
@@ -1158,6 +1186,13 @@
           ],
           "runner": "local macOS and pending native CI",
           "result": "Three provenance/publication tests passed; the POSIX launcher suite passed all 31 cases, including HTTP truncation followed by a verified retry. The gh fixture checks exact signer selectors and models rejection; it does not replace GitHub cryptographic verification. The Windows truncation/retry case is added but not yet executed."
+        },
+        {
+          "tests": [
+            "plugins/wendy/scripts/wendy",
+            "scripts/test/plugin-launcher/run.sh"
+          ],
+          "result": "CI traces show two mkdir lock acquisitions succeeding concurrently, matching uutils/coreutils#13970. A deterministic false-success mkdir fixture failed before an exclusive noclobber PID claim was added and passes afterward. All 32 local POSIX cases pass. Windows and macOS native CI passed on the preceding head; new Linux execution remains pending."
         }
       ],
       "resolution": "Go Tests now requires the reusable Linux/macOS/Windows launcher jobs. Relevant pinning and fixture paths trigger the aggregate. Complete native CI before marking verified."
