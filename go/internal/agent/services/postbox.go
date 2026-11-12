@@ -147,6 +147,9 @@ type postboxPending struct {
 	EntryID       int64  `json:"entryId"`
 	CorrelationID string `json:"correlationId"`
 	AppID         string `json:"appId,omitempty"`
+	// Committed: the entry's state change is on disk (deployment_contract.go),
+	// so after a crash it is finished and reported, not failed.
+	Committed bool `json:"committed,omitempty"`
 }
 
 // postboxAssignment is a verified DeviceAssignment held as desired state.
@@ -888,7 +891,7 @@ func (p *Postbox) apply(ctx context.Context, id *postboxIdentity, entryID int64,
 	case *cloudpbv2.DeviceAssignment:
 		return p.applyAssignment(ctx, id, entryID, correlation, r)
 	case *cloudpbv2.UnassignDeviceRequest:
-		return p.applyUnassign(ctx, r)
+		return p.applyUnassign(ctx, entryID, r)
 	case *cloudpbv2.CreateDeploymentRequest:
 		// Registry material is pulled per DeviceAssignment, which carries this
 		// device's wrap; a deployment names a release, not an app, and no key.
@@ -1040,8 +1043,10 @@ func (p *Postbox) ack(ctx context.Context, client cloudpbv2.DevicePostboxService
 }
 
 // settleInterrupted reports the entry a crash left between advance and
-// decide: claimed past the mark, never decided. It is not retried. A decided
-// entry never reaches it: decide holds until its record is on disk.
+// decide: claimed past the mark, never decided. One whose state change was
+// not yet on disk is reported failed and not retried. One whose change was
+// committed is finished (settleCommitted) and its true outcome reported. A
+// decided entry never reaches it: decide holds until its record is on disk.
 func (p *Postbox) settleInterrupted(ctx context.Context) error {
 	p.mu.Lock()
 	pend := p.state.Pending
@@ -1049,9 +1054,31 @@ func (p *Postbox) settleInterrupted(ctx context.Context) error {
 	if pend == nil {
 		return nil
 	}
-	return p.decide(ctx, &cloudpbv2.PostboxEntry{EntryId: pend.EntryID}, pend.CorrelationID, pend.AppID,
-		cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "interrupted",
-		errors.New("agent stopped after claiming this entry and before deciding it; not retried"))
+	outcome, reason, err := cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "interrupted",
+		errors.New("agent stopped after claiming this entry and before deciding it; not retried")
+	if pend.Committed {
+		outcome, reason, err = p.settleCommitted(ctx, pend)
+	}
+	return p.decide(ctx, &cloudpbv2.PostboxEntry{EntryId: pend.EntryID}, pend.CorrelationID, pend.AppID, outcome, reason, err)
+}
+
+// settleCommitted finishes an interrupted entry whose change is on disk: a
+// queued removal runs now, and an assignment whose pull resumes reports
+// pulling.
+func (p *Postbox) settleCommitted(ctx context.Context, pend *postboxPending) (cloudpbv2.ApplyOutcome, string, error) {
+	st := p.snapshot()
+	if pend.AppID != "" && slices.Contains(st.Removals, pend.AppID) {
+		if err := p.removeReleases(ctx, pend.AppID); err != nil {
+			return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
+		}
+		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+	}
+	for _, a := range st.Assignments {
+		if a.EntryID == pend.EntryID && !a.Pulled {
+			return outcomePulling, "", nil // resumed by resumePulls
+		}
+	}
+	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 }
 
 // advance moves the mark past a chain-verified entry, claims its nonce and
@@ -1216,6 +1243,14 @@ func (p *Postbox) postboxApp(ctx context.Context, req proto.Message) string {
 		return p.control.AppOf(ctx, r.GetContainerName())
 	case *cloudpbv2.DeviceAssignment:
 		return r.GetAppId()
+	case *cloudpbv2.UnassignDeviceRequest:
+		// The held deployment's app, so an interrupted removal is reported
+		// against it.
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if a := p.state.Assignments[r.GetDeploymentId()]; a != nil {
+			return a.AppID
+		}
 	}
 	return ""
 }
