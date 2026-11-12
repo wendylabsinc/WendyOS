@@ -176,6 +176,13 @@ class RpmArtifactTests(unittest.TestCase):
                 if name == "wendy-agent":
                     self.assertEqual(MODULE.member_bytes(archive, fmt, "/usr/lib/systemd/system/wendy-agent.service"),
                                      (ROOT / "packaging/linux/systemd/wendy-agent.service").read_bytes())
+                else:
+                    for packaged, original in (
+                        ("/usr/lib/sysusers.d/wendy.conf", "packaging/linux/sysusers/wendy.conf"),
+                        ("/usr/lib/udev/rules.d/70-wendy-jetson.rules", "packaging/linux/udev/70-wendy-jetson.rules"),
+                        ("/usr/lib/udev/rules.d/70-wendy-qualcomm.rules", "packaging/linux/udev/70-wendy-qualcomm.rules"),
+                    ):
+                        self.assertEqual(MODULE.member_bytes(archive, fmt, packaged), (ROOT / original).read_bytes())
 
     def test_real_rpm_repack_preserves_release_payload_and_changes_recovery_hook(self):
         packages = {}
