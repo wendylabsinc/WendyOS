@@ -25,6 +25,19 @@ run_root_bounded() {
   sudo -n timeout --kill-after=1s "$duration" "$@"
 }
 
+launcher_is_active() {
+  # jobs must run in this parent shell. A pipeline or command substitution
+  # gives it a subshell job table and falsely reports a healthy daemon absent.
+  # Include stopped jobs too; only wait after the owned child is no longer in
+  # Bash's table. The file belongs to this fresh fixture output directory.
+  # An unreadable/unwritable snapshot is unknown, so retain the bounded polling
+  # path rather than falsely declaring exit and entering wait.
+  jobs -p > "$output/pipewire-launcher.jobs" || return 0
+  local status=0
+  grep -Fxq "$daemon_launcher" "$output/pipewire-launcher.jobs" || status=$?
+  [[ "$status" != 1 ]]
+}
+
 # Compile before allocating any host resources. No production source is edited.
 echo "Compiling SensorLink audio normal and regression binaries: $output"
 go test -race -c -o "$output/services.test" ./go/internal/agent/services
@@ -81,10 +94,10 @@ cleanup() {
     # jobs consults bash's own child table. Do not blindly signal this numeric
     # PID or wait indefinitely for a stuck sudo/daemon launcher.
     for _ in $(seq 1 30); do
-      if ! { jobs -pr; jobs -ps; } | grep -Fxq "$daemon_launcher"; then break; fi
+      if ! launcher_is_active; then break; fi
       sleep 0.1
     done
-    if { jobs -pr; jobs -ps; } | grep -Fxq "$daemon_launcher"; then
+    if launcher_is_active; then
       echo 'Owned PipeWire launcher did not finish bounded cleanup.' >&2
       result=1
     else
@@ -171,7 +184,7 @@ while (( SECONDS < startup_deadline )); do
     ready=1
     break
   fi
-  if ! { jobs -pr; jobs -ps; } | grep -Fxq "$daemon_launcher"; then
+  if ! launcher_is_active; then
     daemon_status=0
     wait "$daemon_launcher" || daemon_status=$?
     cat "$output/pipewire.log" >&2
