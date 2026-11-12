@@ -4,12 +4,14 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 def load(name, filename):
@@ -29,6 +31,29 @@ def add(archive, path, content):
 
 
 class StagefileImagesTests(unittest.TestCase):
+    def test_local_package_build_creates_fresh_installed_nonce(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = images.package(root, '1.0')
+            nonces = []
+            # Same source, different target directories, no index and no build
+            # requirements: pip really invokes the stdlib-only PEP 517 backend.
+            for run in range(2):
+                target = root/f'installed-{run}'
+                result = subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-index', '--no-deps',
+                                         '--no-compile', '--target', str(target), str(source)],
+                                        capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+                result = subprocess.run([sys.executable, '-I', '-c',
+                                         'import sys; sys.path.insert(0, '+repr(str(target))+'); '
+                                         'import stagefixture; print(stagefixture.VERSION); print(stagefixture.BUILD_NONCE)'],
+                                        capture_output=True, text=True, timeout=10, check=True)
+                version, nonce = result.stdout.strip().splitlines()
+                self.assertEqual(version, '1.0')
+                self.assertRegex(nonce, '^[0-9a-f]{32}$')
+                nonces.append(nonce)
+            self.assertNotEqual(*nonces, 'uncached pip builds must produce distinct installed markers')
+
     def test_wheel_installs_and_imports_without_an_index(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -90,10 +115,48 @@ class StagefileImagesTests(unittest.TestCase):
                 native.retain_binary(source, destination)
             self.assertEqual(destination.read_bytes(), b'exact tested executable')
 
+    def test_cli_cannot_change_or_escape_the_owned_builder(self):
+        with patch.dict(os.environ, {'BUILDX_BUILDER': 'fixture-oci'}):
+            images.guard_docker_call(['buildx', 'build', '--load'], 'fixture-oci')
+            images.guard_docker_call(['exec', '-i', 'buildx_buildkit_fixture-oci0', 'buildctl', 'dial-stdio'], 'fixture-oci')
+            for argv in (['buildx', 'create', '--name', 'unrelated'], ['buildx', 'rm', 'fixture-oci'],
+                         ['buildx', 'use', 'fixture-oci'], ['buildx', 'prune'],
+                         ['buildx', 'build', '--builder=unrelated'],
+                         ['buildx', 'build', '--builder', 'unrelated'],
+                         ['exec', '-i', 'unrelated', 'buildctl', 'dial-stdio']):
+                with self.subTest(argv=argv), self.assertRaises(RuntimeError):
+                    images.guard_docker_call(argv, 'fixture-oci')
+
+    def test_partial_builder_creation_is_cleaned_and_cleanup_errors_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); cli = root/'cli'; cli.write_bytes(b'fixture')
+            with patch.object(images.shutil, 'which', return_value='/fixture/docker'):
+                harness = images.Harness(cli, root)
+            calls = []
+            def run(argv, label, **kwargs):
+                calls.append(argv)
+                if label == 'docker-info':
+                    return 0, json.dumps({'Architecture': 'amd64', 'OSType': 'linux'})
+                if label == 'check-builder-absent':
+                    return 1, 'no builder found'
+                if label == 'create-builder':
+                    raise RuntimeError('create failed after registering the builder')
+                return 0, ''
+            with patch.object(harness, 'run', side_effect=run):
+                with self.assertRaisesRegex(RuntimeError, 'create failed'):
+                    harness.execute()
+                harness.cleanup()
+            self.assertEqual(calls[-1], ['/fixture/docker', 'buildx', 'rm', '--force', harness.builder])
+            harness.images = ['fixture-owned:latest']
+            harness.builder_created = False
+            with patch.object(harness, 'run', return_value=(1, 'permission denied')):
+                with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                    harness.cleanup()
+            self.assertIn('permission denied', (root/'evidence.json').read_text())
+
     def test_live_gate_refuses_local_daemon_before_creating_output(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)/'must-not-exist'
-            import os
             env = dict(os.environ, GITHUB_ACTIONS='false')
             result = subprocess.run([sys.executable, str(Path(images.__file__)), '/missing/cli',
                                      '--output', str(output)], env=env, capture_output=True, text=True, timeout=10)
