@@ -18,7 +18,7 @@ import time
 import uuid
 
 from benchmark import SCENARIO_NOT_SUCCESS, scored
-from statistics_quality import wilson, success_comparison
+from statistics_quality import attempts_to_pass, wilson, success_comparison
 
 OUTCOMES = ("right", "wrong", "missed", "asked")
 TRACKED = ("runner_sha256", "harness_sha256", "task_sha256", "scenarios_sha256")
@@ -307,9 +307,12 @@ def _pair(b, c, unknown_b, unknown_c):
 
 
 def render_markdown(result):
+    needed = attempts_to_pass(result["success_tolerance"])
     lines = ["# Agent evaluation comparison", "", f"Verdict: {result['verdict']}", "",
              "Success intervals are 95% per comparison. A pass excludes a success-rate loss larger than "
-             f"{result['success_tolerance']:.0%}, with at least {result['min_attempts']} attempts per side.", ""]
+             f"{result['success_tolerance']:.0%}, with at least {result['min_attempts']} attempts per side."
+             + (f" Two sides with the same success rate need at least {needed} attempts each to pass."
+                if needed else ""), ""]
     if result["mismatches"]:
         lines += ["**Runs differ in fields that should match:** " + ", ".join(f"`{m}`" for m in result["mismatches"]), ""]
     lines += ["| Task | Agent | Target | Baseline R/W/M/A | Candidate R/W/M/A | Tokens (b → c) | Seconds (b → c) | Successes (b / c) | Success loss, 95% interval | Verdict / flags |",

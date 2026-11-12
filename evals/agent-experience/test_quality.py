@@ -9,7 +9,7 @@ import unittest
 import benchmark as b
 import compare as c
 import grading as g
-from statistics_quality import wilson
+from statistics_quality import attempts_to_pass, success_comparison, wilson
 from test_compare import make, row
 from tool_trace import build_trace
 from run_suite import command
@@ -47,6 +47,19 @@ class ComparisonQuality(unittest.TestCase):
 
     def test_well_measured_stable_run_passes(self):
         self.assertEqual(self.compare(self.attempts(100), self.attempts(100))['verdict'], 'pass')
+
+    def test_report_states_how_many_attempts_equal_sides_need(self):
+        def flawless(n, tolerance):
+            side = {'successes': n, 'success_attempts': n, 'success_rate': 1., 'success_interval': wilson(n, n)}
+            return success_comparison(side, side, 2, tolerance)['verdict']
+        for tolerance in (.05, .1, .2):
+            needed = attempts_to_pass(tolerance)
+            self.assertEqual((flawless(needed - 1, tolerance), flawless(needed, tolerance)),
+                             ('insufficient_evidence', 'pass'), tolerance)
+        self.assertEqual(attempts_to_pass(.1), 35)
+        self.assertIsNone(attempts_to_pass(0))
+        report = c.render_markdown(self.compare(self.attempts(10), self.attempts(10)))
+        self.assertIn('at least 35 attempts', report)
 
     def test_unknown_usage_prevents_pass(self):
         after = self.attempts(100)
