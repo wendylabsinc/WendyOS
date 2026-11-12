@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import http.server
 import json
 import os
@@ -18,6 +19,26 @@ from pair import merge
 
 
 HERE = Path(__file__).resolve().parent
+
+
+@contextmanager
+def accepting_otlp_server():
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.end_headers()
+        def log_message(self, *args):
+            pass
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/logs"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def report(values=(10, 12, 11), metric="agent.process.cpu_seconds.percent_mean"):
@@ -315,6 +336,30 @@ class WorkloadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "timed out"):
                 workloads.command([sys.executable, "-c", "import time; time.sleep(60)"], .1, log, threading.Event())
             self.assertLess(time.monotonic() - before, 4)
+
+    def test_leftover_child_gets_sigterm_grace_period(self):
+        # The wrapper exits normally, leaving a helper that needs 0.3 s to stop.
+        with tempfile.TemporaryDirectory() as directory:
+            marker, ready = Path(directory) / "stopped", Path(directory) / "ready"
+            helper = ("import pathlib, signal, time\n"
+                      "def stop(*_):\n    time.sleep(.3)\n    pathlib.Path(%r).touch()\n    raise SystemExit\n"
+                      "signal.signal(signal.SIGTERM, stop)\n"
+                      "pathlib.Path(%r).touch()\n"
+                      "time.sleep(30)\n") % (str(marker), str(ready))
+            wrapper = ("import os, subprocess, sys, time\n"
+                       "subprocess.Popen([sys.executable, '-c', %r])\n"
+                       "while not os.path.exists(%r): time.sleep(.02)\n") % (helper, str(ready))
+            workloads.command([sys.executable, "-c", wrapper], 10, Path(directory) / "log", threading.Event())
+            self.assertTrue(marker.exists(), "helper was killed before its SIGTERM handler finished")
+
+    def test_telemetry_lasts_its_full_offered_schedule(self):
+        # 4 requests at 20/s occupy 0.2 s. Stopping at the last send gave 4/0.15 s.
+        with accepting_otlp_server() as endpoint, tempfile.TemporaryDirectory() as directory:
+            scenario = {"kind": "telemetry", "endpoint": endpoint, "batch": 1, "payload_bytes": 10,
+                        "requests": 4, "requests_per_second": 20, "max_lag_seconds": 1}
+            result = workloads.run(scenario, Path(directory) / "log", threading.Event())
+        self.assertGreaterEqual(result["workload.seconds"], .2)
+        self.assertLessEqual(result["workload.operations_per_second"], 20)
 
     def test_failed_verify_invalidates_custom_workload(self):
         scenario = {"kind": "command", "command": [sys.executable, "-c", "pass"],

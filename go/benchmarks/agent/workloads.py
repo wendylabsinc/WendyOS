@@ -25,17 +25,32 @@ def command(argv, timeout, log, stop, cwd=None):
             if process.returncode:
                 raise ValueError(f"command exited {process.returncode}; see {log}")
         finally:
-            # Also terminate descendants left behind by a completed wrapper.
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
+            stop_group(process)
+
+
+def stop_group(process, grace=2):
+    """Terminate the command's process group, including descendants left behind
+    by a wrapper that already exited. Every member gets the grace period after
+    SIGTERM, not just the group leader."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        process.poll()  # Reap the leader so it does not keep the group alive.
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(.05)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait()
 
 
 def varint(value):
@@ -90,16 +105,18 @@ def telemetry(scenario, stop):
             latencies.append(time.monotonic() - before)
     finally:
         connection.close()
-    elapsed = time.monotonic() - start
     # Do not silently compare lower resource usage caused by an unmet offered load.
     if max(lags) > scenario.get("max_lag_seconds", 1):
         raise ValueError(f"telemetry could not sustain offered load; max schedule lag {max(lags):.3f}s")
+    # N requests at R/s occupy N/R seconds, not (N-1)/R; hold the last interval
+    # so operations per second matches the offered rate.
+    if stop.wait(max(0, start + scenario["requests"] / scenario["requests_per_second"] - time.monotonic())):
+        raise ValueError("telemetry cancelled")
     return {"workload.completed_operations": scenario["requests"],
             "workload.accepted_records": scenario["requests"] * scenario["batch"],
             "workload.payload_bytes": len(payload) * scenario["requests"],
             "workload.latency_p95_seconds": percentile(latencies, .95),
-            "workload.schedule_lag_p95_seconds": percentile(lags, .95),
-            "workload.seconds": elapsed}
+            "workload.schedule_lag_p95_seconds": percentile(lags, .95)}
 
 
 def run(scenario, log, stop):

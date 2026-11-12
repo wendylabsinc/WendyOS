@@ -128,7 +128,7 @@ These executable paths are examples to implement for the target device.
 `setup` runs before every repetition; PID discovery follows setup and readiness.
 `command` and required `verify` both contribute to measured duration. `cleanup`
 runs even after failure. Child processes left by a command are terminated when
-it finishes. For a detached deployment, verification must wait for container
+it finishes: SIGTERM, then SIGKILL after two seconds. For a detached deployment, verification must wait for container
 readiness and actual app output. Use exit status to reject dropped records or
 incomplete work. `operations` must describe the fixed amount of work verified.
 
