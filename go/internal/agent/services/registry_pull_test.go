@@ -105,7 +105,9 @@ func (f *pbFixture) releaseOf(t *testing.T, layers ...[]byte) *testRelease {
 	r.assign = &cloudpbv2.DeviceAssignment{
 		OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri, AppId: "web", AppReleaseId: uuid.NewString(),
 		ManifestDigest: m.GetManifestDigest(), DeploymentKeyId: registrycrypto.KeyID(deploymentKey),
-		DesiredState: cloudpbv2.Running_RUNNING, ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
+		// Install only: applied once imported. Running is not applied until
+		// the start step exists (TestRegistryPullRunningReleaseIsNotApplied).
+		DesiredState: cloudpbv2.Running_STOPPED, ExpiresAt: timestamppb.New(f.now.Add(time.Hour)),
 	}
 	pub := priv.PublicKey().Bytes()
 	wrap := registrycrypto.Wrap{
@@ -223,9 +225,24 @@ func (s *blobStream) Recv() (*cloudpbv2.GetBlobResponse, error) {
 // records what it was given, reading the staged blobs while they exist.
 type importRecorder struct {
 	postboxControl
-	imported []ReleaseImage
-	blobs    map[string][]byte
-	err      error
+	imported  []ReleaseImage
+	blobs     map[string][]byte
+	err       error
+	removed   []removal
+	removeErr error
+}
+
+// removal is one RemoveReleases call.
+type removal struct {
+	app  string
+	keep []string
+}
+
+func (r removal) equal(o removal) bool { return r.app == o.app && slices.Equal(r.keep, o.keep) }
+
+func (r *importRecorder) RemoveReleases(_ context.Context, app string, keep []string) error {
+	r.removed = append(r.removed, removal{app, keep})
+	return r.removeErr
 }
 
 func (r *importRecorder) ImportRelease(_ context.Context, img ReleaseImage) error {
@@ -502,11 +519,21 @@ func TestPostboxStartClearsRegistryPullStaging(t *testing.T) {
 func TestRegistryPullGivesUpWhenTheAssignmentExpires(t *testing.T) {
 	f := newPBFixture(t)
 	r := f.release(t)
+	// The pull runs beside the cycle: its clock moves under a lock.
+	var clockMu sync.Mutex
+	clock := f.now
 	arts := &fakeArtifacts{r: r, materialErr: func(int) error {
-		f.now = f.now.Add(time.Hour) // the outage outlives the assignment
+		clockMu.Lock()
+		clock = clock.Add(time.Hour) // the outage outlives the assignment
+		clockMu.Unlock()
 		return status.Error(codes.Unavailable, "the assignment check could not be made; retry")
 	}}
 	rec := f.withArtifacts(arts)
+	f.p.now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
+	}
 	f.assignEntry(r.assign)
 	f.cycle()
 	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED || len(rec.imported) != 0 {

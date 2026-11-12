@@ -1621,7 +1621,12 @@ func main() {
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		return errors.Join(meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx))
+		// No decrypted registry release outlives the enrollment it was for.
+		var releasesErr error
+		if postbox != nil {
+			releasesErr = postbox.RemoveAllReleases(cleanupCtx)
+		}
+		return errors.Join(meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx), releasesErr)
 	}
 	provisioningSvc.OnUnprovisioned = func() {
 		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum)

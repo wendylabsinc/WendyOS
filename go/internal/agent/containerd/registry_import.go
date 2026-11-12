@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 
+	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/leases"
@@ -23,7 +26,7 @@ import (
 
 // ReleaseImageName is the local image name of a registry release.
 func ReleaseImageName(appID, releaseID string) string {
-	return "localhost/wendy-release/" + appID + ":" + releaseID
+	return releaseImagePrefix + appID + ":" + releaseID
 }
 
 // ImportRelease writes a verified registry release (registry plan T14) into
@@ -121,4 +124,71 @@ func writeBlobFile(ctx context.Context, cs content.Store, path string, desc ocis
 		return fmt.Errorf("writing blob %s: %w", desc.Digest, err)
 	}
 	return nil
+}
+
+// The postbox finds these through an interface check; this keeps them in
+// step with it.
+var _ interface {
+	ReleaseApps(ctx context.Context, app string, keep []string) ([]string, error)
+	DeleteReleaseImages(ctx context.Context, app string, keep []string) error
+} = (*Client)(nil)
+
+// releaseImagePrefix starts every ReleaseImageName.
+const releaseImagePrefix = "localhost/wendy-release/"
+
+// removableRelease reports whether image name is a release of app (any app's
+// when app is "") whose release id is not in keep.
+func removableRelease(name, app string, keep []string) bool {
+	rest, ok := strings.CutPrefix(name, releaseImagePrefix)
+	if !ok {
+		return false
+	}
+	owner, release, ok := strings.Cut(rest, ":")
+	return ok && (app == "" || owner == app) && !slices.Contains(keep, release)
+}
+
+// ReleaseApps lists the apps that have a container running a removable
+// release (removableRelease); the caller deletes them through the agent's
+// app delete path before DeleteReleaseImages.
+func (c *Client) ReleaseApps(ctx context.Context, app string, keep []string) ([]string, error) {
+	ctrs, err := c.client.ContainerService().List(c.withNamespace(ctx), fmt.Sprintf("labels.%q", labelKeyAppID))
+	if err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+	return releaseApps(ctrs, app, keep), nil
+}
+
+func releaseApps(ctrs []containers.Container, app string, keep []string) []string {
+	var apps []string
+	for _, ctr := range ctrs {
+		if owner := ctr.Labels[labelKeyAppID]; removableRelease(ctr.Image, app, keep) && !slices.Contains(apps, owner) {
+			apps = append(apps, owner)
+		}
+	}
+	return apps
+}
+
+// DeleteReleaseImages deletes the removable release images and collects
+// their content before returning, so no decrypted layer stays on disk.
+func (c *Client) DeleteReleaseImages(ctx context.Context, app string, keep []string) error {
+	return deleteReleaseImages(c.withNamespace(ctx), c.client.ImageService(), c.logger, app, keep)
+}
+
+func deleteReleaseImages(ctx context.Context, is images.Store, logger *zap.Logger, app string, keep []string) error {
+	imgs, err := is.List(ctx)
+	if err != nil {
+		return fmt.Errorf("listing images: %w", err)
+	}
+	var errs []error
+	for _, img := range imgs {
+		if !removableRelease(img.Name, app, keep) {
+			continue
+		}
+		if err := is.Delete(ctx, img.Name, images.SynchronousDelete()); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("deleting release image %q: %w", img.Name, err))
+			continue
+		}
+		logger.Info("Removed registry release", zap.String("name", img.Name))
+	}
+	return errors.Join(errs...)
 }

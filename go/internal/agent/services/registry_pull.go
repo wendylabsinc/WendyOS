@@ -3,14 +3,17 @@ package services
 import (
 	"context"
 	"crypto/hpke"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -20,6 +23,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
@@ -51,12 +55,37 @@ import (
 //	suite, no device encryption key for this identity        REJECTED_UNWRAP
 //	release kind other than CONTAINER, unreadable OCI
 //	manifest, local staging or containerd import fails       APPLY_FAILED
+//	imported, desired state RUNNING: nothing starts the app
+//	until starting it with its configuration exists          outcomeNotStarted
+//	imported, desired state STOPPED (install only)           APPLIED
+//
+// The pull runs beside the postbox's command queue (pullJob): the
+// assignment's entry is decided at once as outcomePulling, and the pull's
+// outcome replaces it when it ends. Removing or replacing the deployment
+// cancels its pull; a pull the agent's stop interrupted is resumed from the
+// held assignment on the next cycle. A removed deployment's releases are
+// deleted (RemoveReleases), and so is a release a newer one supersedes.
+
+// Interim outcome values (option B of the WP5 plan; the orchestrator ruled
+// for option A on 2026-11-12): service-protos gains APPLY_OUTCOME_IN_PROGRESS
+// and APPLY_OUTCOME_NOT_STARTED, and these two lines switch to them once
+// they are vendored. Until then a pulling deployment carries its entry with
+// no outcome yet, and "not started" travels as APPLY_FAILED with the audit
+// reason not_started: not applied, but not a failure of the release.
+const (
+	outcomePulling    = cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED
+	outcomeNotStarted = cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED
+)
+
+// errNotStarted is a release on the device that nothing starts yet.
+var errNotStarted = errors.New("the release is on the device; the app is not started until it can be started with its configuration")
 
 const (
-	// registryPullDir stages one pull's ciphertext and plaintext under the
-	// agent config directory. It is emptied before and after every pull, when
-	// the postbox starts and on reset; a kill or power loss mid-pull leaves it
-	// until the next of those.
+	// registryPullDir stages each pull's ciphertext and plaintext under the
+	// agent config directory, one folder per deployment. A folder is emptied
+	// before and after its pull; the whole directory when the postbox starts
+	// and on reset. A kill or power loss mid-pull leaves it until the next of
+	// those.
 	registryPullDir = "registry-pull"
 	// materialTimeout bounds GetDeploymentMaterial; blobAttemptTimeout bounds
 	// one GetBlob stream, which a later attempt resumes.
@@ -127,26 +156,32 @@ func dialDeviceArtifacts(cloudURL, certPEM, keyPEM, chainPEM string) (cloudpbv2.
 	return cloudpbv2.NewDeviceArtifactServiceClient(conn), closer, nil
 }
 
-// pullAssignment fetches, opens, verifies and imports a verified assignment's
-// release. An ABSENT assignment is held with nothing to fetch.
-func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
-	if a.GetDesiredState() == cloudpbv2.Running_ABSENT {
-		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
-	}
-	// Checks that need no download (the containerd import repeats them).
+// checkAssignment runs the checks that need no download (the containerd
+// import repeats them), so a malformed assignment is decided with its entry.
+func checkAssignment(a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
 	if err := appconfig.ValidateAppID(a.GetAppId()); err != nil {
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", fmt.Errorf("invalid app ID: %w", err)
 	}
 	if u, err := uuid.Parse(a.GetAppReleaseId()); err != nil || u.String() != a.GetAppReleaseId() {
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", errors.New("invalid release id: want a canonical lowercase UUID")
 	}
-	dir := filepath.Join(p.configPath, registryPullDir)
-	// The postbox applies one entry at a time: anything here is an
-	// interrupted pull's, whose entry is settled and never retried.
+	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED, "", nil
+}
+
+// pullAssignment fetches, opens, verifies and imports a checked assignment's
+// release, then removes the app's releases no held assignment uses.
+func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment) (cloudpbv2.ApplyOutcome, string, error) {
+	// Named by a hash: the deployment id is cloud's string, not a path.
+	dir := filepath.Join(p.configPath, registryPullDir, fmt.Sprintf("%x", sha256.Sum256([]byte(a.GetDeploymentId()))))
+	// One pull per deployment runs at a time: anything here is an earlier,
+	// interrupted pull's.
 	if err := os.RemoveAll(dir); err != nil {
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "stage", err
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
+	defer func() {
+		_ = os.RemoveAll(dir)
+		_ = os.Remove(filepath.Dir(dir)) // only once no other pull stages there
+	}()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "stage", err
 	}
@@ -163,7 +198,174 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 		}
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "pull", err
 	}
+	// The superseded releases go; a failure is retried (Removals).
+	p.removeReleases(ctx, a.GetAppId())
+	if a.GetDesiredState() == cloudpbv2.Running_RUNNING {
+		return outcomeNotStarted, "not_started", errNotStarted
+	}
 	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+}
+
+// pullJob is one deployment's pull, running beside the command queue.
+type pullJob struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// startPull runs a held assignment's pull in the background. Its outcome is
+// recorded against entryID when it ends, unless it was cancelled: a removed
+// or replaced deployment is settled by its own entry, and one the agent's
+// stop interrupted stays unpulled and is resumed.
+func (p *Postbox) startPull(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment, entryID int64, correlation string) {
+	dep := a.GetDeploymentId()
+	ctx, cancel := context.WithCancel(ctx)
+	job := &pullJob{cancel: cancel, done: make(chan struct{})}
+	p.mu.Lock()
+	if p.pulls == nil {
+		p.pulls = map[string]*pullJob{}
+	}
+	p.pulls[dep] = job
+	p.mu.Unlock()
+	// ponytail: one goroutine per held deployment, no cap; add a semaphore if
+	// devices come to hold many deployments at once.
+	go func() {
+		defer close(job.done)
+		defer func() {
+			p.mu.Lock()
+			if p.pulls[dep] == job {
+				delete(p.pulls, dep)
+			}
+			p.mu.Unlock()
+		}()
+		defer cancel()
+		outcome, reason, err := p.pullAssignment(ctx, id, a)
+		if ctx.Err() != nil {
+			return
+		}
+		p.finishPull(a, entryID, correlation, outcome, reason, err)
+	}()
+}
+
+// stopPull cancels a deployment's pull and waits until it has stopped, so
+// nothing it imports outlives the caller's next step.
+func (p *Postbox) stopPull(dep string) {
+	p.mu.Lock()
+	job := p.pulls[dep]
+	delete(p.pulls, dep)
+	p.mu.Unlock()
+	if job != nil {
+		job.cancel()
+		<-job.done
+	}
+}
+
+// waitPulls waits for every running pull to end.
+func (p *Postbox) waitPulls() {
+	p.mu.Lock()
+	jobs := slices.Collect(maps.Values(p.pulls))
+	p.mu.Unlock()
+	for _, job := range jobs {
+		<-job.done
+	}
+}
+
+// finishPull audits a pull's end and records it: the assignment is marked
+// pulled (never resumed), and the outcome replaces the app's unless a newer
+// entry decided the app since. A failed save leaves the assignment unpulled,
+// so the next start pulls again.
+func (p *Postbox) finishPull(a *cloudpbv2.DeviceAssignment, entryID int64, correlation string, outcome cloudpbv2.ApplyOutcome, reason string, err error) {
+	fields := []zap.Field{
+		zap.String("audit", "postbox"), zap.Int64("entry_id", entryID), zap.String("correlation_id", correlation),
+		zap.String("deployment_id", a.GetDeploymentId()), zap.String("app_id", a.GetAppId()), zap.String("outcome", outcome.String()),
+	}
+	if err != nil {
+		p.count(reason)
+		p.logger.Warn("registry pull ended without applying", append(fields, zap.String("reason", reason), zap.Error(err))...)
+	} else {
+		p.logger.Info("registry pull applied", fields...)
+	}
+	serr := p.commit(func(st *postboxState) {
+		held := st.Assignments[a.GetDeploymentId()]
+		if held == nil || held.EntryID != entryID {
+			return // removed or replaced while it ended
+		}
+		done := *held
+		done.Pulled = true
+		st.Assignments = maps.Clone(st.Assignments)
+		st.Assignments[a.GetDeploymentId()] = &done
+		if o := st.Outcomes[a.GetAppId()]; o == nil || o.EntryID <= entryID {
+			st.Outcomes = maps.Clone(st.Outcomes)
+			st.Outcomes[a.GetAppId()] = &postboxOutcome{EntryID: entryID, CorrelationID: correlation, Outcome: outcome}
+		}
+	})
+	if serr != nil {
+		p.logger.Warn("postbox: saving a pull's outcome failed; the pull runs again on the next start", append(fields, zap.Error(serr))...)
+	}
+}
+
+// resumePulls restarts the pull of every held assignment whose pull neither
+// ended nor runs, and retries the removals that failed.
+func (p *Postbox) resumePulls(ctx context.Context, id *postboxIdentity) {
+	st := p.snapshot()
+	for dep, held := range st.Assignments {
+		p.mu.Lock()
+		_, running := p.pulls[dep]
+		p.mu.Unlock()
+		if held.Pulled || running || len(held.Assignment) == 0 {
+			continue
+		}
+		a := &cloudpbv2.DeviceAssignment{}
+		if err := proto.Unmarshal(held.Assignment, a); err != nil {
+			p.logger.Warn("postbox: held assignment unreadable; not resumed", zap.String("deployment_id", dep), zap.Error(err))
+			continue
+		}
+		p.logger.Info("resuming registry pull", zap.String("audit", "postbox"), zap.String("deployment_id", dep), zap.String("app_id", held.AppID))
+		p.startPull(ctx, id, a, held.EntryID, held.CorrelationID)
+	}
+	for _, app := range st.Removals {
+		p.removeReleases(ctx, app)
+	}
+}
+
+// removeReleases deletes app's releases that no held assignment uses, with
+// any container running one. A failure is kept in Removals and retried each
+// cycle, so no decrypted release stays on the device.
+func (p *Postbox) removeReleases(ctx context.Context, app string) error {
+	p.mu.Lock()
+	var keep []string
+	for _, a := range p.state.Assignments {
+		if a.AppID == app {
+			keep = append(keep, a.AppReleaseID)
+		}
+	}
+	p.mu.Unlock()
+	slices.Sort(keep)
+	err := p.control.RemoveReleases(ctx, app, keep)
+	if err != nil {
+		p.logger.Warn("removing an app's registry releases failed; retrying next cycle", zap.String("audit", "postbox"), zap.String("app_id", app), zap.Error(err))
+	}
+	serr := p.commit(func(st *postboxState) {
+		queued := slices.Contains(st.Removals, app)
+		switch {
+		case err != nil && !queued:
+			st.Removals = append(slices.Clone(st.Removals), app)
+		case err == nil && queued:
+			st.Removals = slices.DeleteFunc(slices.Clone(st.Removals), func(a string) bool { return a == app })
+		}
+	})
+	return errors.Join(err, serr)
+}
+
+// RemoveAllReleases stops every pull and removes every registry release and
+// the containers running one: the reset path.
+func (p *Postbox) RemoveAllReleases(ctx context.Context) error {
+	p.mu.Lock()
+	deps := slices.Collect(maps.Keys(p.pulls))
+	p.mu.Unlock()
+	for _, dep := range deps {
+		p.stopPull(dep)
+	}
+	return p.control.RemoveReleases(ctx, "", nil)
 }
 
 func (p *Postbox) fetchRelease(ctx context.Context, id *postboxIdentity, a *cloudpbv2.DeviceAssignment, dir string) (ReleaseImage, error) {

@@ -410,6 +410,7 @@ func (f *pbFixture) cycle() {
 	if err := f.p.cycle(context.Background()); err != nil {
 		f.t.Fatal(err)
 	}
+	f.p.waitPulls()
 }
 
 func (f *pbFixture) outcome(app string) postboxOutcome {
@@ -664,6 +665,9 @@ type crashingControl struct{}
 func (crashingControl) StartApp(context.Context, string) error      { panic("agent killed") }
 func (crashingControl) StopApp(context.Context, string) error       { panic("agent killed") }
 func (crashingControl) AppOf(_ context.Context, name string) string { return name }
+func (crashingControl) RemoveReleases(context.Context, string, []string) error {
+	panic("agent killed")
+}
 
 func TestPostboxReportsEntryInterruptedByCrash(t *testing.T) {
 	f := newPBFixture(t)
