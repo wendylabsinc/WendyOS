@@ -20,6 +20,7 @@ SUITES = (
     "ci_execution_test.py",
     "shared_contracts_test.py",
     "dependency_gates_test.py",
+    "plugin_pin_test.py",
 )
 
 

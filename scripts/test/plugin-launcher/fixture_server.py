@@ -24,6 +24,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             log.write(self.path + "\n")
         if slow:
             time.sleep(slow)
+        # Model a connection lost after headers and half of the release body.
+        # A checksum mismatch alone does not exercise HTTP truncation handling.
+        if os.path.exists(os.path.join(root, "truncate-downloads")):
+            path = self.translate_path(self.path)
+            if os.path.isfile(path):
+                with open(path, "rb") as source:
+                    data = source.read()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data[:len(data) // 2])
+                self.wfile.flush()
+                self.close_connection = True
+                return
         super().do_GET()
 
     def log_message(self, *args):
