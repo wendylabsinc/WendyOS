@@ -390,6 +390,13 @@ jobs:
           go test ./internal/cli/commands -run '^(TestEnsureQEMUOnWindows|TestSimulatorWithoutDetachedSupport|TestDiscoverKeepsScanningWhenSimulatorNeedsForegroundStart|TestDiscoverSimulatorGuidanceFitsPopulatedTerminal|TestVMStorage|TestVMImageSpace|TestVMCreate)' -v -count=1 -timeout 120s
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Test pending Windows serial I/O and close races
+        shell: bash
+        run: |
+          go test ./go/internal/cli/vm -run '^TestWindowsSerial(PendingIO|CloseCancelsPendingIO)$' -v -count=3 -timeout 120s | tee "$RUNNER_TEMP/serial.log"
+          test "$(grep -c '^--- PASS: TestWindowsSerialPendingIO ' "$RUNNER_TEMP/serial.log")" = 3
+          test "$(grep -c '^--- PASS: TestWindowsSerialCloseCancelsPendingIO ' "$RUNNER_TEMP/serial.log")" = 3
+
   # The agent embeds this Python worker and runs it on devices for campaign
   # inference. Its unit tests need no GPU: TensorRT and CUDA are faked.
   inference-worker:
