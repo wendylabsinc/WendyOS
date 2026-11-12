@@ -88,6 +88,21 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(outcome["status"], "failed")
         self.assertEqual(outcome["exit_code"], 7)
 
+    def test_missing_fuzz_target_cannot_pass(self):
+        job = {"mode": "fuzz", "target": "FuzzExpected"}
+        outcome = {"status": "completed", "exit_code": 0}
+        for output in ("PASS\n", "=== RUN   FuzzOther\nPASS\n",
+                       "=== RUN   FuzzExpectedSuffix\nPASS\n"):
+            (self.root / "output.log").write_text(output)
+            result = worker.verify_fuzz_run(job, outcome, self.root)
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["exit_code"], 1)
+            self.assertEqual(result["process_exit_code"], 0)
+        (self.root / "output.log").write_text("=== RUN   FuzzExpected\nPASS\n")
+        self.assertEqual(worker.verify_fuzz_run(job, outcome, self.root), outcome)
+        interrupted = {"status": "interrupted", "exit_code": -15}
+        self.assertEqual(worker.verify_fuzz_run(job, interrupted, self.root), interrupted)
+
     def test_review_schema_and_provenance(self):
         finding = {"file": "file.go", "line": 2, "title": "Bug", "evidence": "Evidence",
                    "reproduction": "Test"}

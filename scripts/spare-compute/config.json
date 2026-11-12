@@ -2,10 +2,89 @@
   "fuzz_seconds": 120,
   "job_seconds": 900,
   "fuzz": [
-    {"package": "go/internal/episodeexport", "target": "FuzzH264ChunkBoundaries"},
-    {"package": "go/internal/cli/tegraflash/t234", "target": "FuzzStaleExtentsPreserveWrittenBytes"}
+    {
+      "package": "go/internal/episodeexport",
+      "target": "FuzzH264ChunkBoundaries"
+    },
+    {
+      "package": "go/internal/cli/tegraflash/t234",
+      "target": "FuzzStaleExtentsPreserveWrittenBytes"
+    },
+    {
+      "package": "go/internal/agent/udpmessage",
+      "target": "FuzzFragmentDecoder"
+    },
+    {
+      "package": "go/internal/agent/udpmessage",
+      "target": "FuzzMessageReassembly"
+    },
+    {
+      "package": "go/internal/agent/localmesh",
+      "target": "FuzzIPAssemblyBounds"
+    },
+    {
+      "package": "go/internal/agent/localmesh",
+      "target": "FuzzCarrierWholeAssemblyBounds"
+    },
+    {
+      "package": "go/internal/agent/bleprovider",
+      "target": "FuzzAdvertisementBinary"
+    },
+    {
+      "package": "go/internal/agent/bleprovider",
+      "target": "FuzzAdvertisementLocalName"
+    },
+    {
+      "package": "go/internal/agent/bleprovider",
+      "target": "FuzzAdvertisingData"
+    },
+    {
+      "package": "go/internal/agent/bleprovider",
+      "target": "FuzzManagementAdvertisement"
+    },
+    {
+      "package": "go/internal/agent/nanprovider",
+      "target": "FuzzPresence"
+    },
+    {
+      "package": "go/internal/agent/nanprovider",
+      "target": "FuzzPresenceSSI"
+    },
+    {
+      "package": "go/internal/rtps/cdr",
+      "target": "FuzzDecoder"
+    },
+    {
+      "package": "go/internal/rtps/cdr",
+      "target": "FuzzDecoderRoundTrip"
+    },
+    {
+      "package": "go/internal/shared/builddelivery",
+      "target": "FuzzDeliveryAdmission"
+    },
+    {
+      "package": "go/internal/cli/archive",
+      "target": "FuzzTarExtraction"
+    },
+    {
+      "package": "go/internal/shared/roughtime",
+      "target": "FuzzMessageDecoder"
+    },
+    {
+      "package": "go/internal/shared/roughtime",
+      "target": "FuzzResponseVerification"
+    }
   ],
-  "mutation": ["go/internal/cli/tegraflash/t234", "go/internal/agent/udpmessage"],
-  "race": ["go/internal/agent/udpmessage"],
-  "review_roots": ["go/internal/agent", "go/internal/cli", "go/internal/episodeexport"]
+  "mutation": [
+    "go/internal/cli/tegraflash/t234",
+    "go/internal/agent/udpmessage"
+  ],
+  "race": [
+    "go/internal/agent/udpmessage"
+  ],
+  "review_roots": [
+    "go/internal/agent",
+    "go/internal/cli",
+    "go/internal/episodeexport"
+  ]
 }

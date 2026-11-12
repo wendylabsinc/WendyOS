@@ -155,7 +155,7 @@ def command_for(job, cpus, config, report):
     package = "./" + job.get("package", "")
     test = ["go", "test", "-p", str(cpus), "-count=1", "-timeout=5m"]
     if job["mode"] == "fuzz":
-        return test + [package, "-run=^$", f"-fuzz=^{job['target']}$",
+        return test + [package, "-v", "-run=^$", f"-fuzz=^{job['target']}$",
                        f"-fuzztime={config['fuzz_seconds']}s", f"-parallel={cpus}"]
     if job["mode"] == "mutation":
         # v0.6.0 passes its --test-cpu value to Go as one malformed argument.
@@ -167,6 +167,19 @@ def command_for(job, cpus, config, report):
     return [sys.executable, str(Path(__file__).with_name("review.py")),
             "--file", job["file"], "--start", str(job["start"]), "--end", str(job["end"]),
             "--output", str(report / "review.json")]
+
+
+def verify_fuzz_run(job, outcome, report):
+    # Go exits zero when -fuzz matches no target (including build-tag exclusions).
+    # Verbose output must identify the requested target as actually running.
+    if job["mode"] == "fuzz" and outcome["status"] == "completed":
+        marker = f"=== RUN   {job['target']}"
+        with (report / "output.log").open(errors="replace") as output:
+            ran = any(line.rstrip("\r\n") == marker for line in output)
+        if not ran:
+            return {**outcome, "status": "failed", "process_exit_code": outcome["exit_code"],
+                    "exit_code": 1, "error": "configured fuzz target did not run in this source revision"}
+    return outcome
 
 
 def extract(archive, root):
@@ -284,6 +297,7 @@ def main():
         atomic_json(report / "result.json", metadata)
         print(json.dumps({"event": "job_started", **metadata}), flush=True)
         outcome = run_process(argv, root, env, report, config["job_seconds"], min_free)
+        outcome = verify_fuzz_run(job, outcome, report)
         if corpus is not None and destination.exists():
             shutil.copytree(destination, corpus, dirs_exist_ok=True)
             shutil.copytree(destination, report / "corpus")

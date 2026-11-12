@@ -175,6 +175,21 @@ timed-out jobs are retained as failures and advance the queue. They do not
 count as successful tests. Remove a stopped worker's `checkpoint.json` to
 restart a sweep after fixing its cause.
 
+The default rotation includes UDP fragment decoding and stateful reassembly,
+mesh assembly bounds, BLE/NAN advertisements, ROS 2 CDR decoding, signed build
+delivery admission, tar extraction, Roughtime verification, H264 boundaries and
+tegraflash extents. Stateful targets check payload integrity, reservation cleanup,
+signature and nonce binding, path containment and preservation of the previous
+destination after a failed extraction. Input sizes and operation counts are
+bounded so each iteration stays suitable for a background worker.
+
+The worker requires Go's verbose output to confirm that the configured fuzz
+target ran. A missing target is a failed job, even if Go exits successfully.
+New targets must exist in `SOURCE_REF`. Before merging this change, deploy the
+worker with `--env SOURCE_REF=feat/spare-compute-worker`; after merging, use the
+default `main`. Redeploy after changing `config.json`, which is baked into the
+worker image. Reports record the resolved source commit in either case.
+
 The reviewer checks overlapping numbered Go excerpts independently of CPU tests.
 Results contain evidence and proposed regression tests, and are always marked
 `unverified`. This version neither executes model-generated commands nor applies
