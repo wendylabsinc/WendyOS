@@ -1,5 +1,12 @@
 # Spare compute on Wendy Cloud devices
 
+> **Deployment blocked:** the LAN check on Joannis Thor General found that the
+> Agent intentionally does not expose HostShell on its local admin socket. The
+> current supervisor receives `UNIMPLEMENTED` and denies all work. This draft
+> needs a supported read-only host observation API before the command below
+> produces useful background work. Do not expose HostShell locally to work
+> around the restriction. Container tests do not verify Agent service availability.
+
 From this directory, deploy the app to a device returned by `wendy discover`:
 
 ```sh
