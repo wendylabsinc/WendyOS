@@ -3275,7 +3275,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1859",
       "title": "agent: clear the explicit hostname on a config-partition rename",
       "package": "priority",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The implementation deletes the explicit hostname override when applying a config-partition name. Current apply tests check name validity and stub the name application, without asserting removal of the old override.",
       "required_follow_up": "Persistence is covered. Restart the agent/name-advertising path and verify the effective hostname and mDNS name, including a stale override that could not be removed.",
       "evidence": [
@@ -3291,8 +3291,14 @@
         {
           "path": "go/internal/agent/configpartition/device_name_restart_linux_test.go",
           "result": "Added real hostname/Avahi wire assertions across a fresh boot-path process using pinned WendyOS-Builder scripts, isolated mount/UTS/network/PID namespaces and a separate DNS-probe network namespace. Covers successful removal, EBUSY removal failure, retained config request and successful retry. Product fix returns the removal error before publishing a mismatched name. Portable assertion failed before fix; full configpartition tests passed on macOS and unprivileged Linux. Required namespace integration remains pending CI."
+        },
+        {
+          "head": "5c28f455d35de6996557e02eab5bcb777a4184d1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43256653001",
+          "result": "Required Go Tests aggregate passed at the hostname PR head, including Race tests and both native-app jobs. Hostname and mDNS restart job 131316574941 passed the actual namespace/Avahi scenarios in 14.77 seconds. Normal rename, an EBUSY stale override, process restart and retry all assert effective hostname plus wire SRV/TXT records. No hardware or full OS boot is claimed."
         }
-      ]
+      ],
+      "resolution": "Failed explicit-hostname removal retains the rename request and prevents mismatched name advertisement. Real boot scripts and fresh-process advertisement are covered in isolated Linux namespaces, including retry after the blocker is removed."
     },
     {
       "key": "2613",
