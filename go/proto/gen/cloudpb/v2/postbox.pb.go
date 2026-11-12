@@ -243,8 +243,11 @@ func (x *PullChangesRequest) GetLimit() uint32 {
 }
 
 type PullChangesResponse struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Entries []*PostboxEntry        `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Byte cap: the server stops adding entries before the serialized response
+	// exceeds 2 MiB, and always returns at least one entry when one exists
+	// above after_entry_id (one entry is far below the cap), setting has_more.
+	Entries []*PostboxEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
 	// pki-core's notarized checkpoint for this chain, byte-for-byte as pki-core
 	// signed it. Empty when the chain has not been notarized yet (notarization is
 	// asynchronous, and a self-hosted cloud may have no notarizer at all); the
