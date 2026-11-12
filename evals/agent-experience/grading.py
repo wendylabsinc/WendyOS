@@ -5,7 +5,7 @@ import re
 from tool_trace import cli_path, command_words, parse_wendy_invocations
 
 OUTCOMES = ("right", "wrong", "missed", "asked", "went_around")
-EXPECT_KEYS = {"right", "wrong", "ask"}
+EXPECT_KEYS = {"right", "wrong", "ask", "ask_regex", "sequence", "require_result"}
 MATCHER_KEYS = {"tool", "cli", "shell", "args", "args_regex", "agents", "block"}
 KINDS = ("tool", "cli", "shell")
 HELP_FLAGS = frozenset({"--help", "-h"})
@@ -16,6 +16,25 @@ def validate_expect(expect):
         raise ValueError(f"expect keys must be within {sorted(EXPECT_KEYS)}")
     if not isinstance(expect.get("ask", False), bool):
         raise ValueError("expect.ask must be a boolean")
+    if not isinstance(expect.get("require_result", False), bool):
+        raise ValueError("expect.require_result must be a boolean")
+    patterns = expect.get("ask_regex", [])
+    if not isinstance(patterns, list) or any(not isinstance(p, str) or not p for p in patterns):
+        raise ValueError("expect.ask_regex must be a list of nonempty regular expressions")
+    if expect.get("ask") and not patterns:
+        raise ValueError("expect.ask requires scenario-specific ask_regex criteria")
+    for pattern in patterns:
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ValueError(f"invalid ask_regex: {error}") from error
+    sequence = expect.get("sequence", [])
+    if not isinstance(sequence, list):
+        raise ValueError("expect.sequence must be a list of alternative-matcher lists")
+    for step in sequence:
+        if not isinstance(step, list) or not step:
+            raise ValueError("each sequence step needs at least one matcher")
+        validate_expect({"right": step})
     for side in ("right", "wrong"):
         matchers = expect.get(side, [])
         if not isinstance(matchers, list):
@@ -56,7 +75,11 @@ def is_help(argv):
 
 
 def _arg_ok(actual, want):
-    return want in actual if isinstance(actual, list) else actual == want
+    if isinstance(actual, list) and not isinstance(want, list):
+        return any(_arg_ok(item, want) for item in actual)
+    if isinstance(actual, bool) != isinstance(want, bool):
+        return False
+    return actual == want
 
 
 def matches(matcher, entry, adapter=None):
@@ -86,9 +109,13 @@ def matches(matcher, entry, adapter=None):
     return "args_regex" not in matcher or re.search(matcher["args_regex"], text) is not None
 
 
-def _first(matchers, trace, adapter):
-    for i, matcher in enumerate(matchers):
-        for j, entry in enumerate(trace):
+def _first(matchers, trace, adapter, require_result=False, right=False):
+    for j, entry in enumerate(trace):
+        for i, matcher in enumerate(matchers):
+            if right and (entry.get("is_error") is True or
+                          (require_result and entry.get("canned") and entry.get("captured") is False) or
+                          (require_result and entry.get("is_error") is not False)):
+                continue
             if matches(matcher, entry, adapter):
                 return i, j
     return None
@@ -117,12 +144,42 @@ def _wendy_work(entry):
     return False
 
 
-def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, went_around=False):
+def explicit_target(entry):
+    args = entry.get("arguments")
+    if entry.get("channel") == "mcp" and isinstance(args, dict):
+        return args.get("device") or (args.get("selector") if entry.get("name") == "device_connect" else None)
+    if entry.get("channel") == "cli" and isinstance(args, list):
+        for i, value in enumerate(args):
+            if value == "--":
+                break
+            if value == "--device" and i + 1 < len(args):
+                return args[i + 1]
+            if isinstance(value, str) and value.startswith("--device="):
+                return value.split("=", 1)[1]
+    return None
+
+
+def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, went_around=False, target=None):
     """Order: wrong, right, went around, asked, missed. `went_around` is set only where the model shares
     the device (the local target), so a laptop's grades don't change."""
     result = {"outcome": "missed", "rule": None, "entry": None, "hidden_group": False}
+    if target:
+        for i, entry in enumerate(trace):
+            selected = explicit_target(entry)
+            if selected is not None and selected != target:
+                result.update(outcome="wrong", rule="target", entry=i)
+                return result
     for side in ("wrong", "right"):
-        hit = _first(expect.get(side, []), trace, adapter)
+        hit = _first(expect.get(side, []), trace, adapter, expect.get("require_result", False), right=side == "right")
+        if side == "right" and hit and expect.get("sequence"):
+            cursor = 0
+            for alternatives in expect["sequence"]:
+                step = _first(alternatives, trace[cursor:], adapter, expect.get("require_result", False), right=True)
+                if step is None or trace[cursor + step[1]].get("order_unknown"):
+                    hit = None
+                    result["rule"] = "incomplete_sequence"
+                    break
+                cursor += step[1] + 1
         if hit:
             result.update(outcome=side, rule=f"{side}[{hit[0]}]", entry=hit[1])
             return result
@@ -131,7 +188,10 @@ def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, 
         if plain and len(plain) >= sum(_wendy_work(e) for e in trace):
             result.update(outcome="went_around", entry=plain[0])
             return result
-    if expect.get("ask") and agent_completed and "?" in (final_text or ""):
+    # Every required concept must occur in a question, not in an unrelated success claim.
+    questions = re.findall(r"[^.!?\n]*\?", final_text or "")
+    if (expect.get("ask") and agent_completed and expect.get("ask_regex") and
+            any(all(re.search(p, question, re.I) for p in expect["ask_regex"]) for question in questions)):
         result["outcome"] = "asked"
         return result
     if adapter in ("claude", "codex") and group and group != "core":

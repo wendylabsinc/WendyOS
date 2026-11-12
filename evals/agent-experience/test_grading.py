@@ -22,7 +22,7 @@ WIFI = {"right": [{"tool": "wifi_connect", "args": {"ssid": "Lab5G"}}],
 
 
 THOR_TRACE = [shell("dmesg | grep -i usb"), shell("lsusb"), shell("cat /proc/bus/usb/devices")]
-USB_LOGS = {"right": [{"tool": "device_os_logs"}], "wrong": [{"tool": "container_exec"}], "ask": True}
+USB_LOGS = {"right": [{"tool": "device_os_logs"}], "wrong": [{"tool": "container_exec"}], "ask": True, "ask_regex": ["which"]}
 
 
 class WentAroundTests(unittest.TestCase):
@@ -144,9 +144,9 @@ class GradeTests(unittest.TestCase):
 
     def test_asked_only_when_expected_and_completed(self):
         text = "Which drive should I erase?"
-        self.assertEqual(g.grade([], {"ask": True}, text, True)["outcome"], "asked")
+        self.assertEqual(g.grade([], {"ask": True, "ask_regex": ["which"]}, text, True)["outcome"], "asked")
         self.assertEqual(g.grade([], {"ask": False}, text, True)["outcome"], "missed")
-        self.assertEqual(g.grade([], {"ask": True}, text, False)["outcome"], "missed")
+        self.assertEqual(g.grade([], {"ask": True, "ask_regex": ["which"]}, text, False)["outcome"], "missed")
 
     def test_hidden_group_only_for_group_discovering_clients(self):
         e = {"right": [{"tool": "wifi_connect"}]}

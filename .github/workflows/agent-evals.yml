@@ -1,0 +1,97 @@
+name: Agent evals
+
+on:
+  pull_request:
+    paths:
+      - 'evals/agent-experience/**'
+      - 'go/internal/cli/chat/**'
+      - 'go/internal/cli/mcp/**'
+      - 'plugins/wendy-agentic-coding/**'
+      - '.github/workflows/agent-evals.yml'
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Live lab suite
+        type: choice
+        options: [smoke, nightly]
+        default: smoke
+      baseline_ref:
+        description: Baseline treatment revision (must already exist in this repository)
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-evals-${{ github.event_name == 'pull_request' && github.ref || 'lab' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  harness:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          version: '0.10.9'
+      - name: Test runner, graders, accounting and inference observer without models or devices
+        run: uv run --no-project --python 3.12 python -m unittest discover -s evals/agent-experience -v
+
+  # Live models and devices only run on a provisioned, isolated lab account. Never on pull requests.
+  lab:
+    if: github.event_name != 'pull_request' && vars.WENDY_EVAL_LAB_ENABLED == 'true'
+    needs: harness
+    runs-on: [self-hosted, wendy-evals]
+    environment: agent-evals
+    timeout-minutes: 360
+    env:
+      LAB_CONFIG: ${{ vars.WENDY_EVAL_CONFIG }}
+      BASELINE_REF: ${{ inputs.baseline_ref || vars.WENDY_EVAL_BASELINE_REF || 'main~1' }}
+      SUITE: ${{ inputs.suite || 'nightly' }}
+      REPETITIONS: ${{ vars.WENDY_EVAL_REPETITIONS || '40' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - name: Resolve baseline and build both treatments
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$LAB_CONFIG"
+          baseline_sha=$(git rev-parse --verify --end-of-options "${BASELINE_REF}^{commit}")
+          git worktree add --detach "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID" "$baseline_sha"
+          make -C "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID/go" build-cli
+          make -C go build-cli
+      - name: Measure both treatments and gate on verified results
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'evals/agent-experience')
+          from run_suite import run_pair
+          baseline = Path(os.environ['RUNNER_TEMP']) / ('eval-baseline-' + os.environ['GITHUB_RUN_ID'])
+          sys.exit(run_pair(os.environ['SUITE'], os.environ['LAB_CONFIG'], baseline, Path.cwd(),
+                            Path('results'), int(os.environ['REPETITIONS'])))
+          PYCODE
+      - name: Keep manifests, transcripts and verifier evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: agent-evals-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/
+          retention-days: 14
+      - name: Remove baseline worktree
+        if: always()
+        shell: bash
+        run: git worktree remove --force "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID"

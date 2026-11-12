@@ -362,7 +362,8 @@ class RunPass(unittest.TestCase):
 
     def pdir(self, model="qwen3.8-flash-next"):
         pin = od.load_model(HERE / "models.json", model)
-        return od.pass_dir(self.results, model, pin["revision"], "pass1-" + "c" * 12)
+        settings = od.settings_fingerprint(pin, pin['context'], self.env, HERE)
+        return od.pass_dir(self.results, model, pin["revision"], "pass1-" + "c" * 12 + "-" + settings)
 
     def last_error(self):
         return (self.results / "last-error.txt").read_text()
@@ -407,6 +408,7 @@ class RunPass(unittest.TestCase):
             mock.patch.object(od, "mcp_tool_names", return_value={f"t{i}" for i in range(notes_tools)}),
             mock.patch.object(od, "measure_baseline", return_value={
                 "baseline_prompt_tokens": baseline, "prompt_per_second": 400.0, "predicted_per_second": 20.0}),
+            mock.patch.object(od, "hardware_identity", return_value={"architecture": "aarch64", "gpu": "Thor"}),
             mock.patch.object(od, "device_facts", return_value={"agent_version": "1.2", "os_version": "0.20", "device": "thor"}),
             mock.patch.object(od.subprocess, "Popen", return_value=FakeProcess(exit_code, stderr)),
         ]
@@ -436,6 +438,15 @@ class RunPass(unittest.TestCase):
         self.assertIn("--execute", argv)
         self.assertEqual(json.loads((pdir / "pass.json").read_text())["status"], "finished")
         server.stop.assert_called()
+
+    def test_context_change_starts_a_new_pass(self):
+        _, run = self.healthy_pass()
+        old = self.pdir()
+        old.mkdir(parents=True)
+        (old / "pass.json").write_text(json.dumps({"status": "finished"}))
+        self.assertEqual(self.quiet({**self.env, "EVAL_CONTEXT": "131072"}), 0)
+        run.assert_called()
+        self.assertNotEqual(Path(os.readlink(self.results / "latest")), old)
 
     def test_exit_code_decides_finished_or_halted(self):
         for code, status in ((0, "finished"), (3, "halted"), (1, "halted")):

@@ -24,6 +24,8 @@ import urllib.request
 import uuid
 
 from retry_guard import RetryGuard
+from token_diagnostics import diagnostics, tool_payloads, render as render_diagnostics, inference_summary
+from statistics_quality import wilson
 from grading import OUTCOMES, grade
 from mcp_client import StdioMCP
 from tool_trace import build_trace, read_jsonl
@@ -68,7 +70,7 @@ def expand(value, variables):
 def run_process(argv, cwd, prefix, timeout, env=None, state_guard=None, progress_guard=None):
     """Keep raw logs, bound wall time, and stop the process group on exit."""
     start = time.monotonic()
-    result = {"argv": argv, "exit_code": None, "timed_out": False, "interrupted": False,
+    result = {"started_at": time.time(), "argv": argv, "exit_code": None, "timed_out": False, "interrupted": False,
               "timeout_seconds": timeout}
     process = None
     with prefix.with_suffix(".stdout").open("wb") as out, prefix.with_suffix(".stderr").open("wb") as err:
@@ -119,6 +121,7 @@ def run_process(argv, cwd, prefix, timeout, env=None, state_guard=None, progress
                 except ProcessLookupError:
                     pass
                 process.wait()
+    result["finished_at"] = time.time()
     result["seconds"] = round(time.monotonic() - start, 3)
     return result
 
@@ -216,11 +219,12 @@ def metrics(adapter, events):
             raise ValueError(f"unknown adapter: {adapter}")
     known = [u for u in usage if u is not None]
     tokens = {key: sum(u[key] for u in known) for key in TOKEN_FIELDS} if known else None
-    return {"tokens": tokens, "usage_complete": bool(usage) and complete and ended and len(known) == len(usage),
+    trace = build_trace(adapter, events)
+    return {"token_diagnostics": diagnostics(adapter, events, trace, normalize_usage), "tokens": tokens, "usage_complete": bool(usage) and complete and ended and len(known) == len(usage),
             "tool_calls": len(tools), "permission_denials": len(denied) if adapter != "codex" else None,
             "reported_cost_usd": reported_cost, "reported_cost_kind": "client_estimate" if reported_cost is not None else None,
             "models_observed": sorted(models), "agent_completed": ended, "agent_errors": errors,
-            "final_text": "\n".join(text), "mcp_servers_observed": servers if adapter == "claude" else [], "tool_trace": build_trace(adapter, events)}
+            "final_text": "\n".join(text), "mcp_servers_observed": servers if adapter == "claude" else [], "tool_trace": trace}
 
 
 def estimate_cost(metric, prices):
@@ -259,7 +263,7 @@ def summary(rows):
         output.append({"agent": agent, "target": target, "task": task, "kind": kind,
                        "attempts": len(eligible), "unscored": len(trials) - len(eligible),
                        "setup_errors": sum(r["status"] == "setup_error" for r in trials),
-                       "successes": len(passed), "unassisted_success_rate": len(passed) / len(eligible) if eligible else None,
+                       "successes": len(passed), "success_interval_95": wilson(len(passed), len(eligible)), "unassisted_success_rate": len(passed) / len(eligible) if eligible else None,
                        "median_success_seconds": statistics.median(times) if times else None,
                        "p90_success_seconds": times[math.ceil(.9 * len(times)) - 1] if times else None,
                        "mean_tokens_per_attempt": statistics.mean(token_values) if all_usage else None,
@@ -283,6 +287,10 @@ def choice_cell(choice):
 def report(rows, output):
     data = summary(rows)
     dump(output / "summary.json", data)
+    dump(output / "inference-summary.json", inference_summary(rows))
+    dump(output / "token-diagnostics.json", [{"id": r.get("id"), "agent": r["agent"], "task": r["task"],
+         **r.get("metrics", {}).get("token_diagnostics", {})} for r in rows])
+    (output / "token-diagnostics.md").write_text(render_diagnostics(rows))
     lines = ["| Agent | Target | Task | Unassisted passes | Median seconds | Tokens / attempt | Tokens / success incl. failures | Estimated $ / success | Tool choice R/W/M/A/WA |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     def fmt(value):
@@ -317,6 +325,7 @@ def rescore(results_dir, tasks, scenarios):
                  for k, f in (("proxy_records", "proxy"), ("cli_records", "cli"))}
         live = metrics(adapter, events)
         row["metrics"]["tool_trace"] = trace = build_trace(adapter, events, **extra)
+        row["metrics"]["token_diagnostics"] = diagnostics(adapter, events, trace, normalize_usage)
         scenario = row.get("kind") == "scenario"
         if scenario:
             mcp_routing(live, extra["proxy_records"])
@@ -325,7 +334,8 @@ def rescore(results_dir, tasks, scenarios):
         item = expects[scenario].get(row.get("task"), {})
         row["tool_choice"] = (grade(trace, item["expect"], live["final_text"], live["agent_completed"],
                                     group=row.get("group") if scenario else None, adapter=adapter,
-                                    went_around=sc.is_local(row.get("target_config") or {}))
+                                    went_around=sc.is_local(row.get("target_config") or {}),
+                                    target=row.get("device_selector") if "{device}" in item.get("prompt", "") else None)
                               if item.get("expect") else None)
         agent = row.get("stages", {}).get("agent")
         # A setup_error attempt never reached a verdict (it may have aborted after the agent ran), and an
@@ -357,9 +367,10 @@ def tree_sha256(path):
 
 
 def harness_sha256(here=HERE):
-    """One hash over what scenario agents run against: every *.py here, cli_safe.json and the canned/ tree."""
+    """Hash runner code, suite/model definitions, CLI policy and both capture trees."""
     here = Path(here)
-    files = list(here.glob("*.py")) + [here / "cli_safe.json"] + list((here / "canned").rglob("*"))
+    files = (list(here.glob("*.py")) + [here / name for name in ("cli_safe.json", "suites.json", "models.json")]
+             + list((here / "canned").rglob("*")) + list((here / "canned-local").rglob("*")))
     digest = hashlib.sha256()
     for file in sorted((f for f in files if f.is_file()), key=lambda f: f.relative_to(here).as_posix()):
         digest.update(file.relative_to(here).as_posix().encode() + b"\0" + file.read_bytes() + b"\0")
@@ -764,6 +775,11 @@ def agent_metrics(adapter, stdout, result, prices):
                                  and not result.get("host_state_changed") and not result.get("no_progress")
                                  and invalid == 0)
     metric["estimated_cost_usd"] = estimate_cost(metric, prices)
+    request_log = os.environ.get("WENDY_EVAL_MODEL_REQUESTS")
+    if request_log and Path(request_log).is_file():
+        metric["inference_requests"] = [r for r in read_jsonl(Path(request_log))
+                                       if result.get("started_at", float("inf")) <= r.get("started_at", 0)
+                                       <= result.get("finished_at", 0)]
     return metric, events
 
 
@@ -859,6 +875,7 @@ def rebuild_trace(metric, adapter, events, proxy_log, cli_log):
     proxy_records = read_jsonl(proxy_log)
     mcp_routing(metric, proxy_records)
     metric["tool_trace"] = build_trace(adapter, events, proxy_records=proxy_records, cli_records=read_jsonl(cli_log))
+    metric.setdefault("token_diagnostics", {})["tools"] = tool_payloads(metric["tool_trace"])
     return metric["tool_trace"]
 
 
@@ -977,7 +994,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                 row["task_seconds"] = result["seconds"]
                 row["tool_choice"] = (grade(row["metrics"]["tool_trace"], task["expect"], row["metrics"]["final_text"],
                                             row["metrics"]["agent_completed"], adapter=agent["adapter"],
-                                            went_around=local)
+                                            went_around=local, target=variables["device"])
                                       if task.get("expect") else None)
                 row["status"] = mcp_status(agent["adapter"], row["metrics"]) or attempt_status(result)
                 infra = infra_status(events, config) if disposable(config) else None

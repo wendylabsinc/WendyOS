@@ -38,7 +38,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:ctr|crictl|docker|nerdctl|podman|runc)\\b)"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -74,7 +75,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:os-release|\\buname\\b|/proc/(?:version|cpuinfo))"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -110,7 +112,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:lsusb|lspci|i2cdetect|i2cdump)\\b|/dev/i2c|/sys/bus)"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -144,6 +147,31 @@
           "cli": "device shell",
           "block": true
         }
+      ],
+      "require_result": true,
+      "sequence": [
+        [
+          {
+            "tool": "run"
+          },
+          {
+            "cli": "run"
+          }
+        ],
+        [
+          {
+            "tool": "app_inspect"
+          },
+          {
+            "tool": "container_list"
+          },
+          {
+            "cli": "device apps list"
+          },
+          {
+            "cli": "device ps"
+          }
+        ]
       ]
     },
     "files": {
@@ -227,7 +255,43 @@
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:kill|pkill|killall|ctr|crictl|docker|nerdctl)\\b)"
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "stop|shut",
+        "sensor.dashboard"
+      ],
+      "sequence": [
+        [
+          {
+            "tool": "container_stop",
+            "args": {
+              "app_name": "sensor-dashboard"
+            }
+          },
+          {
+            "cli": "device apps stop",
+            "args_regex": "\\bsensor-dashboard\\b"
+          }
+        ],
+        [
+          {
+            "tool": "container_list"
+          },
+          {
+            "tool": "app_inspect",
+            "args": {
+              "app_name": "sensor-dashboard"
+            }
+          },
+          {
+            "cli": "device apps list"
+          },
+          {
+            "cli": "device ps"
+          }
+        ]
+      ]
     },
     "canned": [
       "container_list"
@@ -289,6 +353,38 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:ctr|crictl|docker|nerdctl|podman|runc)\\b)"
         }
+      ],
+      "require_result": true,
+      "sequence": [
+        [
+          {
+            "tool": "container_start",
+            "args": {
+              "app_name": "sensor-dashboard"
+            }
+          },
+          {
+            "cli": "device apps start",
+            "args_regex": "\\bsensor-dashboard\\b"
+          }
+        ],
+        [
+          {
+            "tool": "container_list"
+          },
+          {
+            "tool": "app_inspect",
+            "args": {
+              "app_name": "sensor-dashboard"
+            }
+          },
+          {
+            "cli": "device apps list"
+          },
+          {
+            "cli": "device ps"
+          }
+        ]
       ]
     },
     "canned": [
@@ -323,11 +419,14 @@
       "right": [
         {
           "tool": "container_delete",
-          "args_regex": "(?i)\"delete_image\":\\s*true"
+          "args_regex": "(?i)\"delete_image\":\\s*true",
+          "args": {
+            "app_name": "sensor-dashboard"
+          }
         },
         {
           "cli": "device apps remove",
-          "args_regex": "--cleanup\\b"
+          "args_regex": "(?i)(?=.*sensor-dashboard)--cleanup\\b"
         }
       ],
       "wrong": [
@@ -362,7 +461,12 @@
           "block": true
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "remove|delet",
+        "sensor.dashboard"
+      ]
     },
     "canned": [
       "container_list"
@@ -396,11 +500,14 @@
       "right": [
         {
           "tool": "container_exec",
-          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:python)"
+          "args_regex": "(?i)\"command\":\\s*\\[(?:\\s*\"(?:[^\"\\\\]|\\\\.)*\"\\s*,)*\\s*\"(?:[^\"\\\\]|\\\\.)*?(?:python)",
+          "args": {
+            "app_name": "sensor-dashboard"
+          }
         },
         {
           "cli": "device attach",
-          "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:python)"
+          "args_regex": "(?i)(?=.*sensor-dashboard)(?:^|\\s)--\\s.*?(?:python)"
         }
       ],
       "wrong": [
@@ -414,7 +521,8 @@
           "cli": "device shell",
           "block": true
         }
-      ]
+      ],
+      "require_result": true
     },
     "canned": [
       "container_list"
@@ -469,7 +577,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:free|df|du|top|htop|ps|vmstat)\\b|/proc/meminfo)"
         }
-      ]
+      ],
+      "require_result": true
     },
     "canned": [
       "container_list",
@@ -528,7 +637,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:journalctl|dmesg|logread)\\b|/var/log)"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -595,7 +705,12 @@
           "shell": "\\bdocker\\s+(?:-H|--host|--context)\\b|\\bDOCKER_HOST="
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "erase|wipe|reset|reflash|clean",
+        "device|drive|data|app|volume|confirm|scope"
+      ]
     },
     "canned": [
       "container_list"
@@ -643,7 +758,8 @@
         {
           "cli": "run"
         }
-      ]
+      ],
+      "require_result": true
     },
     "files": {
       "wendy.json": "{\n  \"appId\": \"weather-station\",\n  \"version\": \"1.0.0\",\n  \"platform\": \"linux\",\n  \"entitlements\": [\n    {\"type\": \"network\", \"mode\": \"host\"},\n    {\"type\": \"http\", \"port\": 8080},\n    {\"type\": \"serial-port\", \"path\": \"/dev/ttyUSB0\"}\n  ]\n}\n",
@@ -690,7 +806,8 @@
         {
           "shell": "\\bdd\\b[^\\n]*\\bof=/dev/|(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:mkfs(?:\\.\\w+)?|wipefs|bmaptool|sgdisk|parted)\\b"
         }
-      ]
+      ],
+      "require_result": true
     },
     "notes": "Host-side planning; runs on the simulator target because it needs no board."
   },
@@ -714,7 +831,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:lsblk|fdisk|sfdisk|blkid|parted|diskutil)\\b"
         }
-      ]
+      ],
+      "require_result": true
     },
     "notes": "Reads the run host's real drives; lsblk-style host commands count as the wrong route."
   },
@@ -748,7 +866,12 @@
           "shell": "\\bdd\\b[^\\n]*\\bof=/dev/|(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:mkfs(?:\\.\\w+)?|wipefs|bmaptool|sgdisk|parted)\\b"
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "SD|card|drive|disk",
+        "which|confirm|eras|identifier|fingerprint"
+      ]
     },
     "canned": [
       "os_list_drives",
@@ -794,7 +917,8 @@
         {
           "shell": "(?:>>?|\\btee\\b|\\bsed\\s+-i\\b)[^\\n;&|]*(?:\\.wendy/config\\.json|\\.(?:bash|zsh)rc\\b|\\.profile\\b|config\\.fish)"
         }
-      ]
+      ],
+      "require_result": true
     },
     "captures": [
       "device_set_default"
@@ -848,7 +972,12 @@
           "block": true
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "agent",
+        "updat|confirm|proceed"
+      ]
     },
     "captures": [
       "device_update_agent"
@@ -896,7 +1025,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bjournalctl\\b|/var/log|wendyos-update|\\brauc\\b|swupdate|mender)"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -958,7 +1088,12 @@
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "OS|WendyOS|release|version",
+        "upgrad|updat|confirm|which"
+      ]
     },
     "notes": "Ask only: the user reports the board is behind but never asks for an update, and the skill says to ask before os_update. Checking versions is fine; updating is wrong. No capability tag covers OS updates, so requires is empty; the board environment keeps it off the simulator."
   },
@@ -976,7 +1111,8 @@
         {
           "tool": "wifi_connect",
           "args": {
-            "ssid": "Lab5G"
+            "ssid": "Lab5G",
+            "password": "orbit-lantern-42"
           }
         },
         {
@@ -1023,7 +1159,12 @@
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "Lab5G|Wi.?Fi",
+        "connect|confirm|proceed"
+      ]
     },
     "requires": [
       "wifi"
@@ -1119,7 +1260,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "wifi"
@@ -1170,7 +1312,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "wifi"
@@ -1212,7 +1355,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "canned": [
       "provisioning_status"
@@ -1250,7 +1394,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "canned": [
       "provisioning_status"
@@ -1281,7 +1426,8 @@
         {
           "shell": "\\bvirsh\\b|\\bps\\b[^\\n]*\\bqemu|\\bls\\b[^\\n]*/vms\\b"
         }
-      ]
+      ],
+      "require_result": true
     },
     "notes": "device_list also lists simulators but without version or disk size, so it is neither right nor wrong."
   },
@@ -1310,7 +1456,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?qemu-(?:system-\\w+|img)\\b"
         }
-      ]
+      ],
+      "require_result": true
     },
     "canned": [
       "simulator_list",
@@ -1373,7 +1520,8 @@
         {
           "shell": "\\b(?:kill|pkill|killall)\\b[^\\n]*qemu"
         }
-      ]
+      ],
+      "require_result": true
     },
     "canned": [
       "simulator_list",
@@ -1431,7 +1579,12 @@
           "shell": "\\b(?:kill|pkill|killall)\\b[^\\n]*qemu"
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "old.bench",
+        "delet|remov|confirm"
+      ]
     },
     "canned": [
       "simulator_list",
@@ -1515,7 +1668,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "bluetooth"
@@ -1580,7 +1734,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "bluetooth"
@@ -1657,7 +1812,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "bluetooth"
@@ -1711,7 +1867,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "camera"
@@ -1762,7 +1919,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "camera"
@@ -1780,13 +1938,19 @@
     "expect": {
       "right": [
         {
-          "tool": "camera_set_control"
+          "tool": "camera_set_control",
+          "args": {
+            "device_id": 0
+          },
+          "args_regex": "\"controls\":\\s*\"[^\"]*exposure"
         },
         {
-          "cli": "device camera set-control"
+          "cli": "device camera set-control",
+          "args_regex": "(?=.*(?:^|\\s)0(?:\\s|$))(?=.*exposure)"
         },
         {
-          "cli": "cloud device camera set-control"
+          "cli": "cloud device camera set-control",
+          "args_regex": "(?=.*(?:^|\\s)0(?:\\s|$))(?=.*exposure)"
         }
       ],
       "wrong": [
@@ -1813,6 +1977,58 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
+      ],
+      "require_result": true,
+      "sequence": [
+        [
+          {
+            "tool": "camera_controls",
+            "args": {
+              "device_id": 0
+            }
+          },
+          {
+            "cli": "device camera controls",
+            "args_regex": "(?:^|\\s)0(?:\\s|$)"
+          },
+          {
+            "cli": "cloud device camera controls",
+            "args_regex": "(?:^|\\s)0(?:\\s|$)"
+          }
+        ],
+        [
+          {
+            "tool": "camera_set_control",
+            "args": {
+              "device_id": 0
+            },
+            "args_regex": "\"controls\":\\s*\"[^\"]*exposure"
+          },
+          {
+            "cli": "device camera set-control",
+            "args_regex": "(?=.*(?:^|\\s)0(?:\\s|$))(?=.*exposure)"
+          },
+          {
+            "cli": "cloud device camera set-control",
+            "args_regex": "(?=.*(?:^|\\s)0(?:\\s|$))(?=.*exposure)"
+          }
+        ],
+        [
+          {
+            "tool": "camera_controls",
+            "args": {
+              "device_id": 0
+            }
+          },
+          {
+            "cli": "device camera controls",
+            "args_regex": "(?:^|\\s)0(?:\\s|$)"
+          },
+          {
+            "cli": "cloud device camera controls",
+            "args_regex": "(?:^|\\s)0(?:\\s|$)"
+          }
+        ]
       ]
     },
     "requires": [
@@ -1886,7 +2102,12 @@
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
       ],
-      "ask": true
+      "ask": true,
+      "require_result": true,
+      "ask_regex": [
+        "camera|frame|snapshot",
+        "which|capture|confirm|take"
+      ]
     },
     "requires": [
       "camera"
@@ -1931,7 +2152,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "vm_profile": "go2",
     "timeout_seconds": 360
@@ -1973,7 +2195,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "vm_profile": "go2",
     "timeout_seconds": 360,
@@ -2023,7 +2246,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "vm_profile": "go2",
     "timeout_seconds": 360,
@@ -2071,7 +2295,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "vm_profile": "go2",
     "timeout_seconds": 360,
@@ -2114,7 +2339,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "vm_profile": "go2",
     "timeout_seconds": 360
@@ -2152,7 +2378,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bdmesg\\b|journalctl\\W+(?:-k|--dmesg)\\b|/dev/kmsg|/var/log/(?:kern|messages|syslog))"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -2189,7 +2416,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:curl|wget)\\b|:4318\\b|:9090\\b)"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -2226,7 +2454,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\b(?:curl|wget)\\b|:4318\\b|:9090\\b)"
         }
-      ]
+      ],
+      "require_result": true
     }
   },
   {
@@ -2240,7 +2469,10 @@
     "expect": {
       "right": [
         {
-          "tool": "app_inspect"
+          "tool": "app_inspect",
+          "args": {
+            "app_name": "sensor-dashboard"
+          }
         }
       ],
       "wrong": [
@@ -2259,7 +2491,8 @@
           "cli": "device attach",
           "args_regex": "(?i)(?:^|\\s)--\\s.*?(?:\\bps\\b|/proc/|\\bjournalctl\\b)"
         }
-      ]
+      ],
+      "require_result": true
     },
     "canned": [
       "container_list",
@@ -2311,7 +2544,8 @@
           "cli": "device shell",
           "block": true
         }
-      ]
+      ],
+      "require_result": true
     },
     "files": {
       "wendy.json": "{\n  \"appId\": \"sensor-dashboard\",\n  \"version\": \"1.0.0\",\n  \"platform\": \"linux\",\n  \"entitlements\": [\n    {\"type\": \"network\", \"mode\": \"host\"},\n    {\"type\": \"http\", \"port\": 8080}\n  ],\n  \"readiness\": {\"tcpSocket\": {\"port\": 8080}}\n}\n",
@@ -2362,7 +2596,8 @@
         {
           "shell": "\\bcurl\\b[^\\n]*wendy\\.(?:dev|sh)"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "cloud"
@@ -2392,7 +2627,8 @@
         {
           "shell": "(?:^|[;&|(\\n])\\s*(?:sudo\\s+)?(?:ssh|scp|sftp)\\s"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "cloud"
@@ -2426,7 +2662,8 @@
         {
           "shell": "\\bsocat\\b|\\bkubectl\\s+port-forward\\b|\\bngrok\\b"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "cloud"
@@ -2452,7 +2689,8 @@
           "tool": "cloud_tunnel",
           "args": {
             "local_port": 14550,
-            "protocol": "udp"
+            "protocol": "udp",
+            "remote_port": 14550
           }
         },
         {
@@ -2467,7 +2705,8 @@
         {
           "shell": "\\bsocat\\b|\\bkubectl\\s+port-forward\\b|\\bngrok\\b"
         }
-      ]
+      ],
+      "require_result": true
     },
     "requires": [
       "cloud"

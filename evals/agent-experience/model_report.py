@@ -439,12 +439,17 @@ def _wall_minutes(directory):
 
 
 def _header_rows(run):
+    from token_diagnostics import inference_summary
     info, rows = run["info"], run["rows"]
+    measured = inference_summary(rows)
     def pick(*keys):
         return next((info[k] for k in keys if info.get(k) not in (None, "")), None)
     return [("Model", run["name"]), ("Revision", pick("revision")), ("Server settings", pick("server", "server_settings")),
             ("Context", pick("context")), ("Baseline prompt tokens", pick("baseline_prompt_tokens")),
-            ("Tokens per second", pick("tokens_per_second", "speeds")),
+            ("Baseline tokens per second", pick("tokens_per_second", "speeds")),
+            ("Attempt median generation tokens/s", measured["median_generation_tokens_per_second"]),
+            ("Attempt median prompt tokens/s", measured["median_prompt_tokens_per_second"]),
+            ("Generation timing samples", f"{measured['generation_speed_samples']} of {measured['requests']} requests"),
             ("Wendy CLI commit", pick("cli_commit") or run["treatment_revision"]),
             ("Agent version", pick("agent_version")), ("OS version", pick("os_version")),
             ("Device", pick("device", "device_type")),

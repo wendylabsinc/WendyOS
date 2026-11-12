@@ -685,7 +685,7 @@ def scenario_trial(config, agent_name, target_name, scenario, output, real_wendy
         trace = b.rebuild_trace(row["metrics"], adapter, events, proxy_log, cli_log)
         row["task_seconds"] = result["seconds"]
         row["tool_choice"] = grade(trace, expect, row["metrics"]["final_text"], row["metrics"]["agent_completed"],
-                                   group=scenario["group"], adapter=adapter, went_around=is_local(target))
+                                   group=scenario["group"], adapter=adapter, went_around=is_local(target), target=device if "{device}" in scenario["prompt"] else None)
         row["status"], row["success"] = b.scenario_verdict(adapter, row["metrics"], result, row["tool_choice"])
         infra = b.infra_status(events, config) if b.disposable(config) else None
         if infra:

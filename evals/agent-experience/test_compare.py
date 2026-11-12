@@ -96,7 +96,7 @@ class CompareTest(unittest.TestCase):
         n = make(self.tmp.name, "n2", [row("s1", "right")], model="m2")
         out = Path(self.tmp.name) / "out"
         self.assertEqual(c.main(["--baseline", str(b), "--candidate", str(n), "--output", str(out)]), 2)
-        self.assertEqual(c.main(["--baseline", str(b), "--candidate", str(n), "--output", str(out), "--allow-mismatch"]), 0)
+        self.assertEqual(c.main(["--baseline", str(b), "--candidate", str(n), "--output", str(out), "--allow-mismatch"]), 3)
         self.assertTrue((out / "compare.json").exists() and (out / "compare.md").exists())
 
     def test_harness_mismatch_is_reported(self):
