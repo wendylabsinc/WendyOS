@@ -3079,7 +3079,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2803",
       "title": "Tag releases at the commit that was built",
       "package": "priority",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The release tag now uses the built commit, but no automated moving-main/tag-target regression was found.",
       "required_follow_up": "The shell-tag fixture is present. Add published artifact/provenance SHA agreement; document and test what happens when tag creation fails or an existing tag points elsewhere.",
       "evidence": [
@@ -3091,8 +3091,23 @@
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
+        },
+        {
+          "tests": [
+            ".github/scripts/tag-built-commit_test.py",
+            ".github/scripts/release_provenance_test.py"
+          ],
+          "result": "Seven release-gate scenarios plus five workflow contract tests pass. The gate fixture failed against the original fallback behavior. Tests run actual workflow code against real Git refs and a gh policy/API fixture, including moving main, lightweight/annotated wrong tags, concurrent creators, API failures, empty/missing/changed assets and wrong source/repository/workflow. All published artifact types require provenance in their producing job; the real file-inventory shell includes all six published formats and excludes caches. The complete offline suite passes 297 tests. Actionlint workflow validation passes; existing ShellCheck advisories are unchanged."
+        },
+        {
+          "artifact": "wendy-agent-linux-arm64-2026.11.11-074541.tar.gz",
+          "url": "https://github.com/wendylabsinc/WendyOS/releases/tag/2026.11.11-074541",
+          "source_commit": "e6ace7c62272c6537be22f10b70aec259bd24c27",
+          "sha256": "a1bce59078f0fc1901bfc14cd5cff7832c1258c0879cc96a7eedc593e0f54154",
+          "result": "Actual gh cryptographic verification of the published artifact accepted its exact tag/source commit and signer workflow, and rejected an all-zero source digest. Read-only check; no release or tag was changed."
         }
-      ]
+      ],
+      "resolution": "The release now verifies signed asset bytes and exact source SHA before accepting or creating its immutable tag. An incorrect existing tag or an unresolved API/attestation failure stops publication; target_commitish also pins release creation. Required PR CI remains pending; no release was published to test the change."
     },
     {
       "key": "2781",

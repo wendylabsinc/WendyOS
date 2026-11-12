@@ -21,6 +21,8 @@ SUITES = (
     "shared_contracts_test.py",
     "dependency_gates_test.py",
     "plugin_pin_test.py",
+    "tag-built-commit_test.py",
+    "release_provenance_test.py",
 )
 
 
