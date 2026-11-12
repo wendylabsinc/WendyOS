@@ -2728,20 +2728,34 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1979",
       "title": "wendy-lite: entitlements/platform for ESP-IDF init, non-Swift templates, blink-rgb-led doc",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "ESP-IDF init and template handling changed without direct tests in this PR. Current template tests cover broad rendering behavior, but the ESP-IDF entitlement/platform combination needs an explicit fixture.",
-      "required_follow_up": "Generate each supported non-Swift/ESP-IDF template and validate its target and entitlements.",
-      "evidence": []
+      "required_follow_up": "Verify the real template generation tests in the existing required commands suite at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/template_language_regression_test.go"
+          ],
+          "result": "Nine local scenarios exercise the actual init command with localhost archive download, extraction, rendering and configuration reload. Mojo substitutions, invalid tokens, declared C/C++ Lite languages, target and entitlement defaults, unavailable language refusal and existing configuration preservation pass. Four production overlays reproduce the missing Mojo renderer, Swift-only restriction and incorrect Lite defaults. No device build or live template-catalogue claim."
+        }
+      ]
     },
     {
       "key": "1782",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1782",
       "title": "fix(cli): substitute template tokens in .mojo files",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The regression checks that .mojo is classified as a text template. It does not render an actual Mojo template and inspect substituted tokens.",
-      "required_follow_up": "Render a Mojo template with a sentinel project name and assert no template tokens remain.",
-      "evidence": []
+      "required_follow_up": "Verify the real template generation tests in the existing required commands suite at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/template_language_regression_test.go"
+          ],
+          "result": "Nine local scenarios exercise the actual init command with localhost archive download, extraction, rendering and configuration reload. Mojo substitutions, invalid tokens, declared C/C++ Lite languages, target and entitlement defaults, unavailable language refusal and existing configuration preservation pass. Four production overlays reproduce the missing Mojo renderer, Swift-only restriction and incorrect Lite defaults. No device build or live template-catalogue claim."
+        }
+      ]
     },
     {
       "key": "1726",
