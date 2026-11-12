@@ -98,3 +98,43 @@ abbreviated inline mentions, non-Wendy shell commands, or remote PAIR RPC result
 Negative controls reject unknown commands/options, invalid durations, and invalid
 booleans. OS image, service-manager, firmware, and platform capability claims
 still require their own build/runtime evidence.
+
+# Read-only hosted preview verification
+
+After an existing deployment uploads its branch artifact, the existing deploy
+job can verify the public response without publishing anything else:
+
+```sh
+python3 scripts/probe-hosted-export.test.py
+python3 scripts/probe-hosted-export.py \
+  --preview-root /path/to/downloaded/export/branch-NAME-FULL_COMMIT_SHA \
+  --preview-base /branch-NAME-FULL_COMMIT_SHA \
+  --analytics-id G-7SMVRRYVW6 \
+  --report /tmp/docs-hosted-probe.json
+```
+
+Use the exact deploy prefix and the matching artifact already verified by the
+workflow's checksums. The prefix must end in its full 40-character source commit.
+The script records that declared commit and compares preview response bytes with
+the supplied export; it does not independently rebuild or attest the artifact.
+Keep repository checkout credentials disabled for this read-only step. Upload
+the JSON report as evidence even on failure.
+
+The probe accepts only HTTPS `docs.wendy.dev`, disables proxies, and refuses
+HTTP redirects before following any destination. It checks the preview homepage,
+55 historical redirects, their 49 distinct destinations including the homepage,
+and robots.txt against the exact artifact. It checks canonical URLs, accessible
+redirect fallbacks, target anchors, noindex/nofollow and absent preview analytics.
+It then checks the same compatibility map on public `/latest`, which may be a
+different revision and is not compared to the preview artifact. Wildcard robots
+rules must exclude the tested preview path; comments or other user-agent groups
+do not satisfy that check. Production analytics loading is outside this probe.
+
+The current contract makes 210 requests, with limits of 250 requests, 8 MiB per
+body, 10 seconds per request and 180 seconds overall. POSIX wall timers also stop
+responses that keep sending bytes below a socket's inactivity timeout. The local
+HTTP tests exercise rejection and deadlines without contacting public hosts.
+The script never mutates remote state. Passing local tests is not live-hosting
+evidence; only a successful report from the deployed exact preview establishes
+that result. It does not test browser navigation, JavaScript redirects, root GCS
+shortlinks, every site page, or deployment rollback.
