@@ -3,9 +3,98 @@
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
+import sys
 import time
+
+
+def group_has_workload():
+    """The guard remains group leader, so this group ID cannot be reused."""
+    group = os.getpgrp()
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit() or int(entry.name) == os.getpid():
+                continue
+            try:
+                fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+                if int(fields[2]) == group and fields[0] != "Z":
+                    return True
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                # hidepid may conceal unrelated users; our unprivileged
+                # workload shares the guard's uid and remains visible.
+                pass
+        return False
+    # Local POSIX fixtures also run on macOS, whose process table is not /proc.
+    result = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="], capture_output=True,
+                            text=True, check=True, timeout=2, start_new_session=True)
+    for line in result.stdout.splitlines():
+        pid, pgid, state = line.split()
+        if int(pid) != os.getpid() and int(pgid) == group and not state.startswith("Z"):
+            return True
+    return False
+
+
+def terminate_owned_group():
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    os.killpg(os.getpgrp(), signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            if not group_has_workload():
+                break
+        except (OSError, ValueError, subprocess.SubprocessError):
+            # Uncertain membership is not permission to leave owned work alive.
+            pass
+        time.sleep(0.05)
+    # This includes the guard itself. It can only signal its own live group.
+    os.killpg(os.getpgrp(), signal.SIGKILL)
+
+
+def run_step_guard(liveness_fd, report_fd, argv):
+    """Keep the owned group bounded even if the detached runner is SIGKILLed.
+
+    Only the runner holds the pipe's write end; transport processes and the
+    workload never inherit it. A lost observation therefore leaves work alive,
+    while runner death produces EOF independently of its PID or any status file.
+    """
+    stopping = False
+
+    def stop_guard(_signal, _frame):
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop_guard)
+    signal.signal(signal.SIGINT, stop_guard)
+    with os.fdopen(report_fd, "w", buffering=1) as report:
+        try:
+            workload = subprocess.Popen(argv, stdin=subprocess.DEVNULL)
+            report.write(json.dumps({"child_pid": workload.pid}) + "\n")
+            while workload.poll() is None:
+                readable, _, _ = select.select([liveness_fd], [], [], 0.05)
+                if stopping or (readable and not os.read(liveness_fd, 1)):
+                    terminate_owned_group()
+            code = workload.wait()
+            descendants = group_has_workload()
+            report.write(json.dumps({"returncode": code, "descendants_remaining": descendants}) + "\n")
+            if descendants:
+                terminate_owned_group()
+        except BaseException as exc:
+            # Includes a closed report pipe when the runner died during launch.
+            print("step guard failed: " + str(exc)[:800], file=sys.stderr, flush=True)
+            try:
+                report.write(json.dumps({"error": str(exc)[:800]}) + "\n")
+            except OSError:
+                pass
+            terminate_owned_group()
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "--step-guard":
+    run_step_guard(int(sys.argv[2]), int(sys.argv[3]), json.loads(sys.argv[4]))
+    sys.exit(0)
 
 root = Path(__file__).resolve().parent
 spec = json.loads((root / "spec.json").read_text())
@@ -35,11 +124,8 @@ def write():
 def stop(_signal, _frame):
     global stopping
     stopping = True
-    if child is not None and child.poll() is None:
-        try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+    # Only the supervision loop may reap/signal the guard. Keeping its PID
+    # unreaped until the last group signal prevents process-group ID reuse.
 
 
 signal.signal(signal.SIGTERM, stop)
@@ -64,48 +150,89 @@ try:
         stage_started_unix = time.time()
         stage_started_monotonic = time.monotonic()
         with (root / (name + ".log")).open("xb") as output:
-            child = subprocess.Popen(
-                argv,
-                cwd=spec["working_directory"],
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            state["child_pid"] = child.pid
-            write()
-            deadline = time.monotonic() + step["timeout_seconds"]
-            timed_out = False
-            while child.poll() is None:
-                if stopping or time.monotonic() >= deadline:
-                    timed_out = not stopping
-                    try:
-                        os.killpg(child.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        child.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(child.pid, signal.SIGKILL)
-                        child.wait()
-                    break
-                time.sleep(0.05)
-            code = child.wait()
-            # A successful foreground exit must not leave an owned training
-            # process running invisibly. Daemonizing workloads need a managed app.
-            descendants_remaining = False
+            liveness_read, liveness_write = os.pipe()
+            report_read, report_write = os.pipe()
             try:
-                os.killpg(child.pid, 0)
-                descendants_remaining = True
-                os.killpg(child.pid, signal.SIGTERM)
-                time.sleep(0.1)
+                child = subprocess.Popen(
+                    [sys.executable, str(root / "runner.py"), "--step-guard",
+                     str(liveness_read), str(report_write), json.dumps(argv)],
+                    cwd=spec["working_directory"],
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    pass_fds=(liveness_read, report_write),
+                    start_new_session=True,
+                )
+            finally:
+                os.close(liveness_read)
+                os.close(report_write)
+            try:
+                os.set_blocking(report_read, False)
+                report_bytes = bytearray()
+                identity_received = False
+                deadline = stage_started_monotonic + step["timeout_seconds"]
+                timed_out = False
+
+                def receive_report():
+                    global identity_received
+                    try:
+                        chunk = os.read(report_read, 4097 - len(report_bytes))
+                    except BlockingIOError:
+                        return
+                    report_bytes.extend(chunk)
+                    if len(report_bytes) > 4096:
+                        raise RuntimeError(name + " guard report exceeded its bound")
+                    if not identity_received and b"\n" in report_bytes:
+                        identity = json.loads(report_bytes.split(b"\n", 1)[0])
+                        if "error" in identity:
+                            raise RuntimeError(identity["error"])
+                        # Preserve the public argv PID, not the guard's PID.
+                        state["child_pid"] = identity["child_pid"]
+                        identity_received = True
+                        write()
+
+                while child.poll() is None:
+                    if stopping or time.monotonic() >= deadline:
+                        timed_out = not stopping
+                        try:
+                            os.killpg(child.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            child.wait(timeout=6)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(child.pid, signal.SIGKILL)
+                            child.wait()
+                        break
+                    readable, _, _ = select.select([report_read], [], [], 0.05)
+                    if readable:
+                        receive_report()
+                code = child.wait()
+                # All writers belong to the now-reaped guard. Workloads never
+                # inherit this FD; a nonblocking drain also bounds bad reports.
+                receive_report()
+                lines = report_bytes.splitlines()
+                descendants_remaining = False
+                if len(lines) > 1:
+                    result = json.loads(lines[1])
+                    if "error" in result:
+                        raise RuntimeError(result["error"])
+                    code = result["returncode"]
+                    descendants_remaining = result["descendants_remaining"]
+                elif code == 0:
+                    raise RuntimeError(name + " guard exited without a step result")
+            finally:
+                os.close(report_read)
+                os.close(liveness_write)
+                # Exceptions during identity/result handling still release work.
                 try:
+                    child.wait(timeout=6)
+                except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                    child.wait()
+                except ChildProcessError:
                     pass
-            except ProcessLookupError:
-                pass
         state["stages"].append(
             {
                 "label": name,
