@@ -135,6 +135,9 @@ type postboxState struct {
 	OrgCAs [][]byte `json:"orgCAs,omitempty"`
 	// Removals are apps whose release removal failed, retried each cycle.
 	Removals []string `json:"removals,omitempty"`
+	// Marks are the deployment revision marks (deployment_contract.go), by
+	// deployment id.
+	Marks map[string]*postboxMark `json:"marks,omitempty"`
 }
 
 type postboxPending struct {
@@ -188,6 +191,12 @@ var postboxOperations = map[string]string{
 	strings.TrimPrefix(cloudpbv2.DeploymentService_ControlContainer_FullMethodName, "/"):     "wendycloud.v2.ControlContainerRequest",
 	strings.TrimPrefix(cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName, "/"):   "wendycloud.v2.DeviceAssignment",
 	strings.TrimPrefix(cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName, "/"): "wendycloud.v2.UnassignDeviceRequest",
+	// The same statements under their DeploymentService names (ruling D2):
+	// both names are accepted, each only for its payload type. The
+	// deployment-level changes (CreateDeploymentV2, Update, Rollback,
+	// RemoveDeployment) are never relayed and never listed here.
+	strings.TrimPrefix(cloudpbv2.DeploymentService_AssignDevice_FullMethodName, "/"):   "wendycloud.v2.DeviceAssignment",
+	strings.TrimPrefix(cloudpbv2.DeploymentService_UnassignDevice_FullMethodName, "/"): "wendycloud.v2.UnassignDeviceRequest",
 }
 
 // NewPostbox builds the client; it pulls nothing until UpdateIdentity supplies
@@ -874,60 +883,9 @@ func (p *Postbox) apply(ctx context.Context, id *postboxIdentity, entryID int64,
 		}
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 	case *cloudpbv2.DeviceAssignment:
-		// A newer entry for the deployment replaces its pull.
-		p.stopPull(r.GetDeploymentId())
-		raw, err := proto.Marshal(r)
-		if err != nil {
-			return r.GetAppId(), cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", err
-		}
-		absent := r.GetDesiredState() == cloudpbv2.Running_ABSENT
-		outcome, reason := cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, ""
-		if !absent {
-			outcome, reason, err = checkAssignment(r)
-		}
-		p.saveMu.Lock() // a pull's commit must not swap this away; decide saves it
-		p.mu.Lock()
-		p.state.Assignments = maps.Clone(p.state.Assignments) // copy on write: a pull's commit reads it
-		p.state.Assignments[r.GetDeploymentId()] = &postboxAssignment{
-			AppID: r.GetAppId(), AppReleaseID: r.GetAppReleaseId(), ManifestDigest: r.GetManifestDigest(),
-			DeploymentKeyID: r.GetDeploymentKeyId(), DesiredState: r.GetDesiredState().String(),
-			Assignment: raw, EntryID: entryID, CorrelationID: correlation, Pulled: err != nil || absent,
-		}
-		p.mu.Unlock()
-		p.saveMu.Unlock()
-		if err != nil {
-			return r.GetAppId(), outcome, reason, err
-		}
-		if absent {
-			// Held with nothing to fetch: the app's releases go, as on removal.
-			if err := p.removeReleases(ctx, r.GetAppId()); err != nil {
-				return r.GetAppId(), cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
-			}
-			return r.GetAppId(), outcome, reason, nil
-		}
-		// The pull runs beside the queue; its outcome replaces this one.
-		p.startPull(ctx, id, r, entryID, correlation)
-		return r.GetAppId(), outcomePulling, "", nil
+		return p.applyAssignment(ctx, id, entryID, correlation, r)
 	case *cloudpbv2.UnassignDeviceRequest:
-		// The pull stops before anything is removed, so nothing it imports
-		// outlives the deployment.
-		p.stopPull(r.GetDeploymentId())
-		p.saveMu.Lock()
-		p.mu.Lock()
-		app := ""
-		if a := p.state.Assignments[r.GetDeploymentId()]; a != nil {
-			app = a.AppID
-		}
-		p.state.Assignments = maps.Clone(p.state.Assignments)
-		delete(p.state.Assignments, r.GetDeploymentId())
-		p.mu.Unlock()
-		p.saveMu.Unlock()
-		if app != "" {
-			if err := p.removeReleases(ctx, app); err != nil {
-				return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
-			}
-		}
-		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+		return p.applyUnassign(ctx, r)
 	case *cloudpbv2.CreateDeploymentRequest:
 		// Registry material is pulled per DeviceAssignment, which carries this
 		// device's wrap; a deployment names a release, not an app, and no key.
@@ -1176,6 +1134,9 @@ func (p *Postbox) load(principal string) error {
 	}
 	if st.Outcomes == nil {
 		st.Outcomes = map[string]*postboxOutcome{}
+	}
+	if st.Marks == nil {
+		st.Marks = map[string]*postboxMark{}
 	}
 	p.state = st
 	return nil
