@@ -105,6 +105,9 @@ type postboxControl interface {
 	// RemoveReleaseImages deletes every registry release image and collects
 	// its content, leaving containers alone.
 	RemoveReleaseImages(ctx context.Context) error
+	// PruneReleases deletes app's release images outside keep that no
+	// container was created from; it never deletes an app.
+	PruneReleases(ctx context.Context, app string, keep []string) error
 }
 
 // postboxState is everything that must survive a restart. It belongs to one
@@ -1291,6 +1294,9 @@ type releaseRemover interface {
 	// ReleaseApps lists the apps with a container running one of app's
 	// releases outside keep (any app's when app is "").
 	ReleaseApps(ctx context.Context, app string, keep []string) ([]string, error)
+	// ReleasesInUse lists the release ids of app's releases a container was
+	// created from.
+	ReleasesInUse(ctx context.Context, app string) ([]string, error)
 	// DeleteReleaseImages deletes those releases and collects their content.
 	DeleteReleaseImages(ctx context.Context, app string, keep []string) error
 }
@@ -1325,6 +1331,22 @@ func (c containerControl) RemoveReleaseImages(ctx context.Context) error {
 		return nil
 	}
 	return remover.DeleteReleaseImages(ctx, "", nil)
+}
+
+// PruneReleases deletes superseded release images of app: those outside keep
+// that no container runs or was created from. A release a container still
+// uses stays until the app moves off it, so an update never removes the
+// running app.
+func (c containerControl) PruneReleases(ctx context.Context, app string, keep []string) error {
+	remover, ok := c.svc.containerd.(releaseRemover)
+	if !ok {
+		return nil
+	}
+	used, err := remover.ReleasesInUse(ctx, app)
+	if err != nil {
+		return err
+	}
+	return remover.DeleteReleaseImages(ctx, app, append(slices.Clone(keep), used...))
 }
 
 // ImportRelease imports through the containerd client when it can.

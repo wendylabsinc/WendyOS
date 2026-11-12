@@ -119,3 +119,15 @@ func TestImportLeaseIsCollectedSynchronously(t *testing.T) {
 		}
 	}
 }
+
+func TestReleasesInUse(t *testing.T) {
+	ctrs := []containers.Container{
+		{ID: "web", Image: releaseImagePrefix + "web:r1"},
+		{ID: "web_api", Image: releaseImagePrefix + "web:r1"},
+		{ID: "webx", Image: releaseImagePrefix + "webx:r2"},
+		{ID: "dev", Image: "docker.io/library/web:latest"},
+	}
+	if got := releasesInUse(ctrs, "web"); !slices.Equal(got, []string{"r1"}) {
+		t.Fatalf("in use %v, want [r1]", got)
+	}
+}

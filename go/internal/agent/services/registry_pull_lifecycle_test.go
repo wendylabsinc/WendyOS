@@ -167,8 +167,8 @@ func TestRegistryPullRemovesSupersededAndRemovedReleases(t *testing.T) {
 	f.assignEntry(r.assign)
 	f.cycle()
 	rel := r.assign.GetAppReleaseId()
-	if !slices.EqualFunc(rec.removed, []removal{{app: "web", keep: []string{rel}}}, removal.equal) {
-		t.Fatalf("removed %v after the import, want the app's other releases", rec.removed)
+	if !slices.EqualFunc(rec.removed, []removal{{app: "web", keep: []string{rel}, prune: true}}, removal.equal) {
+		t.Fatalf("removed %v after the import, want the app's other releases pruned, never the app", rec.removed)
 	}
 
 	// The device moves to another deployment of the app before the first one
@@ -180,8 +180,19 @@ func TestRegistryPullRemovesSupersededAndRemovedReleases(t *testing.T) {
 	rec.removed = nil
 	f.unassignEntry(r.assign.GetDeploymentId())
 	f.cycle()
-	if !slices.EqualFunc(rec.removed, []removal{{app: "web", keep: []string{"other-release"}}}, removal.equal) {
-		t.Fatalf("removed %v, want web's releases except the other deployment's", rec.removed)
+	if !slices.EqualFunc(rec.removed, []removal{{app: "web", keep: []string{"other-release"}, prune: true}}, removal.equal) {
+		t.Fatalf("removed %v, want web's releases except the other deployment's pruned, never the app", rec.removed)
+	}
+	// With no live deployment of the app left, the app goes too.
+	f.p.mu.Lock()
+	delete(f.p.state.Assignments, other)
+	f.p.mu.Unlock()
+	rec.removed = nil
+	if err := f.p.removeReleases(context.Background(), "web"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(rec.removed, []removal{{app: "web"}}, removal.equal) {
+		t.Fatalf("removed %v, want the app and all its releases", rec.removed)
 	}
 }
 
@@ -230,11 +241,17 @@ func TestPostboxResetRemovesEveryRelease(t *testing.T) {
 type releaseRemoverMock struct {
 	*mockContainerdClient
 	apps  []string
+	used  []string
+	keep  []string // the last DeleteReleaseImages keep list
 	steps []string
 }
 
 func (m *releaseRemoverMock) ReleaseApps(context.Context, string, []string) ([]string, error) {
 	return m.apps, nil
+}
+
+func (m *releaseRemoverMock) ReleasesInUse(context.Context, string) ([]string, error) {
+	return m.used, nil
 }
 
 func (m *releaseRemoverMock) DeleteContainer(ctx context.Context, name string, deleteImage bool) error {
@@ -244,6 +261,7 @@ func (m *releaseRemoverMock) DeleteContainer(ctx context.Context, name string, d
 
 func (m *releaseRemoverMock) DeleteReleaseImages(_ context.Context, app string, keep []string) error {
 	m.steps = append(m.steps, "delete releases of "+app)
+	m.keep = keep
 	return nil
 }
 
@@ -463,5 +481,17 @@ func TestPostboxResetImagesOnlyLeavesTheApps(t *testing.T) {
 	}
 	if want := []string{"delete releases of "}; !slices.Equal(m.steps, want) {
 		t.Fatalf("steps %v, want %v", m.steps, want)
+	}
+}
+
+// Pruning keeps every release a container still uses and deletes no app:
+// an update never removes the running app before its replacement runs.
+func TestPostboxControlPruneKeepsReleasesInUse(t *testing.T) {
+	m := &releaseRemoverMock{mockContainerdClient: &mockContainerdClient{}, apps: []string{"web"}, used: []string{"old"}}
+	if err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).PruneReleases(context.Background(), "web", []string{"new"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(m.steps, []string{"delete releases of web"}) || !slices.Equal(m.keep, []string{"new", "old"}) {
+		t.Fatalf("steps %v, keep %v: want only images deleted, keeping the new and the in-use release", m.steps, m.keep)
 	}
 }

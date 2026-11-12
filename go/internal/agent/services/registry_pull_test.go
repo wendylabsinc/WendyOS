@@ -233,16 +233,24 @@ type importRecorder struct {
 	removeErr error
 }
 
-// removal is one RemoveReleases call.
+// removal is one RemoveReleases call, or a PruneReleases call (prune).
 type removal struct {
-	app  string
-	keep []string
+	app   string
+	keep  []string
+	prune bool
 }
 
-func (r removal) equal(o removal) bool { return r.app == o.app && slices.Equal(r.keep, o.keep) }
+func (r removal) equal(o removal) bool {
+	return r.app == o.app && slices.Equal(r.keep, o.keep) && r.prune == o.prune
+}
 
 func (r *importRecorder) RemoveReleases(_ context.Context, app string, keep []string) error {
-	r.removed = append(r.removed, removal{app, keep})
+	r.removed = append(r.removed, removal{app: app, keep: keep})
+	return r.removeErr
+}
+
+func (r *importRecorder) PruneReleases(_ context.Context, app string, keep []string) error {
+	r.removed = append(r.removed, removal{app, keep, true})
 	return r.removeErr
 }
 

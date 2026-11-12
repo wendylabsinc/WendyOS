@@ -143,6 +143,7 @@ func writeBlobFile(ctx context.Context, cs content.Store, path string, desc ocis
 // step with it.
 var _ interface {
 	ReleaseApps(ctx context.Context, app string, keep []string) ([]string, error)
+	ReleasesInUse(ctx context.Context, app string) ([]string, error)
 	DeleteReleaseImages(ctx context.Context, app string, keep []string) error
 } = (*Client)(nil)
 
@@ -169,6 +170,28 @@ func (c *Client) ReleaseApps(ctx context.Context, app string, keep []string) ([]
 		return nil, fmt.Errorf("listing containers: %w", err)
 	}
 	return releaseApps(ctrs, app, keep), nil
+}
+
+// ReleasesInUse lists the release ids of app's releases that a container
+// was created from, so pruning superseded releases never takes one from
+// under its app.
+func (c *Client) ReleasesInUse(ctx context.Context, app string) ([]string, error) {
+	ctrs, err := c.client.ContainerService().List(c.withNamespace(ctx), fmt.Sprintf("labels.%q", labelKeyAppID))
+	if err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+	return releasesInUse(ctrs, app), nil
+}
+
+func releasesInUse(ctrs []containers.Container, app string) []string {
+	var used []string
+	for _, ctr := range ctrs {
+		rest, ok := strings.CutPrefix(ctr.Image, releaseImagePrefix+app+":")
+		if ok && !slices.Contains(used, rest) {
+			used = append(used, rest)
+		}
+	}
+	return used
 }
 
 func releaseApps(ctrs []containers.Container, app string, keep []string) []string {

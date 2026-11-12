@@ -378,9 +378,12 @@ func (p *Postbox) resumePulls(ctx context.Context, id *postboxIdentity) {
 	}
 }
 
-// removeReleases deletes app's releases that no held assignment uses, with
-// any container running one. A failure is kept in Removals and retried each
-// cycle, so no decrypted release stays on the device.
+// removeReleases deletes app's releases that no held assignment uses. While
+// the app has a live held deployment it only prunes: a release a container
+// still uses stays, so the running app is never removed by an update. With
+// none, the app's containers running a release go too. A failure is kept in
+// Removals and retried each cycle, so no decrypted release stays on the
+// device.
 func (p *Postbox) removeReleases(ctx context.Context, app string) error {
 	// "" means every app's releases to RemoveReleases: only reset asks that.
 	if err := appconfig.ValidateAppID(app); err != nil {
@@ -396,7 +399,11 @@ func (p *Postbox) removeReleases(ctx context.Context, app string) error {
 	}
 	p.mu.Unlock()
 	slices.Sort(keep)
-	err := p.control.RemoveReleases(ctx, app, keep)
+	remove := p.control.RemoveReleases
+	if len(keep) > 0 {
+		remove = p.control.PruneReleases
+	}
+	err := remove(ctx, app, keep)
 	if err != nil {
 		p.logger.Warn("removing an app's registry releases failed; retrying next cycle", zap.String("audit", "postbox"), zap.String("app_id", app), zap.Error(err))
 	}
