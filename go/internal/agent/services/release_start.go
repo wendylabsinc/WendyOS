@@ -190,7 +190,9 @@ func (p *Postbox) startRelease(ctx context.Context, a *cloudpbv2.DeviceAssignmen
 	if !replaced || prev == nil || !before.Present || before.Image != ReleaseImageName(prev.GetAppId(), prev.GetAppReleaseId()) {
 		return err
 	}
-	if perr := p.restart(ctx, prev, before.Running); perr != nil {
+	// The state the user wanted: running (as the statement asks), unless
+	// the user had stopped it, not the instant it was observed in.
+	if perr := p.restart(ctx, prev, !before.StoppedByUser); perr != nil {
 		return errors.Join(err, fmt.Errorf("putting back the previous release: %w", perr))
 	}
 	return err
@@ -226,11 +228,16 @@ func (p *Postbox) expiredResume(ctx context.Context, a *cloudpbv2.DeviceAssignme
 }
 
 // runsStatement reports whether the app's container is a's: a's release
-// image, a's whole configuration in its environment, and running (or left
-// stopped, for install only).
+// image, running (or left stopped, for install only), and exactly a's
+// configuration. Exactly means over every name a configuration could have
+// put there, a's and the previous statement's: each of a's values present,
+// and no value of the previous configuration that a does not set (a value a
+// removed). The rest of the environment (image and agent variables) is not
+// the configuration's.
 func (p *Postbox) runsStatement(st AppContainerState, a *cloudpbv2.DeviceAssignment) bool {
 	env, err := configEnv(a.GetConfigJson())
-	if err != nil || !st.Present || st.Image != ReleaseImageName(a.GetAppId(), a.GetAppReleaseId()) {
+	if err != nil || !st.Present || st.Image != ReleaseImageName(a.GetAppId(), a.GetAppReleaseId()) ||
+		st.Running != (a.GetDesiredState() == cloudpbv2.Running_RUNNING) {
 		return false
 	}
 	for _, kv := range env {
@@ -238,7 +245,18 @@ func (p *Postbox) runsStatement(st AppContainerState, a *cloudpbv2.DeviceAssignm
 			return false
 		}
 	}
-	return st.Running == (a.GetDesiredState() == cloudpbv2.Running_RUNNING)
+	if prev := p.previous(a); prev != nil {
+		old, err := configEnv(prev.GetConfigJson())
+		if err != nil {
+			return false
+		}
+		for _, kv := range old {
+			if slices.Contains(st.Env, kv) && !slices.Contains(env, kv) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // previous is the last applied statement held with a, nil for none.
