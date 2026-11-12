@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.gitattributes'
+      - '.github/dependabot.yml'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -30,6 +31,7 @@ on:
   pull_request:
     paths:
       - '.gitattributes'
+      - '.github/dependabot.yml'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -60,6 +62,23 @@ permissions:
   contents: read
 
 jobs:
+  automation-regressions:
+    name: Offline automation regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+      - name: Install the review SDK and fixture dependencies
+        run: python -m pip install -r .github/scripts/requirements-regression-tests.txt
+      - name: Exercise review, event and failure contracts without publishing
+        run: python .github/scripts/run-automation-regressions.py
+
   shared-grpc-api-contracts:
     name: Shared gRPC API contracts
     runs-on: ubuntu-latest
@@ -480,7 +499,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -497,6 +516,7 @@ jobs:
           GSTREAMER_RESULT: ${{ needs.gstreamer-regressions.result }}
           SIMULATOR_PYTHON_RESULT: ${{ needs.simulator-python310.result }}
           NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
+          AUTOMATION_RESULT: ${{ needs.automation-regressions.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -514,6 +534,7 @@ jobs:
           test "$GSTREAMER_RESULT" = success
           test "$SIMULATOR_PYTHON_RESULT" = success
           test "$NATIVE_APP_RESULT" = success
+          test "$AUTOMATION_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
@@ -547,6 +568,9 @@ jobs:
       - name: Run go vet
         working-directory: go
         run: go vet ./...
+
+      - name: Build and execute the API detector
+        run: python3 .github/scripts/api-snapshot-smoke.py
 
   format:
     name: Format Check
