@@ -253,9 +253,17 @@ jobs:
           status=${PIPESTATUS[0]}
           # PR-controlled output cannot terminate the Actions output record.
           delimiter="$(cat /proc/sys/kernel/random/uuid)"
+          limit=30000
+          size="$(wc -c < lint_output.txt)"
           {
             echo "lint_output<<$delimiter"
-            head -c 30000 lint_output.txt
+            if (( size > limit )); then
+              # iconv -c drops a multibyte character cut at the limit.
+              head -c "$limit" lint_output.txt | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true
+              printf '\n[Truncated to %d of %d bytes. The Lint Swift Sources job log has the full output.]' "$limit" "$size"
+            else
+              cat lint_output.txt
+            fi
             printf '\n%s\n' "$delimiter"
             echo "exit_code=$status"
           } >> "$GITHUB_OUTPUT"
