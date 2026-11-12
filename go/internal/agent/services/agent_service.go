@@ -25,11 +25,13 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/agent/powermode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -130,6 +132,7 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 	if hn, err := os.Hostname(); err == nil {
 		resp.Hostname = hn
 	}
+	resp.Supervision = supervisionStatus()
 
 	if v, ok := wendyOSVersion(); ok {
 		resp.OsVersion = &v
@@ -700,9 +703,14 @@ func (s *AgentService) RunContainer(stream grpc.BidiStreamingServer[agentpb.RunC
 }
 
 func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.UpdateAgentRequest, agentpb.UpdateAgentResponse]) error {
+	if err := refuseUpdates(); err != nil {
+		return err
+	}
 	if !s.installer.TryLock() {
 		return status.Error(codes.FailedPrecondition, "an update is already in progress")
 	}
+	// A wake now would restart this agent and cut the upload off.
+	defer holdSupervisorWake()()
 	// committed is declared before the defer so the closure captures it.
 	// On success the lock is intentionally NOT released: the process exits
 	// within 500 ms and holding the lock prevents a concurrent update from
@@ -721,7 +729,7 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 		return err
 	}
 
-	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(execPath)
+	tmpFile, tmpPath, cleanupTmp, err := createUpdateTempFile(updateTempTarget(execPath))
 	if err != nil {
 		return err
 	}
@@ -782,7 +790,11 @@ func (s *AgentService) UpdateAgent(stream grpc.BidiStreamingServer[agentpb.Updat
 					}
 				}
 
-				if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
+				if inbox, ok := supervisor.InboxFromEnv(); ok {
+					if err := stageForSupervisor(stream.Context(), tmpFile, tmpPath, inbox, computedHash, expectedHash, interceptor.RemoteVia(stream.Context())); err != nil {
+						return err
+					}
+				} else if _, err := commitBinaryUpdate(tmpFile, tmpPath, execPath, computedHash, originalPerm, s.logger); err != nil {
 					if errors.Is(err, ErrDirFsync) {
 						// Binary is installed; only directory-entry durability is at risk.
 						s.logger.Warn("Update dir fsync failed; binary installed but rename may not survive power loss", zap.Error(err))
@@ -1016,6 +1028,10 @@ func inhibitAutoUpdater(logger *zap.Logger) func() {
 	if _, err := sysctl("cat", updaterTimerUnit); err != nil {
 		return func() {}
 	}
+	// A masked updater (local agent builds) can never run.
+	if out, _ := sysctl("is-enabled", updaterTimerUnit); strings.TrimSpace(string(out)) == "masked" {
+		return func() {}
+	}
 	run("stop", updaterTimerUnit, updaterServiceUnit)
 	// Restore only the timer: it re-triggers the oneshot service itself, and a
 	// stopped timer re-arms on the next boot regardless.
@@ -1061,11 +1077,21 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
 
+	verifying := func() {
+		_ = stream.Send(&agentpb.UpdateOSResponse{ResponseType: &agentpb.UpdateOSResponse_Progress_{
+			Progress: &agentpb.UpdateOSResponse_Progress{Phase: "Verifying the agent update"},
+		}})
+	}
+	if msg := osUpdateTrialGate(stream.Context(), verifying); msg != "" {
+		return sendOSUpdateFailure(stream, msg)
+	}
+
 	if !s.installer.TryLock() {
 		s.logger.Warn("UpdateOS rejected: another update is already in progress")
 		return sendOSUpdateFailure(stream, updateInProgressMessage)
 	}
 	defer s.installer.Unlock()
+	defer holdSupervisorWake()()
 
 	if !s.isWendyOSHost() {
 		s.logger.Warn("UpdateOS rejected: host is not a WendyOS OTA target", zap.String("artifact_url", req.GetArtifactUrl()))

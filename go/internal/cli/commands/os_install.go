@@ -48,6 +48,8 @@ type t234InstallOptions struct {
 	RequestedName string
 	PreEnroll     preEnrollOptions
 	Agent         *localInstallAgent
+	// Nightly picks the agent seeded on /config from the same channel as the image.
+	Nightly bool
 }
 
 const (
@@ -293,7 +295,7 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 		return fmt.Errorf("writing image: %w", err)
 	}
 	if agent != nil {
-		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agent)
+		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agentSeed{local: agent})
 		if attached {
 			markFATVolumes(updated)
 			ejectDisk(updated)
@@ -766,7 +768,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		return installOrin(ctx, t234InstallOptions{
 			DeviceType: selected, DeviceName: device.Name, Version: selectedVersion,
 			Storage: storage, Artifact: artifact, Force: force, WiFi: wifi,
-			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent,
+			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent, Nightly: nightly,
 		})
 	}
 	if isT234RecoveryDevice(selected) && rootfsOnly {
@@ -1252,7 +1254,8 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// device still boots. It returns an error only when the user asked for
 		// provisioning and it was not applied — reported below, after the eject,
 		// so the drive is still safe to remove.
-		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData, agent)
+		seed := agentSeed{local: agent, nightly: nightly, arch: installDeviceArchitecture(deviceKey)}
+		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData, seed)
 	}
 
 	if attached {
@@ -2810,7 +2813,7 @@ var confirmProvisioningRetry = func() (bool, error) {
 // more than one drive. It returns the drive where it is now attached, and
 // attached=false when it disconnected and was not found again: its old path
 // must not be touched (marked, ejected) then.
-func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool, agent *localInstallAgent) (_ drive, attached bool, _ error) {
+func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool, seed agentSeed) (_ drive, attached bool, _ error) {
 	// Fingerprint the drive while it is certainly the one just imaged. Only an
 	// interactive run retries, so only it needs this.
 	var id driveIdentity
@@ -2825,7 +2828,7 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 	// again by identity: while set, d's device path is not known to be ours.
 	relocate := false
 
-	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, agent)
+	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
 	// skip ends the loop when the user declines a retry.
 	skip := func() (drive, bool, error) {
 		if requested {
@@ -2894,25 +2897,25 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 			}
 			d, relocate = found, false
 		}
-		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, agent)
+		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, seed)
 	}
 	return d, true, nil
 }
 
-// provisionConfigPartition seeds the local agent or downloads the latest stable agent.
-func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, agent *localInstallAgent) error {
-	if agent != nil {
+// provisionConfigPartition seeds the local agent or downloads the latest one for the image's channel.
+func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, seed agentSeed) error {
+	if agent := seed.local; agent != nil {
 		fmt.Printf("Using local wendy-agent %s (%s)\n", agent.path, agent.arch)
-		return writeConfigPartition(d, agent.data, creds, deviceName, provisioningJSON)
+		return writeConfigPartition(d, configAgent{data: agent.data, local: true}, creds, deviceName, provisioningJSON)
 	}
 	fmt.Printf("Downloading wendy-agent for device...\n")
-	agentBinary, agentVer, _, err := resolveAgentArtifact("linux", "arm64", false)
+	agentBinary, agentVer, err := seedAgent(seed)
 	if err != nil {
 		return fmt.Errorf("resolving agent binary: %w", err)
 	}
 	fmt.Printf("Using wendy-agent %s\n", agentVer)
 
-	return writeConfigPartition(d, agentBinary, creds, deviceName, provisioningJSON)
+	return writeConfigPartition(d, configAgent{data: agentBinary}, creds, deviceName, provisioningJSON)
 }
 
 // maxFlashAttempts bounds installESP32Firmware's retry loop so a permanently

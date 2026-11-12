@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -738,5 +739,144 @@ func TestRefusedAdmissionDropsTheLease(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(agent.StateDir, "lease.pb")); !os.IsNotExist(err) {
 		t.Fatalf("the refused lease survives on disk and would be reloaded at next start (stat err = %v)", err)
+	}
+}
+
+// The agent supervisor approves an automatic agent update only once the new
+// agent is reachable through the relay again.
+func TestAgentReportsAcceptedPresenceOnly(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		verifier := &Verifier{Issuer: "https://cloud.test", fetched: time.Now(), keys: map[string]jwk{"test": {Kid: "test", Kty: "EC", Alg: "ES256", Crv: "P-256", X: b64.EncodeToString(key.X.FillBytes(make([]byte, 32))), Y: b64.EncodeToString(key.Y.FillBytes(make([]byte, 32)))}}}
+		listener, e := net.Listen("tcp", "127.0.0.1:0")
+		if e != nil {
+			t.Fatal(e)
+		}
+		r := &testRelay{t: t, endpoint: listener.Addr().String(), cloudKey: key, verifier: verifier, present: make(chan struct{}), renewOnly: true, renewed: make(chan struct{}), refusePresence: refuse}
+		srv := grpc.NewServer()
+		pb.RegisterTunnelAuthorizationServiceServer(srv, r)
+		pb.RegisterTunnelBrokerV2ServiceServer(srv, r)
+		go srv.Serve(listener)
+		dial := func(endpoint string) (*grpc.ClientConn, error) {
+			return grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		}
+		verifier.relayDial = dial
+		registered := make(chan struct{}, 4)
+		agent := &Agent{Endpoint: r.endpoint, Verifier: verifier, StateDir: t.TempDir(), Credentials: func() (string, string, []byte) { return "", "", nil }, Logger: zap.NewNop(), dialCloud: func(endpoint, _, _ string, _ []byte) (*grpc.ClientConn, error) { return dial(endpoint) },
+			OnRegistered: func() { registered <- struct{}{} }}
+		done := make(chan error, 1)
+		go func() { done <- agent.runOnce(ctx) }()
+		if refuse {
+			<-done
+			if len(registered) != 0 {
+				t.Fatal("a refused presence must not count as reaching the cloud")
+			}
+		} else {
+			select {
+			case <-registered:
+			case err := <-done:
+				t.Fatalf("presence ended before it was reported: %v", err)
+			case <-ctx.Done():
+				t.Fatal("accepted presence was not reported")
+			}
+			cancel()
+			<-done
+		}
+		cancel()
+		srv.Stop()
+	}
+}
+
+// relayHarness serves presence like a broker; stop() takes it away.
+func relayHarness(t *testing.T, refuse bool) (agent *Agent, stop func()) {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	verifier := &Verifier{Issuer: "https://cloud.test", fetched: time.Now(), keys: map[string]jwk{"test": {Kid: "test", Kty: "EC", Alg: "ES256", Crv: "P-256", X: b64.EncodeToString(key.X.FillBytes(make([]byte, 32))), Y: b64.EncodeToString(key.Y.FillBytes(make([]byte, 32)))}}}
+	listener, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := &testRelay{t: t, endpoint: listener.Addr().String(), cloudKey: key, verifier: verifier, present: make(chan struct{}), reconnected: make(chan struct{}), renewOnly: true, renewed: make(chan struct{}, 64), refusePresence: refuse}
+	srv := grpc.NewServer()
+	pb.RegisterTunnelAuthorizationServiceServer(srv, r)
+	pb.RegisterTunnelBrokerV2ServiceServer(srv, r)
+	go srv.Serve(listener)
+	t.Cleanup(srv.Stop)
+	dial := func(endpoint string) (*grpc.ClientConn, error) {
+		return grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	verifier.relayDial = dial
+	agent = &Agent{Endpoint: r.endpoint, Verifier: verifier, StateDir: t.TempDir(), Credentials: func() (string, string, []byte) { return "", "", nil }, Logger: zap.NewNop(), dialCloud: func(endpoint, _, _ string, _ []byte) (*grpc.ClientConn, error) { return dial(endpoint) }}
+	return agent, srv.Stop
+}
+
+// The agent supervisor asks a new agent to reach the cloud only while the old
+// one is connected; a short outage must not count as losing it.
+func TestAgentReportsALostConnectionOnlyOnceItStaysDown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	agent, stop := relayHarness(t, false)
+	registered, lost := make(chan struct{}, 8), make(chan time.Time, 8)
+	agent.OnRegistered = func() { registered <- struct{}{} }
+	agent.OnLost = func() { lost <- time.Now() }
+	agent.lostAfter = 2 * time.Second
+	go agent.Run(ctx)
+	select {
+	case <-registered:
+	case <-ctx.Done():
+		t.Fatal("presence was not registered")
+	}
+	dropped := time.Now()
+	stop()
+	select {
+	case at := <-lost:
+		if d := at.Sub(dropped); d < agent.lostAfter {
+			t.Fatalf("reported lost %s after the drop, before it stayed down for %s", d, agent.lostAfter)
+		}
+	case <-ctx.Done():
+		t.Fatal("a relay that stays down was not reported lost")
+	}
+}
+
+func TestAgentThatNeverRegisteredReportsNoLoss(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	agent, _ := relayHarness(t, true)
+	lost := make(chan struct{}, 8)
+	agent.OnLost = func() { lost <- struct{}{} }
+	agent.lostAfter = 100 * time.Millisecond
+	agent.Run(ctx)
+	if len(lost) != 0 {
+		t.Fatal("an agent that never reached the cloud has no mark to take back")
+	}
+}
+
+func TestPresenceRotationKeepsTheConnection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	agent, _ := relayHarness(t, false)
+	registered, lost := make(chan struct{}, 64), make(chan struct{}, 8)
+	agent.OnRegistered = func() { registered <- struct{}{} }
+	agent.OnLost = func() { lost <- struct{}{} }
+	agent.lostAfter = 100 * time.Millisecond
+	agent.presenceMaxAge = 200 * time.Millisecond
+	agent.Run(ctx)
+	if len(registered) < 2 {
+		t.Fatalf("want the presence to rotate, got %d registrations", len(registered))
+	}
+	if len(lost) != 0 {
+		t.Fatal("a planned rotation must not count as losing the cloud")
+	}
+}
+
+func TestPresenceRotationIsNotALostConnection(t *testing.T) {
+	for _, err := range []error{errPresenceRefresh, errPresencePathMoved, errPresenceSourceRemoved} {
+		if lostConnection(err) {
+			t.Fatalf("%v reconnects at once; it must not count as losing the cloud", err)
+		}
+	}
+	if !lostConnection(errors.New("stream reset")) || !lostConnection(nil) {
+		t.Fatal("a failed or ended session is a lost connection")
 	}
 }

@@ -154,29 +154,33 @@ func TestInstallLocalAgentRecoveryConfig(t *testing.T) {
 	}
 	for _, inject := range []struct {
 		name string
-		fn   func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), *localInstallAgent) error
+		fn   func(string, []wendyconf.WifiCredential, string, []byte, io.Writer, func(string), agentSeed) error
 	}{
 		{"Thor", injectConfigPartition},
 		{"Orin", injectRecoveryConfig},
 	} {
 		t.Run(inject.name, func(t *testing.T) {
 			img := newFATImage(t)
-			if err := inject.fn(img, nil, "", nil, io.Discard, func(string) {}, agent); err != nil {
+			if err := inject.fn(img, nil, "", nil, io.Discard, func(string) {}, agentSeed{local: agent}); err != nil {
 				t.Fatal(err)
 			}
 			got, err := readFATFile(t, img, "wendy-agent")
 			if err != nil || !bytes.Equal(got, data) {
 				t.Fatalf("config agent = %x, %v", got, err)
 			}
+			// The supervisor gives a --binary its trial even when the image's agent is newer.
+			if _, err := readFATFile(t, img, "wendy-agent.local"); err != nil {
+				t.Fatalf("a --binary must be marked local: %v", err)
+			}
 			wrong := &localInstallAgent{arch: "amd64", data: installTestELF(elf.EM_X86_64)}
-			if err := inject.fn(img, nil, "", nil, io.Discard, func(string) {}, wrong); err == nil {
+			if err := inject.fn(img, nil, "", nil, io.Discard, func(string) {}, agentSeed{local: wrong}); err == nil {
 				t.Fatal("accepted incompatible recovery agent")
 			}
 		})
 	}
-	got, warning := resolveSeedAgent(io.Discard, func(string) {}, agent)
-	if warning != "" || !bytes.Equal(got, data) {
-		t.Fatalf("seed agent = %x, %q", got, warning)
+	got, warning := resolveSeedAgent(io.Discard, func(string) {}, agentSeed{local: agent})
+	if warning != "" || !bytes.Equal(got.data, data) || !got.local {
+		t.Fatalf("seed agent = %x (local %v), %q", got.data, got.local, warning)
 	}
 }
 
@@ -187,9 +191,9 @@ func TestInstallLocalAgentProvisioningRetry(t *testing.T) {
 			agent := &localInstallAgent{data: installTestELF(elf.EM_AARCH64), arch: "arm64"}
 			failure := errors.New("config write failed")
 			calls := 0
-			provisionConfigPartitionFn = func(_ drive, _ []wendyconf.WifiCredential, _ string, _ []byte, got *localInstallAgent) error {
+			provisionConfigPartitionFn = func(_ drive, _ []wendyconf.WifiCredential, _ string, _ []byte, got agentSeed) error {
 				calls++
-				if got != agent {
+				if got.local != agent {
 					t.Fatal("retry lost the local agent")
 				}
 				if succeeds && calls == 2 {
@@ -197,10 +201,46 @@ func TestInstallLocalAgentProvisioningRetry(t *testing.T) {
 				}
 				return failure
 			}
-			_, _, err := provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true, agent)
+			_, _, err := provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true, agentSeed{local: agent})
 			if calls != 2 || succeeds && err != nil || !succeeds && !errors.Is(err, failure) {
 				t.Fatalf("calls = %d, error = %v", calls, err)
 			}
 		})
+	}
+}
+
+func TestSeedAgentFollowsTheImage(t *testing.T) {
+	orig := seedArtifactFn
+	t.Cleanup(func() { seedArtifactFn = orig })
+	var gotOS, gotArch string
+	var gotNightly bool
+	seedArtifactFn = func(osName, arch string, nightly bool) ([]byte, string, string, error) {
+		gotOS, gotArch, gotNightly = osName, arch, nightly
+		return []byte("agent"), "2026.11.05-114424", "gcs", nil
+	}
+	// A nightly image gets the nightly agent, not an older stable one.
+	if _, v, err := seedAgent(agentSeed{nightly: true, arch: "amd64"}); err != nil || v != "2026.11.05-114424" {
+		t.Fatal(v, err)
+	}
+	if gotOS != "linux" || gotArch != "amd64" || !gotNightly {
+		t.Fatalf("asked for %s/%s nightly=%v", gotOS, gotArch, gotNightly)
+	}
+	seedAgent(agentSeed{})
+	if gotArch != "arm64" || gotNightly {
+		t.Fatalf("the default stays the stable arm64 agent, asked for %s nightly=%v", gotArch, gotNightly)
+	}
+}
+
+func TestResolveSeedAgentDownloadsTheImagesChannel(t *testing.T) {
+	orig := seedArtifactFn
+	t.Cleanup(func() { seedArtifactFn = orig })
+	var asked bool
+	seedArtifactFn = func(_, arch string, nightly bool) ([]byte, string, string, error) {
+		asked = nightly && arch == "arm64"
+		return []byte("agent"), "2026.11.05-114424", "gcs", nil
+	}
+	got, warning := resolveSeedAgent(io.Discard, func(string) {}, agentSeed{nightly: true, arch: "arm64"})
+	if !asked || warning != "" || string(got.data) != "agent" || got.local {
+		t.Fatalf("USB recovery and Dragonwing seeds follow --nightly too: asked %v, %+v, %q", asked, got, warning)
 	}
 }

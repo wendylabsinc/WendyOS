@@ -93,7 +93,7 @@ func TestWriteConfigPartitionWaitsForTheLabelAndRetriesTheMount(t *testing.T) {
 	shortenConfigPartitionTimeout(t, 5*time.Second)
 	tools := fakeProvisioningTools(t, 2, 32)
 	disk := fakeDisk(t)
-	if err := writeConfigPartition(disk, nil, nil, "", nil); err != nil {
+	if err := writeConfigPartition(disk, configAgent{}, nil, "", nil); err != nil {
 		t.Fatalf("writeConfigPartition: %v", err)
 	}
 	// Two lookups before udev has the label, one whose mount finds the node gone, one that mounts.
@@ -115,7 +115,7 @@ func TestWriteConfigPartitionWaitsForTheLabelAndRetriesTheMount(t *testing.T) {
 func TestWriteConfigPartitionDoesNotRetryAFailingSudo(t *testing.T) {
 	shortenConfigPartitionTimeout(t, 5*time.Second)
 	tools := fakeProvisioningTools(t, 0, 1)
-	err := writeConfigPartition(fakeDisk(t), nil, nil, "", nil)
+	err := writeConfigPartition(fakeDisk(t), configAgent{}, nil, "", nil)
 	if err == nil || tools.ran("mount") != 1 || tools.ran("umount") != 0 {
 		t.Fatalf("got %v after %d mounts and %d umounts, want the first failure and no umount",
 			err, tools.ran("mount"), tools.ran("umount"))
@@ -126,7 +126,7 @@ func TestWriteConfigPartitionStopsWhenTheDriveIsGone(t *testing.T) {
 	shortenConfigPartitionTimeout(t, 5*time.Second)
 	tools := fakeProvisioningTools(t, 1000)
 	gone := drive{DevicePath: filepath.Join(t.TempDir(), "sdz")}
-	if err := writeConfigPartition(gone, nil, nil, "", nil); err == nil || tools.ran("lsblk") != 1 {
+	if err := writeConfigPartition(gone, configAgent{}, nil, "", nil); err == nil || tools.ran("lsblk") != 1 {
 		t.Fatalf("got %v after %d lookups, want the lookup error at once", err, tools.ran("lsblk"))
 	}
 }

@@ -176,7 +176,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 			if err != nil {
 				return false, err
 			}
-			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agent)
+			return false, injectConfigPartition(runConfigImage, creds, name, provJSON, out, detail, agentSeed{local: agent, nightly: nightly, arch: "arm64"})
 		}},
 		{id: stepStage1, label: "Stage 1  RCM boot", run: func(out io.Writer, _ func(string)) (bool, error) {
 			return false, thorStageOne(fp, dev, out)
@@ -258,13 +258,13 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 // wendy.conf, provisioning.json, clock_floor — so first boot applies them via the
 // identical on-device path. Runs before stage-2, so a failure aborts with nothing
 // written to the Thor.
-func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
+func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), seed agentSeed) error {
 	// A local agent is required provisioning. Release downloads remain
 	// best-effort so an offline flash can still provision WiFi and enrollment.
-	if err := agent.checkArchitecture("arm64"); err != nil {
+	if err := seed.local.checkArchitecture("arm64"); err != nil {
 		return err
 	}
-	agentBinary, _ := resolveSeedAgent(out, detail, agent)
+	agentBinary, _ := resolveSeedAgent(out, detail, seed)
 
 	d, err := diskfs.Open(img)
 	if err != nil {

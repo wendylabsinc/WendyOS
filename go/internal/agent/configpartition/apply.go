@@ -2,7 +2,9 @@ package configpartition
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +28,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
+	"github.com/wendylabsinc/wendy/go/internal/supervisor"
 )
 
 // elfMachineByArch maps GOARCH values to ELF e_machine field values (little-endian uint16).
@@ -39,6 +42,10 @@ const (
 	agentBinaryName    = "wendy-agent"
 	defaultInstallPath = "/opt/wendyos/bin/wendy-agent"
 )
+
+// localAgentMarker says the binary is a --binary build, which the user chose
+// over the image's agent.
+const localAgentMarker = "wendy-agent.local"
 
 // validateELF checks that the file at path is a 64-bit ELF binary compiled for
 // the same architecture as the running process.
@@ -142,6 +149,8 @@ func copyFile(src, dst string, perm os.FileMode) error {
 func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 	src := cfgDir + "/" + agentBinaryName
 	if _, err := os.Stat(src); os.IsNotExist(err) {
+		// An older agent that installed the seed left its marker behind.
+		os.Remove(filepath.Join(cfgDir, localAgentMarker)) //nolint:errcheck
 		return false
 	}
 
@@ -178,9 +187,103 @@ func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 		logger.Warn("Failed to remove config partition binary after install",
 			zap.String("path", src), zap.Error(err))
 	}
+	os.Remove(filepath.Join(cfgDir, localAgentMarker)) //nolint:errcheck
 
 	logger.Info("Installed agent binary from config partition, signalling restart",
 		zap.String("installPath", installPath))
+	return true
+}
+
+// enrollmentPending means the image agent can still redeem the baked ACME
+// credential. It lives on /config, outside the trial snapshot, so a seed that
+// enrolled and was then rejected would lose it.
+func enrollmentPending(cfgDir, configPath string) bool {
+	if _, err := os.Stat(filepath.Join(cfgDir, "acme-enrollment.json")); err != nil {
+		return false
+	}
+	for _, f := range []string{"acme-first-boot-attempt.json", "provisioning.json", "enrollment.json"} {
+		if _, err := os.Stat(filepath.Join(configPath, f)); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func seedWaiting(cfgDir, configPath string) bool {
+	if _, ok := supervisor.InboxFromEnv(); !ok {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(cfgDir, agentBinaryName)); err != nil {
+		return false
+	}
+	return !enrollmentPending(cfgDir, configPath)
+}
+
+// EnrollmentPending and SeedWaiting let the agent restart once after
+// first-boot enrollment, so the seed it held back is staged at once.
+func EnrollmentPending(configPath string) bool { return enrollmentPending(configDir, configPath) }
+func SeedWaiting(configPath string) bool       { return seedWaiting(configDir, configPath) }
+
+// supervisorStatusPath is a variable so tests can point it elsewhere.
+var supervisorStatusPath = supervisor.StatusPath
+
+// stageSeedForSupervisor hands the seed to the agent supervisor, which runs
+// it as a trial; installing it over the running binary would skip every check.
+func stageSeedForSupervisor(logger *zap.Logger, cfgDir, inbox, configPath string) bool {
+	src, marker := filepath.Join(cfgDir, agentBinaryName), filepath.Join(cfgDir, localAgentMarker)
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		os.Remove(marker) //nolint:errcheck
+		return false
+	}
+	_, err := os.Stat(marker)
+	local := err == nil
+	if reason := supervisor.PausedReason(supervisorStatusPath); reason != "" {
+		logger.Info("Keeping the config partition agent binary until updates resume", zap.String("reason", reason))
+		return false
+	}
+	if st, err := supervisor.ReadStatus(supervisorStatusPath); err == nil && st.Role != "" && st.Role != supervisor.RoleImage {
+		// An agent was chosen on /data since; the seed must not replace it.
+		logger.Info("Dropping the config partition agent binary: an agent from /data is running")
+		os.Remove(src)    //nolint:errcheck
+		os.Remove(marker) //nolint:errcheck
+		return false
+	}
+	if enrollmentPending(cfgDir, configPath) {
+		logger.Info("Keeping the config partition agent binary until first-boot enrollment is done")
+		return false
+	}
+	if err := validateELF(src); err != nil {
+		logger.Error("Config partition binary failed ELF validation, removing", zap.String("path", src), zap.Error(err))
+		os.Remove(src)    //nolint:errcheck
+		os.Remove(marker) //nolint:errcheck
+		return false
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		logger.Error("Failed to read agent binary from config partition", zap.Error(err))
+		return false
+	}
+	sum := sha256.Sum256(data)
+	sha := hex.EncodeToString(sum[:])
+	staged := filepath.Join(inbox, sha)
+	if err := copyFile(src, staged, 0o755); err != nil {
+		logger.Error("Failed to stage agent binary from config partition", zap.Error(err))
+		return false
+	}
+	// A --binary always gets its trial; a downloaded seed only when it is newer.
+	if err := supervisor.WriteIncoming(inbox, supervisor.Incoming{SHA256: sha, Seed: !local}); err != nil {
+		logger.Error("Failed to stage agent binary from config partition", zap.Error(err))
+		os.Remove(staged) //nolint:errcheck
+		return false
+	}
+	if err := os.Remove(src); err != nil {
+		// Left on /config it is staged again on every start: restarting for it
+		// would loop. The supervisor takes it at the agent's next restart.
+		logger.Error("Staged the config partition agent binary but cannot remove it", zap.Error(err))
+		return false
+	}
+	os.Remove(marker) //nolint:errcheck
+	logger.Info("Staged agent binary from config partition for the supervisor", zap.String("sha256", sha), zap.Bool("local", local))
 	return true
 }
 
@@ -766,9 +869,22 @@ func Apply(logger *zap.Logger, configPath string) {
 			installPath = real
 		}
 	}
+	if inbox, ok := supervisor.InboxFromEnv(); ok {
+		// The other handoffs go first: the seed's trial snapshot must already
+		// hold the Wi-Fi and enrollment they write, or rejecting it erases them.
+		applyHandoffs(logger, configPath)
+		if stageSeedForSupervisor(logger, configDir, inbox, configPath) {
+			os.Exit(0)
+		}
+		return
+	}
 	if applyBinaryUpdate(logger, configDir, installPath) {
 		os.Exit(0)
 	}
+	applyHandoffs(logger, configPath)
+}
+
+func applyHandoffs(logger *zap.Logger, configPath string) {
 	applyWendyConf(logger, configDir)
 	applyPreProvisioning(logger, configDir, configPath)
 	applyClockFloor(logger, configDir, configPath)
