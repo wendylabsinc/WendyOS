@@ -3,11 +3,15 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,7 +67,7 @@ class TensorRTRestartRehearsalTests(unittest.TestCase):
             self.assertNotIn("notify:", campaign)
             self.assertIn("when: manual", campaign)
             subprocess.run(["sh", "-n", str(out / "console-capture.sh")], check=True)
-            for script in ("run-command.py", "capture-cache.py"):
+            for script in ("run-command.py", "capture-cache.py", "capture-libraries.py"):
                 compile((out / script).read_text(), script, "exec")
             # The fake executable fails if the generator accidentally invokes it.
             # Here invoke the bounded runner intentionally, after enabling the fixture preview.
@@ -76,6 +80,63 @@ class TensorRTRestartRehearsalTests(unittest.TestCase):
             self.assertEqual(result["argv"], commands["campaign"]["inspect"])
             self.assertEqual(result["timeout_seconds"], 30)
             self.assertTrue(all(c["status"] == "not_run" for c in evidence["cases"]))
+
+    def test_console_capture_does_not_require_debian_package_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = root / "bundle"
+            self.generator.generate(self.inventory(root), out)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            for name in ("date", "cat", "nvpmodel", "free", "systemctl", "ps", "journalctl"):
+                file = bin_dir / name
+                # Do not inspect the developer's host or contact any device.
+                file.write_text("#!/bin/sh\nprintf '%s\\n' 'fixture wendy-agent " + name + "'\n")
+                file.chmod(0o755)
+            for name in ("dirname", "grep"):
+                (bin_dir / name).symlink_to(shutil.which(name))
+            (bin_dir / "python3").symlink_to(sys.executable)
+            env = dict(os.environ, PATH=str(bin_dir))
+            self.assertIsNone(shutil.which("dpkg-query", path=env["PATH"]))
+            run = subprocess.run(["/bin/sh", str(out / "console-capture.sh")],
+                                 env=env, capture_output=True, text=True, timeout=5)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn('"library_dirs"', run.stdout)
+            self.assertIn("fixture wendy-agent journalctl", run.stdout)
+
+    def test_library_capture_uses_production_paths_and_hashes_loaded_files(self):
+        production = (ROOT / "go/internal/agent/inference/accelerator.go").read_text()
+        declaration = re.search(r'var tensorRTLibraryDirs = \[\]string\{([^}]+)\}', production)
+        self.assertIsNotNone(declaration)
+        self.assertEqual(self.generator.LIBRARY_DIRS, re.findall(r'"([^"]+)"', declaration.group(1)))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "capture-libraries.py"
+            script.write_text(self.generator.LIBRARY_CAPTURE.replace("LIBRARY_DIRECTORIES", repr(self.generator.LIBRARY_DIRS)))
+            spec = importlib.util.spec_from_file_location("library_capture", script)
+            capture = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(capture)
+            library_dir = root / "vendor"
+            library_dir.mkdir()
+            for name in ("libnvinfer.so.10.16.2", "libnvonnxparser.so.10", "libnvinfer_plugin.so.10", "unrelated.txt"):
+                (library_dir / name).write_bytes(name.encode())
+            cuda = root / "libcudart.so.13"
+            cuda.write_bytes(b"CUDA runtime fixture")
+            capture.LIBRARY_DIRS = [str(root / "missing"), str(library_dir)]
+            read_text = Path.read_text
+            mapping = "1000-2000 r-xp 00000000 00:00 42 " + str(cuda)
+
+            def read(path, *args, **kwargs):
+                return mapping if str(path) == "/proc/4242/maps" else read_text(path, *args, **kwargs)
+
+            with patch.object(Path, "read_text", read):
+                result = capture.capture(4242)
+            self.assertEqual(result["errors"], [])
+            self.assertEqual(result["worker_mappings"], [mapping])
+            self.assertEqual(len(result["files"]), 4)
+            found = next(f for f in result["files"] if f["path"] == str(cuda))
+            self.assertEqual(found["sha256"], hashlib.sha256(cuda.read_bytes()).hexdigest())
+            self.assertEqual(found["mtime_ns"], cuda.stat().st_mtime_ns)
 
     def test_changed_model_is_refused_before_running_any_command(self):
         with tempfile.TemporaryDirectory() as directory:
