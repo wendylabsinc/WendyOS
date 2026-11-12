@@ -107,10 +107,11 @@ type SignedRequest struct {
 	// (the stored request is served to other clients as the key's binding) and
 	// on the postbox-relayed methods
 	// (DeploymentService.CreateDeployment, ControlContainer, AssignDevice,
-	// UnassignDevice, and the deprecated ArtifactRegistryService.AssignDevice,
-	// UnassignDevice), whose JWS is forwarded verbatim to devices in
-	// PostboxEntry.request_jws. The same holds for each SignedRequest in
-	// DeleteAppRequest.device_removals.
+	// UnassignDevice, DetachDevice, and the deprecated
+	// ArtifactRegistryService.AssignDevice, UnassignDevice), whose JWS is
+	// forwarded verbatim to devices in PostboxEntry.request_jws. The same holds
+	// for each SignedRequest in DeleteAppRequest.device_removals and
+	// device_detachments.
 	// The methods marked wendy.device_signed_request take a DEVICE-signed
 	// SignedRequest instead (KeyDirectoryService.RegisterDeviceEncryptionKey,
 	// DevicePostboxService.AckHead): `x5c` = the device leaf, which must be the

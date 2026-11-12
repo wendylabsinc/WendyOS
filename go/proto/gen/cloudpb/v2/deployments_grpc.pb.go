@@ -35,6 +35,7 @@ const (
 	DeploymentService_ListPendingDeviceStatements_FullMethodName   = "/wendycloud.v2.DeploymentService/ListPendingDeviceStatements"
 	DeploymentService_AssignDevice_FullMethodName                  = "/wendycloud.v2.DeploymentService/AssignDevice"
 	DeploymentService_UnassignDevice_FullMethodName                = "/wendycloud.v2.DeploymentService/UnassignDevice"
+	DeploymentService_DetachDevice_FullMethodName                  = "/wendycloud.v2.DeploymentService/DetachDevice"
 	DeploymentService_HandleReportedState_FullMethodName           = "/wendycloud.v2.DeploymentService/HandleReportedState"
 	DeploymentService_ListAssetApps_FullMethodName                 = "/wendycloud.v2.DeploymentService/ListAssetApps"
 	DeploymentService_ListAppDeviceStates_FullMethodName           = "/wendycloud.v2.DeploymentService/ListAppDeviceStates"
@@ -109,13 +110,18 @@ type DeploymentServiceClient interface {
 	// - never a device whose move out of this deployment has been recorded:
 	//   the move statement is its removal;
 	// By app_id it is a different list: before an app delete starts and while
-	// it runs, every device in the app's removal set that still lacks its
-	// terminal removal, across the app's deployments
-	// (DeleteAppRequest.device_removals). A client reads this before it sends
-	// its first DeleteApp batch. By app_id the read requires the right to
-	// delete the app, because the removal set can include devices the caller
-	// cannot otherwise see (removals inside an app delete are authorized by
-	// that right, not by device access).
+	// it runs, every device in the app's removal set that is not yet covered
+	// by a removal or a detach (DeleteAppRequest). A client reads this before
+	// it sends its first DeleteApp batch. By app_id the read requires the
+	// right to delete the app. The row kind says what the caller may sign:
+	// - KIND_UNASSIGN (maximum revision): the caller can reach the device.
+	//   Removal is the default; detach is the operator's choice per device.
+	// - KIND_DETACH: the caller cannot reach the device; detach only.
+	// A KIND_DETACH row is the only place a device the caller cannot otherwise
+	// see is listed. It is listed only because the app was sent to it (the
+	// removal set), and it reveals only `device` (its SPIFFE URI) and
+	// `device_display_name`: nothing else about it (no tags, site, hardware,
+	// address, last seen, other apps or reported state).
 	ListPendingDeviceStatements(ctx context.Context, in *ListPendingDeviceStatementsRequest, opts ...grpc.CallOption) (*ListPendingDeviceStatementsResponse, error)
 	// ==================== Per-device statements ====================
 	// Moved here from ArtifactRegistryService (orchestrator ruling D2): same
@@ -142,6 +148,15 @@ type DeploymentServiceClient interface {
 	// current revision.
 	// Signed; payload_type "wendycloud.v2.UnassignDeviceRequest".
 	UnassignDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error)
+	// Declared for its `operation` and payload type only: a DetachDeviceRequest
+	// is accepted only nested in DeleteAppRequest.device_detachments, and cloud
+	// refuses every direct call with FAILED_PRECONDITION ("DetachDevice is
+	// accepted only inside DeleteApp"). Postbox-relayed
+	// verbatim to the one device it names. Detach outside an app delete
+	// (for example with RemoveDeployment) is a follow-up, not part of this
+	// contract.
+	// Signed; payload_type "wendycloud.v2.DetachDeviceRequest".
+	DetachDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error)
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[UpdateReportedStateRequest, DesiredStateResponse], error)
 	ListAssetApps(ctx context.Context, in *ListAssetAppsRequest, opts ...grpc.CallOption) (*ListAssetAppsResponse, error)
@@ -340,6 +355,16 @@ func (c *deploymentServiceClient) UnassignDevice(ctx context.Context, in *Signed
 	return out, nil
 }
 
+func (c *deploymentServiceClient) DetachDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeviceStatementResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeviceStatementResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_DetachDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deploymentServiceClient) HandleReportedState(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[UpdateReportedStateRequest, DesiredStateResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &DeploymentService_ServiceDesc.Streams[2], DeploymentService_HandleReportedState_FullMethodName, cOpts...)
@@ -469,13 +494,18 @@ type DeploymentServiceServer interface {
 	// - never a device whose move out of this deployment has been recorded:
 	//   the move statement is its removal;
 	// By app_id it is a different list: before an app delete starts and while
-	// it runs, every device in the app's removal set that still lacks its
-	// terminal removal, across the app's deployments
-	// (DeleteAppRequest.device_removals). A client reads this before it sends
-	// its first DeleteApp batch. By app_id the read requires the right to
-	// delete the app, because the removal set can include devices the caller
-	// cannot otherwise see (removals inside an app delete are authorized by
-	// that right, not by device access).
+	// it runs, every device in the app's removal set that is not yet covered
+	// by a removal or a detach (DeleteAppRequest). A client reads this before
+	// it sends its first DeleteApp batch. By app_id the read requires the
+	// right to delete the app. The row kind says what the caller may sign:
+	// - KIND_UNASSIGN (maximum revision): the caller can reach the device.
+	//   Removal is the default; detach is the operator's choice per device.
+	// - KIND_DETACH: the caller cannot reach the device; detach only.
+	// A KIND_DETACH row is the only place a device the caller cannot otherwise
+	// see is listed. It is listed only because the app was sent to it (the
+	// removal set), and it reveals only `device` (its SPIFFE URI) and
+	// `device_display_name`: nothing else about it (no tags, site, hardware,
+	// address, last seen, other apps or reported state).
 	ListPendingDeviceStatements(context.Context, *ListPendingDeviceStatementsRequest) (*ListPendingDeviceStatementsResponse, error)
 	// ==================== Per-device statements ====================
 	// Moved here from ArtifactRegistryService (orchestrator ruling D2): same
@@ -502,6 +532,15 @@ type DeploymentServiceServer interface {
 	// current revision.
 	// Signed; payload_type "wendycloud.v2.UnassignDeviceRequest".
 	UnassignDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error)
+	// Declared for its `operation` and payload type only: a DetachDeviceRequest
+	// is accepted only nested in DeleteAppRequest.device_detachments, and cloud
+	// refuses every direct call with FAILED_PRECONDITION ("DetachDevice is
+	// accepted only inside DeleteApp"). Postbox-relayed
+	// verbatim to the one device it names. Detach outside an app delete
+	// (for example with RemoveDeployment) is a follow-up, not part of this
+	// contract.
+	// Signed; payload_type "wendycloud.v2.DetachDeviceRequest".
+	DetachDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error)
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]) error
 	ListAssetApps(context.Context, *ListAssetAppsRequest) (*ListAssetAppsResponse, error)
@@ -569,6 +608,9 @@ func (UnimplementedDeploymentServiceServer) AssignDevice(context.Context, *Signe
 }
 func (UnimplementedDeploymentServiceServer) UnassignDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnassignDevice not implemented")
+}
+func (UnimplementedDeploymentServiceServer) DetachDevice(context.Context, *SignedRequest) (*DeviceStatementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DetachDevice not implemented")
 }
 func (UnimplementedDeploymentServiceServer) HandleReportedState(grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]) error {
 	return status.Error(codes.Unimplemented, "method HandleReportedState not implemented")
@@ -880,6 +922,24 @@ func _DeploymentService_UnassignDevice_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeploymentService_DetachDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).DetachDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_DetachDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).DetachDevice(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeploymentService_HandleReportedState_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(DeploymentServiceServer).HandleReportedState(&grpc.GenericServerStream[UpdateReportedStateRequest, DesiredStateResponse]{ServerStream: stream})
 }
@@ -1014,6 +1074,10 @@ var DeploymentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UnassignDevice",
 			Handler:    _DeploymentService_UnassignDevice_Handler,
+		},
+		{
+			MethodName: "DetachDevice",
+			Handler:    _DeploymentService_DetachDevice_Handler,
 		},
 		{
 			MethodName: "ListAssetApps",
