@@ -78,26 +78,16 @@ func (e *IdentityMismatchError) Error() string {
 
 // PinChecker is satisfied by *devicepin.Store. Defined here as an interface
 // so shared/certs does not import shared/devicepin (which would be circular).
+// Call CheckAndUpdate only after verifying the chain and expected identity.
+// The default store accepts rotations and rejects older keys for that identity.
 type PinChecker interface {
 	CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 }
 
-// BlockingPinError marks the subset of PinChecker errors that must fail the TLS
-// handshake. Only a rejection of the PEER — the pinned key changed while the
-// pinned certificate was still valid — is one; everything else a pin store can
-// fail at is about the store, not the device.
-//
-// The distinction has to be expressed here rather than by type-switching on
-// devicepin's error, because shared/certs cannot import shared/devicepin (that
-// is why PinChecker exists at all). Making it an interface the error opts into
-// keeps the direction of the dependency intact — devicepin already imports
-// certs — and states the rule in the one place that applies it: a PinChecker
-// error aborts a verified connection only if it says it is about the peer.
-//
-// Anything that does NOT implement this is treated as best-effort. A read-only
-// config directory or a full disk is an operational fault in local bookkeeping;
-// failing every mTLS connection over it would take a fleet offline for a reason
-// that has nothing to do with whether the device is who it claims to be.
+// BlockingPinError marks a PinChecker rejection of the peer that must fail the
+// TLS handshake. Local persistence errors do not implement this interface and
+// cannot reject an otherwise verified connection. The default devicepin.Store
+// rejects a changed key when its certificate predates the stored issuance time.
 type BlockingPinError interface {
 	error
 	// BlockingPinRejection distinguishes this error from a persistence
@@ -374,11 +364,9 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			}
 		}
 
-		// Step 3: SPKI pin check/update. Only a rejection of the peer aborts
-		// the handshake — see BlockingPinError. A pin store that cannot record
-		// what it just verified has failed at bookkeeping, and dropping an
-		// otherwise fully verified connection over that would turn a read-only
-		// config directory into a total loss of device access.
+		// Step 3: check and record the verified device certificate. Pin checkers
+		// reject the peer with BlockingPinError on rollback. Local write failures do
+		// not reject an otherwise verified connection.
 		if opts.PinStore != nil && hasIdentity && identity.EntityType == EntityAsset {
 			displayName := leaf.Subject.CommonName
 			if displayName == "" {

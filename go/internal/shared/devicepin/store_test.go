@@ -4,9 +4,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/pem"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -67,31 +68,6 @@ func TestStore_SameCert_UpdatesLastSeen(t *testing.T) {
 	}
 }
 
-// TestStore_DifferentCert_WithinValidityIsRejected supersedes the old
-// "rotation accepted" / "warns on mismatch" behavior: SPKI pinning now fails
-// closed. A key change while the previously pinned cert is still valid is
-// unexplained (a renewal replaces an expiring cert, it does not race a live
-// one), so CheckAndUpdate must reject it instead of overwriting the pin with
-// a warning.
-func TestStore_DifferentCert_WithinValidityIsRejected(t *testing.T) {
-	dir := t.TempDir()
-	store, _ := devicepin.Open(dir)
-	cert1 := makeCert(t, "urn:wendy:org:7:asset:42")
-	_ = store.CheckAndUpdate(cert1, "My Device")
-
-	// Different cert, same identity key, pinned cert still valid → hard fail.
-	cert2 := makeCert(t, "urn:wendy:org:7:asset:42")
-	err := store.CheckAndUpdate(cert2, "My Device")
-
-	var mismatch *devicepin.PinMismatchError
-	if !errors.As(err, &mismatch) {
-		t.Fatalf("want PinMismatchError, got %v", err)
-	}
-	if !strings.Contains(mismatch.DisplayName, "My Device") {
-		t.Errorf("mismatch.DisplayName = %q, want to contain %q", mismatch.DisplayName, "My Device")
-	}
-}
-
 func TestStore_NonAssetCert_Skipped(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := devicepin.Open(dir)
@@ -138,14 +114,11 @@ func TestStore_PersistsAcrossOpen(t *testing.T) {
 	}
 }
 
-// unused import guard — pem is imported by the brief verbatim.
-var _ = pem.EncodeToMemory
-
 // assetCert generates a fresh self-signed asset cert with a URI SAN of
 // urn:wendy:org:<org>:asset:<assetID> and the given NotAfter. Modeled on
 // selfSignedCert in shared/certs/server_verify_test.go. A fresh key is
 // generated on every call, so two certs with the same org/assetID still
-// differ in SPKI — required for the mismatch test below to be meaningful.
+// differ in SPKI, as they do when renewal also rotates the key.
 func assetCert(t *testing.T, org int32, assetID string, notAfter time.Time) *x509.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -175,66 +148,41 @@ func assetCert(t *testing.T, org int32, assetID string, notAfter time.Time) *x50
 }
 
 func TestCheckAndUpdateKeyChange(t *testing.T) {
-	t.Run("within validity is a hard fail", func(t *testing.T) {
-		dir := t.TempDir()
-		s, err := devicepin.Open(dir)
-		if err != nil {
-			t.Fatalf("Open: %v", err)
-		}
-		first := assetCert(t, 7, "42", time.Now().Add(24*time.Hour))
-		if err := s.CheckAndUpdate(first, "thor"); err != nil {
-			t.Fatalf("first use: %v", err)
-		}
-
-		second := assetCert(t, 7, "42", time.Now().Add(24*time.Hour))
-		err = s.CheckAndUpdate(second, "thor")
-
-		var mismatch *devicepin.PinMismatchError
-		if !errors.As(err, &mismatch) {
-			t.Fatalf("want PinMismatchError, got %v", err)
-		}
-	})
-
-	t.Run("a key change is blocking, so the TLS verifier drops the connection", func(t *testing.T) {
-		dir := t.TempDir()
-		s, err := devicepin.Open(dir)
-		if err != nil {
-			t.Fatalf("Open: %v", err)
-		}
-		first := assetCert(t, 7, "42", time.Now().Add(24*time.Hour))
-		if err := s.CheckAndUpdate(first, "thor"); err != nil {
-			t.Fatalf("first use: %v", err)
-		}
-
-		second := assetCert(t, 7, "42", time.Now().Add(24*time.Hour))
-		err = s.CheckAndUpdate(second, "thor")
-
-		// certs.BuildServerVerifyConnection fails the handshake on exactly this
-		// property and nothing else, so a PinMismatchError that stopped
-		// satisfying it would silently become advisory — the MITM protection
-		// gone with every existing test still green.
-		var blocking certs.BlockingPinError
-		if !errors.As(err, &blocking) {
-			t.Fatalf("CheckAndUpdate error = %v (%T), want one the TLS verifier treats as blocking", err, err)
-		}
-	})
-
-	t.Run("after the pinned cert expires it re-pins silently", func(t *testing.T) {
-		dir := t.TempDir()
-		s, err := devicepin.Open(dir)
-		if err != nil {
-			t.Fatalf("Open: %v", err)
-		}
-		expired := assetCert(t, 7, "42", time.Now().Add(-time.Hour))
-		if err := s.CheckAndUpdate(expired, "thor"); err != nil {
-			t.Fatalf("first use: %v", err)
-		}
-
-		renewed := assetCert(t, 7, "42", time.Now().Add(24*time.Hour))
-		if err := s.CheckAndUpdate(renewed, "thor"); err != nil {
-			t.Fatalf("rotation after expiry must be accepted, got %v", err)
-		}
-	})
+	for _, previousExpiry := range []time.Duration{24 * time.Hour, -time.Hour} {
+		t.Run(previousExpiry.String(), func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := devicepin.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := assetCert(t, 7, "42", time.Now().Add(previousExpiry))
+			if err := s.CheckAndUpdate(first, "thor"); err != nil {
+				t.Fatal(err)
+			}
+			// Load an existing on-disk pin, including one whose cert is still valid.
+			s, err = devicepin.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			renewed := assetCert(t, 7, "42", time.Now().Add(48*time.Hour))
+			if err := s.CheckAndUpdate(renewed, "thor"); err != nil {
+				t.Fatalf("key rotation must be accepted: %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "known_devices.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var records map[string]devicepin.PinnedDevice
+			if err := json.Unmarshal(data, &records); err != nil {
+				t.Fatal(err)
+			}
+			got := records["urn:wendy:org:7:asset:42"]
+			wantFingerprint := fmt.Sprintf("sha256:%x", sha256.Sum256(renewed.RawSubjectPublicKeyInfo))
+			if got.SPKIFingerprint != wantFingerprint || got.NotAfter != renewed.NotAfter.UTC().Format(time.RFC3339) {
+				t.Fatalf("rotation was not persisted: %+v", got)
+			}
+		})
+	}
 }
 
 // unwritablePinFile plants an existing, read-only known_devices.json in dir so
