@@ -431,11 +431,33 @@ jobs:
       - name: Run worker unit tests
         run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
 
+  simulator-python310:
+    name: ROS Humble simulator dependencies (${{ matrix.robot }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        robot: [go2, g1]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.10.9'
+      - name: Install the shipped requirements on Python 3.10
+        env:
+          ROBOT: ${{ matrix.robot }}
+        run: |
+          uv venv --managed-python --python 3.10 .venv
+          uv pip install --python .venv/bin/python -r "go/simulator/$ROBOT/requirements.txt"
+          uv pip check --python .venv/bin/python
+          .venv/bin/python .github/scripts/test-simulator-dependencies.py
+
   # Preserve the existing required "Test" check after splitting its work.
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions, simulator-python310]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -451,6 +473,7 @@ jobs:
           DARWIN_RESULT: ${{ needs.darwin-regressions.result }}
           CAMERA_NODE_RESULT: ${{ needs.camera-node-regression.result }}
           GSTREAMER_RESULT: ${{ needs.gstreamer-regressions.result }}
+          SIMULATOR_PYTHON_RESULT: ${{ needs.simulator-python310.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -467,6 +490,7 @@ jobs:
           test "$DARWIN_RESULT" = success
           test "$CAMERA_NODE_RESULT" = success
           test "$GSTREAMER_RESULT" = success
+          test "$SIMULATOR_PYTHON_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
