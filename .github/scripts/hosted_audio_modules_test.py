@@ -16,6 +16,10 @@ SCRIPT = Path(__file__).with_name("prepare-hosted-audio-modules.py")
 spec = importlib.util.spec_from_file_location("audio_modules", SCRIPT)
 modules = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(modules)
+AZURE_RELEASE = "7.0.0-1017-azure"
+AZURE = modules.PINS[AZURE_RELEASE]
+AWS_RELEASE = "7.0.0-1014-aws"
+AWS = modules.PINS[AWS_RELEASE]
 
 
 class AudioModulesTests(unittest.TestCase):
@@ -34,17 +38,17 @@ class AudioModulesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "include/config").mkdir(parents=True)
-            (root / "include/config/kernel.release").write_text(modules.RELEASE)
+            (root / "include/config/kernel.release").write_text(AZURE_RELEASE)
             (root / "Module.symvers").write_text("kernel symbol CRCs")
             base = "# CONFIG_SOUND is not set\nCONFIG_MODULES=y\nCONFIG_MODVERSIONS=y\n"
             for config, release, arch, version, passes in [
-                (base, modules.RELEASE, "x86_64", modules.VERSION, True),
-                (base.replace("# CONFIG_SOUND is not set", "CONFIG_SOUND=m"), modules.RELEASE, "x86_64", modules.VERSION, False),
-                (base + "CONFIG_MODULE_SIG_FORCE=y\n", modules.RELEASE, "x86_64", modules.VERSION, False),
-                (base.replace("CONFIG_MODVERSIONS=y\n", ""), modules.RELEASE, "x86_64", modules.VERSION, False),
-                (base, "7.0.0-1018-azure", "x86_64", modules.VERSION, False),
-                (base, modules.RELEASE, "aarch64", modules.VERSION, False),
-                (base, modules.RELEASE, "x86_64", "other-source-version", False),
+                (base, AZURE_RELEASE, "x86_64", AZURE["version"], True),
+                (base.replace("# CONFIG_SOUND is not set", "CONFIG_SOUND=m"), AZURE_RELEASE, "x86_64", AZURE["version"], False),
+                (base + "CONFIG_MODULE_SIG_FORCE=y\n", AZURE_RELEASE, "x86_64", AZURE["version"], False),
+                (base.replace("CONFIG_MODVERSIONS=y\n", ""), AZURE_RELEASE, "x86_64", AZURE["version"], False),
+                (base, "7.0.0-1018-azure", "x86_64", AZURE["version"], False),
+                (base, AZURE_RELEASE, "aarch64", AZURE["version"], False),
+                (base, AZURE_RELEASE, "x86_64", "other-source-version", False),
             ]:
                 with self.subTest(config=config, release=release, arch=arch, version=version):
                     (root / ".config").write_text(config)
@@ -61,12 +65,65 @@ class AudioModulesTests(unittest.TestCase):
                     patch.object(modules.subprocess, "run", return_value=subprocess.CompletedProcess([], 0 if installed else 1)) as run:
                 if loaded or installed:
                     with self.assertRaises(ValueError):
-                        modules.require_empty_stack()
+                        modules.require_empty_stack(AZURE)
                 else:
-                    modules.require_empty_stack()
+                    modules.require_empty_stack(AZURE)
                     self.assertEqual(run.call_count, 5)
                 if loaded:
                     run.assert_not_called()
+
+    def test_aws_keeps_packaged_soundcore_and_requires_absent_alsa(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "include/config").mkdir(parents=True)
+            (root / "include/config/kernel.release").write_text(AWS_RELEASE)
+            (root / "Module.symvers").write_text("kernel and soundcore CRCs")
+            base = "CONFIG_SOUND=m\n# CONFIG_SND is not set\nCONFIG_MODULES=y\nCONFIG_MODVERSIONS=y\n"
+            (root / ".config").write_text(base)
+            self.assertIs(modules.validate_headers(root, AWS_RELEASE, "x86_64", AWS["version"]), AWS)
+            (root / ".config").write_text(base.replace("# CONFIG_SND is not set", "CONFIG_SND=m"))
+            with self.assertRaises(ValueError):
+                modules.validate_headers(root, AWS_RELEASE, "x86_64", AWS["version"])
+        command = modules.build_command(Path("/aws-headers"), Path("/owned/sound"), AWS)
+        self.assertIn("CONFIG_SOUND=", command)
+        self.assertNotIn("CONFIG_SOUND=m", command)
+        self.assertNotIn("soundcore", modules.required_modules(AWS))
+        flags = next(arg for arg in command if arg.startswith("KCFLAGS="))
+        self.assertNotIn("-DCONFIG_SOUND_MODULE", flags)
+        with patch.object(modules.Path, "exists", return_value=False), \
+                patch.object(modules.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run:
+            modules.require_empty_stack(AWS)
+            self.assertEqual([call.args[0][-1] for call in run.call_args_list], list(modules.MODULES[1:]))
+        with patch.object(modules.Path, "exists", return_value=True), patch.object(modules.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "loaded module soundcore"):
+                modules.require_empty_stack(AWS)
+            run.assert_not_called()
+        patch_text = ("--- linux-aws-7.0-7.0.0.orig/sound/core/init.c\n"
+                      "+++ linux-aws-7.0-7.0.0/sound/core/init.c\n@@ -1 +1 @@\n-old\n+new\n")
+        self.assertEqual(modules.sound_patch(patch_text, AWS), patch_text)
+        with self.assertRaises(ValueError):
+            modules.sound_patch(patch_text, AZURE)
+        self.assertEqual(len(modules.archives(AWS)), 2)
+        self.assertTrue(all(name.startswith("linux-aws-7.0_") for name in modules.archives(AWS)))
+
+    def test_aws_soundcore_requires_exact_distribution_owner_path_and_abi(self):
+        expected = "/lib/modules/" + AWS_RELEASE + "/kernel/sound/soundcore.ko.zst"
+        package = "linux-modules-" + AWS_RELEASE
+        for path, owner, version, magic, good in [
+            (expected, package + ": " + expected, AWS["version"], AWS_RELEASE, True),
+            ("/tmp/soundcore.ko", package + ": " + expected, AWS["version"], AWS_RELEASE, False),
+            (expected, "another-package: " + expected, AWS["version"], AWS_RELEASE, False),
+            (expected, package + ": " + expected, "wrong-version", AWS_RELEASE, False),
+            (expected, package + ": " + expected, AWS["version"], AZURE_RELEASE, False),
+        ]:
+            results = [subprocess.CompletedProcess([], 0, value) for value in [path, owner, version, magic + " SMP modversions"]]
+            with self.subTest(path=path, owner=owner, version=version, magic=magic), \
+                    patch.object(modules, "run", side_effect=results), patch.object(modules.Path, "is_file", return_value=True):
+                if good:
+                    modules.validate_packaged_soundcore(AWS_RELEASE, AWS["version"])
+                else:
+                    with self.assertRaises(ValueError):
+                        modules.validate_packaged_soundcore(AWS_RELEASE, AWS["version"])
 
     def test_source_size_and_digest_both_required(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,11 +163,11 @@ class AudioModulesTests(unittest.TestCase):
         def diff(path):
             return (f"--- linux-azure-7.0-7.0.0.orig/{path}\n"
                     f"+++ linux-azure-7.0-7.0.0/{path}\n@@ -1 +1 @@\n-old\n+new\n")
-        selected = modules.sound_patch(diff("sound/core/init.c") + diff("kernel/exit.c") + diff("sound/drivers/aloop.c"))
+        selected = modules.sound_patch(diff("sound/core/init.c") + diff("kernel/exit.c") + diff("sound/drivers/aloop.c"), AZURE)
         self.assertIn("sound/core/init.c", selected)
         self.assertIn("sound/drivers/aloop.c", selected)
         self.assertNotIn("kernel/exit.c", selected)
-        command = modules.build_command(Path("/exact-headers"), Path("/owned/sound"))
+        command = modules.build_command(Path("/exact-headers"), Path("/owned/sound"), AZURE)
         self.assertIn("M=/owned/sound", command)
         self.assertEqual(command[-1], "modules")
         flags = next(arg for arg in command if arg.startswith("KCFLAGS="))
