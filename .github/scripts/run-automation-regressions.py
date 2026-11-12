@@ -29,6 +29,7 @@ SUITES = (
     "gpu_hardware_test.py",
     "npu_hardware_test.py",
     "accelerator_renumbering_test.py",
+    "so101_reader_acceptance_test.py",
     "tensorrt_restart_test.py",
     "oci_retry_test.py",
     "signing_ci_test.py",

@@ -192,6 +192,9 @@ def generate(inventory, output):
                 "logs": cli_command("device", "logs", "--app", app, "--tail", "200", "--no-follow"),
                 "remove": [cli, "device", "apps", "remove", app, "--force", "--device", selector]},
                 "board": {"info": cli_command("device", "info"),
+                # Cloud OS updates cannot reapply until connectivity returns.
+                # JSON mode makes this second command agent-only.
+                "agent-reapply": cli_command("device", "update", "--binary", artifacts["agent_binary"]["path"], "--yes"),
                 # Artifact updates explicitly reject JSON mode, which skips OS
                 # updates. The shared runner still records bounded text output.
                 "update": [cli, "device", "update", "--binary", artifacts["agent_binary"]["path"],
@@ -234,7 +237,7 @@ def generate(inventory, output):
     needle = 'limit = 1200 if stage == "deploy" else 30'
     if helpers.RUNNER.count(needle) != 1: raise ValueError("shared runner contract changed")
     helpers.write(out / "run-command.py", helpers.RUNNER.replace(needle,
-                  'limit = 1200 if stage == "deploy" else (1800 if stage == "update" else (180 if stage.startswith("infer-") else 120))'))
+                  'limit = 1200 if stage == "deploy" else (1800 if stage == "update" else (300 if stage == "agent-reapply" else (180 if stage.startswith("infer-") else 120)))'))
     run = shlex.join([sys.executable, str(out / "run-command.py")])
     helpers.write(out / "procedure.txt", procedure(evidence, artifacts, run, is_npu))
     return evidence
@@ -313,11 +316,18 @@ Qualification log {a['transition_observation']['path']}; recovery {a['recovery_r
    Agent boot cannot start the app and repair its spec before observation.
    Obtain the owner's explicit approval for this serial and exact new OS hash:
      {run} board update transition
-   This may reboot and reapplies the pinned Agent. A command timeout does not mean
+   This may reboot. Direct updates attempt to reapply the pinned Agent; Cloud
+   updates require the separate agent-only step after connectivity returns.
+   A command timeout does not mean
    the update stopped: observe the maintenance console, do not repeat the update
    or cut power, and follow the reviewed recovery route with the owner.
-5. After recovery, verify the same physical board, target OS/driver versions,
-   candidate Agent hash and new boot ID. BEFORE starting the app, capture info and
+5. After recovery, verify the same physical board and target OS/driver versions.
+   For Cloud updates, or if the direct update did not restore the candidate,
+   reapply only the pinned Agent after connectivity returns:
+     {run} board agent-reapply after-recovery
+   This command uses JSON mode to skip OS updates. Never repeat the OS transition
+   merely to replace the Agent. Confirm the application remains stopped, then
+   verify the candidate Agent hash and new boot ID. BEFORE starting the app, capture info and
    console-capture.sh again:
      {run} board info after-update
    Require the host pair changed exactly as qualified, matching new driver hash,

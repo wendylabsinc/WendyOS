@@ -470,6 +470,8 @@ jobs:
         run: bash .github/scripts/test-management-lifetime.sh "$RUNNER_TEMP/management-lifetime"
       - name: Require Cloud notification identity, retry and redaction contracts
         run: bash .github/scripts/test-cloud-notification-contract.sh
+      - name: Require live relay traffic through stalled renewal and path changes
+        run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
@@ -662,6 +664,8 @@ jobs:
         run: bash .github/scripts/test-thermal-raw-capture.sh
       - name: Decode shared SensorLink capture and reject loopback opens
         run: bash .github/scripts/test-sensorlink-capture.sh
+      - name: Decode shared app-owned camera capture and reject camera reopens
+        run: bash .github/scripts/test-shared-camera-capture.sh
 
       - name: Require actual pipeline output and shutdown
         shell: bash
