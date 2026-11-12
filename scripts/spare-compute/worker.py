@@ -40,6 +40,41 @@ def shard(key, index, count):
     return int(hashlib.sha256(key.encode()).hexdigest(), 16) % count == index
 
 
+# Finite modes sweep every job once; fuzz and race cycle indefinitely.
+FINITE = ("mutation", "review")
+
+
+def job_key(job):
+    return json.dumps(job, sort_keys=True)
+
+
+def load_progress(checkpoint, key, revision):
+    """Resume a finite sweep on whichever commit is current.
+
+    The main branch moves several times a day and every work session fetches
+    it again, so a sweep keyed to one commit would restart from its first job
+    on most sessions. Finished jobs are remembered by identity instead; only a
+    sweep that already finished on an older commit starts over on this one.
+    """
+    progress = json.loads(checkpoint.read_text()) if checkpoint.exists() else {}
+    if progress.get("key") != key:
+        progress = {"key": key, "turn": 0, "cursors": {}, "done": {}, "swept": {}}
+    for mode, swept in list(progress["swept"].items()):
+        if swept != revision:
+            del progress["swept"][mode]
+            progress["done"].pop(mode, None)
+    return progress
+
+
+def pending(progress, jobs, mode):
+    if mode not in FINITE:
+        return jobs[mode]
+    if mode in progress["swept"]:
+        return []
+    done = set(progress["done"].get(mode, []))
+    return [job for job in jobs[mode] if job_key(job) not in done]
+
+
 def terminate(proc):
     # Kill the whole session, including test subprocesses and compiler workers.
     try:
@@ -196,13 +231,11 @@ def main():
     if args.list:
         print(json.dumps({m: jobs[m] for m in modes}, indent=2))
         return
-    key = hashlib.sha256(json.dumps([revision, config, modes, index, count,
+    key = hashlib.sha256(json.dumps([config, modes, index, count,
                                    os.environ.get("MODEL_NAME"),
                                    os.environ.get("MODEL_BASE_URL")], sort_keys=True).encode()).hexdigest()
     checkpoint = state / "checkpoint.json"
-    progress = json.loads(checkpoint.read_text()) if checkpoint.exists() else {}
-    if progress.get("key") != key:
-        progress = {"key": key, "turn": 0, "cursors": {}}
+    progress = load_progress(checkpoint, key, revision)
     env = {**os.environ, "GOMAXPROCS": str(cpus), "GOFLAGS": f"-p={cpus}",
            "GOCACHE": str(state / "cache/build"), "GOMODCACHE": str(state / "cache/mod"),
            "GOTMPDIR": str(scratch), "TMPDIR": str(scratch),
@@ -216,14 +249,19 @@ def main():
                 return
             time.sleep(5)
             continue
-        available = [m for m in modes if jobs[m] and
-                     (m in ("fuzz", "race") or progress["cursors"].get(m, 0) < len(jobs[m]))]
+        queues = {m: pending(progress, jobs, m) for m in modes}
+        for m in modes:
+            if m in FINITE and jobs[m] and not queues[m] and m not in progress["swept"]:
+                # The jobs left in this sweep vanished with the new commit.
+                progress["swept"][m] = revision
+                atomic_json(checkpoint, progress)
+        available = [m for m in modes if queues[m]]
         if not available:
             print('{"event":"all_finite_jobs_completed"}', flush=True)
             return
         mode = available[progress["turn"] % len(available)]
         cursor = progress["cursors"].get(mode, 0)
-        job = jobs[mode][cursor % len(jobs[mode])]
+        job = queues[mode][0] if mode in FINITE else jobs[mode][cursor % len(jobs[mode])]
         # Every attempt gets pristine source, including after a killed mutant.
         extract(args.archive, root)
         shutil.rmtree(scratch, ignore_errors=True)
@@ -249,11 +287,16 @@ def main():
         atomic_json(report / "result.json", {**metadata, **outcome})
         print(json.dumps({"event": "job_finished", **metadata, **outcome}), flush=True)
         # Failed jobs are visible and do not stop other workloads. Finite failed jobs
-        # are retried on a fresh sweep only after the operator removes checkpoint.json.
+        # are retried by the next sweep, which starts on a newer commit, or after
+        # the operator removes checkpoint.json.
         retry_model = mode == "review" and outcome["exit_code"] == 75
         if outcome["status"] not in ("interrupted", "disk_pressure"):
-            if not retry_model:
+            if mode not in FINITE:
                 progress["cursors"][mode] = cursor + 1
+            elif not retry_model:
+                progress["done"].setdefault(mode, []).append(job_key(job))
+                if not pending(progress, jobs, mode):
+                    progress["swept"][mode] = revision
             progress["turn"] += 1
             atomic_json(checkpoint, progress)
         if args.once or STOP:

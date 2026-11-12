@@ -162,7 +162,8 @@ class WorkerTests(unittest.TestCase):
                            env={**os.environ, "MODES": "review", "MIN_FREE_GIB": "0",
                                 "MODEL_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1"})
             checkpoint = json.loads((self.root / "state/checkpoint.json").read_text())
-            self.assertEqual(checkpoint["cursors"].get("review", 0), 0)
+            self.assertEqual(checkpoint["done"].get("review", []), [])
+            self.assertNotIn("review", checkpoint["swept"])
             result = next((self.root / "state/reports").glob("*/result.json"))
             self.assertEqual(json.loads(result.read_text())["exit_code"], 75)
         finally:
@@ -196,6 +197,83 @@ class WorkerTests(unittest.TestCase):
         subprocess.run(command, env=env, check=True, stdout=subprocess.DEVNULL)
         self.assertEqual(len(list((self.root / "state/reports").iterdir())), 1)
         self.assertFalse(reports[0].exists())
+
+    def test_sweep_keeps_its_place_across_commits(self):
+        source = self.root / "source"
+        for package in ("a", "b"):
+            (source / package).mkdir(parents=True)
+        config = self.root / "config.json"
+        config.write_text(json.dumps({"fuzz_seconds": 1, "job_seconds": 10, "mutation": ["a", "b"]}))
+        binary = self.root / "gremlins"
+        binary.write_text("#!/bin/sh\necho mutation-finished\n")
+        binary.chmod(0o755)
+        archive = self.root / "source.tar"
+        reports = self.root / "state/reports"
+        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+               "MODES": "mutation", "MIN_FREE_GIB": "0", "WORKER_INDEX": "0", "WORKER_COUNT": "1"}
+
+        def run_on(revision):
+            with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT,
+                              pax_headers={"comment": revision}) as out:
+                for package in ("a", "b"):
+                    out.add(source / package, arcname=package)
+            before = set(reports.iterdir()) if reports.exists() else set()
+            subprocess.run([sys.executable, worker.__file__, "--archive", str(archive), "--state",
+                            str(self.root / "state"), "--config", str(config), "--once"],
+                           env=env, check=True, stdout=subprocess.DEVNULL)
+            return [json.loads((report / "result.json").read_text())["job"]["package"]
+                    for report in set(reports.iterdir()) - before]
+
+        self.assertEqual(run_on("a" * 40), ["a"])
+        self.assertEqual(run_on("b" * 40), ["b"])  # main moved: the sweep continues
+        self.assertEqual(run_on("b" * 40), [])     # finished on this commit
+        self.assertEqual(run_on("c" * 40), ["a"])  # the next sweep starts on the newer commit
+
+    def test_sweep_ends_when_its_remaining_jobs_vanish(self):
+        class Reviewer(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"choices": [{"finish_reason": "stop", "message": {
+                    "content": '{"findings": []}'}}]}).encode())
+
+            def log_message(self, *_args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Reviewer)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        archive = self.root / "source.tar"
+        reports = self.root / "state/reports"
+        config = self.root / "config.json"
+        config.write_text(json.dumps({"fuzz_seconds": 1, "job_seconds": 10, "review_roots": ["sample"]}))
+        env = {**os.environ, "MODES": "review", "MIN_FREE_GIB": "0", "WORKER_INDEX": "0",
+               "WORKER_COUNT": "1", "MODEL_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1"}
+
+        def run_on(revision, files):
+            with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT,
+                              pax_headers={"comment": revision}) as out:
+                for name in files:
+                    data = b"package sample\n"
+                    member = tarfile.TarInfo("sample/" + name)
+                    member.size = len(data)
+                    out.addfile(member, io.BytesIO(data))
+            before = set(reports.iterdir()) if reports.exists() else set()
+            subprocess.run([sys.executable, worker.__file__, "--archive", str(archive), "--state",
+                            str(self.root / "state"), "--config", str(config), "--once"],
+                           env=env, check=True, stdout=subprocess.DEVNULL)
+            return [json.loads((report / "result.json").read_text())["job"]["file"]
+                    for report in set(reports.iterdir()) - before]
+
+        try:
+            self.assertEqual(run_on("a" * 40, ["x.go", "y.go"]), ["sample/x.go"])
+            self.assertEqual(run_on("b" * 40, ["x.go"]), [])  # y.go was deleted
+            self.assertEqual(run_on("c" * 40, ["x.go", "y.go"]), ["sample/x.go"])
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
 
 
 if __name__ == "__main__":

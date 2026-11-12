@@ -138,11 +138,14 @@ wendy device apps stop sh.wendy.spare-compute --device <device-selector>
 ## Workloads and distribution
 
 `config.json` selects packages and budgets. CPU jobs alternate between 120-second
-fuzz campaigns, Gremlins mutation testing, and shuffled race tests. Mutation
-sweeps run once per source/configuration; interrupted jobs retry from pristine
-source. Failed or timed-out jobs are retained as failures and advance the queue.
-They do not count as successful tests. Remove a stopped worker's
-`checkpoint.json` to repeat a finite sweep after fixing its cause.
+fuzz campaigns, Gremlins mutation testing, and shuffled race tests. Mutation and
+review sweeps cover each target once. A sweep keeps its place when a session
+fetches a newer commit, so it finishes even though `main` moves several times a
+day; the next sweep then starts on the newest commit. Each report records the
+commit it ran on. Interrupted jobs retry from pristine source. Failed or
+timed-out jobs are retained as failures and advance the queue. They do not
+count as successful tests. Remove a stopped worker's `checkpoint.json` to
+restart a sweep after fixing its cause.
 
 The reviewer checks overlapping numbered Go excerpts independently of CPU tests.
 Results contain evidence and proposed regression tests, and are always marked
