@@ -1330,11 +1330,18 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	var image containerd.Image
 	phaseStarted := time.Now()
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
-	image, err = c.client.GetImage(ctx, imageName)
-	if err != nil && strings.HasPrefix(imageName, services.ReleaseImagePrefix) {
-		// A registry release is only ever written by ImportRelease after its
-		// digests verified; it is never pulled by name.
-		return fmt.Errorf("release image %q is not on the device: %w", imageName, err)
+	if strings.HasPrefix(imageName, services.ReleaseImagePrefix) {
+		// A registry release is created only from the image its signed
+		// manifest digest names: the digest is checked on the very image
+		// object the container is made from, so no lookup sits between the
+		// check and the create. It is only ever written by ImportRelease and
+		// never pulled by name.
+		image, err = c.releaseImageByRef(ctx, imageName)
+		if err != nil {
+			return err
+		}
+	} else {
+		image, err = c.client.GetImage(ctx, imageName)
 	}
 	if err != nil {
 		c.logger.Info("Image not in local store, attempting pull from registry",

@@ -281,6 +281,9 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 		AppID: app, AppReleaseID: r.GetAppReleaseId(), ManifestDigest: r.GetManifestDigest(),
 		DeploymentKeyID: r.GetDeploymentKeyId(), DesiredState: r.GetDesiredState().String(),
 		Assignment: raw, EntryID: entryID, CorrelationID: correlation, Pulled: absent,
+		// An ABSENT revision is applied as it is held (its removal queued):
+		// the last applied state, after which nothing is put back.
+		Applied: absent,
 	}
 	replaced := dep
 	if move {

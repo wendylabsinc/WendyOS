@@ -153,3 +153,15 @@ func TestAssembleImageRefusesTheReleasePrefix(t *testing.T) {
 		}
 	}
 }
+
+// A release is created only from a reference pinned to its signed digest.
+func TestSplitReleaseRef(t *testing.T) {
+	if name, digest, err := splitReleaseRef("localhost/wendy-release/web:r1@sha256:aa"); err != nil || name != "localhost/wendy-release/web:r1" || digest != "sha256:aa" {
+		t.Fatalf("%q %q %v", name, digest, err)
+	}
+	for _, ref := range []string{"localhost/wendy-release/web:r1", "localhost/wendy-release/web:r1@"} {
+		if _, _, err := splitReleaseRef(ref); err == nil {
+			t.Fatalf("%q: an unpinned release accepted", ref)
+		}
+	}
+}

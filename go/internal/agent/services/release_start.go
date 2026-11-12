@@ -32,6 +32,22 @@ func ReleaseImageName(appID, releaseID string) string {
 	return ReleaseImagePrefix + appID + ":" + releaseID
 }
 
+// ReleaseImageRef pins a release image to its signed manifest digest: the
+// runtime creates a container from it only when the image under the name has
+// that digest (checked on the image the container is made from).
+func ReleaseImageRef(appID, releaseID, manifestDigest string) string {
+	return ReleaseImageName(appID, releaseID) + "@" + manifestDigest
+}
+
+// AppContainerState is the app's container as the runtime holds it.
+type AppContainerState struct {
+	Image         string   // the image name the container was created from
+	Env           []string // its process environment
+	Present       bool     // a container exists for the app
+	Running       bool     // its task runs
+	StoppedByUser bool     // stopped explicitly (a user, or install only)
+}
+
 // AppConfigLabel is the image config label that carries a release's app
 // definition (its wendy.json), set at publish. The operator signs the
 // manifest digest, which covers the image config and so this label.
@@ -46,6 +62,7 @@ var ErrNoAppDefinition = errors.New("this release has no app definition; publish
 // ReleaseStart is one start of a deployed app.
 type ReleaseStart struct {
 	AppID, ReleaseID string
+	ManifestDigest   string   // the signed digest the release image must have
 	AppConfig        []byte   // the release's app definition
 	Env              []string // the deployment's configuration, KEY=value
 	Run              bool     // false: install only, left stopped
@@ -114,7 +131,7 @@ func (p *Postbox) releaseStart(ctx context.Context, a *cloudpbv2.DeviceAssignmen
 		return ReleaseStart{}, pullFailed("config", err)
 	}
 	return ReleaseStart{
-		AppID: a.GetAppId(), ReleaseID: a.GetAppReleaseId(), AppConfig: def, Env: env,
+		AppID: a.GetAppId(), ReleaseID: a.GetAppReleaseId(), ManifestDigest: a.GetManifestDigest(), AppConfig: def, Env: env,
 		Run: a.GetDesiredState() == cloudpbv2.Running_RUNNING,
 	}, nil
 }
@@ -159,7 +176,7 @@ func checkAppDefinition(def []byte, app string) error {
 // app, that app is put back. Nothing is put back when nothing was replaced,
 // and a directly run app is never replaced by a restore.
 func (p *Postbox) startRelease(ctx context.Context, a *cloudpbv2.DeviceAssignment) error {
-	before, present, _ := p.control.AppState(ctx, a.GetAppId())
+	before := p.control.AppState(ctx, a.GetAppId())
 	s, err := p.releaseStart(ctx, a)
 	if err != nil {
 		return err
@@ -170,34 +187,58 @@ func (p *Postbox) startRelease(ctx context.Context, a *cloudpbv2.DeviceAssignmen
 	}
 	err = pullFailed("start", err)
 	prev := p.previous(a)
-	if !replaced || prev == nil || !present || before != ReleaseImageName(prev.GetAppId(), prev.GetAppReleaseId()) {
+	if !replaced || prev == nil || !before.Present || before.Image != ReleaseImageName(prev.GetAppId(), prev.GetAppReleaseId()) {
 		return err
 	}
-	if perr := p.restart(ctx, prev); perr != nil {
+	if perr := p.restart(ctx, prev, before.Running); perr != nil {
 		return errors.Join(err, fmt.Errorf("putting back the previous release: %w", perr))
 	}
 	return err
 }
 
-// putBackPrevious puts back the last applied statement's app when a
-// statement that will not be applied (expired) finds the app's container
-// gone or a release container stopped: the state a crash in the middle of a
-// swap leaves, read back from the runtime. The held statement and its
-// Previous are on disk before any swap begins, so this works after any
-// crash. A running app and a directly run container are left alone.
-func (p *Postbox) putBackPrevious(ctx context.Context, a *cloudpbv2.DeviceAssignment) {
-	prev := p.previous(a)
-	if prev == nil {
-		return
+// expiredResume settles a resumed statement that expired before its pull
+// (re)started: it is not applied. Two crash states are read back from the
+// runtime (the held statement and its Previous were on disk before any swap):
+//   - its own app already runs (the crash came after its start, before the
+//     outcome was saved): reported APPLIED, since that is what runs; it was
+//     verified and fresh when it was acted on;
+//   - the swap was cut short (the container absent, or a release container
+//     stopped without a user's stop): the last applied app is put back in
+//     the state it had.
+//
+// A running app, a stopped one the user stopped, and a directly run
+// container are left alone.
+func (p *Postbox) expiredResume(ctx context.Context, a *cloudpbv2.DeviceAssignment) (applied bool) {
+	st := p.control.AppState(ctx, a.GetAppId())
+	if p.runsStatement(st, a) {
+		return true
 	}
-	image, present, running := p.control.AppState(ctx, a.GetAppId())
-	if present && (running || !strings.HasPrefix(image, ReleaseImagePrefix)) {
-		return
+	if st.Present && (st.Running || st.StoppedByUser || !strings.HasPrefix(st.Image, ReleaseImagePrefix)) {
+		return false
 	}
-	if err := p.restart(ctx, prev); err != nil {
-		p.logger.Warn("putting back the previous release failed", zap.String("audit", "postbox"),
-			zap.String("deployment_id", a.GetDeploymentId()), zap.String("app_id", a.GetAppId()), zap.Error(err))
+	if prev := p.previous(a); prev != nil {
+		if err := p.restart(ctx, prev, prev.GetDesiredState() == cloudpbv2.Running_RUNNING); err != nil {
+			p.logger.Warn("putting back the previous release failed", zap.String("audit", "postbox"),
+				zap.String("deployment_id", a.GetDeploymentId()), zap.String("app_id", a.GetAppId()), zap.Error(err))
+		}
 	}
+	return false
+}
+
+// runsStatement reports whether the app's container is a's: a's release
+// image, a's whole configuration in its environment, and running (or left
+// stopped, for install only).
+func (p *Postbox) runsStatement(st AppContainerState, a *cloudpbv2.DeviceAssignment) bool {
+	env, err := configEnv(a.GetConfigJson())
+	if err != nil || !st.Present || st.Image != ReleaseImageName(a.GetAppId(), a.GetAppReleaseId()) {
+		return false
+	}
+	for _, kv := range env {
+		if !slices.Contains(st.Env, kv) {
+			return false
+		}
+	}
+	return st.Running == (a.GetDesiredState() == cloudpbv2.Running_RUNNING)
 }
 
 // previous is the last applied statement held with a, nil for none.
@@ -215,13 +256,18 @@ func (p *Postbox) previous(a *cloudpbv2.DeviceAssignment) *cloudpbv2.DeviceAssig
 	return prev
 }
 
-// restart starts an earlier, verified statement's app again (its definition
-// re-read under its own signed digest).
-func (p *Postbox) restart(ctx context.Context, prev *cloudpbv2.DeviceAssignment) error {
+// restart puts back an earlier, verified statement's app (its definition
+// re-read under its own signed digest), running only if it ran. An applied
+// removal (ABSENT) is the last applied state: nothing is put back after it.
+func (p *Postbox) restart(ctx context.Context, prev *cloudpbv2.DeviceAssignment, run bool) error {
+	if prev.GetDesiredState() == cloudpbv2.Running_ABSENT {
+		return nil
+	}
 	s, err := p.releaseStart(ctx, prev)
 	if err != nil {
 		return err
 	}
+	s.Run = s.Run && run
 	_, err = p.control.StartRelease(ctx, s)
 	return err
 }
@@ -259,7 +305,7 @@ func (c containerControl) ReleaseAppConfig(ctx context.Context, app, release, ma
 type releaseReader interface {
 	HasRelease(ctx context.Context, app, release, manifestDigest string) bool
 	ReleaseLabels(ctx context.Context, app, release, manifestDigest string) (map[string]string, error)
-	AppState(ctx context.Context, app string) (image string, present, running bool, err error)
+	AppState(ctx context.Context, app string) (AppContainerState, error)
 }
 
 // StartRelease validates the create while the old app still runs, creates
@@ -270,7 +316,7 @@ type releaseReader interface {
 func (c containerControl) StartRelease(ctx context.Context, s ReleaseStart) (bool, error) {
 	release := s.ReleaseID
 	req := &agentpb.CreateContainerRequest{
-		ImageName: ReleaseImageName(s.AppID, s.ReleaseID), AppName: s.AppID, AppConfig: s.AppConfig, Env: s.Env,
+		ImageName: ReleaseImageRef(s.AppID, s.ReleaseID, s.ManifestDigest), AppName: s.AppID, AppConfig: s.AppConfig, Env: s.Env,
 		RestartPolicy: &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED}, ReleaseId: &release,
 	}
 	if _, err := c.svc.ValidateContainer(ctx, req); err != nil {
@@ -285,15 +331,16 @@ func (c containerControl) StartRelease(ctx context.Context, s ReleaseStart) (boo
 	return true, c.StartApp(ctx, s.AppID)
 }
 
-// AppState asks the containerd client; an unknown state reads as absent.
-func (c containerControl) AppState(ctx context.Context, app string) (string, bool, bool) {
+// AppState asks the containerd client. An unreadable state reads as present,
+// running and user-stopped, so nothing is replaced or put back on it.
+func (c containerControl) AppState(ctx context.Context, app string) AppContainerState {
 	r, ok := c.svc.containerd.(releaseReader)
 	if !ok {
-		return "", false, false
+		return AppContainerState{}
 	}
-	image, present, running, err := r.AppState(ctx, app)
+	st, err := r.AppState(ctx, app)
 	if err != nil {
-		return "", true, true // unreadable: treat as present and running, so nothing is replaced
+		return AppContainerState{Present: true, Running: true, StoppedByUser: true}
 	}
-	return image, present, running
+	return st
 }

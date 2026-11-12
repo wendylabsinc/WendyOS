@@ -191,9 +191,11 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	// A resumed pull starts without a failure, where pullRetry checks the
 	// expiry: nothing is fetched under a statement that has expired.
 	if !p.trustedNow().Before(a.GetExpiresAt().AsTime()) {
-		// Not applied. A swap a crash interrupted may have left no app:
-		// the last applied statement's app is put back.
-		p.putBackPrevious(ctx, a)
+		// Not applied; but a crash may have cut a swap short, or come after
+		// this statement's app had started (expiredResume).
+		if p.expiredResume(ctx, a) {
+			return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
+		}
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED, "expired", errors.New("the assignment expired before its pull started")
 	}
 	// Named by a hash: the deployment id is cloud's string, not a path.

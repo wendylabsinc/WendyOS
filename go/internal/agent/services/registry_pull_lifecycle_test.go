@@ -135,7 +135,7 @@ func TestRegistryPullStartsTheAppWithItsConfiguration(t *testing.T) {
 	f.assignEntry(r.assign)
 	f.cycle()
 	f.p.waitPulls()
-	want := ReleaseStart{AppID: "web", ReleaseID: r.assign.GetAppReleaseId(), AppConfig: rec.appConfig,
+	want := ReleaseStart{AppID: "web", ReleaseID: r.assign.GetAppReleaseId(), ManifestDigest: r.assign.GetManifestDigest(), AppConfig: rec.appConfig,
 		Env: []string{"DEBUG=true", "NAME=a b", "PORT=8080"}, Run: true}
 	if len(rec.starts) != 1 || !reflect.DeepEqual(rec.starts[0], want) || f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
 		t.Fatalf("starts %+v, outcome %v: want one start %+v, then applied", rec.starts, f.outcome("web"), want)
@@ -235,8 +235,8 @@ type releaseReaderMock struct {
 
 func (m *releaseReaderMock) HasRelease(context.Context, string, string, string) bool { return true }
 
-func (m *releaseReaderMock) AppState(context.Context, string) (string, bool, bool, error) {
-	return "", false, false, nil
+func (m *releaseReaderMock) AppState(context.Context, string) (AppContainerState, error) {
+	return AppContainerState{}, nil
 }
 
 func (m *releaseReaderMock) ReleaseLabels(_ context.Context, _, _, digest string) (map[string]string, error) {
@@ -604,7 +604,7 @@ func TestPostboxControlPruneKeepsReleasesInUse(t *testing.T) {
 func TestPostboxControlStartReleaseUsesTheRunPath(t *testing.T) {
 	for _, run := range []bool{true, false} {
 		m := &mockContainerdClient{resolvedIDs: map[string][]string{"web": {"web"}}}
-		s := ReleaseStart{AppID: "web", ReleaseID: "r1", AppConfig: []byte(`{"appId":"web"}`), Env: []string{"A=1"}, Run: run}
+		s := ReleaseStart{AppID: "web", ReleaseID: "r1", ManifestDigest: "sha256:aa", AppConfig: []byte(`{"appId":"web"}`), Env: []string{"A=1"}, Run: run}
 		_, err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).StartRelease(context.Background(), s)
 		if err != nil {
 			t.Fatalf("run %v: %v", run, err)
@@ -613,7 +613,7 @@ func TestPostboxControlStartReleaseUsesTheRunPath(t *testing.T) {
 			t.Fatalf("run %v: validated %d, created %d: want one of each", run, len(m.validateReqs), len(m.createReqs))
 		}
 		req := m.createReqs[0]
-		if req.GetImageName() != ReleaseImageName("web", "r1") || req.GetAppName() != "web" || string(req.GetAppConfig()) != `{"appId":"web"}` ||
+		if req.GetImageName() != "localhost/wendy-release/web:r1@sha256:aa" || req.GetAppName() != "web" || string(req.GetAppConfig()) != `{"appId":"web"}` ||
 			!slices.Equal(req.GetEnv(), []string{"A=1"}) || req.GetReleaseId() != "r1" ||
 			req.GetRestartPolicy().GetMode() != agentpb.RestartPolicyMode_UNLESS_STOPPED {
 			t.Fatalf("run %v: create request %v", run, req)
@@ -777,5 +777,72 @@ func TestPostboxRotationCrashKeepsTheTrueOutcome(t *testing.T) {
 	f.restartFrom(snap)
 	if o := f.outcome("web"); o.EntryID != 2 || o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || len(rec.starts) != starts {
 		t.Fatalf("outcome %+v, starts %d->%d: want entry 2 settled as the recorded APPLIED, nothing started", o, starts, len(rec.starts))
+	}
+}
+
+// crashedResume holds revision 2 of the running deployment with its pull cut
+// off by a kill, sets the container state the crash left, and restarts past
+// the statement's expiry. It returns the starts made by the restart.
+func crashedResume(t *testing.T, f *pbFixture, rec *importRecorder, base *cloudpbv2.DeviceAssignment, mutate func(*cloudpbv2.DeviceAssignment), left func(next *cloudpbv2.DeviceAssignment) *fakeApp) (*cloudpbv2.DeviceAssignment, []ReleaseStart) {
+	next := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+	next.Revision, next.ConfigJson, next.AppReleaseId = 2, `{"MODE":"b"}`, uuid.NewString()
+	if mutate != nil {
+		mutate(next)
+	}
+	rec.arts.materialErr = func(int) error { return status.Error(codes.Unavailable, "registry unreachable") }
+	f.assignEntry(next)
+	f.cycleWithin(5 * time.Second)
+	f.p.stopPull(next.GetDeploymentId())
+	rec.app = left(next)
+	f.p.now = func() time.Time { return f.now.Add(2 * time.Hour) }
+	n := len(rec.starts)
+	f.cycle()
+	f.p.waitPulls()
+	return next, rec.starts[n:]
+}
+
+// R1: an applied removal is the last applied state: after it, an expired
+// resume puts nothing back, even with the app absent.
+func TestNothingIsPutBackAfterAnAppliedRemoval(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	absent := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+	absent.Revision, absent.DesiredState = 2, cloudpbv2.Running_ABSENT
+	f.assignEntry(absent)
+	f.cycle()
+	_, starts := crashedResume(t, f, rec, base, func(a *cloudpbv2.DeviceAssignment) { a.Revision = 3 }, func(*cloudpbv2.DeviceAssignment) *fakeApp { return nil })
+	if len(starts) != 0 {
+		t.Fatalf("starts %+v: want nothing put back after the removal", starts)
+	}
+}
+
+// R2: a crash after the new revision started, then expiry: the device
+// reports what runs (APPLIED), and starts nothing.
+func TestExpiredResumeReportsTheRunningRevision(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	_, starts := crashedResume(t, f, rec, base, nil, func(next *cloudpbv2.DeviceAssignment) *fakeApp {
+		return &fakeApp{image: ReleaseImageName("web", next.GetAppReleaseId()), env: []string{"MODE=b", "WENDY_APP_ID=web"}, running: true}
+	})
+	if o := f.outcome("web"); len(starts) != 0 || o.EntryID != 2 || o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatalf("starts %+v, outcome %+v: want revision 2 reported applied, nothing started", starts, o)
+	}
+}
+
+// R3: a stopped app stays stopped: an expired resume leaves an app the user
+// stopped alone, and a failed start puts the previous app back stopped when
+// it was stopped.
+func TestPutBackKeepsAStoppedAppStopped(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	_, starts := crashedResume(t, f, rec, base, nil, func(*cloudpbv2.DeviceAssignment) *fakeApp {
+		return &fakeApp{image: ReleaseImageName("web", base.GetAppReleaseId()), env: []string{"MODE=a"}, stoppedByUser: true}
+	})
+	if len(starts) != 0 {
+		t.Fatalf("starts %+v: want the stopped app left alone", starts)
+	}
+	g, grec, gbase := runningRelease(t)
+	grec.app.running, grec.app.stoppedByUser = false, true // the user stops it
+	grec.startErr = failMode("b")
+	g.revision(grec, gbase, 2, "b")
+	if last := grec.starts[len(grec.starts)-1]; !slices.Equal(last.Env, []string{"MODE=a"}) || last.Run {
+		t.Fatalf("last start %+v: want revision 1 put back stopped", last)
 	}
 }
