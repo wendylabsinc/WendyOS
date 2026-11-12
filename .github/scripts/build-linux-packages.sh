@@ -24,6 +24,7 @@ cd "$package_work"
 set -euo pipefail
 mkdir -p pkgroot/wendy/usr/bin
 mkdir -p pkgroot/wendy/usr/lib/udev/rules.d
+mkdir -p pkgroot/wendy/usr/lib/sysusers.d
 mkdir -p pkgroot/wendy/usr/share/doc/wendy
 mkdir -p pkgroot/wendy-agent/usr/bin
 mkdir -p pkgroot/wendy-agent/usr/lib/systemd/system
@@ -39,6 +40,9 @@ install -m644 "$package_repo"/packaging/linux/udev/70-wendy-jetson.rules \
   pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-jetson.rules
 install -m644 "$package_repo"/packaging/linux/udev/70-wendy-qualcomm.rules \
   pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-qualcomm.rules
+# Preserve the upstream plugdev group setup for distributions without it.
+install -m644 "$package_repo"/packaging/linux/sysusers/wendy.conf \
+  pkgroot/wendy/usr/lib/sysusers.d/wendy.conf
 # libusb is statically linked into wendy (LGPL-2.1): ship its notice.
 install -m644 "$package_repo/NOTICE" pkgroot/wendy/usr/share/doc/wendy/NOTICE
 install -m755 "$package_agent" \
@@ -172,6 +176,7 @@ dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
 dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*ca-certificates"
 dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
 dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
+dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/sysusers.d/wendy.conf" > /dev/null
 dpkg-deb -c "$WENDY_DEB" | grep "usr/share/doc/wendy/NOTICE" > /dev/null
 dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*containerd"
 dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*dbus"
@@ -190,6 +195,7 @@ rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^ca-certificates" > /dev/null
 rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^avahi" > /dev/null
 rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
 rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
+rpm -qpl "$WENDY_RPM" | grep "/usr/lib/sysusers.d/wendy.conf" > /dev/null
 rpm -qpl "$WENDY_RPM" | grep "/usr/share/doc/wendy/NOTICE" > /dev/null
 rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendy-agent.service" > /dev/null
 rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/default/wendy-agent" > /dev/null
