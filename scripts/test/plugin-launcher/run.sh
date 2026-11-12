@@ -392,6 +392,10 @@ test_new_root_is_private() {
 test_concurrent_launches_download_once() {
   make_release "$V"
   pin "$V" "$V"
+  # Trace only the copied fixture so a failed lock assertion retains the
+  # competing process IDs and lock decisions in install.log.
+  sed 's/^set -u$/set -ux/' "$L" >"$T/traced-launcher"
+  cat "$T/traced-launcher" >"$L"
   FIXTURE_SLOW_SECONDS=2
   export FIXTURE_SLOW_SECONDS
   serve
@@ -512,6 +516,16 @@ run_case() {
   CASE_FAILED=0
   setup
   "$1"
+  if [ "$CASE_FAILED" != 0 ]; then
+    # These are synthetic fixture logs, never a user's launcher directory.
+    # Preserve evidence for process races before teardown removes the case.
+    for fixture_log in "$T/server.err" "$FIX/requests.log" "$T/out1" "$T/err1" "$T/out2" "$T/err2" "$WENDY_CONFIG_DIR/cli/install.log"; do
+      if [ -f "$fixture_log" ]; then
+        echo "    fixture log: $fixture_log"
+        sed 's/^/      /' "$fixture_log"
+      fi
+    done
+  fi
   teardown
   if [ "$CASE_FAILED" = 0 ]; then
     PASSES=$((PASSES + 1))
