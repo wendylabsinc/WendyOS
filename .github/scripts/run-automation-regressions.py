@@ -34,6 +34,7 @@ SUITES = (
     "orin_wpa3_rehearsal_test.py",
     "orin_seed_rehearsal_test.py",
     "mac_camera_rehearsal_test.py",
+    "linklocal_multi_interface_test.py",
     "accelerator_renumbering_test.py",
     "so101_reader_acceptance_test.py",
     "tensorrt_restart_test.py",

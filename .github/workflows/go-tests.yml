@@ -560,6 +560,20 @@ jobs:
           path: ${{ runner.temp }}/publication-loss-packets
           if-no-files-found: ignore
           retention-days: 7
+      - name: Require full-duration chunk stall recovery over TCP and disk
+        run: bash .github/scripts/test-chunk-stall-transport.sh "$RUNNER_TEMP/chunk-stall-transport"
+      - name: Require link-local traffic across competing interface routes
+        run: bash .github/scripts/test-linklocal-multi-interface.sh "$RUNNER_TEMP/linklocal-multi-interface"
+      - name: Preserve transfer and interface recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: transfer-interface-recovery
+          path: |
+            ${{ runner.temp }}/chunk-stall-transport/*.log
+            ${{ runner.temp }}/linklocal-multi-interface/*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
