@@ -1372,9 +1372,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2577",
       "title": "[WN3] Reach Lite services and SensorLink over native mesh connections",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Protocol/mesh tests cover unsupported stream selectors and flow limits. Shared admission locks under sustained TLS UDP backpressure need explicit execution at the transport boundary.",
-      "required_follow_up": "Reconcile the required real TLS/UDP admission test and synchronous-write control at the final PR head. No physical BLE throughput claim is made.",
+      "required_follow_up": "Retain these required regression checks and their failure controls as the implementation changes.",
       "evidence": [
         {
           "tests": [
@@ -1382,8 +1382,14 @@
             ".github/scripts/test-tls-udp-admission.sh"
           ],
           "result": "Production TLS client/server, registry, UDP manager and real echo applications prove unrelated/fresh sessions, owner replacement, revocation and recovery progress while one accepted TLS socket write is paused. Twenty race-enabled runs passed in ordinary Linux Docker; direct synchronous TLS writes fail the healthy-flow timeout. Required network-job execution is registered on the existing runner and remains pending."
+        },
+        {
+          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498192",
+          "result": "Required Linux network job passed 20 real TLS/UDP admission, registry replacement, revocation and recovery runs under race detection. Synchronous TLS writes failed the unrelated healthy-flow timeout."
         }
-      ]
+      ],
+      "resolution": "The required hosted job passed the actual behavior and regression controls. PR readiness remains separate from this entry-specific coverage evidence."
     },
     {
       "key": "2576",
@@ -1970,7 +1976,7 @@
       "package": "07",
       "status": "partial",
       "audit_finding": "Tests check NPU mount refresh and rejected duplicate mesh admission. They do not verify an actual restarted NPU workload and live mesh teardown together.",
-      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Retain the vendor NPU restart/renumbering requirement separately; no physical execution is claimed.",
+      "required_follow_up": "Complete the vendor NPU restart/renumbering physical procedure. The independent live duplicate-admission and portable real-node restart checks passed.",
       "evidence": [
         {
           "tests": [
@@ -1978,6 +1984,11 @@
             ".github/scripts/test-packet-backends.sh"
           ],
           "result": "Added real-kernel incumbent TUN/FIB/UDP forwarding across three real authenticated QUIC duplicate handshakes, with no transient routing registration and a positive admission control after claim release. A late-arbitration mutation reproduces publication before rejection. Linux binaries compile; hosted namespace execution remains pending. The Qualcomm human procedure includes an actual model restart, but physical device renumbering remains separate and unexecuted."
+        },
+        {
+          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498192",
+          "result": "Three authenticated QUIC duplicates were rejected while the original kernel TUN and route kept forwarding UDP. Delaying arbitration failed specifically on transient routing-link publication. The live mesh half is verified; physical NPU renumbering remains separate."
         }
       ]
     },
@@ -2057,9 +2068,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2698",
       "title": "agent: send H.264 from x264enc when h264parse is missing; apps explain VP8",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests verify encoder selection, x264 byte-stream arguments and the VP8 error message. They do not decode a real x264 stream with h264parse absent.",
-      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Do not mark verified until the real required job passes with its regression controls.",
+      "required_follow_up": "Retain these required regression checks and their failure controls as the implementation changes.",
       "evidence": [
         {
           "tests": [
@@ -2067,8 +2078,14 @@
             ".github/scripts/test-gstreamer-no-parser.sh"
           ],
           "result": "Real GStreamer producer registry contains x264 and VP8 but no h264parse. Initial and late viewers decode actual H.264 with checked RGB pixels. Local race-enabled execution and two specific failure controls passed. Required Linux media job registration reuses the existing runner; hosted execution remains pending."
+        },
+        {
+          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498195",
+          "result": "Required Linux media job decoded 40 initial and 30 late-viewer RGB frames with expected pixels; choosing VP8 or omitting byte-stream caps each failed the targeted regression."
         }
-      ]
+      ],
+      "resolution": "The required hosted job passed the actual behavior and regression controls. PR readiness remains separate from this entry-specific coverage evidence."
     },
     {
       "key": "2650",
@@ -2095,9 +2112,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2401",
       "title": "fix(agent): capture SensorLink cameras without opening their loopback node",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "SensorLink feed/hub tests cover teeing, cancellation and format changes. A live loopback-free capture pipeline is not established by the unit fixtures.",
-      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Do not mark verified until the real required job passes with its regression controls.",
+      "required_follow_up": "Retain these required regression checks and their failure controls as the implementation changes.",
       "evidence": [
         {
           "tests": [
@@ -2105,8 +2122,14 @@
             ".github/scripts/test-sensorlink-capture.sh"
           ],
           "result": "Actual SensorFrameFeed, producer, shared hub and GStreamer deliver decoded pixels to two clients. One cancellation preserves fresh changed output for the other; final cancellation tears down encoder/feed. Three local race runs passed; reverting SensorLink routing fails. Required Linux strace rejects loopback opens by service/codec children; that hosted trace remains pending."
+        },
+        {
+          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498195",
+          "result": "Required Linux media job decoded both subscribers and fresh changed frames after one canceled; strace confirmed no loopback-node open. The reverted SensorLink route failed on the absent device, and final cancellation released encoder/feed."
         }
-      ]
+      ],
+      "resolution": "The required hosted job passed the actual behavior and regression controls. PR readiness remains separate from this entry-specific coverage evidence."
     },
     {
       "key": "2399",
@@ -2500,17 +2523,23 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1724",
       "title": "Fix OCI race condition",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "This is a CI OCI-export retry change in test-ci.sh, despite the broad title. No regression test was found for retry count or disposable-builder scope.",
-      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Do not mark verified until the real required job passes with its regression controls.",
+      "required_follow_up": "Retain these required regression checks and their failure controls as the implementation changes.",
       "evidence": [
         {
           "tests": [
             ".github/scripts/oci_retry_test.py"
           ],
           "result": "Full test-ci.sh subprocess runs against stateful local CLI/Docker fixtures. Fourteen failure/success scenarios cover transient export, dead daemon, permanent failure, exactly one retry, later-test reporting and user-builder preservation. Five tests pass locally; omitted cleanup/ownership and extra-retry controls fail. Required offline CI execution remains pending."
+        },
+        {
+          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498214",
+          "result": "Required offline job passed all 345 tests, including all OCI retry/dead-daemon/permanent-failure/local-builder isolation cases without skips."
         }
-      ]
+      ],
+      "resolution": "The required hosted job passed the actual behavior and regression controls. PR readiness remains separate from this entry-specific coverage evidence."
     },
     {
       "key": "2504",
@@ -2824,10 +2853,27 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2258",
       "title": "fix(inference): worker survives failing frames; notifications carry detections",
       "package": "14",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Notification tests cover detection metadata and size bounds. Worker failure behavior needs the separate Python tests and dependency/runtime path, not just the Go notification tests.",
-      "required_follow_up": "Require worker failing-frame tests in CI and verify a healthy frame succeeds after an inference exception.",
-      "evidence": []
+      "required_follow_up": "Retain the locked-runtime worker tests and notification metadata regressions in required CI.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/inference/test_worker.py",
+            "go/internal/agent/services/data_inference_notification_test.go",
+            "go/internal/agent/services/data_inference_test.go"
+          ],
+          "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498452",
+          "result": "The required inference-worker job used the Agent locked uv/Python runtime and passed all 100 tests, including an inference exception producing source_error followed by a healthy prediction from the next frame. Tests also bound persistent failures and preserve engine metadata."
+        },
+        {
+          "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430931049",
+          "result": "The required race job passed data and services packages, including real local HTTP notification metadata delivery, Cloud request attribution and top-five detection bounds. These production/test files are unchanged in the current batch."
+        }
+      ],
+      "resolution": "Existing tests already exercised the missing exception/recovery behavior; passing required CI evidence closes this gap without duplicating the tests."
     },
     {
       "key": "1894",

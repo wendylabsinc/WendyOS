@@ -72,8 +72,12 @@ func TestContainerCombinedMemoryBudget(t *testing.T) {
 			spec.Process.Args = []string{"/memory-workload", strconv.Itoa(tc.mib)}
 			spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/memory-workload", Source: workload, Type: "bind", Options: []string{"bind", "ro"}})
 			if tc.allowSwap {
-				// Explicit positive control: 64 MiB RAM plus 64 MiB swap.
-				combined := int64(128 << 20)
+				// This control proves swap is usable, not the combined limit.
+				// Allow the entire 96 MiB working set to have swap backing,
+				// with room for the runtime and resident swap-cache pages.
+				// The regression cases below retain the production 64 MiB
+				// combined budget; only this positive control gets headroom.
+				combined := int64(256 << 20)
 				spec.Linux.Resources.Memory.Swap = &combined
 			}
 			if err := ctr.Update(ctx, containerd.UpdateContainerOpts(containerd.WithSpec(spec))); err != nil {
