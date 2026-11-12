@@ -3239,7 +3239,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2573",
       "title": "[WN1] Retain WASM memory until firmware replacement",
       "package": "priority",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "The fix removes StopApp before a WASM replacement so firmware can retain linear memory. No provider Run regression asserting the operation ordering was found.",
       "required_follow_up": "Protocol ordering is covered. Verify retained linear memory and replacement failure recovery on actual supported Lite firmware.",
       "evidence": [
@@ -3251,6 +3251,10 @@
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
+        },
+        {
+          "path": ".github/regression-coverage/manual/lite-memory-rehearsal.py",
+          "result": "Offline generator validated with synthetic local inputs: 27 not_run physical cases, hashes, private output and invalid configuration/dimension/budget refusal. Procedure requires actual PSRAM firmware reuse logs, running guest markers, same-phase heap measurements, powered USB data interruption, admission failure and successful recovery. Guest bytes are not expected to survive mapping reuse. No hardware pass is claimed."
         }
       ]
     },
