@@ -75,7 +75,7 @@ Edit `wendy.json` before deployment:
 | `START_FREE_GIB` / `RESERVE_GIB` | 12 / 4 | Host RAM thresholds for CPU work |
 | `MODEL_START_FREE_GIB` | 140 | Available host RAM required before loading the model |
 | `MODEL_START_FREE_MIB` | 180000 | Free GPU memory required before loading the model |
-| `GPU_INDEX` / `CUDA_VISIBLE_DEVICES` | 0 / 0 | Must identify the same physical GPU |
+| `GPU_INDEX` / `CUDA_VISIBLE_DEVICES` | 0 / 0 | Must identify the same physical GPU; `CUDA_DEVICE_ORDER=PCI_BUS_ID` numbers CUDA devices in nvidia-smi's order |
 | `UNIFIED_MODEL_GIB` | 0 | Measured peak model budget for Jetson shared RAM; zero disables unified-memory inference |
 
 The supplied model command serves `Qwen/Qwen3.8-Flash-Next-FP8` using vLLM
