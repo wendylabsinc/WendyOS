@@ -265,6 +265,23 @@ jobs:
           "./${ARTIFACT}/wendy" --version
           .github/scripts/stagefile-release-smoke_test.sh "./${ARTIFACT}/wendy"
 
+      - name: Execute inherited Stagefiles with the release CLI
+        run: python3 .github/scripts/test-stagefile-images.py "./${{ matrix.artifact-name }}/wendy" --output "$RUNNER_TEMP/stagefile-images"
+      - name: Record release Stagefile execution evidence
+        if: always()
+        run: |
+          python3 - <<'PY_EVIDENCE'
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'stagefile-images'
+          for path in sorted(root.glob('*.log')):
+              print(f'--- {path.name} ---')
+              print(path.read_text()[-6000:])
+          evidence = root / 'evidence.json'
+          if evidence.exists():
+              print(evidence.read_text())
+          PY_EVIDENCE
+
       - name: Create archive
         run: |
           ARTIFACT="${{ matrix.artifact-name }}"
