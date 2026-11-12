@@ -27,16 +27,24 @@ runtime_path="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$com
 logs="$RUNNER_TEMP/containerd-$runtime_version"
 mkdir -p "$logs"
 
+# Open-only private character nodes exercise cgroup access without configuring a
+# tunnel or attaching a loop device. These modules belong to the disposable VM.
+sudo modprobe tun
+sudo modprobe loop
 sudo env PATH="$runtime_path" bash .github/scripts/test-containerd-regressions.sh "$RUNNER_TEMP/containerd.test"
 
-for mutation in cdi-display-omitted cdi-refresh-omitted; do
+for mutation in cdi-display-omitted cdi-refresh-omitted device-refresh-omitted; do
+  test_name='^TestIntegrationDisplayCDIMountsAndRestart$'
+  if [[ "$mutation" == device-refresh-omitted ]]; then test_name='^TestIntegrationNPUDeviceNumberRestart$'; fi
   if sudo env PATH="$runtime_path" bash .github/scripts/test-containerd-regressions.sh \
-    "$RUNNER_TEMP/$mutation.test" '^TestIntegrationDisplayCDIMountsAndRestart$' 2>&1 | tee "$logs/$mutation.log"; then
+    "$RUNNER_TEMP/$mutation.test" "$test_name" 2>&1 | tee "$logs/$mutation.log"; then
     echo "CDI mutation unexpectedly passed: $mutation" >&2
     exit 1
   fi
   if [[ "$mutation" == cdi-display-omitted ]]; then
     grep -q 'display CDI mounts missing or duplicated' "$logs/$mutation.log"
+  elif [[ "$mutation" == device-refresh-omitted ]]; then
+    grep -q 'device number refresh did not reach runtime' "$logs/$mutation.log"
   else
     grep -q 'starting CDI fixture:.*libfixture.so.1' "$logs/$mutation.log"
   fi
