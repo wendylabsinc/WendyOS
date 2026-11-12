@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("test-sensorlink-audio-loopback.sh")
 BOUNDED_ROOT = "run_root_bounded() {\n" + SCRIPT.read_text().split("run_root_bounded() {\n", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+ACTIVE_LAUNCHER = "launcher_is_active() {\n" + SCRIPT.read_text().split("launcher_is_active() {\n", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
 LAUNCHER = SCRIPT.with_name("run-owned-media-test.py")
 spec = importlib.util.spec_from_file_location("owned_media", LAUNCHER)
 owned_media = importlib.util.module_from_spec(spec)
@@ -44,7 +45,7 @@ wendy_gid="$(id -g)"
 daemon_directory=
 trap '[ -z "$daemon_directory" ] || rm -rf -- "$daemon_directory"' EXIT
 sudo() { if [[ "${1:-}" == -n ]]; then shift; fi; if [[ "${1:-}" == -u ]]; then shift 2; fi; "$@"; }
-''' + BOUNDED_ROOT + allocation + '''
+''' + BOUNDED_ROOT + ACTIVE_LAUNCHER + allocation + '''
 printf 'private-runtime=%s\\n' "$daemon_directory"
 ''' + startup
             result = subprocess.run(['bash', '-c', shell, 'private-runtime-test', str(output)],
@@ -60,6 +61,57 @@ printf 'private-runtime=%s\\n' "$daemon_directory"
             self.assertIn('fixture daemon startup detail', result.stderr)
             self.assertIn('Owned PipeWire launcher exited during startup (status 17).', result.stderr)
             self.assertIn('fixture daemon startup detail', (output / 'pipewire.log').read_text())
+
+    def test_delayed_socket_does_not_wait_for_a_healthy_daemon_to_exit(self):
+        source = SCRIPT.read_text()
+        startup = source.split('# The runner owns the log file;', 1)[1].split('# These inventory files', 1)[0]
+        startup = startup[startup.index('# shellcheck'):]
+        # A real private daemon binds its Unix socket after startup begins and
+        # stays alive after readiness. No audio, accounts or elevated commands.
+        # Restore the old jobs pipeline as a control: its empty subshell table
+        # must cause the erroneous wait/death path, not successful readiness.
+        for old_pipeline in (False, True):
+            with self.subTest(old_pipeline=old_pipeline), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                runtime = root/'runtime'
+                runtime.mkdir()
+                daemon = root/'pipewire'
+                daemon.write_text(f'#!{sys.executable}\n'
+                                  'import os,socket,time\n'
+                                  'time.sleep(.25)\n'
+                                  'sock=socket.socket(socket.AF_UNIX)\n'
+                                  'sock.bind(os.environ["PIPEWIRE_RUNTIME_DIR"]+"/pipewire-0")\n'
+                                  'time.sleep(1.25)\n')
+                daemon.chmod(0o700)
+                dump = root/'pw-dump'
+                dump.write_text(f'#!{sys.executable}\nimport json\nprint(json.dumps([{{"id": 1}}]))\n')
+                dump.chmod(0o700)
+                helper = ACTIVE_LAUNCHER
+                if old_pipeline:
+                    helper = 'launcher_is_active() { { jobs -pr; jobs -ps; } | grep -Fxq "$daemon_launcher"; }\n'
+                shell = ('set -euo pipefail\noutput="$1"; daemon_directory="$2"\n'
+                         'sudo() { if [[ "${1:-}" == -n ]]; then shift; fi; if [[ "${1:-}" == -u ]]; then shift 2; fi; "$@"; }\n'
+                         + BOUNDED_ROOT + helper + startup + '\nwait "$daemon_launcher"\n')
+                result = subprocess.run(['bash', '-c', shell, 'delayed-socket', str(root), str(root)],
+                    env=dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH']),
+                    capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 1 if old_pipeline else 0, result.stdout+result.stderr)
+                if old_pipeline:
+                    self.assertIn('Owned PipeWire launcher exited during startup (status 0).', result.stderr)
+                    self.assertFalse((root/'pw-dump.json').exists())
+                else:
+                    self.assertIn('Private PipeWire graph is ready', result.stdout)
+                    self.assertIn('"id": 1', (root/'pw-dump.json').read_text())
+
+    def test_unavailable_job_snapshot_never_authorizes_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Opening a directory as the snapshot must fail even as root.
+            (root/'pipewire-launcher.jobs').mkdir()
+            shell = 'set -euo pipefail\noutput="$1"; daemon_launcher=123\n' + ACTIVE_LAUNCHER + 'if launcher_is_active; then exit 0; else exit 91; fi\n'
+            result = subprocess.run(['bash', '-c', shell, 'snapshot-error', str(root)],
+                                    capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_startup_query_kills_term_resistant_owned_command(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -120,7 +172,7 @@ printf 'private-runtime=%s\\n' "$daemon_directory"
                 getent.chmod(0o700)
                 shell = ('created_user=1; loaded_module=0; daemon_launcher=; daemon_directory=; '
                          'wendy_uid=12345; wendy_gid=12345; output="$1"\n'
-                         + BOUNDED_ROOT + "cleanup() {\n" + cleanup + "\n}\ntrue\ncleanup\n")
+                         + BOUNDED_ROOT + ACTIVE_LAUNCHER + "cleanup() {\n" + cleanup + "\n}\ntrue\ncleanup\n")
                 result = subprocess.run(["bash", "-c", shell, "cleanup-test", str(root)],
                                         env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"]),
                                         capture_output=True, text=True, timeout=5)
