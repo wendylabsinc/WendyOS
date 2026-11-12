@@ -35,6 +35,7 @@ SUITES = (
     "orin_seed_rehearsal_test.py",
     "mac_camera_rehearsal_test.py",
     "linklocal_multi_interface_test.py",
+    "linklocal_windows_test.py",
     "chunk_stall_ownership_test.py",
     "accelerator_renumbering_test.py",
     "so101_reader_acceptance_test.py",

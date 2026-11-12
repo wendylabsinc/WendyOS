@@ -1009,6 +1009,20 @@ jobs:
           grep -q '^--- PASS: TestUSBDriverHelperRegistration ' "$RUNNER_TEMP/usb-helpers.log"
           go test ./go/internal/cli/tegraflash/winusb ./go/internal/cli/qdl -run '^Test(Windows|Signing|Usable|Driver|Compatible|Version|Parse|Instance)' -v -count=1 -timeout 120s
 
+      - name: Require Windows link-local binding across competing routes
+        shell: pwsh
+        run: python .github/scripts/test-linklocal-windows.py "$env:RUNNER_TEMP/linklocal-windows"
+      - name: Preserve Windows interface recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-linklocal-recovery
+          path: |
+            ${{ runner.temp }}/linklocal-windows/*.log
+            ${{ runner.temp }}/linklocal-windows/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Rebuild embedded skill tests from a CRLF checkout
         shell: bash
         run: |
