@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -181,6 +183,7 @@ func TestTunnelSessionPauseCancelsAuthorization(t *testing.T) {
 // backoff expires, long after Cloud is reachable again. A dial must not wait
 // for that: it gets a connection that tries now, as an unshared dial would.
 func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
+	var authorizations atomic.Int32
 	serve := func(address string) *grpc.Server {
 		t.Helper()
 		lis, err := net.Listen("tcp", address)
@@ -195,6 +198,7 @@ func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
 			t.Fatal(err)
 		}
 		srv := grpc.NewServer(grpc.UnknownServiceHandler(func(any, grpc.ServerStream) error {
+			authorizations.Add(1)
 			return status.Error(codes.PermissionDenied, "test refusal")
 		}))
 		go srv.Serve(lis)
@@ -226,15 +230,50 @@ func TestTunnelSessionRecoversAsSoonAsCloudReturns(t *testing.T) {
 		t.Fatalf("dial before the outage: %v", got)
 	}
 	srv.Stop()
-	// The first dial finds the connection lost; the second finds it in backoff.
+	// Exercise the failed requests, then observe actual backoff. gRPC publishes
+	// its error picker before its connectivity state, so Unavailable alone
+	// does not guarantee that a retained connection is in TransientFailure.
 	for range 2 {
 		if got := dial(); got != codes.Unavailable {
 			t.Fatalf("dial during the outage: %v", got)
 		}
 	}
+	g := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
+	g.mu.Lock()
+	var retained *tunnelAuthorization
+	for _, entry := range g.entries {
+		retained = entry
+	}
+	g.mu.Unlock()
+	if retained == nil {
+		t.Fatal("outage did not retain an authorization transport")
+	}
+	for state := retained.conn.GetState(); state != connectivity.TransientFailure; state = retained.conn.GetState() {
+		if state == connectivity.Shutdown || !retained.conn.WaitForStateChange(ctx, state) {
+			t.Fatalf("retained transport did not enter backoff: state=%s error=%v", state, ctx.Err())
+		}
+	}
+	// No successful-path retry: the first dial after a confirmed failed
+	// reconnect must reach the returned Cloud server and its authorization.
+	beforeRecovery := authorizations.Load()
 	srv = serve(address)
 	if got := dial(); got != codes.PermissionDenied {
 		t.Fatalf("dial after Cloud returned: %v", got)
+	}
+	if got := authorizations.Load() - beforeRecovery; got != 1 {
+		t.Fatalf("recovery sent %d authorization requests, want exactly one", got)
+	}
+	g.mu.Lock()
+	var replacement *tunnelAuthorization
+	for _, entry := range g.entries {
+		replacement = entry
+	}
+	g.mu.Unlock()
+	if replacement == nil || replacement == retained || replacement.conn == retained.conn {
+		t.Fatal("recovery reused the failed authorization transport")
+	}
+	if got := retained.conn.GetState(); got != connectivity.Shutdown {
+		t.Fatalf("replaced authorization transport was not closed: %s", got)
 	}
 }
 
