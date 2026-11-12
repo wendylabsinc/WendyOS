@@ -29,7 +29,7 @@ func NewChunkStallFixture(directory string) (*Client, func() error, error) {
 		return nil, nil, err
 	}
 	return &Client{client: client, logger: zap.NewNop(), namespace: "default", chunkIndex: index,
-			staging: newStaging(filepath.Join(directory, "staging"))}, func() error {
-			return errors.Join(client.Close(), index.Close())
-		}, nil
+		staging: newStaging(filepath.Join(directory, "staging"))}, func() error {
+		return errors.Join(client.Close(), index.Close())
+	}, nil
 }
