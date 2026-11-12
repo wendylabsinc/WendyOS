@@ -230,7 +230,7 @@ jobs:
   containerd-regressions:
     name: Containerd lifecycle, DNS and resource regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
@@ -328,6 +328,17 @@ jobs:
           done
       - name: Require lifecycle, DNS, DDS and memory checks on both runtimes
         run: bash .github/scripts/test-containerd-versions.sh
+      - name: Require rootful ESP-IDF generated-file ownership
+        timeout-minutes: 35
+        run: python3 .github/scripts/test-esp-idf-ownership.py --output "$RUNNER_TEMP/esp-idf-ownership"
+      - name: Preserve ESP-IDF ownership evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: esp-idf-ownership
+          path: ${{ runner.temp }}/esp-idf-ownership
+          if-no-files-found: ignore
+          retention-days: 7
 
   linux-install-host:
     name: Linux install safety
