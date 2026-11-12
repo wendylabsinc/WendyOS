@@ -548,3 +548,34 @@ func TestRelayPoolIdlePolicyReplacement(t *testing.T) {
 		t.Fatalf("closed policy revived: %v", err)
 	}
 }
+
+func TestRelayPoolCapacityWaitHonorsAdmissionExpiry(t *testing.T) {
+	broker, endpoint, dial, dials := newPoolBroker(t)
+	v := &Verifier{relayDial: dial}
+	t.Cleanup(func() { v.Close() })
+	for i := 0; i < relayPoolLimit; i++ {
+		_, release, err := v.relays.acquire(t.Context(), relayPoolKey{endpoint: endpoint.Endpoint, audience: fmt.Sprint(i)}, dial)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(release)
+	}
+	artifact, grant := broker.grant(t, endpoint)
+	grant.claims.Exp = time.Now().Unix() + 1
+	grant.claims.RelayExp = time.Now().Unix() + 30
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	if _, err := join(ctx, endpoint, artifact, grant.claims, grant.key, pb.JoinRole_JOIN_ROLE_CALLER, v, "wendy-agent"); !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired waiting admission: %v", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("waited for relay expiry instead of admission expiry")
+	}
+	if dials.Load() != relayPoolLimit {
+		t.Fatal("expired admission dialed another transport")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("parent timeout, not grant expiry, interrupted admission")
+	}
+}

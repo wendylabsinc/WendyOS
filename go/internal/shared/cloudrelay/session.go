@@ -26,6 +26,14 @@ type Session struct {
 
 func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c claims, key *ecdsa.PrivateKey, role pb.JoinRole, verifier *Verifier, service string) (*Session, error) {
 	ctx, cancel := context.WithDeadline(ctx, time.Unix(c.RelayExp, 0))
+	// Admission, including waiting for pool capacity, must finish before Exp.
+	admissionDeadline := time.Unix(c.Exp, 0)
+	if !time.Now().Before(admissionDeadline) {
+		cancel()
+		return nil, context.DeadlineExceeded
+	}
+	timer := time.AfterFunc(time.Until(admissionDeadline), cancel)
+	defer timer.Stop()
 	ctx = metadata.NewOutgoingContext(ctx, metadata.MD{})
 	conn, release, err := verifier.relays.acquire(ctx, relayPoolKey{endpoint: broker.Endpoint, audience: broker.Audience, role: role, management: service == "wendy-agent"}, verifier.dialRelay)
 	if err != nil {
@@ -41,9 +49,6 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 			s.Close()
 		}
 	}()
-	// Admission must finish before the grant expires; the relay has a later deadline.
-	timer := time.AfterFunc(time.Until(time.Unix(c.Exp, 0)), cancel)
-	defer timer.Stop()
 	s.stream, err = pb.NewTunnelBrokerV2ServiceClient(conn).JoinSession(ctx)
 	if err != nil {
 		return nil, err
@@ -74,6 +79,9 @@ func join(ctx context.Context, broker *pb.BrokerInstance, artifact string, c cla
 	a := msg.GetAccepted()
 	if a == nil || a.Role != role || a.RelayExpiresAt == nil || a.RelayExpiresAt.CheckValid() != nil || a.RelayExpiresAt.AsTime().Unix() != c.RelayExp {
 		return nil, fmt.Errorf("invalid relay join acceptance")
+	}
+	if !time.Now().Before(admissionDeadline) {
+		return nil, context.DeadlineExceeded
 	}
 	ok = true
 	return s, nil
