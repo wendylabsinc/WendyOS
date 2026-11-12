@@ -448,13 +448,20 @@ func TestAgentSessionSurvivesPresenceReconnect(t *testing.T) {
 }
 
 type relayLifecycle struct {
-	configure func(*testRelay, *Agent)
-	exercise  func(func(string))
+	timeout       time.Duration
+	serverOptions []grpc.ServerOption
+	dial          func(string) (*grpc.ClientConn, error)
+	configure     func(*testRelay, *Agent)
+	exercise      func(func(string))
 }
 
 func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycle ...*relayLifecycle) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	timeout := 10 * time.Second
+	if len(lifecycle) != 0 && lifecycle[0].timeout > 0 {
+		timeout = lifecycle[0].timeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if e != nil {
@@ -470,13 +477,20 @@ func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool, lifecycl
 	r.rotateRoute = reconnect
 	r.renewLease = renewLease
 	r.reconnected = make(chan struct{})
-	srv := grpc.NewServer()
+	var serverOptions []grpc.ServerOption
+	if len(lifecycle) != 0 {
+		serverOptions = lifecycle[0].serverOptions
+	}
+	srv := grpc.NewServer(serverOptions...)
 	pb.RegisterTunnelAuthorizationServiceServer(srv, r)
 	pb.RegisterTunnelBrokerV2ServiceServer(srv, r)
 	go srv.Serve(listener)
 	defer srv.Stop()
 	dial := func(endpoint string) (*grpc.ClientConn, error) {
 		return grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	if len(lifecycle) != 0 && lifecycle[0].dial != nil {
+		dial = lifecycle[0].dial
 	}
 	verifier.relayDial = dial
 	var echoPort int
