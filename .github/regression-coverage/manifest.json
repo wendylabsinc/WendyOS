@@ -1308,7 +1308,7 @@
       "evidence": [
         {
           "tests": [
-            "go/internal/agent/localmesh/operator_spare_recovery_test.go",
+            "go/internal/cli/sessionbroker/operator_spare_recovery_test.go",
             ".github/scripts/test-operator-spare-recovery.sh"
           ],
           "result": "A cold TLS EOF leaves no admissions or RPCs and records a bounded private diagnostic. Production stop/re-enable advances its durable generation, then the same TCP connection survives slow-to-fast carrier selection and fallback through retained standby; management RPCs work in every phase. Local race and isolated capability-free Linux execution pass; missing-diagnostic and eager-standby-retirement controls fail. Required hosted execution remains pending."
