@@ -51,8 +51,24 @@ def agent_fixture(output):
         agent.wait()
 
 
+def hand_back(results):
+    """Give files written by the container's root to the owner of the bind-mounted
+    results directory, so the invoking user can read and delete them. With rootless
+    Docker that owner is already root inside the container, and this is a no-op."""
+    owner = results.stat()
+    for path in results.rglob("*"):
+        os.chown(path, owner.st_uid, owner.st_gid, follow_symlinks=False)
+
+
 def inside():
     output = Path("/results")
+    try:
+        check(output)
+    finally:
+        hand_back(output)
+
+
+def check(output):
     with agent_fixture(output) as agent:
         for label in ("baseline", "candidate"):
             subprocess.run([sys.executable, str(HERE / "benchmark.py"), "run", "--pid", str(agent.pid),
@@ -103,6 +119,10 @@ def main():
                        check=True, timeout=120)
     finally:
         subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    owner = args.output.stat().st_uid
+    foreign = [path for path in args.output.rglob("*") if path.lstat().st_uid != owner]
+    if foreign:
+        raise SystemExit(f"smoke: {len(foreign)} results are not owned by the output directory's owner, e.g. {foreign[0]}")
 
 
 if __name__ == "__main__":

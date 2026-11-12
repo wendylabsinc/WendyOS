@@ -32,7 +32,8 @@ python3 go/benchmarks/agent/pair.py \
 
 The default CI profile takes about nine minutes plus build/container startup time.
 Use `--profile go/benchmarks/agent/profiles/smoke.json` only to check the tooling.
-Its very short samples are unsuitable for performance conclusions.
+Its very short samples are unsuitable for performance conclusions. Files the
+container writes are handed back to the owner of the output directory.
 
 ## Measure the installed service on hardware
 
@@ -140,7 +141,7 @@ the CLI version fixed when isolating agent changes.
 For cloud disconnect/recovery, restore connectivity in `cleanup`. For recording,
 verify exported record counts. Use fixed peers and traffic for mesh workloads.
 Custom scenarios are supported on hardware; the isolated Docker pair runner
-only accepts idle and telemetry. Startup timing and coordinated multi-device
+only accepts idle and telemetry scenarios without hooks. Startup timing and coordinated multi-device
 fixtures are not built in.
 
 Telemetry checks every HTTP response and rejects runs that fall behind their

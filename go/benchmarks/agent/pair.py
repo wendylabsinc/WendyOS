@@ -15,7 +15,7 @@ import uuid
 
 from benchmark import INVALID_INPUT, load_policy, validate_profile, write_comparison, write_json
 from compare import compare, validate
-from smoke import HERE, IMAGE, agent_fixture
+from smoke import HERE, IMAGE, agent_fixture, hand_back
 
 
 def merge(reports, profile):
@@ -46,10 +46,13 @@ def main():
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.inside:
-        with agent_fixture(args.output) as agent:
-            subprocess.run([sys.executable, str(HERE / "benchmark.py"), "run", "--pid", str(agent.pid),
-                            "--profile", str(args.profile), "--environment", "docker-unenrolled-no-containerd",
-                            "--revision", args.candidate_revision, "--output", str(args.output / "run")], check=True)
+        try:
+            with agent_fixture(args.output) as agent:
+                subprocess.run([sys.executable, str(HERE / "benchmark.py"), "run", "--pid", str(agent.pid),
+                                "--profile", str(args.profile), "--environment", "docker-unenrolled-no-containerd",
+                                "--revision", args.candidate_revision, "--output", str(args.output / "run")], check=True)
+        finally:
+            hand_back(args.output)
         return 0
     if not args.baseline or not args.candidate or not args.baseline.is_file() or not args.candidate.is_file():
         parser.error("--baseline and --candidate must name Linux agent binaries matching Docker's architecture")
@@ -68,6 +71,11 @@ def pair(args):
     validate_profile(profile)
     if any(s["kind"] not in ("idle", "telemetry") for s in profile["scenarios"]):
         raise ValueError("Docker pairing supports idle and telemetry; use benchmark.py on a device for custom workloads")
+    # Hooks name device paths that the fixture lacks, and their timeouts are not
+    # in the container timeout below.
+    if any(s.keys() & {"setup", "ready", "verify", "cleanup", "cwd", "timeout_seconds"} for s in profile["scenarios"]):
+        raise ValueError("Docker pairing runs no hook commands; remove setup/ready/verify/cleanup "
+                         "or use benchmark.py on a device")
     # Reject a bad policy before spending minutes on Docker repetitions.
     policy = load_policy(args.policy)
     args.output.mkdir(parents=True, exist_ok=False)

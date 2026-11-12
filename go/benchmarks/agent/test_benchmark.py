@@ -124,19 +124,30 @@ class CompareTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
 
+    def pair_without_docker(self, root, *args):
+        (root / "agent").write_bytes(b"")
+        result = subprocess.run(
+            [sys.executable, str(HERE / "pair.py"), "--baseline", str(root / "agent"),
+             "--candidate", str(root / "agent"), "--output", str(root / "out"), *args],
+            capture_output=True, text=True, env={"PATH": str(root)})  # no docker on PATH
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((root / "out").exists())
+        return result.stderr
+
     def test_pair_rejects_policy_before_running_docker(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "agent").write_bytes(b"")
             (root / "policy.json").write_text(json.dumps({"agent.process.rss_bytes.peak": .1}))
-            result = subprocess.run(
-                [sys.executable, str(HERE / "pair.py"), "--baseline", str(root / "agent"),
-                 "--candidate", str(root / "agent"), "--policy", str(root / "policy.json"),
-                 "--output", str(root / "out")],
-                capture_output=True, text=True, env={"PATH": str(root)})  # no docker on PATH
-            self.assertEqual(result.returncode, 2, result.stderr)
-            self.assertIn("policy", result.stderr)
-            self.assertFalse((root / "out").exists())
+            self.assertIn("policy", self.pair_without_docker(root, "--policy", str(root / "policy.json")))
+
+    def test_pair_rejects_hooks_it_cannot_run(self):
+        # Hook paths name device files; the Docker fixture has none of them.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = json.loads((HERE / "profiles/smoke.json").read_text())
+            profile["scenarios"][1].update(verify=["/opt/agent-bench/check"], timeout_seconds=5)
+            (root / "profile.json").write_text(json.dumps(profile))
+            self.assertIn("hook", self.pair_without_docker(root, "--profile", str(root / "profile.json")))
 
 
 class MetricsTests(unittest.TestCase):
