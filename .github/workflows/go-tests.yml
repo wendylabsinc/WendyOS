@@ -297,7 +297,7 @@ jobs:
         run: go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth ./go/internal/shared/flock -count=1 -timeout 120s
 
   windows-telemetry:
-    name: Windows telemetry
+    name: Windows native regressions
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -320,6 +320,14 @@ jobs:
       - name: Test analytics
         working-directory: go
         run: go test ./internal/cli/analytics -count=1 -timeout 120s
+
+      # Cross-compilation cannot catch shared file-offset corruption. Use the
+      # actual Windows handle writer against a temporary image, never a drive.
+      - name: Test concurrent Windows NVMe writes
+        shell: bash
+        run: |
+          go test ./go/internal/cli/commands -run '^TestHandleWriterAtConcurrentWrites$' -v -count=3 -timeout 120s | tee "$RUNNER_TEMP/disk-writes.log"
+          test "$(grep -c '^--- PASS: TestHandleWriterAtConcurrentWrites ' "$RUNNER_TEMP/disk-writes.log")" = 3
 
       - name: Test analytics preferences with shared identity
         working-directory: go
