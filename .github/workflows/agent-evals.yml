@@ -9,7 +9,8 @@ on:
       - 'plugins/wendy-agentic-coding/**'
       - '.github/workflows/agent-evals.yml'
   schedule:
-    - cron: '23 3 * * *'
+    # Check weekly; the cadence job allows evals every other Monday at 03:23 UTC.
+    - cron: '23 3 * * 1'
   workflow_dispatch:
     inputs:
       suite:
@@ -30,7 +31,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  cadence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_evals: ${{ steps.check.outputs.run_evals }}
+    steps:
+      - name: Check fortnightly cadence
+        id: check
+        shell: python
+        run: |
+          import os
+          from datetime import date, datetime, timezone
+
+          # A fixed Monday anchor keeps the interval stable across year boundaries.
+          weeks = (datetime.now(timezone.utc).date() - date(2026, 11, 16)).days // 7
+          run_evals = os.environ['GITHUB_EVENT_NAME'] != 'schedule' or weeks % 2 == 0
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'run_evals={str(run_evals).lower()}\n')
+
   harness:
+    needs: cadence
+    if: needs.cadence.outputs.run_evals == 'true'
     strategy:
       fail-fast: false
       matrix:
