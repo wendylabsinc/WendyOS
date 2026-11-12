@@ -13,8 +13,8 @@ import subprocess
 import sys
 import uuid
 
-from benchmark import validate_profile, write_json
-from compare import compare, markdown, validate
+from benchmark import INVALID_INPUT, load_policy, validate_profile, write_comparison, write_json
+from compare import compare, validate
 from smoke import HERE, IMAGE, agent_fixture
 
 
@@ -53,10 +53,23 @@ def main():
         return 0
     if not args.baseline or not args.candidate or not args.baseline.is_file() or not args.candidate.is_file():
         parser.error("--baseline and --candidate must name Linux agent binaries matching Docker's architecture")
+    try:
+        return pair(args)
+    except INVALID_INPUT as error:
+        print(f"pair: {error}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("pair interrupted; partial results retained", file=sys.stderr)
+        return 130
+
+
+def pair(args):
     profile = json.loads(args.profile.read_text())
     validate_profile(profile)
     if any(s["kind"] not in ("idle", "telemetry") for s in profile["scenarios"]):
-        parser.error("Docker pairing supports idle and telemetry; use benchmark.py on a device for custom workloads")
+        raise ValueError("Docker pairing supports idle and telemetry; use benchmark.py on a device for custom workloads")
+    # Reject a bad policy before spending minutes on Docker repetitions.
+    policy = load_policy(args.policy)
     args.output.mkdir(parents=True, exist_ok=False)
     single = dict(profile, repetitions=1)
     write_json(args.output / "profile.json", single)
@@ -84,11 +97,8 @@ def main():
     merged = {label: merge(values, profile) for label, values in reports.items()}
     for label, value in merged.items():
         write_json(args.output / label / "report.json", value)
-    result = compare(merged["baseline"], merged["candidate"],
-                     json.loads(args.policy.read_text()) if args.policy else None)
-    write_json(args.output / "comparison.json", result)
-    (args.output / "comparison.md").write_text(markdown(result))
-    print(markdown(result))
+    result = compare(merged["baseline"], merged["candidate"], policy)
+    print(write_comparison(args.output, result))
     return 1 if args.fail_on_regression and result["regressions"] else 0
 
 

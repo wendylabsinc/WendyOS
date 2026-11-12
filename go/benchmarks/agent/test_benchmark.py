@@ -100,6 +100,33 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertTrue((root / "gate/comparison.md").is_file())
 
+    def test_malformed_input_exits_2_not_regression(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a.json").write_text(json.dumps(report()))
+            (root / "list.json").write_text("[]")
+            (root / "policy.json").write_text(json.dumps({"agent.process.rss_bytes.peak": .1}))
+            cmd = [sys.executable, str(HERE / "benchmark.py"), "compare", "--fail-on-regression"]
+            for args in ([str(root / "a.json"), str(root / "a.json"), "--policy", str(root / "policy.json")],
+                         [str(root / "list.json"), str(root / "a.json")]):
+                result = subprocess.run(cmd + args + ["--output", str(root / "out")], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_pair_rejects_policy_before_running_docker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "agent").write_bytes(b"")
+            (root / "policy.json").write_text(json.dumps({"agent.process.rss_bytes.peak": .1}))
+            result = subprocess.run(
+                [sys.executable, str(HERE / "pair.py"), "--baseline", str(root / "agent"),
+                 "--candidate", str(root / "agent"), "--policy", str(root / "policy.json"),
+                 "--output", str(root / "out")],
+                capture_output=True, text=True, env={"PATH": str(root)})  # no docker on PATH
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("policy", result.stderr)
+            self.assertFalse((root / "out").exists())
+
 
 class MetricsTests(unittest.TestCase):
     def test_delta_rates_and_memory_growth(self):

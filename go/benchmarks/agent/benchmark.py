@@ -17,9 +17,15 @@ import sys
 import threading
 import time
 
-from compare import compare, markdown
+from compare import compare, markdown, validate_policy
 from metrics import Process, key_values, read_text, service_pid, snapshot, summarize
 import workloads
+
+
+# Invalid input and environment failures exit 2, so they never look like a
+# gated regression (exit 1).
+INVALID_INPUT = (ValueError, KeyError, TypeError, AttributeError, IndexError, OSError,
+                 subprocess.SubprocessError)
 
 
 def write_json(path, value):
@@ -27,6 +33,17 @@ def write_json(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
     temporary.replace(path)
+
+
+def load_policy(path):
+    return validate_policy(json.loads(Path(path).read_text())) if path else None
+
+
+def write_comparison(directory, result):
+    write_json(directory / "comparison.json", result)
+    text = markdown(result)
+    (directory / "comparison.md").write_text(text)
+    return text
 
 
 def positive(value, name, allow_zero=False, integer=False):
@@ -286,15 +303,12 @@ def main():
     try:
         if args.action == "run":
             return collect(args)
-        result = compare(json.loads(args.baseline.read_text()), json.loads(args.candidate.read_text()),
-                         json.loads(args.policy.read_text()) if args.policy else None)
+        policy = load_policy(args.policy)
+        result = compare(json.loads(args.baseline.read_text()), json.loads(args.candidate.read_text()), policy)
         args.output.mkdir(parents=True, exist_ok=False)
-        write_json(args.output / "comparison.json", result)
-        text = markdown(result)
-        (args.output / "comparison.md").write_text(text)
-        print(text)
+        print(write_comparison(args.output, result))
         return 1 if args.fail_on_regression and result["regressions"] else 0
-    except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
+    except INVALID_INPUT as error:
         print(f"benchmark: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

@@ -188,8 +188,9 @@ Use `--policy policy.json` to replace the default metrics and thresholds:
 ```
 
 Add `--fail-on-regression` to comparison or pairing once thresholds are calibrated
-on stable hardware. Comparison exits 0 for an informational report, 1 for a gated
-regression, and 2 for invalid/incompatible inputs. Failed runs retain partial
+on stable hardware. Comparison and pairing exit 0 for an informational report,
+1 for a gated regression, and 2 for invalid/incompatible inputs or a failed run.
+Pairing checks the policy before it starts Docker. Failed runs retain partial
 artifacts and cannot become a baseline. Both missing and newly missing metrics
 remain distinguishable in the reports.
 

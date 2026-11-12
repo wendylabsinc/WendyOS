@@ -20,8 +20,22 @@ DEFAULT_POLICY = {
 }
 
 
+def validate_policy(policy):
+    if not isinstance(policy, dict) or not policy:
+        raise ValueError("comparison policy must be a nonempty JSON object")
+    for metric, rule in policy.items():
+        if (not isinstance(rule, dict) or set(rule) - {"relative", "absolute", "direction"}
+                or rule.get("direction", "lower") not in ("lower", "higher")):
+            raise ValueError(f"invalid policy for {metric}")
+        for key in ("relative", "absolute"):
+            value = rule.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"invalid {key} threshold for {metric}")
+    return policy
+
+
 def validate(report):
-    if report.get("schema") != 1 or report.get("status") != "ok":
+    if not isinstance(report, dict) or report.get("schema") != 1 or report.get("status") != "ok":
         raise ValueError("only successful schema-1 reports can be compared")
     names = [s["name"] for s in report["compatibility"]["profile"]["scenarios"]]
     repetitions = report["compatibility"]["profile"]["repetitions"]
@@ -54,16 +68,7 @@ def compare(baseline, candidate, policy=None):
     old, new = validate(baseline), validate(candidate)
     if baseline["compatibility"] != candidate["compatibility"]:
         raise ValueError("incompatible environment, scope, or workload profile; establish a matching baseline")
-    policy = DEFAULT_POLICY if policy is None else policy
-    if not policy:
-        raise ValueError("comparison policy is empty")
-    for metric, rule in policy.items():
-        if set(rule) - {"relative", "absolute", "direction"} or rule.get("direction", "lower") not in ("lower", "higher"):
-            raise ValueError(f"invalid policy for {metric}")
-        for key in ("relative", "absolute"):
-            value = rule.get(key)
-            if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
-                raise ValueError(f"invalid {key} threshold for {metric}")
+    policy = validate_policy(DEFAULT_POLICY if policy is None else policy)
     rows = []
     for name in old:
         if required_metrics(old[name][0]) != required_metrics(new[name][0]):
