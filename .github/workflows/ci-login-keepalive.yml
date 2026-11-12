@@ -29,9 +29,16 @@ jobs:
       # No checkout or build: use the runner's existing CLI and file store in
       # the same SSH localhost session as the hardware gate. Never print raw
       # refresh output, which can contain token-endpoint error responses.
-      # Prerequisite: manual ci@wendy.sh OIDC login, with the wendy production
-      # context selected. This command refreshes the current context only.
-      # It does not verify that a human has kept the intended context selected.
+      # Prerequisite: the wendy context is the manual ci@wendy.sh production
+      # OIDC login. Select it explicitly before refreshing the current context.
+      - name: Select the stored wendy CI context
+        timeout-minutes: 1
+        run: >-
+          ssh -o BatchMode=yes -o ConnectTimeout=10 localhost
+          'env CI=true WENDY_SECRET_STORE=file WENDY_NO_UPDATE_CHECK=1
+          /Users/wendy/.github/actions-runner/_work/WendyOS/WendyOS/go/bin/wendy
+          auth use wendy --json' </dev/null >/dev/null 2>&1
+
       - name: Refresh certificates through the stored OIDC sign-in
         timeout-minutes: 2
         run: >-
@@ -43,7 +50,8 @@ jobs:
       - name: Explain the failure without credential output
         if: ${{ failure() }}
         run: >-
-          echo '::error::CI login refresh failed. Sign-in needs attention.
+          echo '::error::CI login context selection or refresh failed.
+          Sign-in needs attention.
           Check SSH, network, Auth and PKI availability. If sign-in is
           expired or refused, use the runner login session to run
           WENDY_SECRET_STORE=file wendy auth login as ci@wendy.sh, then
