@@ -370,7 +370,9 @@ func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []
 }
 
 // Dial requires a fresh caller-side route check before each call. The passed
-// endpoint must therefore come from Resolve at dial time.
+// endpoint must therefore come from Resolve at dial time. It never rechecks the
+// route and always uses conservative QUIC startup; agent app dials use
+// DialWithRouteSnapshot instead.
 func (c *Client) Dial(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16) (net.Conn, error) {
 	return c.DialWithRetryCheck(ctx, peer, address, port, nil)
 }
@@ -378,21 +380,24 @@ func (c *Client) Dial(ctx context.Context, peer meshid.Device, address netip.Add
 // DialWithRetryCheck repeats the caller's signed-route check before retrying
 // a stale pooled session. The callback must fail closed if the route to the
 // target principal has been withdrawn while the old stream was waiting for an
-// ACK.
+// ACK. It does not recheck before a cold handshake and always uses
+// conservative QUIC startup; agent app dials use DialWithRouteSnapshot instead.
 func (c *Client) DialWithRetryCheck(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, retryCheck func() error) (net.Conn, error) {
 	return c.dialWithConfig(ctx, peer, address, port, retryCheck, nil)
 }
 
-// DialWithRouteSnapshot checks a current authenticated snapshot before opening
-// a flow, and again before each cold handshake or stale-session retry. Only a
-// selected direct LAN carrier qualifies for faster QUIC startup. The callback
-// must return the current node snapshot, not a saved discovery result.
+// DialWithRouteSnapshot rechecks a current authenticated snapshot before each
+// cold handshake or stale-session retry. As with Dial, the caller resolves
+// address from a current snapshot immediately before calling; reusing a live
+// pooled session takes no further snapshot. Only a selected direct LAN carrier
+// qualifies for faster QUIC startup. The callback must return the current node
+// snapshot, not a saved discovery result.
 func (c *Client) DialWithRouteSnapshot(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, snapshot func() localmesh.NodeSnapshot) (net.Conn, error) {
+	if snapshot == nil {
+		return nil, ErrNoRoute
+	}
 	config := routeQUICConfig(peer, address, snapshot)
 	check := func() error { _, err := config(); return err }
-	if err := check(); err != nil {
-		return nil, err
-	}
 	return c.dialWithConfig(ctx, peer, address, port, check, config)
 }
 
@@ -505,11 +510,13 @@ func (c *Client) acquireWithConfig(ctx context.Context, peer meshid.Device, addr
 		c.mu.Unlock()
 		cfg, err := c.credentials.PeerTLSWithTickets(peer, multiplexALPN, "app-quic")
 		var conn *quic.Conn
+		routeFailed := false
 		if err == nil {
 			c.credentials.ConfigureTLSClient(cfg, multiplexALPN, ALPN)
 			qc := quicConfig()
 			if config != nil {
 				qc, err = config()
+				routeFailed = err != nil
 			}
 			if err == nil {
 				conn, err = c.dial(dialCtx, address, cfg, qc)
@@ -546,6 +553,10 @@ func (c *Client) acquireWithConfig(ctx context.Context, peer meshid.Device, addr
 			newEntry.ready = nil
 			close(ready)
 			c.mu.Unlock()
+			if routeFailed {
+				// No handshake was attempted; report the route result as is.
+				return nil, false, err
+			}
 			if err != nil {
 				return nil, false, fmt.Errorf("wendy net app QUIC dial: %w", err)
 			}

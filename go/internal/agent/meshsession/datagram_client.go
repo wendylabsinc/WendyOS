@@ -22,18 +22,21 @@ type udpSession struct {
 // DialUDP opens one authorized datagram flow on the peer's shared session. Like
 // TCP sessions, pending setup and active UDP flows are revoked by Invalidate,
 // PruneRoutes and Close. The caller must resolve the current route before dialing.
+// A cold session always uses conservative QUIC startup; agent app dials use
+// DialUDPWithRouteSnapshot instead.
 func (c *Client) DialUDP(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, options ...UDPOptions) (*DatagramFlow, error) {
 	return c.dialUDPWithConfig(ctx, peer, address, port, nil, options...)
 }
 
 // DialUDPWithRouteSnapshot applies the same current direct-LAN startup proof
 // as DialWithRouteSnapshot when a datagram flow opens the shared session first.
+// The caller resolves address from a current snapshot immediately before
+// calling; the route is checked again before a cold handshake.
 func (c *Client) DialUDPWithRouteSnapshot(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, snapshot func() localmesh.NodeSnapshot, options ...UDPOptions) (*DatagramFlow, error) {
-	config := routeQUICConfig(peer, address, snapshot)
-	if _, err := config(); err != nil {
-		return nil, err
+	if snapshot == nil {
+		return nil, ErrNoRoute
 	}
-	return c.dialUDPWithConfig(ctx, peer, address, port, config, options...)
+	return c.dialUDPWithConfig(ctx, peer, address, port, routeQUICConfig(peer, address, snapshot), options...)
 }
 
 func (c *Client) dialUDPWithConfig(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, config func() (*quic.Config, error), options ...UDPOptions) (*DatagramFlow, error) {

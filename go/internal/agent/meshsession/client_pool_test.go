@@ -346,11 +346,14 @@ func testPooledPortACKTimeout(t *testing.T, routeAware bool) {
 	client.mu.Lock()
 	replacement := client.peers[b.Device].conn
 	client.mu.Unlock()
-	expectedChecks := int32(1)
+	// The caller's retry callback runs exactly once per stale-session retry. A
+	// route-aware dial must reread the route before reconnecting; how many
+	// reads that takes is an implementation detail.
+	rechecked := retryChecks.Load() == 1
 	if routeAware {
-		expectedChecks = 3
+		rechecked = retryChecks.Load() >= 1
 	}
-	if replacement == old || calls.Load() != 3 || retryChecks.Load() != expectedChecks {
+	if replacement == old || calls.Load() != 3 || !rechecked {
 		t.Fatalf("did not authenticate a fresh session: replacement=%t requests=%d route_checks=%d", replacement != old, calls.Load(), retryChecks.Load())
 	}
 	select {
@@ -371,6 +374,7 @@ func testPooledPortACKTimeout(t *testing.T, routeAware bool) {
 	// recovery attempt must not create a fresh QUIC session using the old
 	// caller-side route check.
 	stallAt.Store(4)
+	checksBefore := retryChecks.Load()
 	if routeAware {
 		_, err = client.DialWithRouteSnapshot(ctx, b.Device, endpoint, port, snapshot)
 	} else {
@@ -379,11 +383,11 @@ func testPooledPortACKTimeout(t *testing.T, routeAware bool) {
 			return ErrNoRoute
 		})
 	}
-	expectedChecks++
+	rechecked = retryChecks.Load() == checksBefore+1
 	if routeAware {
-		expectedChecks++
+		rechecked = retryChecks.Load() > checksBefore
 	}
-	if !errors.Is(err, ErrNoRoute) || calls.Load() != 4 || retryChecks.Load() != expectedChecks {
+	if !errors.Is(err, ErrNoRoute) || calls.Load() != 4 || !rechecked {
 		t.Fatalf("withdrawn route retried: err=%v requests=%d route_checks=%d", err, calls.Load(), retryChecks.Load())
 	}
 	cancel()

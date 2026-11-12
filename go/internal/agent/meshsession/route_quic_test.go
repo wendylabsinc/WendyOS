@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func TestQUICStartupRequiresInstalledDirectLAN(t *testing.T) {
 func TestRouteAwareDialRechecksBeforeHandshake(t *testing.T) {
 	a, b := fixtureCredentials(t)
 	for _, protocol := range []string{"tcp", "udp"} {
-		for _, change := range []string{"direct LAN", "LAN changes to BLE", "route withdrawn"} {
+		for _, change := range []string{"direct LAN", "LAN changes to BLE", "route withdrawn", "runtime stopped"} {
 			t.Run(protocol+"/"+change, func(t *testing.T) {
 				withdrawn := change == "route withdrawn"
 				client, err := NewClient(a)
@@ -99,32 +100,47 @@ func TestRouteAwareDialRechecksBeforeHandshake(t *testing.T) {
 					}
 					return nil, sentinel
 				}
+				// The caller resolved this endpoint from a direct-LAN view.
+				resolved, err := ResolveApp(directLANView(b.Device), b.Device)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The route then changes before the cold handshake.
 				calls := 0
 				snapshot := func() localmesh.NodeSnapshot {
-					view := directLANView(b.Device)
 					calls++
-					if calls > 1 && change != "direct LAN" {
+					view := directLANView(b.Device)
+					if change != "direct LAN" {
 						view.Links[0].Transport = "ble"
-						if withdrawn {
-							view.ForwardingRoutes = nil
-						}
+					}
+					if withdrawn {
+						view.ForwardingRoutes = nil
 					}
 					return view
 				}
-				if protocol == "tcp" {
-					_, err = client.DialWithRouteSnapshot(context.Background(), b.Device, netip.AddrPortFrom(b.Device.MeshAddress(), Port), 80, snapshot)
-				} else {
-					_, err = client.DialUDPWithRouteSnapshot(context.Background(), b.Device, netip.AddrPortFrom(b.Device.MeshAddress(), Port), 80, snapshot)
+				if change == "runtime stopped" {
+					snapshot = nil
 				}
-				if withdrawn {
+				if protocol == "tcp" {
+					_, err = client.DialWithRouteSnapshot(context.Background(), b.Device, resolved.Address, 80, snapshot)
+				} else {
+					_, err = client.DialUDPWithRouteSnapshot(context.Background(), b.Device, resolved.Address, 80, snapshot)
+				}
+				switch change {
+				case "route withdrawn", "runtime stopped":
 					if !errors.Is(err, ErrNoRoute) || dialed {
 						t.Fatalf("withdrawn dial: %v, dialed=%v", err, dialed)
 					}
-				} else if !errors.Is(err, sentinel) || !dialed {
-					t.Fatalf("BLE dial: %v, dialed=%v", err, dialed)
+					if strings.Contains(err.Error(), "QUIC dial") {
+						t.Fatalf("route failure reported as a handshake failure: %v", err)
+					}
+				default:
+					if !errors.Is(err, sentinel) || !dialed {
+						t.Fatalf("dial: %v, dialed=%v", err, dialed)
+					}
 				}
-				if calls != 2 {
-					t.Fatalf("snapshot calls=%d", calls)
+				if snapshot != nil && calls == 0 {
+					t.Fatal("cold handshake did not recheck the current route")
 				}
 			})
 		}
