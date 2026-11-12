@@ -19,9 +19,9 @@ on:
         options: [smoke, nightly]
         default: smoke
       baseline_ref:
-        description: Baseline treatment revision (must already exist in this repository)
+        description: Baseline treatment revision in this repository (default WENDY_EVAL_BASELINE_REF, else main~1)
         type: string
-        default: main
+        default: ''
 
 permissions:
   contents: read
@@ -88,7 +88,16 @@ jobs:
         run: |
           set -euo pipefail
           test -f "$LAB_CONFIG"
-          baseline_sha=$(git rev-parse --verify --end-of-options "${BASELINE_REF}^{commit}")
+          # Checkout creates a local branch only for the ref under test, so try the remote branch too.
+          resolve() { git rev-parse --verify --quiet --end-of-options "$1^{commit}"; }
+          if ! baseline_sha=$(resolve "$BASELINE_REF" || resolve "origin/$BASELINE_REF"); then
+            echo "::error::Baseline revision '$BASELINE_REF' does not name a commit in this repository"
+            exit 1
+          fi
+          if [ "$baseline_sha" = "$(git rev-parse HEAD)" ]; then
+            echo "::error::Baseline revision '$BASELINE_REF' is the commit under test; choose an earlier revision"
+            exit 1
+          fi
           git worktree add --detach "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID" "$baseline_sha"
           make -C "$RUNNER_TEMP/eval-baseline-$GITHUB_RUN_ID/go" build-cli
           make -C go build-cli
