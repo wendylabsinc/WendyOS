@@ -841,16 +841,16 @@ func dragonwingUSBAccessHint() string {
 		"The board is in EDL mode, but the OS refused wendy access to its USB device.",
 	}
 	if runtime.GOOS == "linux" {
+		hasPlugdev := hostHasPlugdev()
 		lines = append(lines,
-			"Grant access with a udev rule (one-time):",
+			"Grant access with a udev rule (one-time; the wendy deb, rpm and AUR packages install it):",
 			"",
-			briefDim.Render("  echo '"+edlUdevRule+"' \\"),
+			briefDim.Render("  echo '"+udevRuleFor(edlUdevRule, hasPlugdev)+"' \\"),
 			briefDim.Render("    | sudo tee "+edlUdevRulePath),
 			briefDim.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
 			"",
-			"Add your user to the "+briefKey.Render("plugdev")+" group, replug the cable and retry,",
-			"or re-run the flash with sudo.",
 		)
+		lines = append(lines, udevAccessHintTail(hasPlugdev, briefKey.Render, "replug the cable and retry")...)
 	} else if runtime.GOOS == "windows" {
 		lines = append(lines, "Run the install command again to install or repair the Qualcomm EDL WinUSB binding.",
 			"Accept the administrator prompt, and close other flashing tools that may have the board open.")

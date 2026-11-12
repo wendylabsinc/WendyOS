@@ -34,6 +34,34 @@ func TestUsbUdevRuleMatchesPackagedRule(t *testing.T) {
 	}
 }
 
+// The AUR package ships group-free copies (Arch has no plugdev group, and udev
+// drops a whole rule line naming an unknown group). They must equal what the
+// hint prints on such a host.
+func TestArchUdevRulesMatchGroupFreeHint(t *testing.T) {
+	for file, rule := range map[string]string{
+		"70-wendy-jetson.rules":   usbUdevRule,
+		"70-wendy-qualcomm.rules": edlUdevRule,
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packaging", "arch", "wendy", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rules []string
+		for _, line := range strings.Split(string(data), "\n") {
+			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+				rules = append(rules, line)
+			}
+		}
+		want := udevRuleFor(rule, false)
+		if len(rules) != 1 || rules[0] != want || strings.Contains(want, "GROUP") {
+			t.Errorf("%s: got %q, want %q", file, rules, want)
+		}
+	}
+	if udevRuleFor(usbUdevRule, true) != usbUdevRule {
+		t.Error("a host with plugdev must get the packaged deb/rpm rule unchanged")
+	}
+}
+
 func TestUsbAccessHintLines(t *testing.T) {
 	// macOS: a claim-time seize denial. The device enumerated, so the guidance must
 	// point at the two fixes that work — running as root and re-entering recovery —
@@ -51,8 +79,11 @@ func TestUsbAccessHintLines(t *testing.T) {
 
 	// Linux: keep the udev-rule guidance verbatim so the parity test stays meaningful.
 	lin := strings.Join(usbAccessHintLines("linux"), "\n")
-	if !strings.Contains(lin, usbUdevRule) {
-		t.Errorf("linux hint should contain the udev rule %q, got:\n%s", usbUdevRule, lin)
+	if want := udevRuleFor(usbUdevRule, hostHasPlugdev()); !strings.Contains(lin, want) {
+		t.Errorf("linux hint should contain the udev rule %q, got:\n%s", want, lin)
+	}
+	if !hostHasPlugdev() && strings.Contains(lin, "plugdev") {
+		t.Errorf("linux hint must not mention plugdev on a host without that group, got:\n%s", lin)
 	}
 }
 

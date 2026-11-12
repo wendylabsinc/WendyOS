@@ -61,7 +61,7 @@ const (
 )
 
 // wendyJetsonUdevRulePaths are the standard udev rules directories where the
-// 70-wendy-jetson.rules file (installed by the deb/rpm package, or by hand with
+// 70-wendy-jetson.rules file (installed by the deb/rpm/AUR package, or by hand with
 // jetsonUdevRuleInstallHint) grants non-root access to the Jetson
 // recovery/flashing USB device.
 var wendyJetsonUdevRulePaths = []string{
@@ -172,10 +172,10 @@ func thorTelemetryEnv(environ []string) []string {
 }
 
 // jetsonUdevRuleInstallHint returns the shell commands that install the wendy
-// Jetson udev rule by hand — the same rule the deb/rpm packages ship — one per
+// Jetson udev rule by hand — the same rule the wendy packages ship — one per
 // line, each prefixed with indent.
 func jetsonUdevRuleInstallHint(indent string) string {
-	return indent + "echo '" + usbUdevRule + "' | sudo tee " + usbUdevRulePath + "\n" +
+	return indent + "echo '" + udevRuleFor(usbUdevRule, hostHasPlugdev()) + "' | sudo tee " + usbUdevRulePath + "\n" +
 		indent + "sudo udevadm control --reload-rules && sudo udevadm trigger"
 }
 
@@ -186,7 +186,7 @@ func thorElevationReason(goos string) string {
 		return "Flashing a Jetson AGX Thor needs administrator access — it talks to the board's USB recovery device directly, which requires root on macOS."
 	}
 	return "Flashing a Jetson AGX Thor needs USB access to the board's recovery device.\n" +
-		"  Tip: install the udev rule once (the wendy deb/rpm packages include it) to skip sudo next time:\n" +
+		"  Tip: install the udev rule once (the wendy deb, rpm and AUR packages include it) to skip sudo next time:\n" +
 		jetsonUdevRuleInstallHint("    ")
 }
 
@@ -207,7 +207,7 @@ func errThorNeedsRoot() error {
 	msg := "flashing a Jetson AGX Thor requires administrator access — it opens the board's USB recovery device directly, which needs root.\n" +
 		"  Re-run:  sudo wendy install --device-type " + thorDeviceType
 	if runtime.GOOS == "linux" {
-		msg += "\n  Or install the udev rule once (the wendy deb/rpm packages include it), then no sudo is needed:\n" +
+		msg += "\n  Or install the udev rule once (the wendy deb, rpm and AUR packages include it), then no sudo is needed:\n" +
 			jetsonUdevRuleInstallHint("    ")
 	}
 	return errors.New(msg)

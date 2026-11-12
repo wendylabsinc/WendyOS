@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -489,6 +490,38 @@ const (
 	usbUdevRule     = `SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
 )
 
+// hostHasPlugdev reports whether this host has a plugdev group (Debian and
+// Ubuntu do; Arch and Fedora do not).
+func hostHasPlugdev() bool {
+	_, err := user.LookupGroup("plugdev")
+	return err == nil
+}
+
+// udevRuleFor drops GROUP="plugdev" from rule when the host has no plugdev
+// group: udev discards the whole rule line, uaccess included, when it names an
+// unknown group. The result matches the AUR package's rules.
+func udevRuleFor(rule string, hasPlugdev bool) string {
+	if hasPlugdev {
+		return rule
+	}
+	return strings.Replace(rule, `GROUP="plugdev", `, "", 1)
+}
+
+// udevAccessHintTail is the hint's last step: plugdev membership where the
+// group exists, otherwise the uaccess grant to the user at the computer.
+func udevAccessHintTail(hasPlugdev bool, emph func(...string) string, replug string) []string {
+	if hasPlugdev {
+		return []string{
+			"Add your user to the " + emph("plugdev") + " group (then log in again), " + replug + ",",
+			"or re-run the flash with sudo.",
+		}
+	}
+	return []string{
+		"This grants access to the user logged in at this computer: " + replug + ".",
+		"Over SSH or without a desktop login, re-run the flash with sudo.",
+	}
+}
+
 // usbAccessHintBox explains how to regain USB access to the Jetson when the OS
 // refuses to open it: on Linux, udev permissions; on macOS, its own kernel driver
 // bound to the recovery device (root needed to seize it).
@@ -506,17 +539,16 @@ func usbAccessHintLines(goos string) []string {
 		"A Jetson is in recovery mode, but the OS refused wendy access to its USB device.",
 	}
 	if goos == "linux" {
-		return append(lines,
-			"Grant access with a udev rule (one-time; the wendy deb/rpm packages install it):",
+		hasPlugdev := hostHasPlugdev()
+		lines = append(lines,
+			"Grant access with a udev rule (one-time; the wendy deb, rpm and AUR packages install it):",
 			"",
-			thorHintCmd.Render("  echo '"+usbUdevRule+"' \\"),
+			thorHintCmd.Render("  echo '"+udevRuleFor(usbUdevRule, hasPlugdev)+"' \\"),
 			thorHintCmd.Render("    | sudo tee "+usbUdevRulePath),
 			thorHintCmd.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
 			"",
-			"Add your user to the "+thorHintEmph.Render("plugdev")+" group — if your distro has none, create it",
-			"("+thorHintCmd.Render("sudo groupadd plugdev && sudo usermod -aG plugdev $USER")+", then log in",
-			"again) — replug the USB-C cable and rescan. Or re-run the flash with sudo.",
 		)
+		return append(lines, udevAccessHintTail(hasPlugdev, thorHintEmph.Render, "replug the USB-C cable and rescan")...)
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own
 	// driver to the recovery device (often re-matched after a failed RCM boot), so

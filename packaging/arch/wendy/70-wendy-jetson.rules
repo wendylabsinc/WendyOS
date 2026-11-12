@@ -1,0 +1,13 @@
+# NVIDIA Jetson devices used by `wendy os install` Thor flashing:
+# recovery mode (0955:7023 Orin, 0955:7026 Thor) and the initrd-flash
+# ADB gadget (0955:7100). Arch variant of packaging/linux/udev/70-wendy-jetson.rules:
+# Arch has no plugdev group, and udev drops a whole rule line that names an
+# unknown group, so access comes only from uaccess (the user logged in at the
+# active local seat). Others run the flash with sudo.
+#
+# The match is deliberately vendor-wide rather than per-PID: NVIDIA assigns a
+# distinct recovery/gadget PID per Jetson module, and vendor 0955 devices only
+# expose these interfaces transiently in recovery/flashing mode.
+# Installed by the AUR wendy package from the CLI release archive. Must stay
+# identical to usbUdevRule without GROUP (a test asserts it).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", TAG+="uaccess"

@@ -245,6 +245,10 @@ jobs:
             -o "../${ARTIFACT}/wendy" ./cmd/wendy
           # libusb is statically linked (LGPL-2.1): ship its attribution/license.
           cp ../NOTICE "../${ARTIFACT}/NOTICE"
+          # USB access rules for the AUR package, which installs from this archive.
+          mkdir -p "../${ARTIFACT}/udev"
+          cp ../packaging/arch/wendy/70-wendy-jetson.rules \
+            ../packaging/arch/wendy/70-wendy-qualcomm.rules "../${ARTIFACT}/udev/"
 
       - name: Verify static binary and smoke test
         run: |

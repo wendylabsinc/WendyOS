@@ -6,6 +6,7 @@
 if command -v udevadm >/dev/null 2>&1; then
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger --subsystem-match=usb --attr-match=idVendor=0955 2>/dev/null || true
+    udevadm trigger --subsystem-match=usb --attr-match=idVendor=05c6 2>/dev/null || true
 fi
 # An /etc rule with the same filename overrides the packaged /usr/lib one (e.g.
 # from following the wendy CLI's hint before installing the package); warn if it

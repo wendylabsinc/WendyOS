@@ -102,7 +102,7 @@ func TestThorElevationReason(t *testing.T) {
 		t.Errorf("darwin reason should mention macOS root: %q", thorElevationReason("darwin"))
 	}
 	linux := thorElevationReason("linux")
-	for _, want := range []string{usbUdevRulePath, usbUdevRule, "udevadm control --reload-rules"} {
+	for _, want := range []string{usbUdevRulePath, udevRuleFor(usbUdevRule, hostHasPlugdev()), "udevadm control --reload-rules"} {
 		if !strings.Contains(linux, want) {
 			t.Errorf("linux reason should give the udev rule install commands (missing %q): %q", want, linux)
 		}
