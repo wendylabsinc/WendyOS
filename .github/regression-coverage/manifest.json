@@ -3298,7 +3298,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2684",
       "title": "fix(ios): reduce room capture memory use and stop sessions once",
       "package": "priority",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "MobileTests checks stop-once, dismissal, memory-warning and queued reconstruction behavior. The workflows inspected do not invoke go/macos iOS tests, and the tests do not establish a memory-use ceiling.",
       "required_follow_up": "Lifecycle tests now run. Establish a measured capture/reconstruction memory budget on a LiDAR device and stress repeated start/stop, warning, cancel and reconstruction.",
       "evidence": [
@@ -3310,6 +3310,10 @@
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
+        },
+        {
+          "path": ".github/regression-coverage/manual/lidar-memory-rehearsal.py",
+          "result": "Offline generator validated with a synthetic local bundle: 21 not_run cases, artifact hashes, private output, invalid budgets and wrong-app refusal. Physical procedure measures the actual Scan Room UI through capture, reconstruction/export, cancellation and synthetic warnings against pre-approved per-device budgets. No LiDAR device execution or measured memory pass is claimed."
         }
       ]
     },
