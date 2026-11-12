@@ -219,7 +219,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		case thorIsUSBAccessErr(err):
 			// Stage 1 re-opens the device (it can re-enumerate between the scan
 			// and the flash); a denied re-open gets the same guidance as the scan.
-			fmt.Println("\n" + usbAccessHintBox())
+			fmt.Println("\n" + usbAccessHint())
 		case errors.Is(err, errGadgetUnreachable):
 			// Stage-1 booted but the gadget never re-enumerated; nothing was written.
 			printThorGadgetUnreachableHint(os.Stdout)
@@ -489,19 +489,20 @@ const (
 	usbUdevRule     = `SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
 )
 
-// usbAccessHintBox explains how to regain USB access to the Jetson when the OS
+// usbAccessHint explains how to regain USB access to the Jetson when the OS
 // refuses to open it: on Linux, udev permissions; on macOS, its own kernel driver
-// bound to the recovery device (root needed to seize it).
-func usbAccessHintBox() string {
-	return thorHintBorder.Render(strings.Join(usbAccessHintLines(runtime.GOOS), "\n"))
+// bound to the recovery device (root needed to seize it). Keep the hint unbordered
+// and commands on single logical lines so terminal selections remain executable.
+func usbAccessHint() string {
+	return strings.Join(usbAccessHintLines(runtime.GOOS), "\n")
 }
 
 // usbAccessHintLines builds the body of the USB-access-denied hint for the given
-// GOOS. Split out from usbAccessHintBox so both OS branches are testable without
+// GOOS. Split out from usbAccessHint so both OS branches are testable without
 // depending on the runner's platform.
 func usbAccessHintLines(goos string) []string {
 	lines := []string{
-		thorHintTitle.Render("⚠  USB access denied"),
+		"⚠  USB access denied",
 		"",
 		"A Jetson is in recovery mode, but the OS refused wendy access to its USB device.",
 	}
@@ -509,13 +510,16 @@ func usbAccessHintLines(goos string) []string {
 		return append(lines,
 			"Grant access with a udev rule (one-time; the wendy deb/rpm packages install it):",
 			"",
-			thorHintCmd.Render("  echo '"+usbUdevRule+"' \\"),
-			thorHintCmd.Render("    | sudo tee "+usbUdevRulePath),
-			thorHintCmd.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
+			"echo '"+usbUdevRule+"' | sudo tee "+usbUdevRulePath,
+			"sudo udevadm control --reload-rules && sudo udevadm trigger",
 			"",
-			"Add your user to the "+thorHintEmph.Render("plugdev")+" group — if your distro has none, create it",
-			"("+thorHintCmd.Render("sudo groupadd plugdev && sudo usermod -aG plugdev $USER")+", then log in",
-			"again) — replug the USB-C cable and rescan. Or re-run the flash with sudo.",
+			"If your distro has no plugdev group, create it first:",
+			"sudo groupadd --system plugdev",
+			"",
+			"Add your user to the plugdev group, then log in again:",
+			"sudo usermod -aG plugdev $USER",
+			"",
+			"Replug the USB-C cable and rescan. Or re-run the flash with sudo.",
 		)
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own
@@ -526,8 +530,8 @@ func usbAccessHintLines(goos string) []string {
 		"recovery device (often re-matched after a failed RCM boot), so wendy needs",
 		"root to seize it. Try, in order:",
 		"",
-		"  "+thorHintEmph.Render("•")+" Re-run the flash with "+thorHintCmd.Render("sudo")+".",
-		"  "+thorHintEmph.Render("•")+" Or unplug the USB-C cable, re-enter recovery mode, and flash again.",
+		"  • Re-run the flash with sudo.",
+		"  • Or unplug the USB-C cable, re-enter recovery mode, and flash again.",
 		"",
 		"If another process holds it (a VM with USB passthrough, another flashing",
 		"tool, or another wendy), quit that first.",

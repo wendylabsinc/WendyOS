@@ -238,7 +238,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			// provisioning must not print recovery-disk remediation.
 			printOrinWinDiskAccessHint(os.Stdout)
 		case errors.Is(err, rcm.ErrUSBAccess):
-			fmt.Println("\n" + usbAccessHintBox())
+			fmt.Println("\n" + usbAccessHint())
 		case failedID >= orinStepCommands && massStorage != nil && massStorage.HandoffStarted:
 			printOrinBadStateHint(os.Stdout, opts)
 		case failedID == orinStepRCMBoot:

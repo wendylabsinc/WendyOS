@@ -12,10 +12,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashpack"
 )
 
-// The usbAccessHintBox tells tarball users to install usbUdevRule verbatim, and
+// The usbAccessHint tells tarball users to install usbUdevRule verbatim, and
 // the deb/rpm install packaging/linux/udev/70-wendy-jetson.rules. The two must
 // stay identical: /etc/udev/rules.d overrides /usr/lib/udev/rules.d for the same
-// filename, so a stale hint-box copy would permanently mask the packaged rule.
+// filename, so a stale hint copy would permanently mask the packaged rule.
 func TestUsbUdevRuleMatchesPackagedRule(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "..", "packaging", "linux", "udev", "70-wendy-jetson.rules")
 	data, err := os.ReadFile(path)
@@ -53,6 +53,19 @@ func TestUsbAccessHintLines(t *testing.T) {
 	lin := strings.Join(usbAccessHintLines("linux"), "\n")
 	if !strings.Contains(lin, usbUdevRule) {
 		t.Errorf("linux hint should contain the udev rule %q, got:\n%s", usbUdevRule, lin)
+	}
+	for _, command := range []string{
+		"echo '" + usbUdevRule + "' | sudo tee " + usbUdevRulePath,
+		"sudo udevadm control --reload-rules && sudo udevadm trigger",
+		"sudo groupadd --system plugdev",
+		"sudo usermod -aG plugdev $USER",
+	} {
+		if !strings.Contains("\n"+lin+"\n", "\n"+command+"\n") {
+			t.Errorf("linux hint must put the complete command on its own plain line: %q\ngot:\n%s", command, lin)
+		}
+	}
+	if hint := usbAccessHint(); strings.ContainsAny(hint, "\x1b╭╮╰╯│─") {
+		t.Errorf("USB hint must stay plain and unbordered for terminal copying, got:\n%s", hint)
 	}
 }
 
