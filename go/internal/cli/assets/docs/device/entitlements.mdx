@@ -1,5 +1,5 @@
 ---
-title: App Entitlements (wendy.json)
+title: App entitlements (wendy.json)
 description: Configure hardware access and permissions for your WendyOS applications
 ---
 
@@ -136,7 +136,7 @@ When enabled, this entitlement:
 - Sets up environment variables for CUDA and GPU libraries
 
 <Callout type="info">
-  **Hardware-specific behavior**: What the `gpu` entitlement exposes depends on the device — NVIDIA GPU access on Jetson, and VideoCore board telemetry on Raspberry Pi. See [GPU Access](/docs/hardware/gpu#raspberry-pi-board-telemetry) for the details.
+  **Hardware-specific behavior**: What the `gpu` entitlement exposes depends on the device — NVIDIA GPU access on Jetson, and VideoCore board telemetry on Raspberry Pi. See [GPU access](/docs/hardware/gpu#raspberry-pi-board-telemetry) for the details.
 </Callout>
 
 ### Display Entitlement
@@ -186,7 +186,7 @@ When enabled, this entitlement:
 - Configures device permissions for video capture
 - Enables access to V4L2 (Video4Linux2) and libcamera interfaces
 
-A `camera` entitlement can also carry `user`/`password` fields, but they are not read at deploy or container-create time: the CLI consults them — in place of an interactive prompt — only the first time `wendy device camera view` needs a login for that camera, storing the result on the device from there. A container-only consumer still needs that credential stored on the device before it starts, so run `wendy device camera login <id>` (or `camera view --id <id>` once) first. See the [`camera` entitlement fields](/docs/apps/wendy.json#camera) for the field reference and its plaintext-storage caveat.
+A `camera` entitlement can also carry `user`/`password` fields, but they are not read at deploy or container-create time: the CLI consults them — in place of an interactive prompt — only the first time `wendy device camera view` needs a login for that camera, storing the result on the device from there. A container-only consumer still needs that credential stored on the device before it starts, so run `wendy device camera login <id>` (or `camera view --id <id>` once) first. See the [`camera` entitlement fields](/docs/reference/app-configuration#camera) for the field reference and its plaintext-storage caveat.
 
 <Callout type="info">
   **Network cameras**: on a WendyOS build that ships the `v4l2loopback` kernel module, each registered network camera is mirrored into a `/dev/video2xx` node (numbered to match the camera's device ID) for as long as a `camera`-entitled container is running, so it appears in-container exactly like a USB or CSI device. The node always carries the camera's sub-stream — there is no way to select the main stream per container. See [IP Cameras](/docs/hardware/camera#ip-cameras) for the device-ID band and discovery/credential CLI.

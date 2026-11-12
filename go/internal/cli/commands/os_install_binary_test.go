@@ -129,10 +129,10 @@ func TestInstallBinaryCommandPreflight(t *testing.T) {
 	}{
 		{[]string{"--binary="}, "requires a path"},
 		{[]string{"--binary", filepath.Join(t.TempDir(), "missing")}, "reading --binary"},
-		{[]string{"--binary", arm, "--device-type", "x86_64"}, "image is amd64"},
-		{[]string{"--binary", x86, "--device-type", "raspberry-pi-5"}, "image is arm64"},
-		{[]string{"--binary", x86, "--device-type", "jetson-agx-thor"}, "image is arm64"},
-		{[]string{"--binary", x86, "--device-type", "dragonwing-iq-8275"}, "image is arm64"},
+		{[]string{"--binary", arm, "--device-type", "x86_64", "--no-wifi"}, "image is amd64"},
+		{[]string{"--binary", x86, "--device-type", "raspberry-pi-5", "--no-wifi"}, "image is arm64"},
+		{[]string{"--binary", x86, "--device-type", "jetson-agx-thor", "--no-wifi"}, "image is arm64"},
+		{[]string{"--binary", x86, "--device-type", "dragonwing-iq-8275", "--no-wifi"}, "image is arm64"},
 		{[]string{"--binary", arm, "--device-type", "linux-desktop"}, "only when installing a WendyOS image"},
 		{[]string{"--binary", arm, "--device-type", "headless-mac"}, "only when installing a WendyOS image"},
 	} {

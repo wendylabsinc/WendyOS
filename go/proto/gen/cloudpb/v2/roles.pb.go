@@ -35,6 +35,11 @@ const (
 	// organization, site, tag or device scope. Built-ins: Device viewer, Device
 	// operator, Device manager.
 	RoleKind_ROLE_KIND_DEVICE RoleKind = 2
+	// App permissions only (app:*, release:*, artifact:*, except app:create and
+	// app:list). Binds at organization scope (every app) or on one app.
+	// Built-ins: App owner, App developer, App operator, App viewer. An
+	// organization role may hold app permissions too; they apply to every app.
+	RoleKind_ROLE_KIND_APP RoleKind = 3
 )
 
 // Enum value maps for RoleKind.
@@ -43,11 +48,13 @@ var (
 		0: "ROLE_KIND_UNSPECIFIED",
 		1: "ROLE_KIND_ORGANIZATION",
 		2: "ROLE_KIND_DEVICE",
+		3: "ROLE_KIND_APP",
 	}
 	RoleKind_value = map[string]int32{
 		"ROLE_KIND_UNSPECIFIED":  0,
 		"ROLE_KIND_ORGANIZATION": 1,
 		"ROLE_KIND_DEVICE":       2,
+		"ROLE_KIND_APP":          3,
 	}
 )
 
@@ -1158,11 +1165,12 @@ const file_wendycloud_v2_roles_proto_rawDesc = "" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\"h\n" +
 	" ListEffectivePermissionsResponse\x12D\n" +
-	"\vpermissions\x18\x01 \x03(\v2\".wendycloud.v2.EffectivePermissionR\vpermissions*W\n" +
+	"\vpermissions\x18\x01 \x03(\v2\".wendycloud.v2.EffectivePermissionR\vpermissions*j\n" +
 	"\bRoleKind\x12\x19\n" +
 	"\x15ROLE_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16ROLE_KIND_ORGANIZATION\x10\x01\x12\x14\n" +
-	"\x10ROLE_KIND_DEVICE\x10\x02*\x8e\x01\n" +
+	"\x10ROLE_KIND_DEVICE\x10\x02\x12\x11\n" +
+	"\rROLE_KIND_APP\x10\x03*\x8e\x01\n" +
 	"\x10PermissionSource\x12!\n" +
 	"\x1dPERMISSION_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16PERMISSION_SOURCE_ROLE\x10\x01\x12\x1b\n" +

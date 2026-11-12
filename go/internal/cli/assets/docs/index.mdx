@@ -7,6 +7,8 @@ Wendy is a full-stack platform that offers an operating system for NVIDIA Jetson
 
 ## Install the Wendy CLI
 
+The Wendy CLI is the gateway that you, or [coding agents](/docs/guides/llm-integration) like Claude Code and Codex, use to deploy to WendyOS devices.
+
 ```bash title="macOS and Linux"
 curl -fsSL https://install.wendy.dev/cli.sh | bash
 ```
@@ -21,8 +23,10 @@ To build apps on Windows, run the macOS and Linux command inside WSL2 instead.
 
 ## Next steps
 
-<Cards>
-  <Card title="Program a simulated robot" href="/docs/getting-started/robot">Edit a Python app for a simulated Go2. No hardware needed.</Card>
-  <Card title="Deploy your first app" href="/docs/getting-started/app">Run a web server on a device or a local virtual device.</Card>
-  <Card title="Set up a device" href="/docs/installation">Install WendyOS or Wendy Agent on your hardware.</Card>
-</Cards>
+Wendy works with or without hardware, so where you go next depends on what you have and what you want to build. Pick the path that fits. You can come back for the others.
+
+<Paths>
+  <Path when="No hardware yet?" title="Program a simulated robot" href="/docs/getting-started/robot" src="/images/get-started/simulated-go2.webp" alt="A simulated Go2 robot walking in the browser 3D viewer">Watch a simulated Go2 walk, then change its route in Python.</Path>
+  <Path when="Want to run your own code?" title="Deploy your first app" href="/docs/getting-started/app" src="/images/get-started/wendy-run-laptop.webp" alt="A laptop terminal running wendy run">Run a web server on a device or a local virtual device, then change its response.</Path>
+  <Path when="Have a board on your desk?" title="Set up a device" href="/docs/installation" src="/images/get-started/jetson-usb-c.webp" alt="An NVIDIA Jetson Orin Nano connected to a laptop with one USB-C cable">Install WendyOS on a Jetson, Raspberry Pi, Dragonwing or ESP32, or Wendy Agent on Linux or a Mac.</Path>
+</Paths>

@@ -1,6 +1,6 @@
 # WASM Apps
 
-Wendy Lite firmware variants with WASM support can run Swift, Rust, C/C++, AssemblyScript, or WAT guests as a smaller, portable, sandboxed alternative to native ESP-IDF apps. Guests call into hardware and platform features through Wendy's host-imported APIs — see [`host-api.md`](host-api.md) for the full function reference.
+Wendy Lite firmware variants with WASM support can run Swift, Rust, C/C++, AssemblyScript, or WAT guests as a smaller, portable, sandboxed alternative to native ESP-IDF apps. Guests call into hardware and platform features through Wendy's host-imported APIs — see [`host-api.md`](./host-api.md) for the full function reference.
 
 ## Optional WASM Guest Languages
 
@@ -25,4 +25,4 @@ For low-level firmware development, a WASM guest can still be embedded directly:
 3. Rebuild the firmware: `idf.py build`
 4. Flash: `idf.py flash`
 
-See [`host-api.md`](host-api.md) for the full function reference, [`swift-sdk.md`](swift-sdk.md) for Swift-specific internals, [`stdio.md`](stdio.md) for console I/O, [`native-apps.md`](native-apps.md) for the native app build-to-device flow, and [`wendy-com.md`](wendy-com.md) for the WendyCom protocol reference.
+See [`host-api.md`](./host-api.md) for the full function reference, [`swift-sdk.md`](./swift-sdk.md) for Swift-specific internals, [`stdio.md`](./stdio.md) for console I/O, [`native-apps.md`](./native-apps.md) for the native app build-to-device flow, and [`wendy-com.md`](./wendy-com.md) for the WendyCom protocol reference.

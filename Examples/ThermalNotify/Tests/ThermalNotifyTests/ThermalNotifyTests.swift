@@ -145,27 +145,60 @@ private func reading(_ raw: UInt16) throws -> ThermalReading {
     #expect(state.next(now: now.addingTimeInterval(10)) == nil)
 }
 
-private func hikFrame(hot: UInt16 = 5346, x: UInt16 = 1000) -> VideoFrame {
+private func hikFrame(hot: UInt16 = 5346, x: UInt16 = 1000, compact: Bool = false) -> VideoFrame {
     var sample = frame([1])
-    sample.data = Data(repeating: 0, count: 200704)
+    let width = compact ? 96 : 256, height = compact ? 96 : 192
+    let stride = width * 2, captureHeight = height * 2 + 8
+    sample.data = Data(repeating: 0, count: stride * captureHeight)
     sample.rawFormat.fourcc = "YUYV"
-    sample.rawFormat.width = 256
-    sample.rawFormat.height = 392
-    sample.rawFormat.bytesPerLine = 512
+    sample.rawFormat.width = UInt32(width)
+    sample.rawFormat.height = UInt32(captureHeight)
+    sample.rawFormat.bytesPerLine = UInt32(stride)
     sample.rawFormat.thermalPlane.adapter = "topdon-tc001-hik-v1"
-    sample.rawFormat.thermalPlane.width = 256
-    sample.rawFormat.thermalPlane.height = 192
-    sample.rawFormat.thermalPlane.rowStrideBytes = 512
+    sample.rawFormat.thermalPlane.width = UInt32(width)
+    sample.rawFormat.thermalPlane.height = UInt32(height)
+    sample.rawFormat.thermalPlane.rowStrideBytes = UInt32(stride)
     sample.rawFormat.thermalPlane.clearTemperature()
     func put(_ offset: Int, _ value: UInt16) {
         sample.data[offset] = UInt8(truncatingIfNeeded: value)
         sample.data[offset + 1] = UInt8(value >> 8)
     }
-    put(193 * 512, 0xccdd)
-    put(193 * 512 + 2, 0xaabb)
-    let words: [UInt16] = [0xffff, 0xeeee, hot, x, 973, 4472, 74, 486, 4591, 4557]
-    for (i, word) in words.enumerated() { put(388 * 512 + i * 2, word) }
+    let header = (height + 1) * stride
+    put(header, 0xccdd)
+    put(header + 2, 0xaabb)
+    put(header + 8, UInt16(width))
+    put(header + 12, UInt16(height))
+    let words: [UInt16] = compact
+        ? [0xffff, 0xeeee, hot, x, 894, 4563, 136, 21, 4600, 4591]
+        : [0xffff, 0xeeee, hot, x, 973, 4472, 74, 486, 4591, 4557]
+    for (i, word) in words.enumerated() { put((captureHeight - 4) * stride + i * 2, word) }
     return sample
+}
+
+@Test func `96x96 TOPDON uses live camera summary temperatures and rejects bad geometry`() throws {
+    var sample = hikFrame(hot: 5228, compact: true)
+    sample.data.replaceSubrange(0..<(96 * 192), with: repeatElement(UInt8(254), count: 96 * 192))
+    let reading = try ThermalReading(frame: sample, now: now)
+    #expect(reading.celsius == 31.6875 && reading.x == 95 && reading.y == 85)
+    for offset in [97*192, 97*192+8, 97*192+12, 196*192, 196*192+4, 196*192+10] {
+        var bad = sample
+        bad.data[offset] = 0; bad.data[offset+1] = 0
+        #expect(throws: MonitorError.self) { try ThermalReading(frame: bad, now: now) }
+    }
+    sample.data.removeLast()
+    #expect(throws: MonitorError.self) { try ThermalReading(frame: sample, now: now) }
+}
+
+@Test func `96x96 TOPDON only fresh summaries can trigger the alert threshold`() throws {
+    var decoder = ThermalFrameDecoder()
+    var state = AlertState()
+    #expect(throws: MonitorError.self) { try decoder.decode(hikFrame(hot: 8320, compact: true), now: now) }
+    let reading = try decoder.decode(hikFrame(hot: 8321, compact: true), now: now.addingTimeInterval(0.4))
+    state.observe(camera: camera(), reading: reading)
+    let candidate = state.next(now: now)
+    let alert = try #require(candidate)
+    #expect(alert.request.metadata.fields["max_celsius"]?.numberValue == 80.015625)
+    #expect(throws: MonitorError.self) { try decoder.decode(hikFrame(hot: 8321, compact: true), now: now.addingTimeInterval(3.4)) }
 }
 
 @Test func `HIK uses the camera maximum from metadata, not raw sensor pixels`() throws {
@@ -247,4 +280,41 @@ private func hikFrame(hot: UInt16 = 5346, x: UInt16 = 1000) -> VideoFrame {
     state.accepted(alert, now: now.addingTimeInterval(20))
     #expect(state.next(now: now.addingTimeInterval(29.999)) == nil)
     #expect(state.next(now: now.addingTimeInterval(30)) != nil)
+}
+
+@Test func `custom 30 degree threshold controls alerts and payload`() throws {
+    var state = AlertState()
+    state.threshold = 30
+    state.observe(camera: camera(), reading: try reading(30315))
+    #expect(state.next(now: now) == nil)
+    state.observe(camera: camera(), reading: try reading(30316))
+    let candidate = state.next(now: now)
+    let alert = try #require(candidate)
+    #expect(alert.request.metadata.fields["threshold_celsius"]?.numberValue == 30)
+    #expect(alert.request.title == "Thermal camera above 30°C")
+    #expect(alert.request.body.contains("30°C threshold"))
+}
+
+@Test func `threshold defaults and invalid configuration`() throws {
+    #expect(try thermalThreshold(nil) == 80)
+    #expect(try thermalThreshold("30") == 30)
+    #expect(try thermalThreshold("-5.5") == -5.5)
+    for value in ["", "hot", "nan", "inf", "-inf"] {
+        #expect(throws: MonitorError.self) { try thermalThreshold(value) }
+    }
+}
+
+@Test func `test notification preserves real reading and explicit audience`() throws {
+    let measured = try reading(29815)
+    let recipient = UUID().uuidString.lowercased()
+    let request = testNotificationRequest(camera: camera(), reading: measured, recipients: [recipient], threshold: 30)
+    #expect(request.severity == .info)
+    #expect(request.title == "Thermal notification test")
+    #expect(request.body.contains("25.00°C"))
+    #expect(request.body.contains("Test only"))
+    #expect(request.audience.userIds == [recipient])
+    #expect(request.audience.roles.isEmpty)
+    #expect(request.metadata.fields["test"]?.boolValue == true)
+    #expect(request.metadata.fields["max_celsius"]?.numberValue == measured.celsius)
+    #expect(request.metadata.fields["threshold_celsius"]?.numberValue == 30)
 }

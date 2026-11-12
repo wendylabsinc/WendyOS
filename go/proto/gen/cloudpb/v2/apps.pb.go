@@ -33,8 +33,12 @@ type App struct {
 	// Interim owner/admin-controlled grant allowing this app to send notifications.
 	// WDY-2058 will replace this with capability-scoped app authorization.
 	CanSendNotifications bool `protobuf:"varint,7,opt,name=can_send_notifications,json=canSendNotifications,proto3" json:"can_send_notifications,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Set while the app is being deleted: from the first accepted DeleteApp
+	// call until the delete completes (DeleteAppRequest.device_removals). Unset
+	// = not being deleted.
+	DeletionStartedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=deletion_started_at,json=deletionStartedAt,proto3" json:"deletion_started_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *App) Reset() {
@@ -114,6 +118,13 @@ func (x *App) GetCanSendNotifications() bool {
 		return x.CanSendNotifications
 	}
 	return false
+}
+
+func (x *App) GetDeletionStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeletionStartedAt
+	}
+	return nil
 }
 
 type UpsertAppRequest struct {
@@ -318,6 +329,38 @@ type DeleteAppRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	OrganizationId string                 `protobuf:"bytes,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	// Operator-signed UnassignDeviceRequests, one per device in the removal
+	// set: every device in any live deployment's current set of the app, or
+	// with any Assign for the app relayed to it, not only devices known to hold
+	// one. Each is a TERMINAL removal: it carries the maximum revision,
+	// 2147483647 (UnassignDeviceRequest.revision).
+	// - Authorized by the caller's right to delete the app, not by access to
+	//   each device: a removal only takes the app away, the app is the
+	//   deleter's to delete, and otherwise an interrupted delete has no way out.
+	// - Each passes the full request-signing gate as an UnassignDevice call
+	//   would: the `operation` claim of DeploymentService.UnassignDevice or its
+	//   deprecated ArtifactRegistryService twin, the deployment's resource
+	//   binding, `x5c` only, its own nonce claimed, iat/expiry checked at
+	//   receipt. It must name a deployment of the app being deleted.
+	// - DeleteApp may be repeated with batches (clients send about 200 per
+	//   call; the whole request stays under the server's message limit). Each
+	//   call's removals are verified, queued and relayed verbatim.
+	// - There is no cancel: a device that received a terminal removal cannot
+	//   be put back. The delete is resumable and idempotent. A removal for a
+	//   device already covered is skipped and not relayed, also when it is a
+	//   retried copy whose nonce was claimed by the accepted one. Any operator
+	//   who may delete the app can finish it, from any of their keys. The
+	//   devices still lacking a removal: ListPendingDeviceStatements by app_id.
+	// - From the first accepted call until the delete completes, the app is
+	//   being deleted (App.deletion_started_at). Creating or changing a
+	//   deployment of it, AssignDevice under either name, and publishing a
+	//   release for it, are refused with FAILED_PRECONDITION saying the app is
+	//   being deleted.
+	// - The call after which no device lacks a removal deletes the app, its
+	//   releases and its deployments, without waiting for the devices. Until
+	//   then each call ends with FAILED_PRECONDITION saying how many devices
+	//   still need one.
+	DeviceRemovals []*SignedRequest `protobuf:"bytes,3,rep,name=device_removals,json=deviceRemovals,proto3" json:"device_removals,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -364,6 +407,13 @@ func (x *DeleteAppRequest) GetOrganizationId() string {
 		return x.OrganizationId
 	}
 	return ""
+}
+
+func (x *DeleteAppRequest) GetDeviceRemovals() []*SignedRequest {
+	if x != nil {
+		return x.DeviceRemovals
+	}
+	return nil
 }
 
 type DeleteAppResponse struct {
@@ -535,7 +585,7 @@ var File_wendycloud_v2_apps_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_apps_proto_rawDesc = "" +
 	"\n" +
-	"\x18wendycloud/v2/apps.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\x98\x02\n" +
+	"\x18wendycloud/v2/apps.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xe4\x02\n" +
 	"\x03App\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x12\n" +
@@ -545,7 +595,8 @@ const file_wendycloud_v2_apps_proto_rawDesc = "" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x124\n" +
-	"\x16can_send_notifications\x18\a \x01(\bR\x14canSendNotifications\"\x98\x01\n" +
+	"\x16can_send_notifications\x18\a \x01(\bR\x14canSendNotifications\x12J\n" +
+	"\x13deletion_started_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionStartedAt\"\x98\x01\n" +
 	"\x10UpsertAppRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x17\n" +
@@ -566,10 +617,11 @@ const file_wendycloud_v2_apps_proto_rawDesc = "" +
 	"\x05_nameB\n" +
 	"\n" +
 	"\b_detailsB\x19\n" +
-	"\x17_can_send_notifications\"K\n" +
+	"\x17_can_send_notifications\"\x92\x01\n" +
 	"\x10DeleteAppRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
-	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\"-\n" +
+	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12E\n" +
+	"\x0fdevice_removals\x18\x03 \x03(\v2\x1c.wendycloud.v2.SignedRequestR\x0edeviceRemovals\"-\n" +
 	"\x11DeleteAppResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\"\xaf\x01\n" +
 	"\x0fListAppsRequest\x12'\n" +
@@ -617,24 +669,26 @@ var file_wendycloud_v2_apps_proto_goTypes = []any{
 	(*SignedRequest)(nil),         // 9: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_apps_proto_depIdxs = []int32{
-	8, // 0: wendycloud.v2.App.created_at:type_name -> google.protobuf.Timestamp
-	8, // 1: wendycloud.v2.App.updated_at:type_name -> google.protobuf.Timestamp
-	0, // 2: wendycloud.v2.ListAppsResponse.apps:type_name -> wendycloud.v2.App
-	9, // 3: wendycloud.v2.AppService.UpsertApp:input_type -> wendycloud.v2.SignedRequest
-	2, // 4: wendycloud.v2.AppService.GetApp:input_type -> wendycloud.v2.GetAppRequest
-	9, // 5: wendycloud.v2.AppService.UpdateApp:input_type -> wendycloud.v2.SignedRequest
-	9, // 6: wendycloud.v2.AppService.DeleteApp:input_type -> wendycloud.v2.SignedRequest
-	6, // 7: wendycloud.v2.AppService.ListApps:input_type -> wendycloud.v2.ListAppsRequest
-	0, // 8: wendycloud.v2.AppService.UpsertApp:output_type -> wendycloud.v2.App
-	0, // 9: wendycloud.v2.AppService.GetApp:output_type -> wendycloud.v2.App
-	0, // 10: wendycloud.v2.AppService.UpdateApp:output_type -> wendycloud.v2.App
-	5, // 11: wendycloud.v2.AppService.DeleteApp:output_type -> wendycloud.v2.DeleteAppResponse
-	7, // 12: wendycloud.v2.AppService.ListApps:output_type -> wendycloud.v2.ListAppsResponse
-	8, // [8:13] is the sub-list for method output_type
-	3, // [3:8] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	8,  // 0: wendycloud.v2.App.created_at:type_name -> google.protobuf.Timestamp
+	8,  // 1: wendycloud.v2.App.updated_at:type_name -> google.protobuf.Timestamp
+	8,  // 2: wendycloud.v2.App.deletion_started_at:type_name -> google.protobuf.Timestamp
+	9,  // 3: wendycloud.v2.DeleteAppRequest.device_removals:type_name -> wendycloud.v2.SignedRequest
+	0,  // 4: wendycloud.v2.ListAppsResponse.apps:type_name -> wendycloud.v2.App
+	9,  // 5: wendycloud.v2.AppService.UpsertApp:input_type -> wendycloud.v2.SignedRequest
+	2,  // 6: wendycloud.v2.AppService.GetApp:input_type -> wendycloud.v2.GetAppRequest
+	9,  // 7: wendycloud.v2.AppService.UpdateApp:input_type -> wendycloud.v2.SignedRequest
+	9,  // 8: wendycloud.v2.AppService.DeleteApp:input_type -> wendycloud.v2.SignedRequest
+	6,  // 9: wendycloud.v2.AppService.ListApps:input_type -> wendycloud.v2.ListAppsRequest
+	0,  // 10: wendycloud.v2.AppService.UpsertApp:output_type -> wendycloud.v2.App
+	0,  // 11: wendycloud.v2.AppService.GetApp:output_type -> wendycloud.v2.App
+	0,  // 12: wendycloud.v2.AppService.UpdateApp:output_type -> wendycloud.v2.App
+	5,  // 13: wendycloud.v2.AppService.DeleteApp:output_type -> wendycloud.v2.DeleteAppResponse
+	7,  // 14: wendycloud.v2.AppService.ListApps:output_type -> wendycloud.v2.ListAppsResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_apps_proto_init() }

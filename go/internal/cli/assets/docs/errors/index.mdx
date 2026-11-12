@@ -25,6 +25,11 @@ Follow the CLI's recovery hint. If the device clock may be wrong, run `wendy dev
 
 Simulator startup stops retrying when authentication is rejected. It reports the authentication error without the boot-console tail. See [simulator startup and authentication failures](/docs/advanced/clients/wendy-cli/device-selection#simulator-startup-and-authentication-failures).
 
+For OIDC sign-ins, automatic certificate re-issuance through the sign-in session
+runs at most once per CLI invocation. If another target needs re-issuance in the
+same command, run `wendy auth refresh-certs` explicitly and retry. See
+[certificate renewal](/docs/advanced/clients/wendy-cli/commands/auth/refresh-certs).
+
 ## Wendy Net connection limit
 
 If you see `Wendy Net is closing a backup connection to free a slot; retry shortly`,
@@ -39,7 +44,7 @@ available connection slot. See [backup connections and recovery](/docs/advanced/
 
 ## Image build fails
 
-Read the first build error above the deployment failure. For the HTTP quickstart, confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
+Read the first build error above the deployment failure. For the [first app tutorial](/docs/getting-started/app), confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
 
 ## Cloud v2 upload connection lost
 
@@ -59,7 +64,7 @@ a missing capability requires an Agent update. See [Cloud v2 uploads](/docs/adva
 
 ## Host port already in use
 
-Another process may own the app's port, which is 5001 for the quickstart app. Stop that process or change the app's listening port and its readiness configuration together. The simulator forwards the declared TCP readiness port onto your development machine. See [simulator networking](/docs/installation/wendyos-virtual-machine#reaching-an-app-you-deployed).
+Another process may own the app's port, which is 5001 for the first app tutorial. Stop that process or change the app's listening port and its readiness configuration together. The simulator forwards the declared TCP readiness port onto your development machine. See [simulator networking](/docs/installation/simulator-management#reaching-an-app-you-deployed).
 
 ## Readiness probe timed out
 

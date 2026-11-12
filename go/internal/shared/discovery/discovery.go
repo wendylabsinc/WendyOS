@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 )
 
 // logMDNSQueryErr reports an mDNS query failure to stderr when WENDY_MDNS_DEBUG
@@ -43,7 +44,7 @@ func logMDNSBackend(name string) {
 
 // mdnsDebugOut is where the WENDY_MDNS_DEBUG diagnostics above go. A var so
 // tests can capture them; production never reassigns it.
-var mdnsDebugOut io.Writer = os.Stderr
+var mdnsDebugOut io.Writer = terminaloutput.Stderr
 
 // silentLogger is a no-op logger used to suppress hashicorp/mdns log output.
 var silentLogger = log.New(io.Discard, "", 0)

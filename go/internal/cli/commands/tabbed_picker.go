@@ -98,7 +98,7 @@ func runTabbedPicker(model tabbedPickerModel) (string, error) {
 	if len(model.tabs) == 0 {
 		return "", fmt.Errorf("no options available")
 	}
-	finalModel, err := tea.NewProgram(model).Run()
+	finalModel, err := tui.RunProgram(tui.NewProgram(model))
 	if err != nil {
 		return "", fmt.Errorf("picker: %w", err)
 	}

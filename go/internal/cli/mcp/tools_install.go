@@ -17,7 +17,7 @@ func (s *mcpServer) SetInstallationBackend(backend onboarding.Backend) { s.insta
 
 func (s *mcpServer) registerInstallationTools(srv *server.MCPServer) {
 	plan := append([]mcpgo.ToolOption{
-		mcpgo.WithDescription("Plan initial WendyOS or agent installation: artifact, erase scope, prerequisites and CLI arguments. No disk writes. For supported image installs, os_install_start creates a resumable job."),
+		mcpgo.WithDescription("Plan initial WendyOS or agent installation: artifact, erase scope, prerequisites and CLI arguments. No disk writes. For supported image installs, os_install_start creates a resumable job that can also set the first-boot name and Wi-Fi."),
 	}, installationOptionSchema()...)
 	plan = append(plan, readOnly()...)
 	plan = append(plan, openWorld()...)

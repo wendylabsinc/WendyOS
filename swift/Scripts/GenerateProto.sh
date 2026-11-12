@@ -90,15 +90,7 @@ generate_grpc --no-clients --no-servers --access-level public \
   --output-path "$OUT_DIR/WendyAgentGRPC" --import-path "$PROTO_DIR" \
   -- "${SHARED_SWIFT_MESSAGE_PROTOS[@]}"
 
-if [ -n "${1:-}" ]; then
-  if [ "$1" = --check-shared-grpc-api-contracts ]; then
-    for suffix in pb.swift grpc.swift; do
-      if [ -e "Sources/WendyAgentGRPC/Proto/wendy/lite/sensorlink.$suffix" ]; then
-        echo "error: stale generated sensorlink output at the old path" >&2
-        exit 1
-      fi
-    done
-  fi
+if [ "${1:-}" = --shared-grpc-api-contracts-only ]; then
   CLOUD_V1_SHARED_INPUTS=()
   for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
     CLOUD_V1_SHARED_INPUTS+=("$PROTO_DIR/cloud/$proto")
@@ -117,22 +109,14 @@ if [ -n "${1:-}" ]; then
     for message in "${SHARED_SWIFT_MESSAGE_PROTOS[@]}"; do
       if [ "$input" = "$message" ]; then
         suffixes=(pb.swift)
-        if [ "$1" = --check-shared-grpc-api-contracts ] && [ -e "Sources/$module/Proto/${proto%.proto}.grpc.swift" ]; then
-          echo "error: stale gRPC output for message-only $proto" >&2
-          exit 1
-        fi
       fi
     done
     for suffix in "${suffixes[@]}"; do
       file="${proto%.proto}.$suffix"
       committed="Sources/$module/Proto/$file"
       generated="$OUT_DIR/$module/$file"
-      if [ "$1" = --check-shared-grpc-api-contracts ]; then
-        diff -u "$committed" "$generated"
-      else
-        mkdir -p "$(dirname "$committed")"
-        cp "$generated" "$committed"
-      fi
+      mkdir -p "$(dirname "$committed")"
+      cp "$generated" "$committed"
     done
   done
   exit 0
@@ -176,9 +160,22 @@ publicize_generated_imports \
     "$OUT_DIR/OpenTelemetryGRPC" \
     "$OUT_DIR/WendyCloudGRPC"
 
+if [ "${1:-}" = --check-shared-grpc-api-contracts ]; then
+  drift=0
+  for module in WendyAgentGRPC OpenTelemetryGRPC WendyCloudGRPC; do
+    diff -ru "Sources/$module/Proto" "$OUT_DIR/$module" || drift=1
+  done
+  if [ "$drift" -ne 0 ]; then
+    echo "error: generated Swift output differs; regenerate from repository root: bash swift/Scripts/GenerateProto.sh" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 # Export, generation and postprocessing must all succeed before replacing outputs.
 for module in WendyAgentGRPC OpenTelemetryGRPC WendyCloudGRPC; do
   rm -rf "Sources/$module/Proto"
+  mkdir -p "Sources/$module"
   cp -R "$OUT_DIR/$module" "Sources/$module/Proto"
 done
 

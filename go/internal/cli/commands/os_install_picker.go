@@ -5,6 +5,7 @@ package commands
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -36,6 +37,9 @@ func pickInstallDevice(items []tui.PickerItem) (string, error) {
 	if len(items) == 0 {
 		return "", fmt.Errorf("no devices available")
 	}
+	if err := requireInstallChoice("choosing a device", "pass --device-type ("+strings.Join(installDeviceTypeChoices(items), ", ")+")"); err != nil {
+		return "", err
+	}
 	devices, err := scanInstallUSBDevices()
 	if err != nil {
 		log.Printf("WARNING: could not scan USB flashing devices: %v", err)
@@ -48,4 +52,17 @@ func pickInstallDevice(items []tui.PickerItem) (string, error) {
 		return pickFromItems("Select the board connected in EDL mode", edlInstallItems(items))
 	}
 	return selected, nil
+}
+
+// installDeviceTypeChoices lists the --device-type values among items; Wendy
+// Lite boards have none, since only the picker installs them.
+func installDeviceTypeChoices(items []tui.PickerItem) []string {
+	var types []string
+	for _, item := range items {
+		if v, ok := item.Value.(string); ok && v != "" && !strings.HasPrefix(v, "wlite_") {
+			types = append(types, v)
+		}
+	}
+	sort.Strings(types)
+	return types
 }

@@ -40,10 +40,14 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	gallery                 galleryConnections
+	discovery               nearbyDiscovery
+	discoverNearby          func(context.Context) ([]commands.DesktopDevice, error)
 	operationMu             sync.Mutex
 	operationCancel         context.CancelFunc
 	mobileMu                sync.Mutex
 	mobileScope             string
+	tunnelSession           commands.TunnelSession
 	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
@@ -82,8 +86,12 @@ type Backend struct {
 }
 
 func New() *Backend {
-	return &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second,
-		connectTarget: connectDesktopTarget, unpinDevice: commands.DesktopUnpin}
+	b := &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second, unpinDevice: commands.DesktopUnpin}
+	b.tunnelSession.SetActive(true)
+	b.connectTarget = func(ctx context.Context, selector string) (*grpcclient.AgentConnection, liteConnection, error) {
+		return connectDesktopTarget(b.tunnelSession.Context(ctx), selector)
+	}
+	return b
 }
 
 // IdentityRecoveryError exposes a recovery action without exposing a caller-
@@ -209,11 +217,6 @@ func (b *Backend) Initialize(cli string) error {
 	_, done := b.begin()
 	defer done()
 	return commands.InitializeDesktop(cli)
-}
-func (b *Backend) Nearby() ([]commands.DesktopDevice, error) {
-	ctx, done := b.begin()
-	defer done()
-	return commands.DesktopNearby(ctx)
 }
 func (b *Backend) Cloud() ([]commands.DesktopDevice, error) {
 	ctx, done := b.begin()
@@ -461,6 +464,9 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.tunnelSession.SetActive(false)
+	b.resetNearbyDiscovery(true)
+	b.galleryReset(true)
 	b.cancelOperation()
 	b.ReserveConnection()
 	b.NearbyClose(0)

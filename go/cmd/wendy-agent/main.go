@@ -346,6 +346,13 @@ func main() {
 	containerSvc := services.NewContainerService(logger, containerdClient,
 		containerSvcOpts...,
 	)
+	removeAllReleases := func(ctx context.Context, imagesOnly bool) error {
+		control := services.NewPostboxControl(containerSvc)
+		if imagesOnly {
+			return control.RemoveReleaseImages(ctx)
+		}
+		return control.RemoveReleases(ctx, "", nil)
+	}
 	shellSvc := services.NewShellService(logger, hostexec.New())
 	audioSvc := services.NewAudioService(logger)
 
@@ -425,8 +432,18 @@ func main() {
 	// must not require mesh firewall tools just to begin enrollment.
 	if resetStatus, err := provisioningSvcV2.IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}); err == nil {
 		completed := len(resetStatus.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 || provisioningSvc.LocalResetCompleted()
+		// The recovery also removes every registry release: a reset whose
+		// removal failed is confirmed only once they are gone.
+		// Without containerd it gives up after a few tries and exits: the
+		// service manager restarts the agent, which connects again.
+		releaseCleanup := resetReleaseCleanup(runtime.GOOS, ctrdErr, containerdAddr, nil, removeAllReleases, func(err error) {
+			logger.Error("Reset release removal cannot run without containerd; restarting the agent", zap.Error(err))
+			os.Exit(1)
+		})
 		recoverCompletedResetMesh(ctx, completed, 5*time.Second,
-			cleanupResetMesh, provisioningSvc.SetResetCleanupError, func(err error) {
+			func(ctx context.Context) error {
+				return errors.Join(cleanupResetMesh(ctx), releaseCleanup(ctx, false))
+			}, provisioningSvc.SetResetCleanupError, func(err error) {
 				logger.Error("Reset net cleanup incomplete; completion and enrollment remain unavailable", zap.Error(err))
 			})
 	}
@@ -1048,7 +1065,7 @@ func main() {
 		if !accessPolicy.AllowsNetwork {
 			return
 		}
-		tlsConfig, err := mtls.NewTLSConfig(certPEM, chainPEM, keyPEM, logger, certNotBeforeFloor(certPEM))
+		tlsConfig, err := mtls.NewOperatorTLSConfig(certPEM, chainPEM, keyPEM, logger, certNotBeforeFloor(certPEM), orgMode)
 		if err != nil {
 			logger.Error("Failed to build BLE TLS config", zap.Error(err))
 			return
@@ -1389,6 +1406,17 @@ func main() {
 		}()
 	}
 
+	// The device's registry encryption key (registry plan T10): generated with
+	// the first enrolled identity and registered with Cloud for each identity
+	// the agent loads. Like the roster it stays silent until enrolled.
+	encryptionKey := services.NewDeviceEncryptionKey(logger, configPath)
+	encryptionKey.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		encryptionKey.Run(ctx)
+	}()
+
 	if alreadyProvisioned {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
@@ -1539,6 +1567,7 @@ func main() {
 		// peer, until the agent is restarted — so swap in the freshly issued
 		// identity here.
 		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		encryptionKey.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 		if reportedState != nil {
 			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
@@ -1590,6 +1619,7 @@ func main() {
 		localMeshMu.Unlock()
 		meshDialer.UpdateIdentity("", "", "")
 		meshRoster.UpdateIdentity("", "", "", "")
+		encryptionKey.UpdateIdentity("", "", "", "")
 		if reportedState != nil {
 			reportedState.UpdateIdentity("", "", "", "")
 			postbox.UpdateIdentity("", "", "", "")
@@ -1601,14 +1631,25 @@ func main() {
 		if err := unitreeSvc.Rebind(unitree.PairingOwner{}); err != nil {
 			logger.Error("Clearing Unitree pairings during unprovisioning failed", zap.Error(err))
 		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		// No decrypted registry release outlives the enrollment it was for.
+		// It runs before the net check below returns; a failure keeps the
+		// reset unconfirmed and the restart recovery retries it. While the
+		// net shutdown has not drained, only the release images go: deleting
+		// an app tears down its container networking. The recovery removes
+		// the rest.
+		var pb releaseResetter
+		if postbox != nil {
+			pb = postbox
+		}
+		releasesErr := resetReleaseCleanup(runtime.GOOS, ctrdErr, containerdAddr, pb, removeAllReleases, nil)(cleanupCtx, stopErr != nil)
 		if stopErr != nil {
 			// Do not reclaim kernel objects while an undrained worker may still
 			// use them. Reset stays unconfirmed; the scheduled restart retries.
-			return fmt.Errorf("waiting for net shutdown: %w", stopErr)
+			return errors.Join(fmt.Errorf("waiting for net shutdown: %w", stopErr), releasesErr)
 		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		return errors.Join(meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx))
+		return errors.Join(meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx), releasesErr)
 	}
 	provisioningSvc.OnUnprovisioned = func() {
 		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum)

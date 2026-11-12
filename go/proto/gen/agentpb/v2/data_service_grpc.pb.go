@@ -30,6 +30,7 @@ const (
 	DataService_Episodes_FullMethodName                   = "/wendy.agent.services.v2.DataService/Episodes"
 	DataService_Inspect_FullMethodName                    = "/wendy.agent.services.v2.DataService/Inspect"
 	DataService_Download_FullMethodName                   = "/wendy.agent.services.v2.DataService/Download"
+	DataService_DeleteEpisode_FullMethodName              = "/wendy.agent.services.v2.DataService/DeleteEpisode"
 	DataService_CampaignDeploy_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignDeploy"
 	DataService_Campaigns_FullMethodName                  = "/wendy.agent.services.v2.DataService/Campaigns"
 	DataService_CampaignInspect_FullMethodName            = "/wendy.agent.services.v2.DataService/CampaignInspect"
@@ -74,6 +75,16 @@ type DataServiceClient interface {
 	Episodes(ctx context.Context, in *DataEpisodesRequest, opts ...grpc.CallOption) (*DataEpisodesResponse, error)
 	Inspect(ctx context.Context, in *DataInspectRequest, opts ...grpc.CallOption) (*DataInspectResponse, error)
 	Download(ctx context.Context, in *DataDownloadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataDownloadChunk], error)
+	// DeleteEpisode permanently removes one finalized episode from the device:
+	// its manifest and every file it recorded. It cannot be undone, and an
+	// episode that had not been uploaded is lost for good, so callers confirm
+	// with the operator first. It is what `wendy data delete` calls.
+	// FAILED_PRECONDITION while the episode is still recording, draining or
+	// sealing, or while a Download or the upload worker is reading it; NOT_FOUND
+	// if the device holds no finalized episode with that ID. The episode leaves
+	// the store atomically: a delete interrupted by a crash or power cut is
+	// finished when the agent next starts, never left half done.
+	DeleteEpisode(ctx context.Context, in *DataDeleteEpisodeRequest, opts ...grpc.CallOption) (*DataDeleteEpisodeResponse, error)
 	CampaignDeploy(ctx context.Context, in *DataCampaignDeployRequest, opts ...grpc.CallOption) (*DataCampaign, error)
 	Campaigns(ctx context.Context, in *DataCampaignsRequest, opts ...grpc.CallOption) (*DataCampaignsResponse, error)
 	CampaignInspect(ctx context.Context, in *DataCampaignInspectRequest, opts ...grpc.CallOption) (*DataCampaign, error)
@@ -231,6 +242,16 @@ func (c *dataServiceClient) Download(ctx context.Context, in *DataDownloadReques
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DataService_DownloadClient = grpc.ServerStreamingClient[DataDownloadChunk]
 
+func (c *dataServiceClient) DeleteEpisode(ctx context.Context, in *DataDeleteEpisodeRequest, opts ...grpc.CallOption) (*DataDeleteEpisodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataDeleteEpisodeResponse)
+	err := c.cc.Invoke(ctx, DataService_DeleteEpisode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *dataServiceClient) CampaignDeploy(ctx context.Context, in *DataCampaignDeployRequest, opts ...grpc.CallOption) (*DataCampaign, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DataCampaign)
@@ -336,6 +357,16 @@ type DataServiceServer interface {
 	Episodes(context.Context, *DataEpisodesRequest) (*DataEpisodesResponse, error)
 	Inspect(context.Context, *DataInspectRequest) (*DataInspectResponse, error)
 	Download(*DataDownloadRequest, grpc.ServerStreamingServer[DataDownloadChunk]) error
+	// DeleteEpisode permanently removes one finalized episode from the device:
+	// its manifest and every file it recorded. It cannot be undone, and an
+	// episode that had not been uploaded is lost for good, so callers confirm
+	// with the operator first. It is what `wendy data delete` calls.
+	// FAILED_PRECONDITION while the episode is still recording, draining or
+	// sealing, or while a Download or the upload worker is reading it; NOT_FOUND
+	// if the device holds no finalized episode with that ID. The episode leaves
+	// the store atomically: a delete interrupted by a crash or power cut is
+	// finished when the agent next starts, never left half done.
+	DeleteEpisode(context.Context, *DataDeleteEpisodeRequest) (*DataDeleteEpisodeResponse, error)
 	CampaignDeploy(context.Context, *DataCampaignDeployRequest) (*DataCampaign, error)
 	Campaigns(context.Context, *DataCampaignsRequest) (*DataCampaignsResponse, error)
 	CampaignInspect(context.Context, *DataCampaignInspectRequest) (*DataCampaign, error)
@@ -404,6 +435,9 @@ func (UnimplementedDataServiceServer) Inspect(context.Context, *DataInspectReque
 }
 func (UnimplementedDataServiceServer) Download(*DataDownloadRequest, grpc.ServerStreamingServer[DataDownloadChunk]) error {
 	return status.Error(codes.Unimplemented, "method Download not implemented")
+}
+func (UnimplementedDataServiceServer) DeleteEpisode(context.Context, *DataDeleteEpisodeRequest) (*DataDeleteEpisodeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteEpisode not implemented")
 }
 func (UnimplementedDataServiceServer) CampaignDeploy(context.Context, *DataCampaignDeployRequest) (*DataCampaign, error) {
 	return nil, status.Error(codes.Unimplemented, "method CampaignDeploy not implemented")
@@ -613,6 +647,24 @@ func _DataService_Download_Handler(srv interface{}, stream grpc.ServerStream) er
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DataService_DownloadServer = grpc.ServerStreamingServer[DataDownloadChunk]
 
+func _DataService_DeleteEpisode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataDeleteEpisodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).DeleteEpisode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_DeleteEpisode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).DeleteEpisode(ctx, req.(*DataDeleteEpisodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DataService_CampaignDeploy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DataCampaignDeployRequest)
 	if err := dec(in); err != nil {
@@ -777,6 +829,10 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Inspect",
 			Handler:    _DataService_Inspect_Handler,
+		},
+		{
+			MethodName: "DeleteEpisode",
+			Handler:    _DataService_DeleteEpisode_Handler,
 		},
 		{
 			MethodName: "CampaignDeploy",

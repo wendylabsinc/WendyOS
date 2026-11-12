@@ -93,6 +93,7 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 	srv := wendymcp.New(cfg, connectMCPDevice)
+	srv.SetWiFiSetupConnect(connectMCPWiFiDevice)
 	srv.SetTransientConnectError(isTransientDeviceConnectError)
 	srv.SetLoginRenewer(renewConnectionLogin)
 	srv.SetCLIUpdateChecker(checkCLIUpdateIfDue)

@@ -7,6 +7,8 @@ import (
 
 	bubbleTable "github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // Regression test for the "wendy discover eats my terminal" bug: bubbletea
@@ -65,5 +67,40 @@ func TestBubbleTableSetRowsPreservesValidCursor(t *testing.T) {
 	tbl.SetRows([]bubbleTable.Row{{"a"}, {"b"}, {"c"}, {"d"}})
 	if cur := tbl.Cursor(); cur != 2 {
 		t.Fatalf("cursor = %d after SetRows, want it preserved at 2", cur)
+	}
+}
+
+// rowLine returns the rendered line that shows text.
+func rowLine(t *testing.T, view, text string) string {
+	t.Helper()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, text) {
+			return line
+		}
+	}
+	t.Fatalf("no line shows %q in:\n%s", text, view)
+	return ""
+}
+
+func TestBubbleTableSelectedRowWithAndWithoutColour(t *testing.T) {
+	render := func(p termenv.Profile) string {
+		withColor(t, p)
+		tbl := NewBubbleTable(true, []bubbleTable.Column{{Title: "Drive", Width: 10}})
+		tbl.SetHeight(5)
+		tbl.SetRows([]bubbleTable.Row{{"disk4"}, {"disk5"}})
+		tbl.SetCursor(1)
+		return tbl.FullView()
+	}
+
+	plain := render(termenv.Ascii)
+	selected, other := rowLine(t, plain, "disk5"), rowLine(t, plain, "disk4")
+	if !strings.HasPrefix(selected, ">disk5") || strings.HasPrefix(other, ">") || len(selected) != len(other) {
+		t.Fatalf("plain rows %q and %q; want only the cursor row marked, at the same width", selected, other)
+	}
+
+	coloured := render(termenv.TrueColor)
+	want := lipgloss.NewStyle().Foreground(tableSelectedFg).Background(tableSelectedBg).Bold(true).Render(" disk5      ")
+	if got := rowLine(t, coloured, "disk5"); got != want || strings.Contains(coloured, ">") {
+		t.Fatalf("coloured cursor row %q; want the highlight unchanged, %q", got, want)
 	}
 }

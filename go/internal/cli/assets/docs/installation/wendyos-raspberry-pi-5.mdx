@@ -3,10 +3,7 @@ title: Raspberry Pi
 description: Install WendyOS on your Raspberry Pi 3, 4, or 5
 ---
 
-<div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
-  <img src="/icons/icons8-raspberry-pi.svg" alt="Raspberry Pi" style={{ width: '48px', height: '48px' }} />
-  <h1 style={{ fontSize: '2.25rem', fontWeight: 'bold', margin: 0, lineHeight: '1' }}>Raspberry Pi Installation</h1>
-</div>
+<Figure src="/images/get-started/raspberry-pi-5-camera-feed.webp" alt="Overhead view of a Raspberry Pi 5 with a USB webcam, connected by USB-C to a laptop that shows the webcam's live feed" caption="A Raspberry Pi 5 running WendyOS. The laptop shows the live feed from the webcam plugged into the Pi." />
 
 WendyOS runs on these Raspberry Pi boards, with the Wendy agent built in:
 
@@ -20,7 +17,7 @@ WendyOS runs on these Raspberry Pi boards, with the Wendy agent built in:
   The Pi 5 and Pi 4 expose a USB gadget over their USB-C port, so you can plug them straight into your computer for setup. The Pi 3 B/B+ cannot do this — its onboard USB hub blocks USB gadget mode — so it connects over the network instead. Plan to give the Pi 3 Wi-Fi or wired Ethernet (see the connection step below).
 </Callout>
 
-## Installation Steps
+## Installation steps
 
 Prefer to follow along with video? Watch the [WendyOS Raspberry Pi 5 installation video](https://youtu.be/87GlYkx86jY). The steps are the same for the Pi 4 and Pi 3, apart from how you connect the board.
 
@@ -146,10 +143,10 @@ Prefer to follow along with video? Watch the [WendyOS Raspberry Pi 5 installatio
     <CliShot flow="discover" step="devices" alt="The Wendy CLI listing discovered WendyOS devices on the network" />
 
     <Callout type="warning">
-      **Don't see your Pi 3?** Since the Pi 3 is found over the network, discovery relies on mDNS. If it doesn't show up, confirm the Pi is on the same network as your computer and that the network allows mDNS traffic — see [Discovering Devices](/docs/device/discovering-devices) for troubleshooting.
+      **Don't see your Pi 3?** Since the Pi 3 is found over the network, discovery relies on mDNS. If it doesn't show up, confirm the Pi is on the same network as your computer and that the network allows mDNS traffic — see [Discovering devices](/docs/device/discovering-devices) for troubleshooting.
     </Callout>
 
-    Your device is now ready for development! For more information on device discovery and configuration, see [Discovering Devices](/docs/device/discovering-devices).
+    Your device is now ready for development! For more information on device discovery and configuration, see [Discovering devices](/docs/device/discovering-devices).
   </Step>
 </Steps>
 

@@ -3,25 +3,23 @@ title: How Wendy works
 description: Understand targets, app configuration, and the build and deploy loop.
 ---
 
-Start with the [quickstart](/docs/) if you have not run an app yet.
+Start with [Get started](/docs/) if you have not run an app yet.
 
 ## Wendy in 60 seconds
 
-```text
-YOUR DEVELOPMENT MACHINE
-  Wendy CLI / editor
-          |
-          | build, run, debug
-          v
-YOUR TARGET
-  WendyOS, or an existing machine with Wendy Agent
-    Your app
-    Camera / GPU / GPIO / ROS 2
-          |
-          | optional enrollment
-          v
-  Wendy Cloud: fleet management and remote deployment
-```
+<Flow label="The Wendy CLI builds, runs and debugs your app on a target. Enrolling the target in Wendy Cloud is optional.">
+  <FlowNode title="Your development machine">
+    <FlowPart>Wendy CLI</FlowPart>
+    <FlowPart>Your editor</FlowPart>
+  </FlowNode>
+  <FlowArrow>build, run, debug</FlowArrow>
+  <FlowNode wide title="Your target" note="WendyOS, or an existing machine with Wendy Agent">
+    <FlowPart>Your app</FlowPart>
+    <FlowPart>Camera · GPU · GPIO · ROS 2</FlowPart>
+  </FlowNode>
+  <FlowArrow optional>optional enrollment</FlowArrow>
+  <FlowNode optional title="Wendy Cloud" note="Fleet management and remote deployment" />
+</Flow>
 
 | Name | What it does |
 | --- | --- |
@@ -33,6 +31,8 @@ YOUR TARGET
 
 ## Your development machine and your target
 
+<Figure src="/images/get-started/jetson-usb-c.webp" alt="Overhead view of a laptop connected to an NVIDIA Jetson Orin Nano developer kit by one USB-C cable" caption="A development machine and a target: a laptop and a Jetson Orin Nano joined by one USB-C cable." />
+
 The CLI runs on your development machine. A target is the machine that runs your app. WendyOS includes Wendy Agent; existing Linux and supported Mac machines can run the agent without replacing their OS. A simulator is a local VM running WendyOS.
 
 `wendy run` selects a target, detects the project, builds for that target, uploads the result, starts the app, and attaches logs. Use `wendy run --watch` to repeat that loop when source files change.
@@ -43,7 +43,7 @@ Keep existing Dockerfiles, Compose projects, and standard ROS 2 application inte
 
 ## App configuration
 
-[`wendy.json`](/docs/reference/app-configuration) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path. Physical hardware access is limited to opt-in [serial passthrough](/docs/installation/wendyos-virtual-machine#serial-passthrough); other peripherals need a real device.
+[`wendy.json`](/docs/reference/app-configuration) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path. Physical hardware access is limited to opt-in [serial passthrough](/docs/installation/simulator-management#serial-passthrough); other peripherals need a real device.
 
 ## Optional cloud management
 

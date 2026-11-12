@@ -383,6 +383,7 @@ func NewManager(root string) (*Manager, error) {
 	if err := m.recoverPartials(); err != nil {
 		return nil, err
 	}
+	m.emptyTrash()
 	return m, nil
 }
 
@@ -962,6 +963,10 @@ func scanEpisodeStore(root string) (storeScan, error) {
 		switch {
 		case e.Name() == ".recordings":
 			scan.partialBytes += size
+			continue
+		case e.Name() == trashDirName:
+			// Deleted episodes whose files are still being removed. Their
+			// bytes are on disk until then, but there is nothing to evict.
 			continue
 		case strings.HasSuffix(e.Name(), ".partial"):
 			scan.partialBytes += size

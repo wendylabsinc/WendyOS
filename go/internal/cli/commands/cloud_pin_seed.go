@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -168,6 +169,6 @@ func cloudPinChanges(cfg *config.Config, pins map[string]config.DevicePin) map[s
 // mTLS/pin diagnostics (see debugClock in device_clock.go).
 func debugPinSeed(format string, args ...any) {
 	if os.Getenv("WENDY_TLS_DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "[pin-seed] "+format+"\n", args...)
+		fmt.Fprintf(terminaloutput.Stderr, "[pin-seed] "+format+"\n", args...)
 	}
 }

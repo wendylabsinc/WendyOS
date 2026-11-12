@@ -520,7 +520,7 @@ func spinOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -724,7 +724,7 @@ func waitForDeviceOnline(ctx context.Context, prior *grpcclient.AgentConnection)
 			p.Send(tui.SpinnerDoneMsg{})
 		}
 	}()
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
@@ -1693,7 +1693,7 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 		p.Send(tui.ProgressDoneMsg{Err: downloadToFile(ctx, img, tmpFile, sendProgress)})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		tmpFile.Close()
 		os.Remove(tmpFile.Name())

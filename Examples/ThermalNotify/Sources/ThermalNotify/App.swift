@@ -21,18 +21,55 @@ func requiredSocket(_ key: String, entitlement: String) throws -> String {
 @main
 struct ThermalNotify {
     static func main() async throws {
+        let delivery = ProcessInfo.processInfo.environment["THERMAL_NOTIFY_DELIVERY"] ?? "cloud"
+        guard ["cloud", "monitor-only"].contains(delivery) else { throw MonitorError("THERMAL_NOTIFY_DELIVERY must be cloud or monitor-only") }
+        let recipients = (ProcessInfo.processInfo.environment["THERMAL_NOTIFY_USER_IDS"] ?? "")
+            .split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+        guard recipients.allSatisfy({ UUID(uuidString: $0) != nil }) else { throw MonitorError("THERMAL_NOTIFY_USER_IDS must contain user UUIDs") }
+        let sender: NotificationSender? = delivery == "cloud"
+            ? NotificationSender(socketPath: try requiredSocket("WENDY_SYSTEM_SOCKET", entitlement: "notifications")) : nil
+        let threshold = try thermalThreshold(ProcessInfo.processInfo.environment["THERMAL_NOTIFY_THRESHOLD_CELSIUS"])
+        let alerts = AlertCoordinator(sender: sender, recipients: recipients, threshold: threshold)
+        if sender == nil { log("Monitor-only mode: no Cloud notifications will be sent.") }
+        if let address = ProcessInfo.processInfo.environment["THERMAL_VIEWER_URL"] {
+            guard let url = URL(string: address), url.scheme == "http", url.host == "127.0.0.1", url.port == 18842,
+                url.path == "/api/frame", url.user == nil, url.password == nil, url.query == nil else {
+                throw MonitorError("THERMAL_VIEWER_URL must be http://127.0.0.1:18842/api/frame on this device")
+            }
+            if CommandLine.arguments.contains("--test-notification") {
+                guard let sender else { throw MonitorError("Cloud notification delivery is disabled") }
+                guard !recipients.isEmpty else { throw MonitorError("A test must be addressed to explicit THERMAL_NOTIFY_USER_IDS") }
+                let (_, reading) = try await ViewerSource.read(url)
+                let request = testNotificationRequest(camera: ViewerSource.camera, reading: reading, recipients: recipients, threshold: threshold)
+                try await sender.send(request)
+                log("TEST notification accepted: \(request.notificationID)")
+                return
+            }
+            log("Monitoring MLX90642 on this device; alerts above \(threshold)°C; recipients: \(recipients.isEmpty ? "organization roles" : "configured users").")
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { try await alerts.run() }
+                group.addTask { try await ViewerSource.monitor(url, alerts: alerts) }
+                defer { group.cancelAll() }
+                try await group.waitForAll()
+            }
+            return
+        }
         let agentSocket = try requiredSocket("WENDY_AGENT_SOCKET", entitlement: "admin")
-        let systemSocket = try requiredSocket("WENDY_SYSTEM_SOCKET", entitlement: "notifications")
-        let alerts = AlertCoordinator(sender: .init(socketPath: systemSocket))
-        log(
-            "Monitoring all thermal cameras. CRITICAL alerts to every organization role when any valid pixel exceeds 80°C."
-        )
+        let stableID = ProcessInfo.processInfo.environment["THERMAL_CAMERA_STABLE_ID"]
+        if CommandLine.arguments.contains("--test-notification") {
+            guard let sender, let stableID, !recipients.isEmpty else {
+                throw MonitorError("A test requires Cloud delivery, an exact camera and explicit recipients")
+            }
+            try await testNotification(socket: agentSocket, stableID: stableID, sender: sender, recipients: recipients, threshold: threshold)
+            return
+        }
+        log("Monitoring \(stableID ?? "all thermal cameras"); threshold above \(threshold)°C; delivery: \(delivery).")
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await alerts.run() }
             defer { group.cancelAll() }
             while !Task.isCancelled {
                 do {
-                    try await monitor(socket: agentSocket, alerts: alerts)
+                    try await monitor(socket: agentSocket, alerts: alerts, stableID: stableID)
                 } catch {
                     if Task.isCancelled { return }
                     log("Camera connection failed: \(error). Retrying in 5 seconds.")
@@ -42,7 +79,34 @@ struct ThermalNotify {
         }
     }
 
-    static func monitor(socket: String, alerts: AlertCoordinator) async throws {
+    static func testNotification(socket: String, stableID: String, sender: NotificationSender, recipients: [String], threshold: Double) async throws {
+        let transport = try HTTP2ClientTransport.Posix(target: .unixDomainSocket(path: socket), transportSecurity: .plaintext)
+        try await withGRPCClient(transport: transport) { client in
+            let video = Wendy_Agent_Services_V1_WendyVideoService.Client(wrapping: client)
+            var options = CallOptions.defaults
+            options.timeout = .seconds(30)
+            let cameras = try await video.listVideoDevices(.init(), options: options)
+            guard let camera = cameras.devices.first(where: { $0.stableID == stableID && isThermalCamera($0) }) else {
+                throw MonitorError("Configured thermal camera is unavailable")
+            }
+            var request = Wendy_Agent_Services_V1_StreamVideoRequest()
+            request.deviceID = camera.id
+            request.stableID = stableID
+            request.codec = .raw
+            let reading: ThermalReading = try await video.streamVideo(request, options: options) { stream in
+                var decoder = ThermalFrameDecoder()
+                for try await frame in stream.messages {
+                    if let reading = try? decoder.decode(frame) { return reading }
+                }
+                throw MonitorError("No fresh temperature received")
+            }
+            let notificationRequest = testNotificationRequest(camera: camera, reading: reading, recipients: recipients, threshold: threshold)
+            try await sender.send(notificationRequest)
+            log("TEST notification accepted: \(notificationRequest.notificationID); maximum \(reading.celsius)°C")
+        }
+    }
+
+    static func monitor(socket: String, alerts: AlertCoordinator, stableID: String? = nil) async throws {
         let transport = try HTTP2ClientTransport.Posix(
             target: .unixDomainSocket(path: socket),
             transportSecurity: .plaintext
@@ -56,7 +120,7 @@ struct ThermalNotify {
                     var options = CallOptions.defaults
                     options.timeout = .seconds(10)
                     let response = try await video.listVideoDevices(.init(), options: options)
-                    let cameras = response.devices.filter(isThermalCamera)
+                    let cameras = response.devices.filter { isThermalCamera($0) && (stableID == nil || $0.stableID == stableID) }
                     if cameras.isEmpty {
                         log("No thermal cameras found. Checking again in 5 seconds.")
                     }
@@ -75,6 +139,7 @@ struct ThermalNotify {
                                     try await video.streamVideo(request) { stream in
                                         var lastProblem: String?
                                         var reportedReading = false
+                                        var lastReport = Date.distantPast
                                         var decoder = ThermalFrameDecoder()
                                         for try await frame in stream.messages {
                                             let reading: ThermalReading
@@ -90,12 +155,13 @@ struct ThermalNotify {
                                                 }
                                                 continue
                                             }
-                                            if !reportedReading || lastProblem != nil {
+                                            if !reportedReading || lastProblem != nil || Date().timeIntervalSince(lastReport) >= 30 {
                                                 log(
                                                     "\(camera.name) [\(camera.monitorKey)]: maximum \(String(format: "%.2f", reading.celsius))°C, \(reading.provenance)"
                                                 )
                                                 reportedReading = true
                                                 lastProblem = nil
+                                                lastReport = .now
                                             }
                                             await alerts.observe(camera: camera, reading: reading)
                                         }

@@ -451,7 +451,7 @@ func pickBuildOptionWithTitle(options []BuildOption, title string) (*BuildOption
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("build type picker: %w", err)
 	}
@@ -712,7 +712,7 @@ func buildDockerProject(dir, imageName, platform, dockerfile string) error {
 		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}

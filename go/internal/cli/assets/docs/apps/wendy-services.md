@@ -55,10 +55,10 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 | `context` | string | **yes** | Build context directory, relative to `wendy.json`. Must be a relative path and must not contain `..` components. |
 | `entitlements` | array | no | [Entitlements](../device/entitlements.md) to apply to this service's container. Same schema as the top-level `entitlements` field. |
 | `dependsOn` | array of strings | no | Names of other services in this `services` map that must be created before this one. All referenced names must exist in the same map. |
-| `env` | object | no | Environment variables for this service's container. Overrides the top-level [`env`](./wendy.json.md#env) per key, so a service can change one variable without dropping the rest. |
+| `env` | object | no | Environment variables for this service's container. Overrides the top-level [`env`](/docs/reference/app-configuration#env) per key, so a service can change one variable without dropping the rest. |
 | `readiness` | object | no | Readiness probe for this service. Same schema as the top-level `readiness` field; see [Readiness and lifecycle hooks](#readiness-and-lifecycle-hooks). |
 | `hooks` | object | no | Lifecycle hooks for this service. Same schema as the top-level `hooks` field. |
-| `resources` | object | no | CPU/memory/PID ceilings for this service. Overrides the top-level [`resources`](./wendy.json.md#resources) per field. |
+| `resources` | object | no | CPU/memory/PID ceilings for this service. Overrides the top-level [`resources`](/docs/reference/app-configuration#resources) per field. |
 | `frameworks` | object | no | Framework configuration (e.g. ROS 2) for this service, replacing the top-level `frameworks`. |
 | `simulation` | object | no | Explicit environment and entitlement overrides for a matching managed robot VM. See [Simulation backends](#simulation-backends). |
 

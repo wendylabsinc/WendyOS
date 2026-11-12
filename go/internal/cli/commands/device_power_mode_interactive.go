@@ -184,7 +184,7 @@ func waitForPowerModeApplied(ctx context.Context, host, pinKey string, want int3
 		applied, err := pollPowerModeApplied(ctx, probe, want, powerModeWaitInterval)
 		p.Send(tui.SpinnerDoneMsg{Result: applied, Err: err})
 	}()
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return nil, fmt.Errorf("TUI error: %w", err)
 	}

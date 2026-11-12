@@ -25,6 +25,7 @@ const skipDirs = new Set([
   'scripts',
 ]);
 const publicAssetExtensions = new Set([
+  '.cast',
   '.gif',
   '.ico',
   '.js',
@@ -66,7 +67,9 @@ async function walk(dir) {
   for (const entry of entries) {
     if (entry.name === 'AGENTS.md' || entry.name === 'CLAUDE.md') continue;
     if (entry.name.startsWith('.') && entry.name !== '.gitignore') continue;
-    if (entry.isDirectory() && skipDirs.has(entry.name)) continue;
+    // Tool folders are skipped at the top level only, so a content folder that
+    // shares a name, such as the `wendy app` command pages, is still published.
+    if (entry.isDirectory() && dir === docsRoot && skipDirs.has(entry.name)) continue;
 
     const absolutePath = path.join(dir, entry.name);
     const relativePath = path.relative(docsRoot, absolutePath);
@@ -204,7 +207,7 @@ function normalizeMarkdown(raw, targetRelativePath) {
     .replace(/\]\(\/((?:icons|images|videos)\/[^)#\s]+)(#[^)]+)?\)/g, (_match, assetPath, hash = '') => {
       return `](${relativeAssetImport(targetRelativePath, assetPath, hash)})`;
     })
-    .replace(/src="\/((?:icons|images|videos)\/[^"]+)"/g, (_match, assetPath) => {
+    .replace(/src="\/((?:casts|icons|images|videos)\/[^"]+)"/g, (_match, assetPath) => {
       return `src="${absoluteAssetPath(assetPath)}"`;
     });
 }
