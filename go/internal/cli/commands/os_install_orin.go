@@ -78,10 +78,14 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := checkInstallConfirmable("flashing the "+opts.DeviceName, opts.Force); err != nil {
+		return err
+	}
 	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, &name)
 	if err != nil {
 		return err
 	}
+	enrolled := provJSON != nil
 
 	if err := confirmOrinReady(opts); err != nil {
 		return err
@@ -90,18 +94,12 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dev.Describe()))
-
-	if !opts.Force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage))))
-		ok, err := tui.ConfirmNoDefaultDanger(fmt.Sprintf("Flash %s?", dev.Describe()))
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target:   dev.Describe(),
+		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},
+		question: fmt.Sprintf("Flash %s?", dev.Describe()),
+	}, name, creds, enrolled, opts.Force); err != nil {
+		return err
 	}
 
 	if err := preAuthElevation(); err != nil {
@@ -127,6 +125,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 		if lf, lerr := os.Create(logPath); lerr == nil {
 			defer lf.Close()
 			fmt.Fprintf(lf, "wendy os install — %s %s recovery — WendyOS %s\n\n", opts.DeviceType, opts.Storage, opts.Version)
+			logProvisioningSummary(lf, name, creds, &enrolled)
 			logW = lf
 			defer func() { fmt.Println(tui.Dim("Full flash log: " + logPath)) }()
 		} else {
@@ -368,7 +367,7 @@ func prepareT234Workspace(fp *flashpack.Flashpack) (workspace, layoutPath string
 	return workspace, filepath.Join(workspace, layoutRel), nil
 }
 
-func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
+func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) (err error) {
 	if err := agent.checkArchitecture("arm64"); err != nil {
 		return err
 	}
@@ -378,7 +377,11 @@ func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, de
 	if err != nil {
 		return fmt.Errorf("opening per-run config image: %w", err)
 	}
-	defer d.Close()
+	defer func() {
+		if closeErr := d.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("finishing per-run config image: %w", closeErr)
+		}
+	}()
 	fsys, err := d.GetFilesystem(0)
 	if err != nil {
 		return fmt.Errorf("reading config filesystem: %w", err)
@@ -445,7 +448,7 @@ func confirmOrinReady(opts t234InstallOptions) error {
 		return nil
 	}
 	fmt.Println()
-	ok, err := tui.Confirm("Is the target connected and in recovery mode?")
+	ok, err := confirmInstallStep("flashing the "+opts.DeviceName, "Is the target connected and in recovery mode?", false, opts.Force)
 	if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 		return ErrUserCancelled
 	}

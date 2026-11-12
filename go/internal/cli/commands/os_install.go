@@ -4,7 +4,6 @@ package commands
 
 import (
 	"archive/zip"
-	"bufio"
 	"compress/gzip"
 	"context"
 	"encoding/binary"
@@ -22,12 +21,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"google.golang.org/protobuf/proto"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/devicename"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -88,7 +89,7 @@ When called with positional arguments, skips interactive prompts:
   wendy os install <image-path> <drive-id> --force
 
 When called with manifest-backed flags, installs a specific version:
-  wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
+  wendy os install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force --no-wifi
 
 Pre-seed multiple WiFi networks (repeatable, highest-priority first):
   wendy os install --device-type raspberry-pi-5 --drive /dev/disk4 --force \
@@ -96,7 +97,10 @@ Pre-seed multiple WiFi networks (repeatable, highest-priority first):
     --wifi "ssid=Office,password=corp,priority=50" \
     --wifi "ssid=Cafe,hidden=true"
 
-Flags can be provided progressively — omitted values trigger interactive pickers.`,
+Flags can be provided progressively — omitted values trigger interactive pickers.
+Prompts still work when output is piped, as long as you type the command in a
+terminal. Without a terminal, choose first-boot Wi-Fi with --wifi, --wifi-ssid
+or --no-wifi, pick the target with flags, and pass --force to skip confirmations.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			switch len(args) {
 			case 0, 2:
@@ -108,6 +112,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			}
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			defer startInstallSession(cmd)()
 			if len(drivers) > 0 {
 				if len(args) != 0 || deviceType == "" || deviceName == "" {
 					return usageErrorf("--driver requires --device-type and --device-name, and cannot be combined with positional image/drive arguments")
@@ -135,6 +140,27 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			if nightly && versionFlag != "" {
 				return usageErrorf("--nightly and --version are mutually exclusive")
 			}
+			opts := wifiCLIOptions{
+				SSID:          wifiSSID,
+				Password:      wifiPassword,
+				Entries:       wifiEntries,
+				NoWifi:        noWifi,
+				RequireChoice: true,
+			}
+			// Flag mistakes fail before anything is fetched, elevated or erased.
+			if err := validateWiFiFlags(opts); err != nil {
+				return err
+			}
+			if deviceName != "" {
+				if err := validateDeviceName(deviceName); err != nil {
+					return usageErrorf("--device-name: %w", err)
+				}
+			}
+			// Without a terminal the installers would reach this error only after
+			// elevation and drive selection; fail before them.
+			if len(args) == 0 && !isInteractiveTerminal() && !opts.chosen() && installAsksWiFi(deviceType) {
+				return markUsage(errWiFiUndecided)
+			}
 
 			var agent *localInstallAgent
 			if cmd.Flags().Changed("binary") {
@@ -146,13 +172,6 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				if err != nil {
 					return err
 				}
-			}
-
-			opts := wifiCLIOptions{
-				SSID:     wifiSSID,
-				Password: wifiPassword,
-				Entries:  wifiEntries,
-				NoWifi:   noWifi,
 			}
 
 			if len(args) == 2 {
@@ -199,7 +218,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringVar(&wifiSSID, "wifi-ssid", "", "Pre-configure a single WiFi SSID on first boot (shortcut for --wifi)")
 	cmd.Flags().StringVar(&wifiPassword, "wifi-password", "", "Password for --wifi-ssid")
 	cmd.Flags().StringArrayVar(&wifiEntries, "wifi", nil, "Pre-configure a WiFi network. Repeatable. Format: ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2]")
-	cmd.Flags().BoolVar(&noWifi, "no-wifi", false, "Skip WiFi setup entirely (no interactive prompt, no pre-seeded networks)")
+	cmd.Flags().BoolVar(&noWifi, "no-wifi", false, "Install without WiFi (reach the device over Ethernet or USB); without a terminal, pass this or --wifi/--wifi-ssid")
 	cmd.Flags().StringVar(&deviceName, "device-name", "", "Set device name on first boot (e.g. brave-dolphin)")
 	cmd.Flags().BoolVar(&preEnroll, "pre-enroll", false, "Enroll with Wendy Cloud during imaging, or after reboot for ESP32 (requires 'wendy auth login')")
 	cmd.Flags().StringVar(&enrollCloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the auth session to use for pre-enrollment (optional when a default is set via 'wendy auth use')")
@@ -247,16 +266,8 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	if err := confirmOverwriteInternalDrive(*targetDrive, force, yesOverwriteInternal); err != nil {
 		return err
 	}
-
-	if !force {
-		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			fmt.Println("Cancelled.")
-			return ErrUserCancelled
-		}
+	if err := confirmEraseDrive(*targetDrive, force); err != nil {
+		return err
 	}
 
 	stream, err := openLocalImageStream(imagePath)
@@ -294,12 +305,20 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	}
 	if agent != nil {
 		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agent)
+		var ejectErr error
 		if attached {
 			markFATVolumes(updated)
-			ejectDisk(updated)
+			ejectErr = ejectDisk(updated)
 		}
+		err, stillMounted := splitStillMounted(err)
 		if err != nil {
-			return fmt.Errorf("the OS image was written, but --binary could not be installed: %w", err)
+			return errors.Join(fmt.Errorf("the OS image was written, but --binary could not be installed: %w", err), ejectErr)
+		}
+		if stillMounted != nil {
+			return errors.Join(fmt.Errorf("the OS image and --binary were written to %s, but %w", updated.Name, stillMounted), ejectErr)
+		}
+		if ejectErr != nil {
+			return fmt.Errorf("the OS image and --binary were written to %s, but the drive could not be ejected: %w", updated.Name, ejectErr)
 		}
 	} else {
 		markFATVolumes(*targetDrive)
@@ -435,8 +454,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	}
 	// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
 	// Rejected before any manifest fetch: the answer never depends on it.
-	switch flagDeviceType {
-	case "esp32-c5", "esp32-c6", "esp32-c61", "esp32-p4", "esp32-s3":
+	if isESP32Target(flagDeviceType) {
 		return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
 	}
 	if storageOverride != "" && storageOverride != "nvme" && storageOverride != "sd" && storageOverride != "emmc" {
@@ -617,6 +635,9 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 
 		if target, ok := strings.CutPrefix(selected, "wlite_target_"); ok {
+			if err := requireInstallChoice("choosing a Wendy Lite board", "Wendy Lite installs only from the interactive picker"); err != nil {
+				return err
+			}
 			board, err := pickWendyLiteBoard(target, nightly)
 			if err != nil {
 				return err
@@ -939,88 +960,13 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		targetDrive = selectedDrive
 	}
 
-	// Step 3: Confirm destructive write (unless --force).
-	if err := confirmOverwriteInternalDrive(targetDrive, force, yesOverwriteInternal); err != nil {
-		return err
-	}
-	if !force {
-		fmt.Println()
-		confirmed, err := tui.Confirm(fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", targetDrive.Name, targetDrive.DevicePath))
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			fmt.Println("Cancelled.")
-			return ErrUserCancelled
-		}
-	}
-
-	// Step 5: Resolve image metadata for the target storage. A USB-attached
-	// drive is ambiguous (SD card in a reader vs NVMe SSD in an enclosure), so
-	// the variant is chosen from what this manifest version publishes — see
-	// manifestStorage. Pass --storage to override.
-	ver, ok := device.Manifest.Versions[selectedVersion]
-	if !ok {
-		return fmt.Errorf("version %s not found in device manifest", selectedVersion)
-	}
-	storage := manifestStorage(ver, targetDrive.StorageType, targetDrive.MediaFixed, storageOverride)
-
-	// A USB-attached SD reader and an SSD enclosure are indistinguishable by bus
-	// type, and not every platform reports fixed-media signals. When the variant
-	// is a guess on a dual-variant device, ask the user which slot the drive is
-	// for rather than silently picking the wrong image (a wrong guess can produce
-	// a non-booting device). Non-interactive runs keep the manifest default.
-	if storageOverride == "" && storageChoiceAmbiguous(ver, targetDrive.StorageType, targetDrive.MediaFixed) && isInteractiveTerminal() {
-		bootNVMe, err := tui.ConfirmNoDefault(fmt.Sprintf(
-			"Can't tell if %s is an SD card or an SSD. Will it boot from the NVMe/SSD slot?",
-			targetDrive.DevicePath))
-		if err != nil {
-			return err
-		}
-		if bootNVMe {
-			storage = "nvme"
-		} else {
-			storage = "sd"
-		}
-	} else if storageOverride == "" && targetDrive.MediaFixed && storage == "nvme" {
-		// Auto-detected an SSD enclosure. Surface the inference and the override
-		// so a surprising choice is at least visible and reversible.
-		fmt.Printf("Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).\n", targetDrive.DevicePath)
-	}
-
-	fmt.Printf("\nPreparing %s %s image...\n", device.Name, selectedVersion)
-	var imgInfo *imageInfo
-	var err error
-	if rootfsOnly && ver.InstallMode == "recovery" {
-		imgInfo, err = getRootfsOnlyImageInfo(device.Manifest, selectedVersion, storage)
-	} else {
-		imgInfo, err = getImageInfo(device.Manifest, selectedVersion, storage)
-	}
-	if err != nil {
-		return fmt.Errorf("getting image info: %w", err)
-	}
-
-	// Refuse a too-small drive before the prompts, pre-enrollment and download.
-	if err := preflightImageFits(deviceKey, selectedVersion, storage, imgInfo, targetDrive, noBmap); err != nil {
-		return err
-	}
-
-	provCreds, err := resolveWiFiCredentialsList(wifi)
+	// Step 3: Choose the image, settle first boot and confirm the erase.
+	settled, err := settleDiskInstall(ctx, deviceKey, device, selectedVersion, targetDrive, rootfsOnly, noBmap, storageOverride, wifi, deviceName, preOpts, force, yesOverwriteInternal)
 	if err != nil {
 		return err
 	}
-
-	provDeviceName, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
-
-	// Resolve pre-enrollment before provisioning — the config partition is mounted
-	// and unmounted inside provisionConfigWithRetry below.
-	provisioningJSON, err := resolveProvisioningJSON(ctx, preOpts, &provDeviceName)
-	if err != nil {
-		return err
-	}
+	storage, imgInfo := settled.storage, settled.imgInfo
+	provCreds, provDeviceName, provisioningJSON := settled.creds, settled.name, settled.provisioningJSON
 
 	activationStep(ctx, "download", map[string]string{"target_selected": "true"})
 	// Step 5a/5b: Settle the image and block map to write (resolveFlashSource).
@@ -1240,8 +1186,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// agent download — paying 5–30s of network for a guaranteed-skipped
 		// step is the bug from WDY-1118.
 		if hasProvisioningData {
-			ejectDisk(targetDrive)
-			return fmt.Errorf("the OS image was written to %s, but --binary, --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
+			return errors.Join(fmt.Errorf("the OS image was written to %s, but --binary, --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name), ejectDisk(targetDrive))
 		}
 		fmt.Println("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
 	} else {
@@ -1255,23 +1200,42 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData, agent)
 	}
 
+	var ejectErr error
 	if attached {
 		markFATVolumes(targetDrive)
-		ejectDisk(targetDrive)
+		ejectErr = ejectDisk(targetDrive)
 	}
 
-	// Requested provisioning that never reached the card is a failed install:
-	// the device would boot with none of the configuration the user asked for,
-	// and reporting success here is what made WendyOS#1562 look like a device
-	// bug. The image itself is fine, which the warning above already said.
-	if provisionErr != nil {
-		return fmt.Errorf("%s %s was written to %s, but the requested provisioning was not applied: %w",
-			device.Name, imgInfo.Version, targetDrive.Name, provisionErr)
+	if err := diskInstallResult(device.Name+" "+imgInfo.Version, targetDrive.Name, provisionErr, ejectErr); err != nil {
+		return err
 	}
 
 	fmt.Printf("\nSuccessfully installed %s %s on %s.\n", device.Name, imgInfo.Version, targetDrive.Name)
 	fmt.Println("You can now insert the drive into your device and power it on.")
 	printFirstBootVerification(deviceKey, imgInfo.Version)
+	return nil
+}
+
+// diskInstallResult is how a disk install that wrote its image ends; nil means
+// the drive may be removed.
+func diskInstallResult(what, where string, provisionErr, ejectErr error) error {
+	provisionErr, stillMounted := splitStillMounted(provisionErr)
+	switch {
+	// Requested provisioning that never reached the card is a failed install:
+	// the device would boot with none of the configuration the user asked for,
+	// and reporting success here is what made WendyOS#1562 look like a device
+	// bug. The image itself is fine, which the provisioning warning already said.
+	case provisionErr != nil:
+		return errors.Join(fmt.Errorf("%s was written to %s, but the requested provisioning was not applied: %w",
+			what, where, provisionErr), ejectErr)
+	// Telling the user to remove a drive that is still mounted invites losing
+	// the config partition writes that have not reached the media yet.
+	case stillMounted != nil:
+		return errors.Join(fmt.Errorf("%s was written to %s, but %w", what, where, stillMounted), ejectErr)
+	case ejectErr != nil:
+		return fmt.Errorf("%s and its first-boot configuration were written to %s, but the drive could not be ejected: %w",
+			what, where, ejectErr)
+	}
 	return nil
 }
 
@@ -1435,6 +1399,9 @@ func pickManifestVersion(title string, manifest *deviceManifest) (string, error)
 const externalDrivePickerRefreshInterval = 2 * time.Second
 
 func pickExternalDrive(ctx context.Context) (drive, error) {
+	if err := requireInstallChoice("choosing a drive", "pass --drive (list them with 'wendy os list-drives')"); err != nil {
+		return drive{}, err
+	}
 	item, err := pickRefreshingItem(ctx, "Select target drive", externalDrivePickerRefreshInterval, func(context.Context) ([]tui.PickerItem, error) {
 		drives, err := listExternalDrives()
 		if err != nil {
@@ -2308,30 +2275,97 @@ type wifiCLIOptions struct {
 	Password string   // --wifi-password (only valid with --wifi-ssid)
 	Entries  []string // --wifi, repeatable
 	NoWifi   bool     // --no-wifi
+	// RequireChoice makes an unanswered Wi-Fi question an error without a
+	// terminal; only callers with Wi-Fi flags to point at set it.
+	RequireChoice bool
 }
 
-// resolveWiFiCredentialsList builds the ordered list of WiFi credentials to
-// write to the config partition. It consults flags first (non-interactive),
-// and only falls back to the Bubble Tea prompts when no flag was set and
-// stdin is a TTY.
-func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
-	if opts.NoWifi {
-		if opts.SSID != "" || len(opts.Entries) > 0 {
-			return nil, fmt.Errorf("--no-wifi is incompatible with --wifi / --wifi-ssid")
-		}
-		return nil, nil
+// chosen reports whether a flag settles first-boot Wi-Fi.
+func (o wifiCLIOptions) chosen() bool {
+	return o.NoWifi || o.SSID != "" || len(o.Entries) > 0
+}
+
+// installAsksWiFi reports whether installing --device-type deviceType asks for
+// first-boot Wi-Fi; an empty type is picked interactively.
+func installAsksWiFi(deviceType string) bool {
+	switch deviceType {
+	case "", linuxDesktopValue, headlessMacValue:
+		return false
+	}
+	return !isESP32Target(deviceType)
+}
+
+// isESP32Target reports whether deviceType names an ESP32 target, which
+// --device-type does not install.
+func isESP32Target(deviceType string) bool {
+	switch deviceType {
+	case "esp32-c5", "esp32-c6", "esp32-c61", "esp32-p4", "esp32-s3":
+		return true
+	}
+	return false
+}
+
+// errWiFiUndecided is returned when nobody chose Wi-Fi for first boot and no
+// terminal can ask, so the board would otherwise boot unreachable over Wi-Fi.
+var errWiFiUndecided = errors.New("no Wi-Fi choice for first boot and no terminal to ask: pass --wifi ssid=<name>,password=<pw> (or --wifi-ssid/--wifi-password), or --no-wifi to skip")
+
+// Wi-Fi hooks used by resolveWiFiCredentialsList; stubbed in tests.
+var (
+	wifiKeychainPassword = lookupKeychainPassword
+	confirmWifiSetup     = func() (bool, error) {
+		return tui.ConfirmDefaultYes("Set up WiFi on first boot?")
+	}
+	promptWifiShortcutPassword = func(ssid string) (string, error) {
+		return tui.PromptPassword(fmt.Sprintf("WiFi password for %s", ssid), "(leave empty for open network)", nil)
+	}
+)
+
+// validateWiFiFlags rejects contradictory Wi-Fi flags and malformed --wifi
+// entries. It needs no terminal, so it runs before anything else.
+func validateWiFiFlags(opts wifiCLIOptions) error {
+	if opts.NoWifi && (opts.SSID != "" || opts.Password != "" || len(opts.Entries) > 0) {
+		return usageErrorf("--no-wifi cannot be combined with --wifi, --wifi-ssid or --wifi-password")
 	}
 	if opts.Password != "" && opts.SSID == "" {
-		return nil, fmt.Errorf("--wifi-password requires --wifi-ssid")
+		return usageErrorf("--wifi-password requires --wifi-ssid")
+	}
+	for i, raw := range opts.Entries {
+		if _, err := parseWiFiEntry(raw); err != nil {
+			return markUsage(wifiEntryError(i, raw, err))
+		}
+	}
+	return nil
+}
+
+// wifiEntryError names a bad --wifi entry by position and SSID, never by its
+// text: the entry can hold a password.
+func wifiEntryError(i int, raw string, err error) error {
+	for _, kv := range splitEscaped(raw, ',') {
+		k, v, _ := strings.Cut(kv, "=")
+		if strings.EqualFold(strings.TrimSpace(k), "ssid") && strings.TrimSpace(v) != "" {
+			return fmt.Errorf("invalid --wifi entry %d (ssid %q): %w", i+1, strings.TrimSpace(v), err)
+		}
+	}
+	return fmt.Errorf("invalid --wifi entry %d: %w", i+1, err)
+}
+
+// resolveWiFiCredentialsList returns the networks to seed: from flags, else asked.
+// With RequireChoice, nil always means none was chosen, never that nobody asked.
+func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential, error) {
+	if err := validateWiFiFlags(opts); err != nil {
+		return nil, err
+	}
+	if opts.NoWifi {
+		return nil, nil
 	}
 
 	var creds []wendyconf.WifiCredential
 
 	// --wifi (repeatable) first so priorities stay in the order the user typed.
-	for _, raw := range opts.Entries {
+	for i, raw := range opts.Entries {
 		c, err := parseWiFiEntry(raw)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --wifi %q: %w", raw, err)
+			return nil, wifiEntryError(i, raw, err)
 		}
 		creds = append(creds, c)
 	}
@@ -2340,10 +2374,10 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 	if opts.SSID != "" {
 		c := wendyconf.WifiCredential{SSID: opts.SSID, Password: opts.Password}
 		if c.Password == "" {
-			if pw, kerr := lookupKeychainPassword(c.SSID); kerr == nil && pw != "" {
+			if pw, kerr := wifiKeychainPassword(c.SSID); kerr == nil && pw != "" {
 				c.Password = pw
 			} else if isInteractiveTerminal() {
-				pw, perr := tui.PromptPassword(fmt.Sprintf("WiFi password for %s", c.SSID), "(leave empty for open network)", nil)
+				pw, perr := promptWifiShortcutPassword(c.SSID)
 				if perr != nil {
 					if errors.Is(perr, tui.ErrCancelled) {
 						return nil, ErrUserCancelled
@@ -2351,18 +2385,26 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 					return nil, fmt.Errorf("reading WiFi password: %w", perr)
 				}
 				c.Password = pw
+			} else {
+				// An open network must be asked for, not inferred from a missing password.
+				return nil, usageErrorf("no password for Wi-Fi %q: pass --wifi-password, or %s for an open network", c.SSID, openWiFiFlag(c.SSID))
 			}
 		}
 		creds = append(creds, c)
 	}
 
-	// If any flag supplied creds OR stdin is not a TTY, we're done.
-	if len(creds) > 0 || !isInteractiveTerminal() {
+	if len(creds) > 0 {
 		return creds, nil
+	}
+	if !isInteractiveTerminal() {
+		if opts.RequireChoice {
+			return nil, markUsage(errWiFiUndecided)
+		}
+		return nil, nil
 	}
 
 	// Interactive path: Y/N → loop until the user declines another network.
-	enable, err := tui.ConfirmDefaultYes("Set up WiFi on first boot?")
+	enable, err := confirmWifiSetup()
 	if err != nil {
 		if errors.Is(err, tui.ErrCancelled) {
 			return nil, ErrUserCancelled
@@ -2400,16 +2442,18 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 
 // parseWiFiEntry parses `ssid=X,password=Y,priority=N,hidden=true,security=wpa2`.
 // Only `ssid=` is required; commas inside values can be escaped with `\,`.
+// Errors never quote the entry: a password with an unescaped comma splits into
+// fields that would otherwise be echoed.
 func parseWiFiEntry(raw string) (wendyconf.WifiCredential, error) {
 	var c wendyconf.WifiCredential
-	for _, kv := range splitEscaped(raw, ',') {
+	for i, kv := range splitEscaped(raw, ',') {
 		kv = strings.TrimSpace(kv)
 		if kv == "" {
 			continue
 		}
 		eq := strings.IndexByte(kv, '=')
 		if eq <= 0 {
-			return c, fmt.Errorf("expected key=value, got %q", kv)
+			return c, fmt.Errorf("field %d is not key=value (escape a comma inside a value as \\,)", i+1)
 		}
 		k := strings.ToLower(strings.TrimSpace(kv[:eq]))
 		v := strings.TrimSpace(kv[eq+1:])
@@ -2421,25 +2465,36 @@ func parseWiFiEntry(raw string) (wendyconf.WifiCredential, error) {
 		case "priority":
 			n, err := strconv.Atoi(v)
 			if err != nil {
-				return c, fmt.Errorf("priority must be an integer: %w", err)
+				return c, errors.New("priority must be an integer")
 			}
 			c.Priority = int32(n)
 		case "hidden":
 			b, err := strconv.ParseBool(v)
 			if err != nil {
-				return c, fmt.Errorf("hidden must be true/false: %w", err)
+				return c, errors.New("hidden must be true/false")
 			}
 			c.Hidden = b
 		case "security":
 			c.Security = strings.ToLower(v)
 		default:
-			return c, fmt.Errorf("unknown key %q", k)
+			return c, fmt.Errorf("field %d has an unknown key: use ssid, password, priority, hidden or security, and escape a comma inside a value as \\,", i+1)
 		}
 	}
 	if c.SSID == "" {
 		return c, fmt.Errorf("ssid is required")
 	}
 	return c, nil
+}
+
+// openWiFiFlag is the --wifi argument that seeds ssid as an open network, as
+// parseWiFiEntry reads it and quoted for a shell; a placeholder if it cannot be.
+func openWiFiFlag(ssid string) string {
+	entry := "ssid=" + strings.ReplaceAll(ssid, ",", `\,`)
+	c, err := parseWiFiEntry(entry)
+	if err != nil || c.SSID != ssid || strings.ContainsFunc(ssid, unicode.IsControl) {
+		return "--wifi ssid=<name>"
+	}
+	return "--wifi " + shellQuoteArg(entry)
 }
 
 // splitEscaped splits s on sep, honouring `\sep` as a literal separator char.
@@ -2493,8 +2548,8 @@ type wifiScanSelection struct {
 func selectWifiNetworkStreaming() (wifiScanSelection, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := tea.NewProgram(newLocalWifiPickerModel(ctx))
-	fmt.Println()
+	p := tui.NewProgram(newLocalWifiPickerModel(ctx))
+	fmt.Fprintln(tui.PromptWriter())
 	finalModel, runErr := tui.RunProgram(p)
 	if errors.Is(runErr, tea.ErrInterrupted) {
 		return wifiScanSelection{}, ErrUserCancelled
@@ -2588,33 +2643,9 @@ func nonEmptyValidator(v string) error {
 	return nil
 }
 
-// maxDeviceNameLen caps the device name so the derived hostname stays a valid
-// DNS label. The agent builds the hostname as "wendyos-<name>" (see
-// generate-hostname.sh / configpartition.applyDeviceName); with the 8-character
-// "wendyos-" prefix, a 55-character name yields a 63-octet label — the RFC 1035
-// maximum. Longer names produce an invalid hostname label on the device.
-const maxDeviceNameLen = 55
+const maxDeviceNameLen = devicename.MaxLen
 
-func validateDeviceName(name string) error {
-	if len(name) < 3 || len(name) > maxDeviceNameLen {
-		return fmt.Errorf("device name must be 3–%d characters", maxDeviceNameLen)
-	}
-	for i, c := range name {
-		switch {
-		case c >= 'a' && c <= 'z':
-		case (c >= '0' && c <= '9') || c == '-':
-			if i == 0 {
-				return fmt.Errorf("device name must start with a lowercase letter")
-			}
-		default:
-			return fmt.Errorf("device name may only contain lowercase letters, digits, and hyphens")
-		}
-	}
-	if name[len(name)-1] == '-' {
-		return fmt.Errorf("device name must not end with a hyphen")
-	}
-	return nil
-}
+func validateDeviceName(name string) error { return devicename.Validate(name) }
 
 func optionalDeviceNameValidator(name string) error {
 	if strings.TrimSpace(name) == "" {
@@ -2661,6 +2692,16 @@ func resolveDeviceName(flagName string) (string, error) {
 // *deviceName is filled in when the device is pre-enrolled, so the caller
 // writes the name Cloud reserved.
 func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, deviceName *string) ([]byte, error) {
+	plan, err := planProvisioning(preOpts, deviceName)
+	if err != nil || plan == nil {
+		return nil, err
+	}
+	return mintProvisioningJSON(ctx, plan, *deviceName)
+}
+
+// planProvisioning is the question half of resolveProvisioningJSON: it may
+// prompt and fill a blank *deviceName, but reserves nothing in Cloud.
+func planProvisioning(preOpts preEnrollOptions, deviceName *string) (*acmePreEnrollPlan, error) {
 	if preOpts.mode == preEnrollSkip {
 		return nil, nil
 	}
@@ -2671,7 +2712,16 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 		}
 		cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 	}
-	prov, err := resolveACMEPreEnrollment(ctx, cfg, preOpts, isInteractiveTerminal(), deviceName)
+	return planACMEPreEnrollment(cfg, preOpts, isInteractiveTerminal(), deviceName)
+}
+
+// mintProvisioningJSON mints plan's credential as acme-enrollment.json; a nil
+// plan, or a failure the person chose to continue past, bakes nothing.
+func mintProvisioningJSON(ctx context.Context, plan *acmePreEnrollPlan, deviceName string) ([]byte, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	prov, err := plan.mint(ctx, deviceName)
 	if err != nil || prov == nil {
 		return nil, err
 	}
@@ -2686,24 +2736,168 @@ func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, devi
 // explicit --yes-overwrite-internal flag (non-interactive) or a typed device
 // path (interactive).
 func confirmOverwriteInternalDrive(d drive, force bool, yesOverwriteInternal bool) error {
-	if d.IsRemovable {
+	if d.IsRemovable || yesOverwriteInternal {
 		return nil
 	}
-	if yesOverwriteInternal {
-		return nil
+	if err := internalDriveRefusal(d, force, yesOverwriteInternal); err != nil {
+		return err
 	}
-	if force {
-		return fmt.Errorf("refusing to wipe non-removable drive %s (%s) with --force; pass --yes-overwrite-internal to confirm you really want to overwrite an internal drive", d.Name, d.DevicePath)
-	}
-	fmt.Printf("\n%s (%s) is an internal (non-removable) drive.\n", d.Name, d.DevicePath)
-	fmt.Println("Typically WendyOS is installed to an SD card or USB drive — overwriting an internal drive will destroy whatever filesystem currently lives on it.")
-	fmt.Printf("To proceed, type the device path exactly:\n  %s\n> ", d.DevicePath)
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	if strings.TrimSpace(line) != d.DevicePath {
+	w := tui.PromptWriter()
+	fmt.Fprintf(w, "\n%s (%s) is an internal (non-removable) drive.\n", d.Name, d.DevicePath)
+	fmt.Fprintln(w, "Typically WendyOS is installed to an SD card or USB drive — overwriting an internal drive will destroy whatever filesystem currently lives on it.")
+	fmt.Fprintf(w, "To proceed, type the device path exactly:\n  %s\n> ", d.DevicePath)
+	if readLineFn() != d.DevicePath {
 		return fmt.Errorf("internal-drive overwrite cancelled (typed value did not match %s)", d.DevicePath)
 	}
 	return nil
+}
+
+// internalDriveRefusal is why confirmOverwriteInternalDrive would refuse d
+// without asking anyone, or nil.
+func internalDriveRefusal(d drive, force, yesOverwriteInternal bool) error {
+	switch {
+	case d.IsRemovable || yesOverwriteInternal:
+		return nil
+	case force:
+		return fmt.Errorf("refusing to wipe non-removable drive %s (%s) with --force; pass --yes-overwrite-internal to confirm you really want to overwrite an internal drive", d.Name, d.DevicePath)
+	case !isInteractiveTerminal():
+		return usageErrorf("%s (%s) is an internal drive and there is no terminal to confirm it: pass --yes-overwrite-internal to overwrite it", d.Name, d.DevicePath)
+	}
+	return nil
+}
+
+// eraseDriveStep names erasing d in a needs-confirmation error.
+func eraseDriveStep(d drive) string { return fmt.Sprintf("erasing %s (%s)", d.Name, d.DevicePath) }
+
+// confirmEraseDrive asks before d is erased; --force skips the question.
+func confirmEraseDrive(d drive, force bool) error {
+	if !force && isInteractiveTerminal() {
+		fmt.Fprintln(tui.PromptWriter())
+	}
+	ok, err := confirmInstallStep(eraseDriveStep(d),
+		fmt.Sprintf("Writing will ERASE ALL DATA on %s (%s). Continue?", d.Name, d.DevicePath), false, force)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		fmt.Println("Cancelled.")
+		return ErrUserCancelled
+	}
+	return nil
+}
+
+// diskInstallSettled is what installLinuxImage writes, settled before the download.
+type diskInstallSettled struct {
+	storage          string
+	imgInfo          *imageInfo
+	creds            []wendyconf.WifiCredential
+	name             string
+	provisioningJSON []byte
+}
+
+// settleDiskInstall picks d's image and refuses a drive too small for it
+// before any first-boot question, then settles first boot and confirms the
+// erase; only after that is anything reserved in Cloud.
+func settleDiskInstall(ctx context.Context, deviceKey string, device pickerDevice, version string, d drive, rootfsOnly, noBmap bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) (diskInstallSettled, error) {
+	// Resolve image metadata for the target storage. A USB-attached drive is
+	// ambiguous (SD card in a reader vs NVMe SSD in an enclosure), so the
+	// variant is chosen from what this manifest version publishes — see
+	// manifestStorage. Pass --storage to override.
+	ver, ok := device.Manifest.Versions[version]
+	if !ok {
+		return diskInstallSettled{}, fmt.Errorf("version %s not found in device manifest", version)
+	}
+	storage := manifestStorage(ver, d.StorageType, d.MediaFixed, storageOverride)
+
+	// A USB-attached SD reader and an SSD enclosure are indistinguishable by bus
+	// type, and not every platform reports fixed-media signals. When the variant
+	// is a guess on a dual-variant device, ask the user which slot the drive is
+	// for rather than silently picking the wrong image (a wrong guess can produce
+	// a non-booting device). Non-interactive runs keep the manifest default.
+	if storageOverride == "" && storageChoiceAmbiguous(ver, d.StorageType, d.MediaFixed) && isInteractiveTerminal() {
+		bootNVMe, err := tui.ConfirmNoDefault(fmt.Sprintf(
+			"Can't tell if %s is an SD card or an SSD. Will it boot from the NVMe/SSD slot?",
+			d.DevicePath))
+		if err != nil {
+			return diskInstallSettled{}, err
+		}
+		if bootNVMe {
+			storage = "nvme"
+		} else {
+			storage = "sd"
+		}
+	} else if storageOverride == "" && d.MediaFixed && storage == "nvme" {
+		// Auto-detected an SSD enclosure. Surface the inference and the override
+		// so a surprising choice is at least visible and reversible.
+		fmt.Printf("Detected a fixed SSD on %s — using the NVMe image (pass --storage sd to override).\n", d.DevicePath)
+	}
+
+	fmt.Printf("\nPreparing %s %s image...\n", device.Name, version)
+	var imgInfo *imageInfo
+	var err error
+	if rootfsOnly && ver.InstallMode == "recovery" {
+		imgInfo, err = getRootfsOnlyImageInfo(device.Manifest, version, storage)
+	} else {
+		imgInfo, err = getImageInfo(device.Manifest, version, storage)
+	}
+	if err != nil {
+		return diskInstallSettled{}, fmt.Errorf("getting image info: %w", err)
+	}
+
+	// Refuse a too-small drive before the prompts, pre-enrollment and download.
+	if err := preflightImageFits(deviceKey, version, storage, imgInfo, d, noBmap); err != nil {
+		return diskInstallSettled{}, err
+	}
+
+	creds, name, plan, err := confirmDiskInstall(d, wifi, deviceName, preOpts, force, yesOverwriteInternal)
+	if err != nil {
+		return diskInstallSettled{}, err
+	}
+	// Reserving the name in Cloud waits for the erase confirm, so a declined
+	// install leaves nothing reserved and its retry can use the same name.
+	provisioningJSON, err := mintProvisioningJSON(ctx, plan, name)
+	if err != nil {
+		return diskInstallSettled{}, err
+	}
+	return diskInstallSettled{storage: storage, imgInfo: imgInfo, creds: creds, name: name, provisioningJSON: provisioningJSON}, nil
+}
+
+// confirmDiskInstall settles what first boot will apply, including whether to
+// pre-enroll, and shows it before asking to erase d, so nothing that changes
+// the result is asked afterwards. The returned plan is minted only after this.
+func confirmDiskInstall(d drive, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, force, yesOverwriteInternal bool) ([]wendyconf.WifiCredential, string, *acmePreEnrollPlan, error) {
+	creds, err := resolveWiFiCredentialsList(wifi)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	name, err := resolveDeviceName(deviceName)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	// Answers to the pre-enrollment questions are wasted if the erase cannot be confirmed.
+	if err := internalDriveRefusal(d, force, yesOverwriteInternal); err != nil {
+		return nil, "", nil, err
+	}
+	if err := checkInstallConfirmable(eraseDriveStep(d), force); err != nil {
+		return nil, "", nil, err
+	}
+	// It may ask for the name to enroll, which the summary then shows.
+	plan, err := planProvisioning(preOpts, &name)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	cloud := cloudNotEnrolled
+	if plan != nil {
+		cloud = cloudWillPreEnroll
+	}
+	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), name, creds, cloud)
+	if err := confirmOverwriteInternalDrive(d, force, yesOverwriteInternal); err != nil {
+		return nil, "", nil, err
+	}
+	if err := confirmEraseDrive(d, force); err != nil {
+		return nil, "", nil, err
+	}
+	return creds, name, plan, nil
 }
 
 // checkImageFitsDrive refuses a write the drive cannot hold, for an image
@@ -2799,7 +2993,8 @@ var confirmProvisioningRetry = func() (bool, error) {
 // config-partition write failed, --wifi and --device-name never reached the
 // card, and the install still reported success — which read as the device
 // ignoring its configuration rather than never receiving it). When provisioning
-// was not requested it stays advisory and returns nil.
+// was not requested it stays advisory and returns nil. A config partition left
+// mounted is always returned, and never retried: alone, it means the files landed.
 //
 // If the drive drops off the bus mid-write (WDY-3974: a USB NVMe enclosure
 // reset and every retry hit the same vanished /dev/disk8), retrying its old
@@ -2835,6 +3030,12 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 		return d, !relocate, nil
 	}
 	for err != nil {
+		notApplied, stillMounted := splitStillMounted(err)
+		if notApplied == nil {
+			// Only the unmount failed; the caller reports the mount.
+			fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
+			return d, !relocate, stillMounted
+		}
 		if requested {
 			fmt.Printf("\nWarning: could not apply provisioning data — --binary / --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
 		} else {
@@ -2844,10 +3045,16 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 
 		relocate = relocate || driveDisconnected(d, err)
 
-		if !isInteractiveTerminal() {
+		// A retry would mount the still-mounted partition a second time.
+		var mounted *configStillMountedError
+		leftMounted := errors.As(err, &mounted)
+		if !isInteractiveTerminal() || leftMounted {
 			if requested {
 				fmt.Println("Re-run 'wendy os install' to apply the requested provisioning, or configure the device after it boots.")
 				return d, !relocate, err
+			}
+			if leftMounted {
+				return d, !relocate, mounted
 			}
 			return d, !relocate, nil
 		}
@@ -2896,6 +3103,7 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 		}
 		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, agent)
 	}
+	fmt.Println(provisioningWrittenLine(deviceName, creds, len(provisioningJSON) > 0))
 	return d, true, nil
 }
 
@@ -3073,6 +3281,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
 
+	printProvisioningSummary(alsoOnPromptTerminal(os.Stdout), provDeviceName, provCreds, "")
+
 	// Flash with progress bar. Retries on failure: a busy port gets an extra
 	// offer to identify and kill whatever holds it; any other failure just
 	// gets the plain retry prompt. Prompting is skipped entirely when the run
@@ -3101,7 +3311,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 			return fmt.Errorf("ESP32 enrollment requires native USB; select the board's native USB port, or install with --pre-enroll=false")
 		}
 		if serialDevice.Transport == discovery.SerialTransportUARTBridge {
-			fmt.Fprintln(os.Stderr, tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
+			fmt.Fprintln(alsoOnPromptTerminal(os.Stderr), tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
 			if requiresESP32UARTConfirmation(serialDevice, len(provCreds) > 0, interactive) &&
 				!confirmDefaultNoFn("Continue flashing through USB-UART without WiFi?") {
 				return ErrUserCancelled

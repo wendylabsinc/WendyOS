@@ -131,7 +131,7 @@ func TestOSInstallDriversResolveAliasFirst(t *testing.T) {
 	serveManifests(t, map[string]string{"manifests/master.json": masterWithAlias, "manifests/agx.json": noDriver, "manifests/agx-emmc.json": noDriver})
 
 	cmd := newOSInstallCmd()
-	cmd.SetArgs([]string{"--nightly", "--driver", "intel-be202", "--device-type", "jetson-agx-orin-emmc", "--device-name", "agx-test"})
+	cmd.SetArgs([]string{"--nightly", "--driver", "intel-be202", "--device-type", "jetson-agx-orin-emmc", "--device-name", "agx-test", "--no-wifi"})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	err := cmd.Execute()

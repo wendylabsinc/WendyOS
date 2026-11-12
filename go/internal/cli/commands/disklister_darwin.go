@@ -361,8 +361,11 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, fit imageFit, progr
 	return finishImageWrite(d, fit)
 }
 
-// ejectDisk ejects the disk so macOS shows the safe-to-remove notification.
-// Called by the caller after all post-flash operations are complete.
-func ejectDisk(d drive) {
-	exec.Command("diskutil", "eject", d.DevicePath).Run() //nolint:errcheck
+// ejectDisk ejects the disk once all post-flash operations are complete. A nil
+// error means every volume is unmounted and the drive is safe to remove.
+func ejectDisk(d drive) error {
+	diskutil := func(args ...string) ([]byte, error) {
+		return runWithTimeout(diskutilTimeout, "/usr/sbin/diskutil", args...)
+	}
+	return ejectWithDiskutil(d.DevicePath, diskutil, time.Sleep, func() bool { return drivePresent(d) }, os.Stdout)
 }

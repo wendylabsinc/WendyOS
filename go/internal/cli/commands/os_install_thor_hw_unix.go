@@ -55,8 +55,7 @@ func pickUnixRecoveryDevice(hints recoveryWaitHints, match func(rcm.RecoveryDevi
 		switch {
 		case errors.Is(err, rcm.ErrUSBAccess) && len(devs) == 0:
 			fmt.Println("\n" + usbAccessHintBox())
-			fmt.Print("Press Enter to rescan, or 'q' to quit: ")
-			if readQuit() {
+			if promptRescan("Press Enter to rescan, or 'q' to quit: ") {
 				return rcm.RecoveryDevice{}, fmt.Errorf("cannot open the Jetson's USB device: permission denied")
 			}
 			continue
@@ -78,6 +77,9 @@ func pickUnixRecoveryDevice(hints recoveryWaitHints, match func(rcm.RecoveryDevi
 		case 1:
 			return devs[0], nil
 		default:
+			if err := requireRecoveryChoice(len(devs), hints.label); err != nil {
+				return rcm.RecoveryDevice{}, err
+			}
 			var items []tui.PickerItem
 			byKey := make(map[string]rcm.RecoveryDevice, len(devs))
 			for _, d := range devs {

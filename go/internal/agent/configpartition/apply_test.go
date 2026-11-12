@@ -259,7 +259,7 @@ func TestApplyWendyConf_DeletesFileAfterApply(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	applyWendyConf(logger, dir)
+	applyWendyConf(logger, dir, t.TempDir())
 
 	if _, err := os.Stat(conf); !os.IsNotExist(err) {
 		t.Error("wendy.conf should be deleted after applyWendyConf")
@@ -269,7 +269,7 @@ func TestApplyWendyConf_DeletesFileAfterApply(t *testing.T) {
 func TestApplyWendyConf_NoFile(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	// Should return without panic when file doesn't exist.
-	applyWendyConf(logger, t.TempDir())
+	applyWendyConf(logger, t.TempDir(), t.TempDir())
 }
 
 func TestValidDeviceName(t *testing.T) {

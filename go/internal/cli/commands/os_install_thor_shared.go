@@ -96,10 +96,14 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if err != nil {
 		return err
 	}
+	if err := checkInstallConfirmable("flashing the Jetson AGX Thor", force); err != nil {
+		return err
+	}
 	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
 	if err != nil {
 		return err
 	}
+	enrolled := provJSON != nil
 
 	// Brief the user (Windows briefing includes the WinUSB driver note),
 	// then confirm before touching USB.
@@ -117,18 +121,12 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\n%s %s\n", tui.Dim("Target:"), tui.Device(dev.Label))
-
-	if !force {
-		fmt.Println()
-		fmt.Println(tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone."))
-		ok, err := tui.ConfirmNoDefaultDanger(fmt.Sprintf("Flash %s?", dev.Label))
-		if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
-			return ErrUserCancelled
-		}
-		if err != nil {
-			return err
-		}
+	if err := confirmRecoveryFlash(recoveryFlashConfirm{
+		target:   dev.Label,
+		warning:  []string{tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone.")},
+		question: fmt.Sprintf("Flash %s?", dev.Label),
+	}, name, creds, enrolled, force); err != nil {
+		return err
 	}
 
 	// flashCtx aborts in-flight step work (the stage-2 engine) when the user
@@ -146,6 +144,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		if lf, lerr := os.Create(logPath); lerr == nil {
 			defer lf.Close()
 			fmt.Fprintf(lf, "wendy os install — Jetson AGX Thor — WendyOS %s\n\n", plan.version)
+			logProvisioningSummary(lf, name, creds, &enrolled)
 			logW = lf
 			defer func() { fmt.Println(tui.Dim("Full flash log: " + logPath)) }()
 		} else {
@@ -248,8 +247,10 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
 	return err
 }
 
@@ -258,7 +259,7 @@ func (w fatWriter) WriteFile(name string, data []byte, _ os.FileMode) error {
 // wendy.conf, provisioning.json, clock_floor — so first boot applies them via the
 // identical on-device path. Runs before stage-2, so a failure aborts with nothing
 // written to the Thor.
-func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
+func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) (err error) {
 	// A local agent is required provisioning. Release downloads remain
 	// best-effort so an offline flash can still provision WiFi and enrollment.
 	if err := agent.checkArchitecture("arm64"); err != nil {
@@ -270,7 +271,11 @@ func injectConfigPartition(img string, creds []wendyconf.WifiCredential, deviceN
 	if err != nil {
 		return fmt.Errorf("opening config image: %w", err)
 	}
-	defer d.Close()
+	defer func() {
+		if closeErr := d.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("finishing config image: %w", closeErr)
+		}
+	}()
 	fs, err := d.GetFilesystem(0) // bare FAT32, no partition table
 	if err != nil {
 		return fmt.Errorf("reading config filesystem: %w", err)
