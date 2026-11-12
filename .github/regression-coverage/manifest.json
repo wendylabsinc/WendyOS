@@ -2815,10 +2815,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2251",
       "title": "Protect stable releases and run integration tests only for releases",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Workflow conditions protect stable releases and limit hardware jobs. Later release-priority tests cover scheduling, but publication/tag protection is not fully exercised.",
-      "required_follow_up": "Test release/ref/event combinations and prevention of stable-release overwrite.",
-      "evidence": []
+      "required_follow_up": "Require current-source release policy tests and immutable-tag regressions in the existing offline CI job. Original fix af463f100 protected queued stable jobs from cancellation and limited hardware entry points; it did not implement a new tag-overwrite mechanism.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/release_policy_test.py",
+            ".github/scripts/tag-built-commit_test.py",
+            ".github/scripts/release_provenance_test.py"
+          ],
+          "result": "Four policy tests execute actual workflow expressions and the real version-classification shell across 32 event/ref/publish/skip combinations; restored shared-group, cancellation and push-hardware policies are rejected. Seven real Git reference/provenance fixture tests pass, including existing mismatched lightweight/annotated tags and concurrent creators. No release dispatch/publication or hardware job was performed. Hosted gate remains pending."
+        }
+      ]
     },
     {
       "key": "1825",
