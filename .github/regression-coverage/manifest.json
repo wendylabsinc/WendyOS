@@ -1765,10 +1765,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2224",
       "title": "cli: reach USB devices when several share the 169.254/16 route",
       "package": "05",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Link-aware dials/listeners and error translation have tests. Multiple real USB links sharing 169.254/16 are not reproduced in ordinary CI.",
-      "required_follow_up": "Add a multi-interface namespace test and a Windows binding test for two simultaneous USB devices.",
-      "evidence": []
+      "required_follow_up": "Execute the Linux namespace gate and both binding controls in the existing network job, then complete the separate native Windows two-interface binding requirement.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-linklocal-multi-interface.sh",
+            ".github/scripts/linklocal_multi_interface_test.py",
+            "go/internal/cli/linklocal/multi_interface_linux_test.go"
+          ],
+          "result": "Prepared Linux private mount/network/PID namespaces with two real veth peers sharing overlapping 169.254/16 routes. Production Dial, SourceIP and Listen must retain exact device payload/source addresses, callbacks and established sessions through route reversal. Both removed-binding variants compile and require named failures. Two offline admission checks pass. Actual kernel execution is pending on hosted CI; the separate Windows binding requirement remains open. No local privileged or physical USB execution occurred."
+        }
+      ]
     },
     {
       "key": "2124",
@@ -1936,10 +1945,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2086",
       "title": "perf(cli): adaptive chunk compression with stall fallback (WDY-3211)",
       "package": "06",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Compression and stall-watchdog tests cover chunk behavior and timing. Root ownership and long-lived stalled real transports are not fully established by the portable tests.",
-      "required_follow_up": "Add an elevated-state ownership fixture and a blocked transport test that resumes without duplicate content.",
-      "evidence": []
+      "required_follow_up": "Require real TCP/disk stall recovery and its three controls in the existing Linux network job. Complete the distinct elevated-user cache/session ownership fixture before closing this entry.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-chunk-stall-transport.sh",
+            "go/internal/cli/commands/chunk_stall_transport_test.go",
+            "go/internal/agent/containerd/chunk_stall_fixture.go"
+          ],
+          "result": "Real loopback HTTP/2 runs production ContainerService and disk staging/Bolt storage. The full 30-second watchdog reconnects exactly once with observed gzip headers, reuses retained chunks, reconstructs exact 24 MiB content and drains streams. Native race and unprivileged Linux execution pass. Disabling the watchdog, gzip fallback or retained-content lookup each fails its named assertion. The regression-only store constructor is absent from default builds. Required hosted transport execution and elevated-state ownership remain pending."
+        }
+      ]
     },
     {
       "key": "2022",
