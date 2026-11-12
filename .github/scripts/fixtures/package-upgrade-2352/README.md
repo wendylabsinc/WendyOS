@@ -21,81 +21,128 @@ fails the check; none counts as detecting the negative control.
 
 ## Existing job integration
 
-Use the existing `package-linux` job after package metadata validation and before
-attestation/upload. FPM, RPM and dpkg are already present there. Add Python 3 and
-`libarchive-tools` for `bsdtar`, plus `cpio` for FPM's RPM input. Reuse its exact
-produced packages and version:
+The shared scripts are the release recipe, also used by the PR gate:
 
 ```sh
-python3 .github/scripts/test-installed-linux-packages.py prepare \
-  --format deb --agent "$agent_deb" --cli "$cli_deb" \
-  --expected-version "$release_version" --output "$RUNNER_TEMP/package-deb"
-python3 .github/scripts/test-installed-linux-packages.py prepare \
-  --format rpm --agent "$agent_rpm" --cli "$cli_rpm" \
-  --expected-version "$release_version" --output "$RUNNER_TEMP/package-rpm"
+bash .github/scripts/build-linux-release-cli.sh "$version" "$arch" "$cli_output"
+bash .github/scripts/build-linux-packages.sh "$version" "$arch" \
+  "$cli_binary" "$agent_binary" "$new_package_directory"
 ```
 
-`release_version` is the unmodified version embedded in both Go binaries, not the
-RPM version with punctuation changed. Outputs must not already exist. Store the
-fixture bundles as temporary job files, separate from release artifacts.
+The CLI script preserves the pinned libusb archive, musl flags, version injection
+and static-link check from `build-cli-linux`. The package script preserves the
+package roots, metadata, dependencies, configuration declarations, scriptlets and
+produced-package validation from `package-linux`. It creates all four packages in
+a new output directory. It never installs them.
 
-Run `python3 .github/scripts/installed_linux_packages_test.py` in the existing
-Linux package test step. Its DEB/RPM roundtrips exercise the actual packaging
-tools. Its small ELF payloads are never executed and do not constitute installed
-Agent, ABI, systemd, or repository acceptance evidence. On hosts without RPM/FPM,
-the RPM roundtrip reports an explicit skip.
+In `build.yml`, replace the libusb compile and CLI compile steps with the shared
+CLI script; retain the native architecture selection, NOTICE copy, archive,
+smoke checks and attestations. Replace package root construction, the two FPM
+steps and metadata validation with the shared package script. Use a fresh child
+directory for its output, then move those four packages to the existing upload
+location. Keep attestation and upload steps after the guest check.
 
-For transaction proof, prepare a fresh native-architecture distro root for
-**each** format/case combination. Reuse the existing Linux install/package
-runner; do not add a matrix job or a new runner just for these checks. Ubuntu
-22.04 and 24.04 cover the documented oldest recommended Ubuntu and the packaging
-runner distribution. A supported Fedora root covers the RPM consumer. Record
-its exact release and immutable source image digest in job evidence; do not
-silently substitute another release if provisioning fails. Both amd64 and arm64
-require native execution. An x64 runner packaging arm64 does not establish
-arm64 runtime compatibility.
+Use `ubuntu-24.04` for the existing amd64 package row and `ubuntu-24.04-arm` for
+its existing arm64 row. The number of jobs does not change. Cross-packaging arm64
+on x64 does not prove native execution and the guest runner rejects it.
 
-The guest needs Python 3, a bootable systemd installation, D-Bus, containerd,
-xdg-dbus-proxy, CA certificates, USB utilities and Avahi. Use `avahi-daemon` on
-Ubuntu and `avahi` on Fedora. Preinstall these dependencies before disconnecting
-its network. Containerd must be able to start in the guest's delegated cgroup
-and mount namespaces. Retain the actual packaged Agent service and its
-`Requires=containerd.service`; do not replace it, mock systemctl, suppress
-scriptlets, or use `--nodeps` to get a passing result.
-
-Boot each unique, task-owned root with systemd-nspawn. Bind its bundle read-only
-at `/fixture`, and a new host evidence directory at `/evidence`. Use
-`--private-network` so the actual Agent cannot enroll or discover outside peers.
-Once that machine is running, the exact guest invocation is:
+The host needs Docker, systemd with PID 1, `systemd-container`, Python 3,
+`ruby ruby-dev build-essential rpm cpio libarchive-tools`, and FPM. CLI builds
+also need `musl-tools`, `pkg-config`, `curl` and `bzip2`. Existing release jobs
+already supply most of these. Run the artifact and runner tests in the existing
+Linux job:
 
 ```sh
-nonce=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["nonce"])' "$bundle/manifest.json")
-sudo systemd-run --machine="$machine" --wait --pipe --collect \
-  --service-type=exec --setenv="WENDY_PACKAGE_GUEST_NONCE=$nonce" \
-  /usr/bin/python3 /fixture/test-installed-linux-packages.py guest \
-  --bundle /fixture --nonce "$nonce" --case "$case" \
-  --evidence "/evidence/$case"
+python3 .github/scripts/installed_linux_packages_test.py
+python3 .github/scripts/installed_linux_package_guests_test.py
 ```
 
-`case` is `normal` or `negative-control`. The evidence directory for that case
-must not exist. The guest refuses non-Linux/non-root execution, a PID 1 other
-than systemd, a non-nspawn container, a wrong nonce, a non-native architecture,
-modified package bytes, or pre-existing Wendy installations. These checks are
-accident-prevention guards, not a sandbox for untrusted artifacts.
+The RPM/DEB roundtrips use real packaging tools and small nonexecuted ELF payloads.
+They do not constitute installed Agent or repository acceptance evidence. On
+hosts without RPM/FPM, that subset reports an explicit skip.
 
-The host must apply a bounded overall deadline and a trap that terminates only
-that unique machine, waits for it to exit, and removes only its temporary root.
-Guest subprocess timeouts do not guarantee that apt/dnf descendants have exited;
-terminating the guest is the final cleanup boundary. Always retain or print
-`result.json`, transaction logs and `agent-journal.log`, including on failures.
-A missing result or a skipped guest is not a pass.
+For actual release artifacts, after metadata validation and before attestation:
 
-The normal case checks the actual packaged CLI, the Agent's executable hash,
-local gRPC version/architecture, enabled service, a changed service start
-identity, stable health after upgrade, preserved local configuration and
-service shutdown after package removal. The negative case independently proves
-that the same installation detects the old lifecycle failure. Both cases must
-pass before #2352's transaction coverage is considered verified.
+```sh
+sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+  RUNNER_TEMP="$RUNNER_TEMP" \
+  python3 .github/scripts/run-installed-linux-package-guests.py \
+  --packages "$package_directory" --expected-version "$release_version" \
+  --output "$RUNNER_TEMP/package-guests"
+```
+
+`release_version` is the version embedded in both Go binaries, not the RPM
+version with punctuation changed. The package directory must contain exactly one
+native package for each product/format. The runner prepares its own legacy/control
+bundles. Fixtures stay outside the release artifact directory and are removed
+when the run ends. No repository upload occurs here.
+
+For required PR proof, add this command to the existing `linux-install-host`
+job after its existing checks, using the same host dependencies:
+
+```sh
+bash .github/scripts/test-linux-packages-pr.sh "$RUNNER_TEMP/package-regressions"
+```
+
+It compiles one static release CLI and one CGO-disabled Agent from the current
+checkout, using the same version, then calls the shared package recipe and guest
+runner. The retained Make CLI used by the Stagefile gate has different dynamic
+linkage and cannot substitute for the shipped static binary on Ubuntu 22.04.
+Reuse the existing Go cache. These are required artifact builds, not another
+runner or a dispatch of the release workflow. An amd64 PR run proves amd64 only;
+arm64 remains subject to the native release package row. Budget 60 minutes for
+the combined existing job; the guest runner has a 50-minute default maximum and
+normally exits earlier. Hosted runtime must be measured before tightening that
+budget.
+
+## Guest provisioning and evidence
+
+`run-installed-linux-package-guests.py` refuses execution outside a GitHub-hosted
+Linux runner with root and systemd PID 1. It pulls immutable, native-architecture
+Docker Library manifests for Ubuntu 22.04, Ubuntu 24.04 and Fedora 44. The index
+and child hashes were verified against the registry on 2026-11-12. It only
+creates/exports stopped Docker containers; it never starts a Docker container,
+creates a builder or prunes shared images/cache.
+
+For each distro, a non-booted nspawn root installs systemd/Python plus dependencies
+read from the actual candidate packages. Apt resolves `Pre-Depends` and `Depends`;
+DNF resolves the RPM requirements apart from RPM engine capabilities, which are
+checked by the later real transaction. No Wendy binary is installed during this
+network-connected phase. Exact installed dependency versions are retained.
+
+The runner then makes a fresh root for each normal/negative-control case and
+boots systemd with `--private-network`. There is no veth or host network access.
+The verifier independently requires loopback to be the only network interface.
+DNF local transactions use an empty repository directory. No dependencies are
+silently ignored; a missing dependency fails the actual transaction.
+
+Each nspawn process stays inside its unique transient systemd service through
+`--keep-unit`, with delegated cgroups, `KillMode=control-group`, a runtime limit
+and a bounded stop timeout. Cleanup verifies the full random ownership marker
+before stopping the unit or removing its export container. It refuses to delete
+roots with any remaining mounts. Host signals trigger bounded cleanup; the
+service runtime limit also applies if the driver dies. Only owned roots and
+containers are removed. Shared images/builders are retained.
+
+The guest verifier requires its bundle nonce, native ELF architecture, unchanged
+package hashes, no prior Wendy installation and a real systemd PID 1. It retains
+the packaged Agent service and `Requires=containerd.service`. Do not mock
+systemctl, replace that unit, suppress package scriptlets, use `--nodeps`, or
+substitute another distro when provisioning fails.
+
+The normal case checks the actual packaged CLI, the Agent executable hash,
+local gRPC version/architecture, enabled service, changed service start identity,
+stable health after upgrade, preserved local configuration and service shutdown
+after removal. The negative case independently proves that the same installation
+detects the old lifecycle failure. All six distro/case results are required.
+A skipped guest, missing result, installer failure or cleanup failure is not a pass.
+
+The output directory contains `summary.json`, candidate manifests and per-distro
+image/provisioning logs, dependency inventories, boot logs, transaction logs,
+Agent journals and `result.json`. Preserve the directory as a PR diagnostic
+artifact even on failure. Release jobs should print the summary and bounded log
+tails without adding diagnostics to the release provenance/upload sets. Do not
+close #2352 until hosted normal and negative-control transactions have passed.
 
 ## Audit scope and remaining external evidence
 

@@ -211,6 +211,8 @@ def guest_guard(manifest, nonce):
             "guest nonce must match the explicitly provisioned disposable guest")
     native = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine())
     require(native == manifest["packages"]["candidate"]["elf_architecture"], "native architecture required; no emulation")
+    require({item.name for item in Path("/sys/class/net").iterdir()} == {"lo"},
+            "Agent tests require a private network with loopback only")
 
 
 def service_state():
@@ -232,6 +234,7 @@ def transaction(fmt, action, paths, log):
         command = ["apt-get", "-y", "-o", "Dpkg::Options::=--force-confold", "--no-install-recommends", action, *paths]
     else:
         command = ["dnf", "-y", "--setopt=install_weak_deps=False", "--setopt=gpgcheck=False",
+                   "--setopt=reposdir=/run/wendy-package-no-repositories",
                    "--setopt=localpkg_gpgcheck=False", action, *paths]
     result = run(*command, check=False, timeout=300, env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
     log.write_text(result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace"))
@@ -292,6 +295,7 @@ def guest(args):
         # Network remains private to this guest. Keep the actual Agent on its local policy.
         Path("/etc/wendy-agent").mkdir(exist_ok=True)
         Path("/etc/wendy-agent/network-access").write_text("local\n")
+        Path("/run/wendy-package-no-repositories").mkdir(exist_ok=False)
         path = lambda role: str(bundle / manifest["packages"][role]["file"])
         transaction(fmt, "install", [path("cli"), path("legacy")], evidence / "install.log")
         require(installed(fmt, "wendy-agent") == manifest["packages"]["legacy"]["version"], "legacy version not installed")
