@@ -1322,9 +1322,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2674",
       "title": "Keep Cloud presence alive over slow mesh uplinks",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Extensive TLS, lease-history, offer-admission and slow-path tests exist. Real slow BLE uplink presence and relay behavior is not established by these fixtures alone.",
-      "required_follow_up": "Verify required local slow-uplink renewal, retained-session traffic and mutation controls in hosted network CI. Physical radio and kernel route movement are separate transport coverage.",
+      "required_follow_up": "Retain the required real-transport regression checks and negative controls in the existing Linux network job.",
       "evidence": [
         {
           "tests": [
@@ -1332,6 +1332,11 @@
             ".github/scripts/test-relay-path-traffic.sh"
           ],
           "result": "Two real loopback TCP forwarding paths carry relay frames while the renewal socket read is held. Pending and acknowledged renewal cases require live payloads, five successful replacement-path probes, identical signed/persisted lease on presence reconnect, same admitted session and recovered traffic. Ten local race runs plus existing end-to-end tests pass; session-context, discarded-lease and blocking-renewal mutations fail. Loopback gRPC is plaintext; holder proofs and HPKE dial instructions are real. Long-idle keepalive, physical slow radio and kernel routing changes are not claimed."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
+          "result": "Required network job passed ten real relay-traffic runs across stalled renewal and simulated path preference changes; context, lease-discard and synchronous-renewal mutations failed. A separate real TLS test preserved the same admitted session over 40 seconds of application silence using unchanged production keepalive; the disabled-keepalive child expired at the 35-second path cutoff and failed with EOF. Physical radio or kernel routing changes are not claimed."
         }
       ]
     },
@@ -1452,19 +1457,26 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2569",
       "title": "[WN1] Add compact binary encoding for Wendy Net records",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Binary codec and line-ending tests are broad; a presence path-watcher race is included in the PR but is not established by codec coverage.",
-      "required_follow_up": "Run the relay renewal/path-move race test repeatedly under -race and assert the active session remains valid.",
-      "evidence": []
+      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-presence-watcher-race.sh"
+          ],
+          "result": "Five normal real-RPC renewal race runs passed locally. Three independent exact pre-fix closure mutations reported a data race at both the captured lease read and acknowledged lease replacement. Existing relay traffic script invokes the dedicated gate; hosted execution pending."
+        }
+      ]
     },
     {
       "key": "2474",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2474",
       "title": "fix(cloudrelay): keep v2 relay connections alive and the lease across path moves (WDY-3682)",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests check keepalive configuration and path/session behavior. Longer idle relay periods and physical uplink moves are not established by configuration assertions alone.",
-      "required_follow_up": "Verify required production TLS keepalive at real idle durations plus existing path-move/session/lease assertions in hosted network CI.",
+      "required_follow_up": "Retain the required real-transport regression checks and negative controls in the existing Linux network job.",
       "evidence": [
         {
           "tests": [
@@ -1479,6 +1491,11 @@
             ".github/scripts/test-relay-path-traffic.sh"
           ],
           "result": "Unchanged production 30-second keepalive preserves three original TLS sockets, lease, presence and session payloads after 40 seconds of application silence across a 35-second idle-expiring TCP proxy. A concurrent child omitting only keepalive loses its same-session read with EOF. Local race validation passes in 42 seconds; hosted invocation is required once. Trust is private to subprocesses, with no system trust changes. Physical route migration is separate from this idle transport contract."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
+          "result": "Required network job passed ten real relay-traffic runs across stalled renewal and simulated path preference changes; context, lease-discard and synchronous-renewal mutations failed. A separate real TLS test preserved the same admitted session over 40 seconds of application silence using unchanged production keepalive; the disabled-keepalive child expired at the 35-second path cutoff and failed with EOF. Physical radio or kernel routing changes are not claimed."
         }
       ]
     },
@@ -2251,20 +2268,36 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2399",
       "title": "fix(agent): record sensor-link microphones on PipeWire hosts",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests verify source listing and capture-target selection on PipeWire, but do not record audio through a live PipeWire/ALSA bridge.",
-      "required_follow_up": "Add an audio loopback recording fixture and verify sample delivery and source identity.",
-      "evidence": []
+      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/audio_sensorlink_loopback_integration_test.go",
+            ".github/scripts/test-sensorlink-audio-loopback.sh"
+          ],
+          "result": "Proposed hosted kernel fixture uses real audioloop Manager writers, two source identities, private live PipeWire, production adapter and ALSA recording, with exact PCM markers in sealed WAVs. Normal and two source-routing mutation variants cross-compile for Linux; offline guards pass. Actual snd-aloop/sample checks remain pending."
+        }
+      ]
     },
     {
       "key": "2350",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2350",
       "title": "Fix Lite sensor connections and verify host loopback support",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Protocol and host-module checks exist. The host-sensor support fixture is hardware-gated, and module presence alone does not verify video/audio delivery.",
-      "required_follow_up": "Run actual Lite camera and microphone capture through the loopback paths.",
-      "evidence": []
+      "required_follow_up": "Verify actual Lite camera and microphone delivery through kernel loopback. Audio fixture awaits hosted execution; full video delivery fixture remains in progress.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/audio_sensorlink_loopback_integration_test.go",
+            ".github/scripts/test-sensorlink-audio-loopback.sh"
+          ],
+          "result": "Microphone portion adds real kernel ALSA/PipeWire identity and sample checks; hosted execution is pending. Does not establish the video portion."
+        }
+      ]
     },
     {
       "key": "1987",
@@ -2295,9 +2328,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2130",
       "title": "Reuse app-owned camera feeds for shared capture",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "HTTP ownership, JPEG and cancellation tests exist; the actual GStreamer pipeline can skip without its runtime.",
-      "required_follow_up": "Verify decoded owner pixels, lifecycle, actual Linux syscall no-camera-open evidence and both mutation controls in the required media job.",
+      "required_follow_up": "Retain decoded-pixel, shared-lifetime and Linux syscall assertions in the required media job.",
       "evidence": [
         {
           "tests": [
@@ -2305,6 +2338,11 @@
             ".github/scripts/test-shared-camera-capture.sh"
           ],
           "result": "Actual owner HTTP JPEG feed flows through production shared capture, GStreamer and hub to two decoded pixel consumers. First cancellation preserves fresh changed frames for the second; final cancellation ends feed/encoder; incompatible requests are refused. Normal and race tests pass locally, and stale-pixel/reopen controls fail. Owner/process discovery seam is synthetic. Linux gate requires v4l2src and strace and rejects any physical-camera open; that hosted syscall evidence remains pending. Native hardware contention is not claimed."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482107681",
+          "result": "Required Linux media job passed the actual shared-owner HTTP/GStreamer decode test with fresh frames after one consumer leaves. strace gate found no physical-camera opens and required GStreamer library activity; v4l2src was installed. Camera-reopen and stale-pixel controls both failed at their targeted assertions. Native physical camera contention is outside this entry and remains partial under 1739."
         }
       ]
     },
@@ -2840,25 +2878,38 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1764",
       "title": "Wire direct Stagefile LLB builds into the CLI",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Stagefile parser/hash/LLB tests cover many build corrections. Actual image construction and reuse across build backends are not demonstrated by those unit tests.",
-      "required_follow_up": "Build a fixture with inherited layers, environment changes and negative COPY paths using both backends.",
-      "evidence": []
+      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-stagefile-images.py",
+            ".github/scripts/stagefile_images_test.py"
+          ],
+          "result": "Both real CLI backends build and run inherited images, verify Docker subprocess backend selection, pip cache reuse and invalidation, and failed COPY behavior. Five offline cases pass. Hosted actual image execution remains pending."
+        }
+      ]
     },
     {
       "key": "1979",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1979",
       "title": "wendy-lite: entitlements/platform for ESP-IDF init, non-Swift templates, blink-rgb-led doc",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "ESP-IDF init and template handling changed without direct tests in this PR. Current template tests cover broad rendering behavior, but the ESP-IDF entitlement/platform combination needs an explicit fixture.",
-      "required_follow_up": "Verify the real template generation tests in the existing required commands suite at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain the required regression gate in the existing race CI job.",
       "evidence": [
         {
           "tests": [
             "go/internal/cli/commands/template_language_regression_test.go"
           ],
           "result": "Nine local scenarios exercise the actual init command with localhost archive download, extraction, rendering and configuration reload. Mojo substitutions, invalid tokens, declared C/C++ Lite languages, target and entitlement defaults, unavailable language refusal and existing configuration preservation pass. Four production overlays reproduce the missing Mojo renderer, Swift-only restriction and incorrect Lite defaults. No device build or live template-catalogue claim."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666759",
+          "result": "Required Linux race job passed the full commands suite containing the real init/download/extract/render/configuration scenarios. The tested source is unchanged in this child branch; prior local production overlays rejected the original incorrect behavior."
         }
       ]
     },
@@ -2867,15 +2918,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1782",
       "title": "fix(cli): substitute template tokens in .mojo files",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The regression checks that .mojo is classified as a text template. It does not render an actual Mojo template and inspect substituted tokens.",
-      "required_follow_up": "Verify the real template generation tests in the existing required commands suite at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain the required regression gate in the existing race CI job.",
       "evidence": [
         {
           "tests": [
             "go/internal/cli/commands/template_language_regression_test.go"
           ],
           "result": "Nine local scenarios exercise the actual init command with localhost archive download, extraction, rendering and configuration reload. Mojo substitutions, invalid tokens, declared C/C++ Lite languages, target and entitlement defaults, unavailable language refusal and existing configuration preservation pass. Four production overlays reproduce the missing Mojo renderer, Swift-only restriction and incorrect Lite defaults. No device build or live template-catalogue claim."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666759",
+          "result": "Required Linux race job passed the full commands suite containing the real init/download/extract/render/configuration scenarios. The tested source is unchanged in this child branch; prior local production overlays rejected the original incorrect behavior."
         }
       ]
     },
@@ -2901,10 +2957,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1698",
       "title": "Fix Stagefile pip overlay inheritance",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The PR includes Stagefile overlay inheritance plus cache/layer changes with multiple tests. Containerd suites improve layer coverage, but packaged Stagefile execution still depends on the separate release smoke test.",
-      "required_follow_up": "Require the Stagefile release-binary inheritance smoke test alongside unit tests.",
-      "evidence": []
+      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-stagefile-images.py",
+            ".github/scripts/stagefile_images_test.py"
+          ],
+          "result": "Packaged Dockerfile and direct LLB fixture builds inherited wheel layers, executes imports and environment/workdir assertions, changes source/environment/wheel inputs and rejects missing COPY, unknown stage and lost inheritance without replacing the last image. Five offline cases pass. Required native Make CLI and release CLI jobs are wired; hosted actual builds remain pending."
+        }
+      ]
     },
     {
       "key": "1918",
@@ -3050,9 +3114,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2448",
       "title": "Add verified training workflows and experimental Wendy MCP V1",
       "package": "14",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "MCP and job tests cover explicit target selection, cancellation and artifact validation. The PR also introduces durable job/approval workflows that need host-process lifecycle checks.",
-      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain the required regression gate in the existing race CI job.",
       "evidence": [
         {
           "tests": [
@@ -3060,6 +3124,11 @@
             ".github/scripts/test-job-supervisor-lifetime.sh"
           ],
           "result": "Real local RPC/job hosts test transport reconnection without duplicate steps, supervisor death, bounded TERM/timeout and startup, safe artifact retrieval and readiness defaults. A reproduced supervisor-death leak is fixed with an owned process guard. Existing macOS jobops tests pass; Linux cases compile. Final reviewed Linux execution and the lost-supervisor cleanup negative control await required CI."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666759",
+          "result": "Required Linux race job passed the full commands suite containing all template scenarios and the jobops suite. Five focused durable-job cases and four TERM/timeout subcases passed; removing supervisor-loss cleanup failed at the owned-process cleanup deadline."
         }
       ]
     },
@@ -3078,9 +3147,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2066",
       "title": "Forward app Notifications through Cloud v2",
       "package": "14",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Notification tests validate trusted app/audience identities and avoid legacy proof headers. They do not establish a complete production Cloud v2 notification delivery.",
-      "required_follow_up": "Verify required real-mTLS identity, retry and diagnostic-redaction checks with all mutation controls at the final PR head.",
+      "required_follow_up": "Retain the required real-transport regression checks and negative controls in the existing Linux network job.",
       "evidence": [
         {
           "tests": [
@@ -3088,6 +3157,11 @@
             ".github/scripts/test-cloud-notification-contract.sh"
           ],
           "result": "Actual app Unix RPC forwarding and campaign delivery reach a local Cloud server requiring verified client certificates. Legacy signatures are checked against received bytes; v2 uses certificate identity. Explicit retries preserve IDs/payloads, transient campaign errors retry and AlreadyExists is terminal. Live tests reproduced private Cloud error text in campaign status/warnings; the fix preserves status codes and retry decisions while replacing the final description. Native race suite and four negative controls pass; hosted CI pending."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
+          "result": "Required network job passed Unix app RPC to independently verified local Cloud mTLS, legacy signed payload and v2 certificate identity, retry/duplicate classification and status/log redaction. All four targeted production mutations failed as required."
         }
       ]
     },
@@ -3123,9 +3197,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1894",
       "title": "Register apps with existing Cloud APIs and send campaign events (WDY-2939)",
       "package": "14",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The PR includes a Windows filesystem-query build correction and app/campaign notification changes. Windows compilation covers the former; Cloud notification behavior has separate contract tests.",
-      "required_follow_up": "Verify required real-mTLS identity, retry and diagnostic-redaction checks with all mutation controls at the final PR head.",
+      "required_follow_up": "Retain the required real-transport regression checks and negative controls in the existing Linux network job.",
       "evidence": [
         {
           "tests": [
@@ -3133,6 +3207,11 @@
             ".github/scripts/test-cloud-notification-contract.sh"
           ],
           "result": "Actual app Unix RPC forwarding and campaign delivery reach a local Cloud server requiring verified client certificates. Legacy signatures are checked against received bytes; v2 uses certificate identity. Explicit retries preserve IDs/payloads, transient campaign errors retry and AlreadyExists is terminal. Live tests reproduced private Cloud error text in campaign status/warnings; the fix preserves status codes and retry decisions while replacing the final description. Native race suite and four negative controls pass; hosted CI pending."
+        },
+        {
+          "head": "70763b1ff6033eae53ff0e3ad4290458067cbf44",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43303938523/job/131482106990",
+          "result": "Required network job passed Unix app RPC to independently verified local Cloud mTLS, legacy signed payload and v2 certificate identity, retry/duplicate classification and status/log redaction. All four targeted production mutations failed as required."
         }
       ]
     },
