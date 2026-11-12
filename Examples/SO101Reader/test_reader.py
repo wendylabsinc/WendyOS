@@ -8,6 +8,7 @@ from pathlib import Path
 import pty
 import plistlib
 import signal
+import select
 import socket
 import struct
 import subprocess
@@ -324,6 +325,45 @@ class TransportTests(unittest.TestCase):
         data, bits = self.transport.read(1, 3, 2)
         thread.join()
         self.assertEqual((data, bits), (b"\x09\x03", 0))
+
+    def test_retained_synthetic_trace_replays_stray_headers_and_delayed_fragments(self):
+        trace = json.loads((Path(__file__).parent / "fixtures/stray-header-delayed.synthetic.json").read_text())
+        self.assertEqual(trace["schema_version"], 1)
+        self.assertEqual(trace["provenance"]["kind"], "synthetic")
+        self.assertIsNone(trace["provenance"]["hardware_capture"])
+        self.transport.timeout = trace["timeout_ms"] / 1000
+        captured, errors = [], []
+
+        def peer():
+            try:
+                for transaction in trace["transactions"]:
+                    packet = bytearray()
+                    deadline = time.monotonic() + 2
+                    while len(packet) < 8:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not select.select([self.master], [], [], remaining)[0]:
+                            raise AssertionError("reader did not emit the next trace READ")
+                        packet.extend(os.read(self.master, 8 - len(packet)))
+                    captured.append(bytes(packet))
+                    if packet.hex() != transaction["request_hex"] or packet[4] != 0x02:
+                        raise AssertionError("reader emitted an unexpected or non-READ packet")
+                    for chunk in transaction["chunks"]:
+                        time.sleep(chunk["delay_ms"] / 1000)
+                        os.write(self.master, bytes.fromhex(chunk["hex"]))
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=peer, daemon=True)
+        thread.start()
+        try:
+            for transaction in trace["transactions"]:
+                actual = self.transport.read(transaction["motor_id"], transaction["address"], transaction["count"])
+                self.assertEqual(actual, (bytes.fromhex(transaction["expected_payload_hex"]), transaction["expected_error_bits"]))
+        finally:
+            thread.join(timeout=3)
+        self.assertFalse(thread.is_alive(), "synthetic trace peer did not stop")
+        self.assertEqual(errors, [])
+        self.assertEqual([packet.hex() for packet in captured], [item["request_hex"] for item in trace["transactions"]])
 
     def test_close_error_does_not_escape(self):
         fd = self.transport.fd
