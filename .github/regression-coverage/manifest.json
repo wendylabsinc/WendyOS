@@ -1143,10 +1143,22 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2534",
       "title": "fix(ble): stop sending shared certificate issuers in Wendy Net BLE handshakes",
       "package": "03",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests exercise real handshakes over throttled in-memory transport, mixed issuers and failures. Actual BLE controller transport is not part of the reproducer.",
       "required_follow_up": "Retain the slow-handshake tests and add one cross-version BLE interoperability job.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/ble-interop-rehearsal.py",
+          "validation": "Syntax and help checked. Generated all four actual old/current binary pairings, two traffic directions and cold/reconnect phases, plus controlled slow RF observation: 17 cases remain not_run. Duplicate board UUIDs are rejected. Requires actual BLE path, controller traces, TLS roles/certificate counts and successful application RPC; includes exact binary hashes, bounded waits and rollback.",
+          "hardware_execution": "not_run"
+        },
+        {
+          "command": "go test -race ./go/internal/agent/bleprovider -run '^(TestBLEKnownIssuersDeviceAdmissionMatrix|TestBLEHandshake|TestBLEIssuerOmission|TestBLEOperatorAdmission)' -count=1 -timeout120s",
+          "runner": "Unprivileged Linux golang:1.27.4-bookworm container",
+          "result": "Passed in 2.750s. Retains real TLS over simulated slow CoC, mixed-issuer/legacy-client/legacy-server handshakes and admission checks. This is not physical BLE evidence."
+        }
+      ],
+      "resolution": "Existing deterministic slow and mixed-version TLS tests pass. The actual controller transport and installed-release matrix require physical setup; an exact-target executable procedure generator records every case as not_run until a human follows it."
     },
     {
       "key": "2362",
