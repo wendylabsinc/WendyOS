@@ -572,6 +572,8 @@ jobs:
           retention-days: 7
       - name: Require full-duration chunk stall recovery over TCP and disk
         run: bash .github/scripts/test-chunk-stall-transport.sh "$RUNNER_TEMP/chunk-stall-transport"
+      - name: Require elevated cache and session broker ownership boundaries
+        run: bash .github/scripts/test-chunk-stall-ownership.sh "$RUNNER_TEMP/chunk-stall-ownership"
       - name: Require link-local traffic across competing interface routes
         run: bash .github/scripts/test-linklocal-multi-interface.sh "$RUNNER_TEMP/linklocal-multi-interface"
       - name: Preserve transfer and interface recovery evidence
@@ -581,6 +583,7 @@ jobs:
           name: transfer-interface-recovery
           path: |
             ${{ runner.temp }}/chunk-stall-transport/*.log
+            ${{ runner.temp }}/chunk-stall-ownership/*.log
             ${{ runner.temp }}/linklocal-multi-interface/*.log
           if-no-files-found: ignore
           retention-days: 7

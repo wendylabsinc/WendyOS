@@ -1945,9 +1945,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2086",
       "title": "perf(cli): adaptive chunk compression with stall fallback (WDY-3211)",
       "package": "06",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Compression and stall-watchdog tests cover chunk behavior and timing. Root ownership and long-lived stalled real transports are not fully established by the portable tests.",
-      "required_follow_up": "Require real TCP/disk stall recovery and its three controls in the existing Linux network job. Complete the distinct elevated-user cache/session ownership fixture before closing this entry.",
+      "required_follow_up": "Require the real TCP/disk stall gate and elevated cache/session ownership gate, including all seven negative controls, in the existing hosted Linux network job. Root/UID-switch execution remains pending.",
       "evidence": [
         {
           "tests": [
@@ -1956,6 +1956,15 @@
             "go/internal/agent/containerd/chunk_stall_fixture.go"
           ],
           "result": "Real loopback HTTP/2 runs production ContainerService and disk staging/Bolt storage. The full 30-second watchdog reconnects exactly once with observed gzip headers, reuses retained chunks, reconstructs exact 24 MiB content and drains streams. Native race and unprivileged Linux execution pass. Disabling the watchdog, gzip fallback or retained-content lookup each fails its named assertion. The regression-only store constructor is absent from default builds. Required hosted transport execution and elevated-state ownership remain pending."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-chunk-stall-ownership.sh",
+            ".github/scripts/chunk_stall_ownership_test.py",
+            "go/internal/cli/commands/chunk_stall_ownership_linux_test.go",
+            "go/internal/cli/sessionbroker/ownership_process_linux_test.go"
+          ],
+          "result": "Hosted-only fixture compiles race binaries as the runner, then confines root writes and child UID/GID changes to fresh scratch paths. Cases require root-created cache data to be readable and lockable/updateable by the real runner, elevated Start/Run to reject foreign-owned broker configuration without artifacts or upstream traffic, and a real ordinary-user mTLS/IPC RPC round trip with socket cleanup. Two offline admission tests, ShellCheck, normal/four-control Linux builds and the ordinary-user Linux broker round trip pass. Root cases and the four named regression controls await hosted execution. Registered in the existing Linux network job without another runner."
         }
       ]
     },
