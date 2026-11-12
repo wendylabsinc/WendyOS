@@ -175,13 +175,18 @@ def _reply(value):
     return json.dumps(value, ensure_ascii=False) if value is not None else None
 
 
+# How a failed, denied or skipped call's result text starts; the last three are what wendy chat writes.
+ERROR_PREFIXES = ("Error:", "error:", "Tool failed:", "Denied:",
+                  "Tool error:", "User denied permission", "Tool was not executed")
+
+
 def _error(value):
     """Only explicit protocol errors; ordinary prose containing 'error' is not a failure."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except ValueError:
-            return value.startswith(("Error:", "error:", "Tool failed:", "Denied:"))
+            return value.startswith(ERROR_PREFIXES)
     return isinstance(value, dict) and (value.get("isError") is True or bool(value.get("error")))
 
 

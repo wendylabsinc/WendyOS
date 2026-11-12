@@ -216,6 +216,17 @@ class ScenarioQuality(unittest.TestCase):
         codex = [{'type': 'item.completed', 'item': {'type': 'mcp_tool_call', 'id': '1', 'server': 'wendy', 'tool': 'run', 'result': {'isError': True}}}]
         self.assertTrue(build_trace('codex', codex)[0]['is_error'])
 
+    def test_chat_tool_failures_are_errors(self):
+        # The result texts wendy chat writes for a failed, denied or skipped tool call (go/internal/cli/chat/engine.go).
+        for text in ('Tool error: Wendy MCP tool reported an error\n[NOT_CONNECTED] no device is connected',
+                     'User denied permission. Tool was not executed; do not retry this action without new user instructions.',
+                     'Tool was not executed because the turn was canceled.'):
+            events = [{'type': 'tool_start', 'id': '1', 'tool': 'run'}, {'type': 'tool_result', 'id': '1', 'text': text}]
+            self.assertTrue(build_trace('wendy', events)[0]['is_error'], text)
+        ok = [{'type': 'tool_start', 'id': '1', 'tool': 'run'},
+              {'type': 'tool_result', 'id': '1', 'text': 'Deployed. No tool error was reported.'}]
+        self.assertFalse(build_trace('wendy', ok)[0]['is_error'])
+
     def test_catalog_has_specific_asks_and_argument_checks(self):
         rows = json.loads((Path(__file__).parent / 'scenarios.json').read_text())
         for scenario in rows:
