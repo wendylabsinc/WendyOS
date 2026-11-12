@@ -516,3 +516,35 @@ func (c *poolWaitContext) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.waiting) })
 	return c.Context.Done()
 }
+
+// Account/policy replacement creates a new owner even when the old transport
+// has no sessions. RelayDial closures deliberately use the same function body:
+// code pointers do not identify a transport's captured credentials or policy.
+func TestRelayPoolIdlePolicyReplacement(t *testing.T) {
+	broker, endpoint, dial, dials := newPoolBroker(t)
+	var calls [2]atomic.Int32
+	policy := func(index int) func(string) (*grpc.ClientConn, error) {
+		return func(endpoint string) (*grpc.ClientConn, error) {
+			calls[index].Add(1)
+			return dial(endpoint)
+		}
+	}
+	old := &Verifier{Issuer: "https://old.example", RelayDial: policy(0)}
+	current := &Verifier{Issuer: "https://current.example", RelayDial: policy(1)}
+	t.Cleanup(func() { old.Close(); current.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	session := broker.open(t, ctx, old, endpoint, "wendy-agent")
+	session.Close()
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := broker.open(t, ctx, current, endpoint, "wendy-agent")
+	poolEcho(t, replacement)
+	if calls[0].Load() != 1 || calls[1].Load() != 1 || dials.Load() != 2 {
+		t.Fatal("replacement reused former policy's idle transport")
+	}
+	if _, _, err := old.relays.acquire(ctx, relayPoolKey{}, policy(0)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("closed policy revived: %v", err)
+	}
+}
