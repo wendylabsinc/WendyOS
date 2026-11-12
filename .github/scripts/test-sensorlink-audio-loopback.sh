@@ -14,7 +14,6 @@ if getent passwd wendy >/dev/null || getent group wendy >/dev/null || [[ -d /sys
   exit 2
 fi
 output="$(mktemp -d "${RUNNER_TEMP:?}/wendy-sensorlink-audio.XXXXXX")"
-chmod 755 "$output"
 test_name=TestSensorLinkMicrophonesRecordKernelLoopbackWithLivePipeWire
 
 # Compile before allocating any host resources. No production source is edited.
@@ -47,6 +46,7 @@ done
 created_user=0
 loaded_module=0
 daemon_launcher=
+daemon_directory=
 wendy_uid=
 wendy_gid=
 cleanup() {
@@ -79,6 +79,10 @@ cleanup() {
       wait "$daemon_launcher"
     fi
   fi
+  if [[ -n "$daemon_directory" ]]; then
+    # mktemp reserved this exact private subtree; logs remain in $output.
+    sudo rm -rf -- "$daemon_directory" || result=1
+  fi
   if [[ "$loaded_module" == 1 ]]; then
     sudo modprobe -r snd-aloop || result=1
     test ! -d /sys/module/snd_aloop || result=1
@@ -110,15 +114,18 @@ wendy_gid="$(id -g wendy)"
 sudo modprobe snd-aloop id=Loopback pcm_substreams=8
 loaded_module=1
 sudo udevadm settle
-sudo install -d -m 700 -o wendy -g wendy "$output/runtime"
-mkdir -p "$output/config/pipewire/pipewire.conf.d"
+# The fresh daemon UID cannot traverse private RUNNER_TEMP ancestors. Reserve
+# only its runtime/config under /tmp; never relax runner-directory permissions.
+daemon_directory="$(mktemp -d /tmp/wendy-sensorlink-pipewire.XXXXXX)"
+sudo install -d -m 700 -o "$wendy_uid" -g "$wendy_gid" "$daemon_directory/runtime"
+mkdir -p "$daemon_directory/config/pipewire/pipewire.conf.d"
 # A real ALSA source on the opposite cable is present in the private graph.
 # It is deliberately not one of the device-1/subdevice-0,1 mounted microphones.
 # No session manager auto-opens any other ALSA subdevice. The correct fix uses
 # arecord for these microphones even though the real PipeWire session is up.
 # Adapter configuration follows the upstream pipewire.conf ALSA source example:
 # https://github.com/PipeWire/pipewire/blob/master/src/daemon/pipewire.conf.in
-cat > "$output/config/pipewire/pipewire.conf.d/90-loopback-fixture.conf" <<'CONF'
+cat > "$daemon_directory/config/pipewire/pipewire.conf.d/90-loopback-fixture.conf" <<'CONF'
 context.objects = [
   { factory = adapter
     args = {
@@ -135,21 +142,28 @@ context.objects = [
   }
 ]
 CONF
+sudo chown -R "$wendy_uid:$wendy_gid" "$daemon_directory"
 # The runner owns the log file; sudo applies only to the daemon.
 # shellcheck disable=SC2024
-sudo -u wendy env XDG_CONFIG_HOME="$output/config" XDG_RUNTIME_DIR="$output/runtime" PIPEWIRE_RUNTIME_DIR="$output/runtime" \
+sudo -u wendy env XDG_CONFIG_HOME="$daemon_directory/config" XDG_RUNTIME_DIR="$daemon_directory/runtime" PIPEWIRE_RUNTIME_DIR="$daemon_directory/runtime" \
   pipewire > "$output/pipewire.log" 2>&1 &
 daemon_launcher=$!
 ready=0
 for _ in $(seq 1 50); do
   # The runner owns this captured JSON; only pw-dump needs daemon access.
   # shellcheck disable=SC2024
-  if sudo test -S "$output/runtime/pipewire-0" && \
-    sudo env PIPEWIRE_RUNTIME_DIR="$output/runtime" XDG_RUNTIME_DIR="$output/runtime" timeout 2 pw-dump > "$output/pw-dump.json"; then
+  if sudo test -S "$daemon_directory/runtime/pipewire-0" && \
+    sudo env PIPEWIRE_RUNTIME_DIR="$daemon_directory/runtime" XDG_RUNTIME_DIR="$daemon_directory/runtime" timeout 2 pw-dump > "$output/pw-dump.json"; then
     ready=1
     break
   fi
-  kill -0 "$daemon_launcher"
+  if ! { jobs -pr; jobs -ps; } | grep -Fxq "$daemon_launcher"; then
+    daemon_status=0
+    wait "$daemon_launcher" || daemon_status=$?
+    cat "$output/pipewire.log" >&2
+    printf 'Owned PipeWire launcher exited during startup (status %s).\n' "$daemon_status" >&2
+    exit 1
+  fi
   sleep 0.1
 done
 if [[ "$ready" != 1 ]]; then
@@ -164,7 +178,7 @@ sudo arecord -l > "$output/arecord-list.txt"
 sudo aplay -l > "$output/aplay-list.txt"
 run_fixture() {
   sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
-    WENDY_SENSORLINK_AUDIO_LOOPBACK=1 WENDY_TEST_PIPEWIRE_RUNTIME="$output/runtime" \
+    WENDY_SENSORLINK_AUDIO_LOOPBACK=1 WENDY_TEST_PIPEWIRE_RUNTIME="$daemon_directory/runtime" \
     python3 .github/scripts/run-owned-media-test.py --timeout 60 -- "$1" \
       -test.run "^${test_name}$" -test.v -test.count=1 -test.timeout=0
 }

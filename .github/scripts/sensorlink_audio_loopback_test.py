@@ -20,6 +20,46 @@ spec.loader.exec_module(owned_media)
 
 
 class KernelFixtureLauncherTests(unittest.TestCase):
+    def test_private_runtime_is_outside_artifacts_and_launcher_death_is_reported(self):
+        source = SCRIPT.read_text()
+        allocation = source.split('# only its runtime/config under /tmp;', 1)[1].split('# A real ALSA source', 1)[0]
+        # Keep the executable allocation lines, excluding the preceding comment.
+        allocation = allocation[allocation.index('daemon_directory='):]
+        startup = source.split('# The runner owns the log file;', 1)[1].split('# These inventory files', 1)[0]
+        startup = startup[startup.index('# shellcheck'):]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / 'pipewire'
+            fake.write_text('#!/bin/sh\nprintf \"fixture daemon startup detail\\n\"\nexit 17\n')
+            fake.chmod(0o700)
+            output = root / 'private-ancestor' / 'artifacts'
+            output.mkdir(parents=True)
+            output.parent.chmod(0o700)
+            output.chmod(0o700)
+            shell = '''set -euo pipefail
+output="$1"
+wendy_uid="$(id -u)"
+wendy_gid="$(id -g)"
+daemon_directory=
+trap '[ -z "$daemon_directory" ] || rm -rf -- "$daemon_directory"' EXIT
+sudo() { if [[ "${1:-}" == -u ]]; then shift 2; fi; "$@"; }
+''' + allocation + '''
+printf 'private-runtime=%s\\n' "$daemon_directory"
+''' + startup
+            result = subprocess.run(['bash', '-c', shell, 'private-runtime-test', str(output)],
+                                    env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH']),
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            runtime = Path(result.stdout.strip().split('private-runtime=', 1)[1])
+            self.assertEqual(runtime.parent, Path('/tmp'))
+            self.assertTrue(runtime.name.startswith('wendy-sensorlink-pipewire.'))
+            self.assertFalse(runtime.exists(), 'owned runtime was not removed')
+            self.assertEqual(output.parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+            self.assertIn('fixture daemon startup detail', result.stderr)
+            self.assertIn('Owned PipeWire launcher exited during startup (status 17).', result.stderr)
+            self.assertIn('fixture daemon startup detail', (output / 'pipewire.log').read_text())
+
     def test_non_hosted_invocation_refuses_before_setup(self):
         env = dict(os.environ, GITHUB_ACTIONS="", RUNNER_ENVIRONMENT="")
         result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=5)
@@ -56,7 +96,7 @@ class KernelFixtureLauncherTests(unittest.TestCase):
                 getent = root / "getent"
                 getent.write_text(f'#!/bin/sh\necho "wendy:x:{gid}:"\n')
                 getent.chmod(0o700)
-                shell = ('created_user=1; loaded_module=0; daemon_launcher=; '
+                shell = ('created_user=1; loaded_module=0; daemon_launcher=; daemon_directory=; '
                          'wendy_uid=12345; wendy_gid=12345; output="$1"\n'
                          + "cleanup() {\n" + cleanup + "\n}\ntrue\ncleanup\n")
                 result = subprocess.run(["bash", "-c", shell, "cleanup-test", str(root)],
