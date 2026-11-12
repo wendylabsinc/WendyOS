@@ -255,12 +255,16 @@ type mcpPingStats struct {
 func mcpRunPingLoop(ctx context.Context, session mcpPingSession, target string, count int, interval time.Duration, out io.Writer) mcpPingStats {
 	identifier := uint32(os.Getpid() & 0xFFFF)
 	type sentEcho struct{ originate time.Time }
+	type receivedEcho struct {
+		reply *cloudpb.IcmpEchoReply
+		at    time.Time
+	}
 	var (
 		stats     mcpPingStats
 		pending   = map[uint32]sentEcho{} // keyed by sequence
 		total     time.Duration
 		done      = make(chan struct{})
-		replies   = make(chan *cloudpb.IcmpEchoReply, 16)
+		replies   = make(chan receivedEcho, 16)
 		lifeErrMu sync.Mutex
 		lifeErr   error // first transport error out of the recv loop, guarded by lifeErrMu
 	)
@@ -281,8 +285,11 @@ func mcpRunPingLoop(ctx context.Context, session mcpPingSession, target string, 
 				return
 			}
 			if r := msg.GetIcmpReply(); r != nil && r.GetIdentifier() == identifier {
+				// A synchronous agent RPC can block the send loop while earlier
+				// replies wait in this queue. Measure arrival, not queue drain.
+				received := receivedEcho{reply: r, at: time.Now()}
 				select {
-				case replies <- r:
+				case replies <- received:
 				case <-ctx.Done():
 					return
 				}
@@ -351,10 +358,11 @@ func mcpRunPingLoop(ctx context.Context, session mcpPingSession, target string, 
 
 	for {
 		select {
-		case r := <-replies:
+		case received := <-replies:
+			r := received.reply
 			if s, ok := pending[r.GetSequence()]; ok {
 				delete(pending, r.GetSequence())
-				rtt := time.Since(s.originate)
+				rtt := received.at.Sub(s.originate)
 				stats.Received++
 				total += rtt
 				if stats.Min == 0 || rtt < stats.Min {

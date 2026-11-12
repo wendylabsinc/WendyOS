@@ -10,12 +10,11 @@ import (
 )
 
 // USBNetworkInterfaceNames returns the names of non-loopback network interfaces
-// that appear to be USB-attached (USB-CDC gadget links), using the same
-// heuristics as device discovery (name patterns plus, on Linux, a sysfs
-// device-path check). The CLI's USB-C auto-setup flow uses it to locate the
-// host's gadget interface.
+// that are Wendy USB gadget links, classified as device discovery does (on
+// Linux by the USB device's identity, see IsWendyUSBGadget). The CLI's USB-C
+// auto-setup flow uses it to locate the host's gadget interface.
 func USBNetworkInterfaceNames() ([]string, error) {
-	ifaces, err := net.Interfaces()
+	ifaces, err := netInterfacesFn()
 	if err != nil {
 		return nil, fmt.Errorf("listing interfaces: %w", err)
 	}
@@ -59,8 +58,6 @@ func sanitiseNetworkString(s string, maxLen int) string {
 	return s
 }
 
-var linuxUSBInterfaceNameRE = regexp.MustCompile(`^en[a-z0-9]*u[0-9]+`)
-
 func setLANNetworkInterface(dev *models.LANDevice, interfaceName, displayName, linkSpeed string) {
 	interfaceName = strings.TrimSpace(sanitiseNetworkString(interfaceName, 64))
 	if interfaceName == "" {
@@ -88,7 +85,13 @@ func usbConnectionSummary(interfaceName, displayName, linkSpeed string) string {
 	return label
 }
 
+// looksLikeUSBConnection reports whether an interface is a USB link to a Wendy
+// device. On Linux the USB identity decides; elsewhere only the interface and
+// display names are available.
 func looksLikeUSBConnection(interfaceName, displayName string) bool {
+	if usbGadgetIdentityFn != nil {
+		return usbGadgetIdentityFn(strings.TrimSpace(interfaceName))
+	}
 	name := strings.ToLower(strings.TrimSpace(interfaceName))
 	display := strings.ToLower(strings.TrimSpace(displayName))
 	combined := name + " " + display
@@ -110,13 +113,7 @@ func looksLikeUSBConnection(interfaceName, displayName string) bool {
 		return true
 	case strings.HasPrefix(name, "enx"):
 		return true
-	case linuxUSBInterfaceNameRE.MatchString(name):
-		return true
 	default:
-		// Fall back to sysfs: an interface whose real device path traverses the
-		// USB bus is USB-backed regardless of its name. This keeps gadget
-		// detection working under net.ifnames=0 / classic naming (eth0, usb0),
-		// where none of the name heuristics above match. No-op off Linux.
-		return interfaceIsUSBBacked(strings.TrimSpace(interfaceName))
+		return false
 	}
 }

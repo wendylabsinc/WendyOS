@@ -1,10 +1,10 @@
 ---
-title: Hello World in TypeScript
+title: Hello world in TypeScript
 description: Create your first application using TypeScript
 language: typescript
 ---
 
-## Creating Your First TypeScript Application
+## Creating your first TypeScript application
 
 This guide will walk you through creating your first WendyOS application using TypeScript. The Wendy template scaffolds a small long-running [Express](https://expressjs.com/) server that responds with `{"message":"hello-world"}`. It's a great way to prove that you can send your first app to your device and verify your development environment is set up correctly.
 
@@ -21,11 +21,11 @@ a local language installation if you choose to run the source outside Docker.
   **Containerized Deployment**: TypeScript applications run inside containers on your WendyOS device. This guide shows you how to package the Node.js runtime for deployment with the Wendy CLI.
 </Callout>
 
-## Creating the Project
+## Creating the project
 
 <Steps>
   <Step>
-    ### Initialize the Project
+    ### Initialize the project
 
     Start from the Wendy TypeScript template:
 
@@ -36,7 +36,7 @@ a local language installation if you choose to run the source outside Docker.
 
     <CliShot flow="init" step="wizard" alt="wendy init scaffolding the hello-world TypeScript project from the simple-api template" />
 
-    The template creates `package.json`, `tsconfig.json`, `src/index.ts`, `Dockerfile`, and `wendy.json`. Continue below to understand the generated project.
+    The template creates `package.json`, `tsconfig.json`, `src/index.ts`, `Dockerfile`, and `wendy.json`. [Understand the generated web server](/docs/guides/tutorials/typescript/generated-server) explains each file.
   </Step>
 
   <Step>
@@ -54,185 +54,7 @@ a local language installation if you choose to run the source outside Docker.
   </Step>
 </Steps>
 
-## Code Breakdown
-
-<Steps>
-  <Step>
-    ### Generated Application
-
-    The template includes `src/index.ts`, a small Express server. The root route returns a JSON greeting, and there's a `/health` check plus an example `POST /items` route:
-
-    ```typescript
-    // src/index.ts
-    import express, { Request, Response } from "express";
-
-    const app = express();
-    const port = 5001;
-    const hostname = process.env.WENDY_HOSTNAME || "0.0.0.0";
-
-    app.use(express.json());
-
-    app.get("/", (_req: Request, res: Response) => {
-      console.log("Received request: GET /");
-      res.json({ message: "hello-world" });
-    });
-
-    app.get("/health", (_req: Request, res: Response) => {
-      res.json({ status: "ok" });
-    });
-
-    interface CreateItemBody {
-      name: string;
-      price: number;
-    }
-
-    interface ItemResponse {
-      id: number;
-      name: string;
-      price: number;
-    }
-
-    app.post(
-      "/items",
-      (req: Request<{}, ItemResponse, CreateItemBody>, res: Response) => {
-        console.log(`Received request: POST /items - ${req.body.name}`);
-        const item: ItemResponse = {
-          id: 1,
-          name: req.body.name,
-          price: req.body.price,
-        };
-        res.status(201).json(item);
-      }
-    );
-
-    app.listen(port, () => {
-      console.log(`Server running on http://${hostname}:${port}`);
-    });
-    ```
-  </Step>
-
-  <Step>
-    ### Generated package.json
-
-    The generated `package.json` includes build and start scripts, plus Express as the one runtime dependency:
-
-    ```json
-    {
-      "name": "hello-world",
-      "version": "0.1.0",
-      "type": "module",
-      "scripts": {
-        "build": "tsc",
-        "start": "node dist/index.js",
-        "dev": "tsx watch src/index.ts"
-      },
-      "dependencies": {
-        "express": "^4"
-      },
-      "devDependencies": {
-        "@types/express": "^5",
-        "@types/node": "^22",
-        "typescript": "^5.7",
-        "tsx": "^4"
-      },
-      "engines": {
-        "node": ">=22"
-      }
-    }
-    ```
-  </Step>
-
-  <Step>
-    ### Generated tsconfig.json
-
-    The generated `tsconfig.json` specifies the output directory and module settings:
-
-    ```json
-    {
-      "compilerOptions": {
-        "target": "ES2022",
-        "module": "NodeNext",
-        "moduleResolution": "NodeNext",
-        "outDir": "./dist",
-        "rootDir": "./src",
-        "strict": true,
-        "esModuleInterop": true,
-        "skipLibCheck": true,
-        "forceConsistentCasingInFileNames": true,
-        "declaration": true
-      },
-      "include": ["src/**/*"],
-      "exclude": ["node_modules", "dist"]
-    }
-    ```
-  </Step>
-
-  <Step>
-    ### Generated Dockerfile
-
-    The generated project includes a multi-stage Dockerfile that builds the TypeScript and ships only the compiled output plus dependencies:
-
-    ```dockerfile
-    FROM node:22-slim AS builder
-
-    WORKDIR /app
-    COPY package*.json ./
-    RUN npm install
-
-    COPY tsconfig.json ./
-    COPY src ./src
-    RUN npm run build
-
-    FROM node:22-slim
-
-    WORKDIR /app
-    COPY --from=builder /app/dist ./dist
-    COPY --from=builder /app/node_modules ./node_modules
-
-    EXPOSE 5001
-
-    CMD ["node", "dist/index.js"]
-    ```
-  </Step>
-
-  <Step>
-    ### Generated wendy.json
-
-    The generated `wendy.json` requests the `network` entitlement, declares a TCP readiness check on the server port, and wires a `postStart` hook that opens your browser once the app is ready:
-
-    ```json
-    {
-        "appId": "hello-world",
-        "platform": "linux",
-        "version": "0.1.0",
-        "entitlements": [
-            {
-                "type": "network"
-            }
-        ],
-        "readiness": {
-            "tcpSocket": { "port": 5001 },
-            "timeoutSeconds": 30
-        },
-        "hooks": {
-            "postStart": {
-                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:5001"
-            }
-        }
-    }
-    ```
-  </Step>
-</Steps>
-
-## Run Again on WendyOS
-
-Deploy your containerized application to your WendyOS device:
-
-```bash
-wendy run
-```
-
-## Verifying Deployment on Your Device
+## Verifying deployment on your device
 
 After deploying your application to a WendyOS device, you can verify it is running by listing the applications on your device:
 
@@ -253,20 +75,11 @@ wendy device apps list
   **Expected State**: The app shows as "Running" because it's a long-running HTTP server that stays up to serve requests. The "Failures" column showing `0` confirms it started cleanly. The generated `postStart` hook opens your browser to `http://<device>:5001`, where the root route returns `{"message":"hello-world"}`.
 </Callout>
 
-## Next Steps
-
-Now that you have a basic TypeScript application running:
-
-- Learn how to build a [Simple Web Server](/docs/guides/tutorials/typescript/simple-web-server) with Express
-- Explore environment variables and configuration
-- Build more complex applications with networking and data processing
-- Integrate with WendyOS device features via HTTP APIs
-
 <Accordions>
   <Accordion title="Testing the app on your own machine">
     There are times when you might not have a WendyOS device around. You can still test your application locally using Node.js or Docker.
 
-    ### Using Node.js Directly
+    **Using Node.js directly**
 
     Install dependencies, build, and start the server:
 
@@ -295,7 +108,7 @@ Now that you have a basic TypeScript application running:
     # {"message":"hello-world"}
     ```
 
-    ### Using Docker Locally
+    **Using Docker locally**
 
     Build and run your application in a Docker container, mapping the port so you can reach it:
 
@@ -305,3 +118,8 @@ Now that you have a basic TypeScript application running:
     ```
   </Accordion>
 </Accordions>
+
+## Next steps
+
+- [Understand the generated web server](/docs/guides/tutorials/typescript/generated-server) to see how the source, Dockerfile, and `wendy.json` work together.
+- Build a [full-stack web app](/docs/guides/tutorials/typescript/web-app) with a React frontend.

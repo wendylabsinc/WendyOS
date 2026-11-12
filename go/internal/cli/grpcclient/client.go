@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
@@ -63,7 +64,7 @@ const (
 
 // tlsDebugWriter is where WENDY_TLS_DEBUG resumption logging is written.
 // Overridable in tests to capture output.
-var tlsDebugWriter io.Writer = os.Stderr
+var tlsDebugWriter io.Writer = terminaloutput.Stderr
 
 type AgentConnection struct {
 	Conn *grpc.ClientConn

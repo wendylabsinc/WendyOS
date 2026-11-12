@@ -1,5 +1,5 @@
 ---
-title: Analyze Raw Camera Frames
+title: Analyze raw camera frames
 description: Read uncompressed camera frames with Python while keeping a live preview, and inspect their pixel values without losing frame boundaries
 language: python
 ---
@@ -265,3 +265,7 @@ Update the CLI and device agent to versions that support raw streaming. See the 
 The reader terminates its Wendy subprocess when it finishes, fails, or receives Ctrl+C. Stop the separate preview with Ctrl+C. The program leaves only `read_raw.py` and `raw-camera.log` in the working directory and makes no persistent camera control changes.
 
 Keep the script for later captures, or remove the local `raw-camera-demo` directory when you no longer need it. For exposure adjustments before measuring pixels, see [Adjust Camera Exposure](/docs/guides/camera-exposure).
+
+## Next steps
+
+Continue with [Run PyTorch on an AMD GPU](/docs/guides/tutorials/python/amd-rocm-pytorch) to check a GPU calculation against the CPU result on an AMD x86 device.

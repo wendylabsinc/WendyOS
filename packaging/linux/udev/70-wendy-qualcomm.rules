@@ -5,9 +5,9 @@
 # The match is vendor-wide rather than per-PID because 9008 is the single
 # generic EDL id Qualcomm assigns across SoCs. A device only exposes this
 # interface while it is in EDL — a mode entered deliberately by a DIP switch or
-# an explicit reboot — so the extra grant is bounded. On distros without a
-# plugdev group (e.g. Fedora/RHEL) create it and add yourself, or run with sudo:
-#   sudo groupadd plugdev && sudo usermod -aG plugdev $USER
-# Must stay identical to edlUdevRule in
-# go/internal/cli/commands/os_install_dragonwing.go (a test asserts it).
+# an explicit reboot — so the extra grant is bounded.
+# The deb, rpm and AUR packages ship these rules for every distro and create
+# plugdev as a system group where it is missing (packaging/linux/sysusers):
+# udev drops a whole rule line that names a missing group. Users outside a
+# desktop login join plugdev once: sudo usermod -aG plugdev $USER
 SUBSYSTEM=="usb", ATTRS{idVendor}=="05c6", MODE="0660", GROUP="plugdev", TAG+="uaccess"

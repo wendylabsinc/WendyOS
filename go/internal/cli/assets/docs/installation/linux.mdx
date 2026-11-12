@@ -3,11 +3,7 @@ title: Linux computer
 description: Install wendy-agent on any Linux machine to turn it into a managed Wendy device
 ---
 
-<img
-  src={`${(process.env.NEXT_PUBLIC_BASE_PATH || '').replace(/\/$/, '')}/images/boards/ubuntu.png`}
-  alt="Ubuntu desktop"
-  className="not-prose aspect-video w-full bg-fd-muted object-cover object-center"
-/>
+<Figure src="/images/get-started/linux-agent-status.webp" alt="An Ubuntu terminal where systemctl status wendy-agent reports the service as active and running" caption="Wendy Agent running as a service on an Ubuntu computer." />
 
 ## Overview
 
@@ -77,7 +73,7 @@ because the network is not yet up), enrollment is skipped and the token file is
 deleted. In that case, run `wendy device enroll` from the CLI once the device
 is reachable over mDNS, or re-run `wendy install` to obtain a fresh token.
 
-### Verify the Installation
+### Verify the installation
 
 Check that the agent is running:
 
@@ -108,7 +104,7 @@ Expect device information in JSON. Local-only agents do not appear in
 
 After enrollment, the agent uses its authenticated mTLS port (normally 50052).
 
-## Discovering Your Device
+## Discovering your device
 
 If you chose **Other devices**, go back to your developer machine (where you installed the Wendy CLI) and run:
 
@@ -120,7 +116,7 @@ wendy discover
 
 This uses mDNS to scan your local area network and list all devices running `wendy-agent`. You should see your newly configured machine appear in the list.
 
-## Deploying to Remote Devices
+## Deploying to remote devices
 
 If your device is not on the same local network (e.g., a remote server, cloud instance, or a machine connected via a VPN like Tailscale or Headscale), mDNS discovery will not find it automatically. Instead, you can target the device directly by hostname:
 
@@ -135,6 +131,5 @@ Replace `{hostname}` with the hostname or IP address of your remote machine. Thi
 Continue with [the app tutorial](/docs/getting-started/app), including its
 Docker with Buildx prerequisite. For **Only this computer**, keep the project,
 CLI, and builder on this Linux computer and pass `--device 127.0.0.1:50051`
-when running against the unenrolled agent. The tutorial carries this target
-through the edit-and-redeploy loop. For **Other devices**, develop on your
+wherever the tutorial selects a device. For **Other devices**, develop on your
 computer and select the Linux target.

@@ -677,3 +677,20 @@ func TestProvisionConfigWithRetry_UnrequestedFailureReturnsNil(t *testing.T) {
 		t.Errorf("unrequested provisioning failure must not fail the install; got %v", got)
 	}
 }
+
+func TestDirTargetWriteFileReplacesTheWholeFile(t *testing.T) {
+	dir := t.TempDir()
+	target := dirTarget(dir)
+	if err := target.WriteFile("wendy.conf", []byte("[wifi]\nssid = A much longer network name\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.WriteFile("wendy.conf", []byte("[wifi]\nssid = Home\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "wendy.conf")); err != nil || string(got) != "[wifi]\nssid = Home\n" {
+		t.Fatalf("wendy.conf = %q, %v; want only the second write", got, err)
+	}
+	if err := dirTarget(filepath.Join(dir, "gone")).WriteFile("wendy.conf", nil, 0o644); err == nil {
+		t.Fatal("writing into a missing directory succeeded")
+	}
+}

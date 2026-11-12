@@ -130,7 +130,7 @@ func runAudioTUI(cmd *cobra.Command) error {
 
 	model := newAudioTUIModel(resp.GetDevices(), &audioRPCHandler{ctx: ctx, client: conn.AudioServiceV2, streamClient: conn.AudioService})
 	model.ctx = ctx
-	if _, err := tea.NewProgram(model, tea.WithContext(ctx)).Run(); err != nil {
+	if _, err := tui.RunProgram(tea.NewProgram(model, tea.WithContext(ctx))); err != nil {
 		return fmt.Errorf("audio TUI: %w", err)
 	}
 	return nil

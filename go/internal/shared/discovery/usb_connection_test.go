@@ -13,6 +13,7 @@ import (
 // interface/display name and link speed only when the interface actually
 // looks USB-backed and only when USB has not already been set upstream.
 func TestSetLANNetworkInterface(t *testing.T) {
+	nameRulesOnly(t)
 	t.Run("USB-looking interface gets a USB summary with link speed", func(t *testing.T) {
 		dev := &models.LANDevice{}
 		setLANNetworkInterface(dev, "usb0", "", "480 Mbps")
@@ -71,7 +72,17 @@ func TestSetLANNetworkInterface(t *testing.T) {
 	})
 }
 
+// nameRulesOnly tests the name rules macOS and Windows use on any host; Linux
+// otherwise classifies by USB identity.
+func nameRulesOnly(t *testing.T) {
+	t.Helper()
+	orig := usbGadgetIdentityFn
+	usbGadgetIdentityFn = nil
+	t.Cleanup(func() { usbGadgetIdentityFn = orig })
+}
+
 func TestLooksLikeUSBConnectionNCM(t *testing.T) {
+	nameRulesOnly(t)
 	if !looksLikeUSBConnection("ncm0", "") {
 		t.Fatal("ncm0 should be classified as a USB connection")
 	}

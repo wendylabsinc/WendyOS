@@ -2,7 +2,9 @@ package configpartition
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,13 +187,33 @@ func applyBinaryUpdate(logger *zap.Logger, cfgDir, installPath string) bool {
 	return true
 }
 
-// applyWendyConf reads /config/wendy.conf, registers every `[wifi]` /
-// `[wifi.N]` profile via NetworkManager, activates the highest-priority one
-// that is in range, applies the device name from the `[device]` section if
-// present, then deletes the file regardless of outcome (bad values should
-// not be retried on every boot).
-func applyWendyConf(logger *zap.Logger, cfgDir string) {
-	confPath := cfgDir + "/wendy.conf"
+// Seams so applyWendyConf runs in tests without NetworkManager or /etc.
+var (
+	addProfileFn      = network.AddOrUpdateProfile
+	activateProfileFn = network.ActivateProfile
+	applyDeviceNameFn = applyDeviceName
+	sleepFn           = time.Sleep
+)
+
+const (
+	// wendyConfAttemptsFile lives in the agent config dir: a counter on /config
+	// would be lost with the file it counts.
+	wendyConfAttemptsFile = "wendy-conf-attempts"
+	maxWendyConfAttempts  = 5
+	// nmWaitBudget bounds the wait for NetworkManager across the whole file:
+	// Apply runs before the agent serves anything.
+	nmWaitBudget = 20 * time.Second
+	nmMaxBackoff = 5 * time.Second
+)
+
+// errInvalidDeviceName marks a name that no retry can apply.
+var errInvalidDeviceName = errors.New("invalid device name")
+
+// applyWendyConf applies the Wi-Fi networks and device name in wendy.conf. What
+// was rejected is dropped; what failed only because NetworkManager or /etc was
+// not ready is kept for a later boot.
+func applyWendyConf(logger *zap.Logger, cfgDir, configPath string) {
+	confPath := filepath.Join(cfgDir, "wendy.conf")
 	data, err := os.ReadFile(confPath)
 	if os.IsNotExist(err) {
 		return
@@ -198,41 +221,39 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 	if err != nil {
 		logger.Error("Failed to read wendy.conf from config partition",
 			zap.String("path", confPath), zap.Error(err))
-		if err := os.Remove(confPath); err != nil {
-			logger.Warn("Failed to remove wendy.conf after read error",
-				zap.String("path", confPath), zap.Error(err))
-		}
+		retainWendyConf(logger, confPath, configPath, nil, nil)
 		return
 	}
 
 	sections := parseINI(data)
 	creds := wendyconf.UnmarshalWiFi(sections)
+	var keptCreds []wendyconf.WifiCredential
 	if len(creds) == 0 {
 		logger.Warn("wendy.conf has no usable WiFi credentials, skipping WiFi provisioning")
 	} else {
 		ctx := context.Background()
+		var waited time.Duration
 		for _, c := range creds {
-			err := network.AddOrUpdateProfile(ctx, network.SavedCredential{
-				SSID:     c.SSID,
-				Password: c.Password,
-				Priority: c.Priority,
-				Hidden:   c.Hidden,
-				Security: c.Security,
-			})
-			if err != nil {
+			err := addProfileWaitingForNM(ctx, c, &waited)
+			switch {
+			case err == nil:
+				logger.Info("Registered WiFi profile from config partition",
+					zap.String("ssid", c.SSID),
+					zap.Int32("priority", c.Priority))
+			case network.NetworkManagerUnavailable(err):
+				logger.Warn("NetworkManager is unavailable, keeping WiFi profile for the next boot",
+					zap.String("ssid", c.SSID), zap.Error(err))
+				keptCreds = append(keptCreds, c)
+			default:
 				logger.Error("Failed to register WiFi profile from config partition",
 					zap.String("ssid", c.SSID), zap.Error(err))
-				continue
 			}
-			logger.Info("Registered WiFi profile from config partition",
-				zap.String("ssid", c.SSID),
-				zap.Int32("priority", c.Priority))
 		}
 		// Try to bring up the first (highest-priority) credential so the
 		// device is online immediately when it's in range. Lower-priority
 		// profiles stay saved for future locations.
 		for _, c := range creds {
-			if err := network.ActivateProfile(ctx, c.SSID); err != nil {
+			if err := activateProfileFn(ctx, c.SSID); err != nil {
 				logger.Warn("Could not activate WiFi profile",
 					zap.String("ssid", c.SSID), zap.Error(err))
 				continue
@@ -242,17 +263,171 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 		}
 	}
 
+	var keptName string
 	if name := sections["device"]["name"]; name != "" {
-		if err := applyDeviceName(logger, name); err != nil {
+		if err := applyDeviceNameFn(logger, name); err != nil {
 			logger.Error("Failed to apply device name from config partition",
 				zap.String("name", name), zap.Error(err))
+			if !errors.Is(err, errInvalidDeviceName) {
+				keptName = name
+			}
 		}
 	}
 
-	if err := os.Remove(confPath); err != nil {
+	if len(keptCreds) == 0 && keptName == "" {
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+	retainWendyConf(logger, confPath, configPath, data, marshalWendyConf(keptCreds, keptName))
+}
+
+// addProfileWaitingForNM registers c, retrying while NetworkManager is
+// unavailable and the budget shared by the whole file (*waited) lasts.
+func addProfileWaitingForNM(ctx context.Context, c wendyconf.WifiCredential, waited *time.Duration) error {
+	cred := network.SavedCredential{
+		SSID:     c.SSID,
+		Password: c.Password,
+		Priority: c.Priority,
+		Hidden:   c.Hidden,
+		Security: c.Security,
+	}
+	for delay := time.Second; ; delay = min(2*delay, nmMaxBackoff) {
+		err := addProfileFn(ctx, cred)
+		// A missing nmcli will not appear within the budget; a later boot may still have it.
+		if err == nil || !network.NetworkManagerUnavailable(err) || errors.Is(err, network.ErrNMCLINotFound) ||
+			*waited+delay > nmWaitBudget {
+			return err
+		}
+		sleepFn(delay)
+		*waited += delay
+	}
+}
+
+// marshalWendyConf renders wendy.conf the way the CLI writes it.
+func marshalWendyConf(creds []wendyconf.WifiCredential, name string) []byte {
+	conf := wendyconf.Marshal(creds)
+	if name != "" {
+		if len(conf) > 0 {
+			conf = append(conf, '\n')
+		}
+		conf = append(conf, "[device]\nname = "+name+"\n"...)
+	}
+	return conf
+}
+
+// retainWendyConf leaves rest in wendy.conf for the next boot and counts the
+// attempt; data and rest are nil when the file could not be read.
+func retainWendyConf(logger *zap.Logger, confPath, configPath string, data, rest []byte) {
+	// The counter carries the hash of the file it counts, so one left behind by
+	// an earlier install does not shorten a new install's retries.
+	previous, sum := readWendyConfAttempts(configPath)
+	if data != nil && sum != wendyConfSum(data) {
+		previous = 0
+	}
+	attempts := previous + 1
+	if attempts >= maxWendyConfAttempts {
+		logger.Error("Giving up on wendy.conf after repeated boots could not apply it",
+			zap.String("path", confPath), zap.Int("attempts", attempts))
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+
+	if data != nil {
+		sum = wendyConfSum(data)
+		if err := replaceWendyConf(confPath, rest); err != nil {
+			logger.Warn("Could not rewrite wendy.conf; keeping it whole for the next boot",
+				zap.String("path", confPath), zap.Error(err))
+		} else {
+			sum = wendyConfSum(rest)
+		}
+	}
+	if err := writeWendyConfAttempts(configPath, attempts, sum); err != nil {
+		// An attempt that cannot be counted could repeat on every boot.
+		logger.Error("Could not record the wendy.conf attempt, dropping wendy.conf",
+			zap.String("configPath", configPath), zap.Error(err))
+		removeWendyConf(logger, confPath, configPath)
+		return
+	}
+	logger.Warn("Kept the parts of wendy.conf that could not be applied for the next boot",
+		zap.String("path", confPath), zap.Int("attempt", attempts), zap.Int("maxAttempts", maxWendyConfAttempts))
+}
+
+// removeWendyConf deletes wendy.conf and its attempt counter; the counter goes
+// first so a crash in between re-applies the file instead of skipping it.
+func removeWendyConf(logger *zap.Logger, confPath, configPath string) {
+	counter := filepath.Join(configPath, wendyConfAttemptsFile)
+	if err := os.Remove(counter); err != nil && !os.IsNotExist(err) {
+		logger.Warn("Failed to remove the wendy.conf attempt counter",
+			zap.String("path", counter), zap.Error(err))
+	}
+	os.Remove(confPath + ".new") //nolint:errcheck
+	if err := os.Remove(confPath); err != nil && !os.IsNotExist(err) {
 		logger.Warn("Failed to remove wendy.conf after applying",
 			zap.String("path", confPath), zap.Error(err))
 	}
+}
+
+// readWendyConfAttempts returns the stored attempt count and the hash of the
+// wendy.conf it counts; a missing or malformed counter reads as zero.
+func readWendyConfAttempts(configPath string) (int, string) {
+	raw, err := os.ReadFile(filepath.Join(configPath, wendyConfAttemptsFile))
+	if err != nil {
+		return 0, ""
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) != 2 {
+		return 0, ""
+	}
+	n, err := strconv.Atoi(fields[0])
+	if err != nil || n < 0 {
+		return 0, ""
+	}
+	return n, fields[1]
+}
+
+func writeWendyConfAttempts(configPath string, attempts int, sum string) error {
+	if sum == "" {
+		sum = "-"
+	}
+	if err := os.MkdirAll(configPath, 0o700); err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(configPath, wendyConfAttemptsFile),
+		[]byte(fmt.Sprintf("%d %s\n", attempts, sum)), 0o600)
+}
+
+func wendyConfSum(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// replaceWendyConf swaps in the new content by rename, so a power cut leaves
+// either the old file or the new one. No chmod: /config may be FAT.
+func replaceWendyConf(confPath string, data []byte) error {
+	tmp := confPath + ".new"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, confPath)
+	}
+	if err != nil {
+		os.Remove(tmp) //nolint:errcheck
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(confPath)); err == nil {
+		d.Sync()  //nolint:errcheck
+		d.Close() //nolint:errcheck
+	}
+	return nil
 }
 
 // maxDeviceNameLen caps the device name so the hostname this package derives as
@@ -284,7 +459,7 @@ func validDeviceName(name string) bool {
 
 func applyDeviceName(logger *zap.Logger, name string) error {
 	if !validDeviceName(name) {
-		return fmt.Errorf("invalid device name %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", name)
+		return fmt.Errorf("%w %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", errInvalidDeviceName, name)
 	}
 
 	const deviceNamePath = "/etc/wendyos/device-name"
@@ -769,7 +944,7 @@ func Apply(logger *zap.Logger, configPath string) {
 	if applyBinaryUpdate(logger, configDir, installPath) {
 		os.Exit(0)
 	}
-	applyWendyConf(logger, configDir)
+	applyWendyConf(logger, configDir, configPath)
 	applyPreProvisioning(logger, configDir, configPath)
 	applyClockFloor(logger, configDir, configPath)
 	applyExtensions(logger, configDir)

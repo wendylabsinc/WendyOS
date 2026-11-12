@@ -2,7 +2,7 @@
 
 WendyOS devices authenticate to Cloud with their enrolled device certificates.
 Your CLI and apps use your signed-in account to reach those devices. See
-[device certificates](../pki/) for the trust model.
+[device certificates](/docs/advanced/pki) for the trust model.
 
 ## Network changes
 

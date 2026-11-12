@@ -4,6 +4,7 @@
   "pages": [
     "index",
     "../installation/unitree-simulators",
+    "../installation/live-simulation-projects",
     "sim-to-real",
     "sensor-fidelity",
     "vision-language-action",
@@ -11,6 +12,7 @@
     "../installation/unitree-g1-reflash",
     "ros2",
     "robot-diagnostics",
-    "foxglove"
+    "foxglove",
+    "offline-protocol"
   ]
 }

@@ -182,11 +182,21 @@ func cloudTunnelCommand(ctx context.Context, auth *config.AuthConfig, deviceName
 	cliSuccess("Forwarding %s → %s:%d (via cloud)", listenAddr, asset.GetName(), remotePort)
 	cliLogln("Press Ctrl+C to stop.")
 
-	return serveTCPForward(ctx, ln, func(ctx context.Context) (net.Conn, error) {
-		return asset.openTunnel(ctx, brokerConn, auth, remotePort)
-	}, func(err error) {
+	return asset.serveTunnelForward(ctx, ln, brokerConn, auth, remotePort, func(err error) {
 		cliLogln("Cloud tunnel failed: %v", err)
 	})
+}
+
+// serveTunnelForward relays every connection accepted on ln through its own
+// tunnel to remotePort. The connections share one TunnelSession: each still
+// requests its own grant, over the session's authorization connection.
+func (d cloudDiscoveryDevice) serveTunnelForward(ctx context.Context, ln net.Listener, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32, dialFailed func(error)) error {
+	var session TunnelSession
+	session.SetActive(true)
+	defer session.SetActive(false)
+	return serveTCPForward(session.Context(ctx), ln, func(ctx context.Context) (net.Conn, error) {
+		return d.openTunnel(ctx, brokerConn, auth, remotePort)
+	}, dialFailed)
 }
 
 // serveTCPForward accepts connections on ln until ctx ends and relays each one

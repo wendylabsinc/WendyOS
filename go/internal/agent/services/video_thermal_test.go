@@ -78,3 +78,47 @@ func TestDescribeThermalCapturePreservesRawContract(t *testing.T) {
 		t.Fatal("unidentified YUYV frame became thermal")
 	}
 }
+
+func TestThermalProbe96RequiresUSBIdentityAndMode(t *testing.T) {
+	previous := thermalUSBIdentity
+	t.Cleanup(func() { thermalUSBIdentity = previous })
+	withYUYVModes(t, [][2]uint32{{96, 200}, {240, 240}})
+	thermalUSBIdentity = func(string) (string, string) { return "2bdf", "0102" }
+	p := probeThermalCamera("/dev/video2", "Camera: UVC Camera")
+	if p.GetAdapter() != thermal.TOPDONTC001HIK || p.GetCaptureWidth() != 96 || p.GetCaptureHeight() != 200 {
+		t.Fatalf("wrong profile: %v", p)
+	}
+	layout := describeThermalCapture(p, &pb.RawFormat{Width: 96, Height: 200, Fourcc: "YUYV", BytesPerLine: 192})
+	if layout.GetThermalPlane().GetWidth() != 96 || layout.GetThermalPlane().GetHeight() != 96 || layout.GetThermalPlane().Temperature != nil {
+		t.Fatalf("wrong thermal description: %v", layout)
+	}
+	thermalUSBIdentity = func(string) (string, string) { return "046d", "08e5" }
+	if p := probeThermalCamera("/dev/video2", "Camera: UVC Camera"); p != nil {
+		t.Fatalf("webcam classified as thermal: %v", p)
+	}
+	thermalUSBIdentity = func(string) (string, string) { return "2bdf", "0102" }
+	withYUYVModes(t, [][2]uint32{{96, 100}, {240, 240}})
+	if p := probeThermalCamera("/dev/video2", "Camera: UVC Camera"); p != nil {
+		t.Fatalf("preview-only camera classified as thermal: %v", p)
+	}
+}
+
+func TestThermalPreviewCropsOnlyVerifiedLayouts(t *testing.T) {
+	for _, tc := range []struct {
+		adapter                    string
+		width, height, top, bottom uint32
+		ok                         bool
+	}{
+		{thermal.TOPDONTC001, 256, 384, 0, 192, true},
+		{thermal.TOPDONTC001HIK, 256, 392, 196, 4, true},
+		{thermal.TOPDONTC001HIK, 96, 200, 100, 4, true},
+		{thermal.TOPDONTC001HIK, 240, 240, 0, 0, false},
+		{thermal.TOPDONTC001HIK, 96, 392, 0, 0, false},
+		{thermal.TOPDONTC001, 96, 200, 0, 0, false},
+	} {
+		top, bottom, ok := thermalPreviewCrop(&pb.ThermalCamera{Adapter: tc.adapter}, tc.width, tc.height)
+		if top != tc.top || bottom != tc.bottom || ok != tc.ok {
+			t.Fatalf("wrong crop for %+v: %d %d %v", tc, top, bottom, ok)
+		}
+	}
+}
