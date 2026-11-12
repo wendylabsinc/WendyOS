@@ -227,6 +227,8 @@ type Client struct {
 	// meshIngressMu serializes the check, iptables update, and claim so two
 	// concurrent starts cannot publish the same host port.
 	meshIngress   *meshingress.Registry
+	restoreSketch func(ctx context.Context, appID string) error
+	forgetSketch  func(ctx context.Context, appID string)
 	meshMDNS      meshMDNSService
 	meshIngressMu sync.Mutex
 	// A task-exit callback may arrive after a restart has published the same
@@ -292,6 +294,12 @@ func (c *Client) SetMeshDNS(d *mesh.DNSServer) {
 		return
 	}
 	c.meshDNS = d
+}
+
+// SetSketchOwnership wires the microcontroller's sketch to app lifecycle:
+// restore runs before any start of the app, forget after the app is removed.
+func (c *Client) SetSketchOwnership(restore func(ctx context.Context, appID string) error, forget func(ctx context.Context, appID string)) {
+	c.restoreSketch, c.forgetSketch = restore, forget
 }
 
 // SetMeshIngressRegistry shares the fail-closed host-port authorization table
@@ -2300,6 +2308,12 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	appID, serviceName, err := ParseContainerName(appName)
 	if err != nil {
 		return nil, fmt.Errorf("StartContainer: invalid app name: %w", err)
+	}
+	// Before any lock: this may flash the chip and stop another app.
+	if c.restoreSketch != nil {
+		if err := c.restoreSketch(ctx, appID); err != nil {
+			return nil, err
+		}
 	}
 	unlockNetwork := c.lockNetworkOperation(appName)
 	defer unlockNetwork()
@@ -4991,6 +5005,9 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 	// have changed regardless of errs — see StartContainer for the
 	// WithoutCancel/go rationale).
 	go c.SyncCameraLoopbacks(context.WithoutCancel(ctx))
+	if wholeApp && len(errs) == 0 && c.forgetSketch != nil {
+		go c.forgetSketch(context.WithoutCancel(ctx), appID)
+	}
 
 	return errors.Join(errs...)
 }

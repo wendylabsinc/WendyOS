@@ -110,7 +110,7 @@ func (f *fakeHelper) callCount() int {
 	defer f.mu.Unlock()
 	n := 0
 	for _, c := range f.calls {
-		if c.args[0] != "--resume" {
+		if !strings.HasPrefix(c.args[0], "--") {
 			n++
 		}
 	}

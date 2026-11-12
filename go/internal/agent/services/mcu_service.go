@@ -22,12 +22,14 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
 const (
 	maxMCULoaderSize = 8 << 20
 	mcuStatusPrefix  = "wendy-mcu-status "
+	mcuStatePath     = "/data/wendy/mcu/state.json"
 )
 
 var mcuSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -45,14 +47,22 @@ type McuService struct {
 	// holdUpdater keeps the agent auto-updater from restarting the agent, and
 	// with it the helper, in the middle of a flash.
 	holdUpdater func(*zap.Logger) func()
-	mu          sync.Mutex
+	// stopApp stops the app whose sketch was just replaced: without its sketch
+	// it would run on with stale readings and failing calls.
+	stopApp func(ctx context.Context, appID string) error
+	mu      sync.Mutex
+}
+
+// SetAppStopper wires how the previous sketch owner is stopped.
+func (s *McuService) SetAppStopper(stop func(ctx context.Context, appID string) error) {
+	s.stopApp = stop
 }
 
 func NewMcuService(logger *zap.Logger) *McuService {
 	return &McuService{
 		logger:        logger,
 		stagingDir:    "/run/wendy/mcu",
-		statePath:     "/data/wendy/mcu/state.json",
+		statePath:     mcuStatePath,
 		helperTimeout: 3 * time.Minute,
 		layouts:       loadMCULayouts,
 		runHelper:     runMCUHelper,
@@ -88,6 +98,9 @@ type mcuState struct {
 type mcuFlashStream = grpc.BidiStreamingServer[agentpbv2.FlashFirmwareRequest, agentpbv2.FlashFirmwareResponse]
 
 func sendMCUProgress(s mcuFlashStream, phase, line string) {
+	if s == nil {
+		return
+	}
 	_ = s.Send(&agentpbv2.FlashFirmwareResponse{ResponseType: &agentpbv2.FlashFirmwareResponse_Progress_{
 		Progress: &agentpbv2.FlashFirmwareResponse_Progress{Phase: phase, LogLine: line}}})
 }
@@ -125,7 +138,7 @@ func (s *McuService) FlashFirmware(stream mcuFlashStream) error {
 
 	// Locked only after staging: an upload is client-paced, and a stalled
 	// client must not keep everyone else out.
-	if !s.lock(stream) {
+	if !s.lock(stream.Context(), stream) {
 		return sendMCUFailure(stream, "microcontroller is busy with another flash; try again when it finishes")
 	}
 	defer s.mu.Unlock()
@@ -140,6 +153,8 @@ func (s *McuService) FlashFirmware(stream mcuFlashStream) error {
 	}
 
 	previous := s.recordFlash(spec)
+	s.keepFirmware(spec, loaderPath, sketchPath)
+	s.stopReplaced(ctx, previous, spec.GetAppId())
 	return stream.Send(&agentpbv2.FlashFirmwareResponse{ResponseType: &agentpbv2.FlashFirmwareResponse_Completed_{
 		Completed: &agentpbv2.FlashFirmwareResponse_Completed{
 			LoaderWritten: st.LoaderWritten,
@@ -151,7 +166,7 @@ func (s *McuService) FlashFirmware(stream mcuFlashStream) error {
 
 // lock waits for a flash in progress, such as one a cancelled run left behind,
 // for as long as that flash can take. It gives up when the client goes away.
-func (s *McuService) lock(stream mcuFlashStream) bool {
+func (s *McuService) lock(ctx context.Context, stream mcuFlashStream) bool {
 	if s.mu.TryLock() {
 		return true
 	}
@@ -168,7 +183,7 @@ func (s *McuService) lock(stream mcuFlashStream) bool {
 			}
 		case <-deadline.C:
 			return false
-		case <-stream.Context().Done():
+		case <-ctx.Done():
 			return false
 		}
 	}
@@ -179,8 +194,9 @@ func (s *McuService) validateSpec(spec *agentpbv2.McuFirmwareSpec) (mcuLayout, e
 	if !ok {
 		return mcuLayout{}, fmt.Errorf("this device cannot flash microcontroller layout %q", spec.GetLayout())
 	}
-	if spec.GetAppId() == "" {
-		return mcuLayout{}, errors.New("app_id is required")
+	// The id names the app's firmware folder, so it must be a real app id.
+	if err := appconfig.ValidateAppID(spec.GetAppId()); err != nil {
+		return mcuLayout{}, fmt.Errorf("app_id: %w", err)
 	}
 	if n := spec.GetLoader().GetSize(); n == 0 || n > maxMCULoaderSize {
 		return mcuLayout{}, fmt.Errorf("loader size %d is outside 1..%d bytes", n, maxMCULoaderSize)
@@ -326,17 +342,17 @@ func (s *McuService) resume(layout string) {
 
 // recordFlash notes which app owns the sketch now and returns the previous owner.
 func (s *McuService) recordFlash(spec *agentpbv2.McuFirmwareSpec) string {
-	var prev mcuState
-	if data, err := os.ReadFile(s.statePath); err == nil {
-		_ = json.Unmarshal(data, &prev)
-	}
-	next := mcuState{
+	return s.recordOwner(mcuState{
 		AppID:        spec.GetAppId(),
 		Layout:       spec.GetLayout(),
 		LoaderSHA256: spec.GetLoader().GetSha256(),
 		SketchSHA256: spec.GetSketch().GetSha256(),
-		FlashedAt:    time.Now().UTC().Format(time.RFC3339),
-	}
+	})
+}
+
+func (s *McuService) recordOwner(next mcuState) string {
+	prev, _ := s.readState()
+	next.FlashedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeMCUState(s.statePath, next); err != nil {
 		s.logger.Warn("Failed to record microcontroller flash", zap.Error(err))
 	}

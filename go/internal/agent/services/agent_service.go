@@ -638,6 +638,7 @@ func detectFeatureset() []string {
 	}
 
 	features = append(features, mcuFeatureEntries(loadMCULayouts())...)
+	features = append(features, mcuOwnerFeature()...)
 
 	return features
 }
