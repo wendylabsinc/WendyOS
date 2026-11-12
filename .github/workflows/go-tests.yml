@@ -364,11 +364,40 @@ jobs:
       - name: Run worker unit tests
         run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
 
+  # The report queries under go/scripts/analytics only run against a real
+  # PostgreSQL; without one their tests skip, so nothing else covers them.
+  analytics-queries:
+    name: Analytics report queries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run report query tests
+        working-directory: go/scripts/analytics
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: python3 -m unittest -v test_recovery
+
   # Preserve the existing required "Test" check after splitting its work.
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, analytics-queries]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -384,6 +413,7 @@ jobs:
           DARWIN_RESULT: ${{ needs.darwin-regressions.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
+          ANALYTICS_QUERIES_RESULT: ${{ needs.analytics-queries.result }}
         run: |
           test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
           test "$BABEL_RESULT" = success
@@ -396,6 +426,7 @@ jobs:
           test "$INFERENCE_WORKER_RESULT" = success
           test "$CONTAINERD_RESULT" = success
           test "$DARWIN_RESULT" = success
+          test "$ANALYTICS_QUERIES_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
