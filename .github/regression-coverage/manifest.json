@@ -1667,9 +1667,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2453",
       "title": "fix(agent): cap combined memory and swap for explicit memory budgets",
       "package": "06",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "OCI resource tests assert combined memory/swap limits; a hardware resource fixture exists but is release-gated.",
-      "required_follow_up": "Require real cgroup OOM enforcement and the uncapped-swap mutation on both containerd runtime versions. Do not count compilation or OCI-field assertions as enforcement.",
+      "required_follow_up": "Retain real cgroup OOM enforcement and the uncapped-swap mutation on both containerd runtime versions in the existing required job.",
       "evidence": [
         {
           "files": [
@@ -1684,8 +1684,14 @@
           "head": "89ff97ea1df6e41892dffbb51503da89a9483716",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43278587930/job/131393525711",
           "result": "Both containerd 1.7 and 2.2.1 passed the real budget fixture. In each, the 16 MiB workload exited zero; the 96 MiB workload exited 137 with one cgroup OOM kill and zero swap. Explicit swap controls exited zero and used 37-38 MB of swap. Removing Swap let the 96 MiB workload exit zero with 94-97 MB of swap, failing the targeted enforcement assertion. Complete PR checks are still pending."
+        },
+        {
+          "head": "89ff97ea1df6e41892dffbb51503da89a9483716",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43278587930/job/131407235009",
+          "result": "All PR checks completed successfully, including the required Go aggregate. Both runtime versions executed the workload and mutation checks in job 131393525711."
         }
-      ]
+      ],
+      "resolution": "Real cgroup limits and the regression mutation passed on containerd 1.7 and 2.2.1. PR #2861 is ready for review."
     },
     {
       "key": "2049",
@@ -1792,24 +1798,30 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1692",
       "title": "fix(ci): gate GPU fixtures by architecture",
       "package": "07",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The shell gate skips fixtures by architecture, but no table test was found for the architecture/fixture selection matrix.",
-      "required_follow_up": "Reconcile the required offline automation job. These are selection/verdict tests, not CUDA hardware evidence.",
+      "required_follow_up": "Retain the process-level selection and workflow argument tests in the required offline automation job. Hardware execution is tracked separately.",
       "evidence": [
         {
           "test": ".github/scripts/gpu_fixture_selection_test.py",
           "result": "Actual test-ci.sh runs against a strict local CLI fixture. Seven supported/legacy NVIDIA device cases require the exact CUDA Dockerfile for both GPU apps. Six unsupported CPU/GPU combinations require zero deploys and two explicit skips. An app exit 17 must produce two failures despite successful deploy commands. Mutating vendor detection to generic hasGpu fails four assertions; selecting CUDA 12 for Thor/Spark fails two. Included in the required offline automation job; hosted CI pending."
+        },
+        {
+          "head": "71b902289aa6be64d536b74aefcc27787d9d8230",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43280339195/job/131399639753",
+          "result": "All 321 offline tests passed without skips. All PR checks subsequently completed successfully, including the required Go aggregate. PR #2862 is ready for review."
         }
-      ]
+      ],
+      "resolution": "The actual shell harness, discovery process and workflow scan shell execute against local protocol fixtures in required CI."
     },
     {
       "key": "1691",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1691",
       "title": "fix(ci): allow current Thor integration host",
       "package": "07",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The integration host allowlist was updated. Later integration-discover tests improve platform selection, but this historical host fix has no standalone assertion.",
-      "required_follow_up": "Reconcile the required offline automation job for both discovery and actual workflow argument propagation.",
+      "required_follow_up": "Retain the process-level selection and workflow argument tests in the required offline automation job. Hardware execution is tracked separately.",
       "evidence": [
         {
           "tests": [
@@ -1817,8 +1829,14 @@
             ".github/scripts/ci_execution_test.py"
           ],
           "result": "Existing platform-family tests are now in the unconditional offline suite. New process-level discovery uses renamed Thor/Pi/Dragonwing devices, fails a missing or unauthorized Jetson family, and distinguishes optional discovery from required coverage. The actual workflow scan shell is executed with a local SSH fixture to require --require-platforms for automatic integration and preserve explicit-target/discovery-only exceptions. Hosted CI pending."
+        },
+        {
+          "head": "71b902289aa6be64d536b74aefcc27787d9d8230",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43280339195/job/131399639753",
+          "result": "All 321 offline tests passed without skips. All PR checks subsequently completed successfully, including the required Go aggregate. PR #2862 is ready for review."
         }
-      ]
+      ],
+      "resolution": "The actual shell harness, discovery process and workflow scan shell execute against local protocol fixtures in required CI."
     },
     {
       "key": "1666",
