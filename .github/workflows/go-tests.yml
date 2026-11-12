@@ -269,6 +269,28 @@ jobs:
           sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
           grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
 
+  gstreamer-regressions:
+    name: GStreamer output and cancellation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: gstreamer
+      - name: Install GStreamer core elements
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-tools libasound2-dev libusb-1.0-0-dev
+          gst-inspect-1.0 fakesrc
+          gst-inspect-1.0 fdsink
+      - name: Require actual pipeline output and shutdown
+        shell: bash
+        run: |
+          go test -race ./go/internal/agent/services -run '^TestGStreamerInProcessRunner(_Cancellation)?$' -v -count=1 -timeout 90s | tee "$RUNNER_TEMP/gstreamer.log"
+          grep -q '^--- PASS: TestGStreamerInProcessRunner ' "$RUNNER_TEMP/gstreamer.log"
+          grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
+
   windows:
     name: Windows CLI
     runs-on: runs-on,runner=2cpu-linux-x64
@@ -413,7 +435,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -428,6 +450,7 @@ jobs:
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
           DARWIN_RESULT: ${{ needs.darwin-regressions.result }}
           CAMERA_NODE_RESULT: ${{ needs.camera-node-regression.result }}
+          GSTREAMER_RESULT: ${{ needs.gstreamer-regressions.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -443,6 +466,7 @@ jobs:
           test "$CONTAINERD_RESULT" = success
           test "$DARWIN_RESULT" = success
           test "$CAMERA_NODE_RESULT" = success
+          test "$GSTREAMER_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
