@@ -1163,41 +1163,42 @@ def main(argv=None):
             parser.error("--calibrate checks end-to-end fixtures and can't run scenarios")
         scenarios = load_scenarios()
     agents = args.agent or list(config["agents"])
+    # Without --target, scenarios run on simulators and the --device board; end-to-end tasks run on every
+    # configured target, also when scenarios are selected in the same run. The board is for scenarios only.
     if args.target:
-        targets = args.target
-    elif args.scenario:
-        targets = [name for name, t in config["targets"].items() if t.get("kind") == "simulator"]
-        targets += ["board"] if args.device else []
+        task_targets = scenario_targets = args.target
     else:
-        targets = list(config["targets"])
+        scenario_targets = [name for name, t in config["targets"].items() if t.get("kind") == "simulator"]
+        scenario_targets += ["board"] if args.device else []
+        task_targets = [name for name in config["targets"] if not (args.device and name == "board")]
     selected_tasks = args.task or ([] if args.scenario else [t["id"] for t in tasks])
     scenario_ids = [s["id"] for s in scenarios]
     selected_scenarios = scenario_ids if "all" in (args.scenario or []) else args.scenario or []
-    for selected, available in ((agents, config["agents"]), (targets, config["targets"]),
+    for selected, available in ((agents, config["agents"]), (task_targets + scenario_targets, config["targets"]),
                                 (selected_tasks, [t["id"] for t in tasks]), (selected_scenarios, scenario_ids)):
         if any(name not in available for name in selected):
             parser.error("unknown selection: " + str(selected))
     if args.calibrate:
-        return calibrate(config, [t for t in tasks if t["id"] in selected_tasks], targets, args)
+        return calibrate(config, [t for t in tasks if t["id"] in selected_tasks], task_targets, args)
     # Validate guard settings before creating workspaces or copying credentials.
     RetryGuard(args.output / "validation-only", config.get("syntax_error_limit", 3))
 
     def plan_all():
         try:
-            covered = sc.scenario_coverage(scenarios, config["targets"], selected_scenarios, targets, sc.CANNED,
+            covered = sc.scenario_coverage(scenarios, config["targets"], selected_scenarios, scenario_targets, sc.CANNED,
                                            lambda: sc.robot_prerequisites(config))
         except ValueError as error:  # a capture that would fail mid-attempt
             parser.error(str(error))
-        coverage = plan_coverage(tasks, config["targets"], selected_tasks, targets) + covered
+        coverage = plan_coverage(tasks, config["targets"], selected_tasks, task_targets) + covered
         ready = {(c["task"], c["target"]) for c in covered if c["status"] == "ready"}
         plan = [("task", agent, target, task_for_target(task, config["targets"][target])[0])
                 for _ in range(args.repetitions) for task in tasks
-                if task["id"] in selected_tasks for target in targets
+                if task["id"] in selected_tasks for target in task_targets
                 if config["targets"][target]["kind"] in task["environments"]
                 if task_for_target(task, config["targets"][target])[1] is None for agent in agents]
         plan += [("scenario", agent, target, scenario)
                  for _ in range(args.repetitions) for scenario in scenarios
-                 if scenario["id"] in selected_scenarios for target in targets
+                 if scenario["id"] in selected_scenarios for target in scenario_targets
                  if (scenario["id"], target) in ready for agent in agents]
         random.Random(args.seed).shuffle(plan)
         if disposable(config):
@@ -1221,7 +1222,7 @@ def main(argv=None):
                      "would be scored as the model's failure")
     # A board's capabilities (null, as for --device) are read only under --execute; until then its
     # hardware scenarios wait.
-    detect = [name for name in targets if config["targets"][name]["kind"] in ("physical", "cloud", "local")
+    detect = [name for name in scenario_targets if config["targets"][name]["kind"] in ("physical", "cloud", "local")
               and "capabilities" in config["targets"][name] and config["targets"][name]["capabilities"] is None
               and any(config["targets"][name]["kind"] in s["environments"]
                       for s in scenarios if s["id"] in selected_scenarios)]
