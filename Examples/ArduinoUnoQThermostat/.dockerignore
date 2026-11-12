@@ -1,0 +1,18 @@
+# The sketch is compiled on the developer machine and flashed to the MCU;
+# none of it belongs in the container.
+sketch/
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+
+# Python
+__pycache__/
+*.py[cod]
+test_app.py
+
+# Host test for the sketch control rules
+test/
