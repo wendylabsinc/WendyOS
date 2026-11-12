@@ -2549,10 +2549,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1924",
       "title": "WDY-3009: stream Mac cameras to Companion Live",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Swift video service tests cover authorization/rate bounds. Real AVFoundation streaming and packaged-app listener behavior remain outside those fixtures.",
-      "required_follow_up": "Add a controlled stream test that checks unauthenticated refusal, resource limits and cancellation.",
-      "evidence": []
+      "required_follow_up": "Require the live plaintext/mTLS VideoService transport suite in existing Swift CI. Prepare and retain a physical AVFoundation and packaged-agent listener procedure for real capture/teardown; controlled source transport tests do not establish that hardware behavior.",
+      "evidence": [
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTransportTests.swift",
+            "swift/WendyAgentCore/Sources/WendyAgent/Services/VideoService.swift"
+          ],
+          "result": "Twelve focused Swift adapter/transport tests pass locally. Actual loopback HTTP/2 plaintext and mTLS paths reject no/foreign certificates and wrong-role clients before camera access, enforce two sessions, preserve sibling streaming, cancel idle/pre-first-frame captures, handle error/cancel races and reuse exactly two slots. Original production failed both idle wire-cancellation cases: GRPCCore signals the RPC handle instead of cancelling the response producer task. The fix races that handle with frame copy and joins cancellation before release. Hosted execution and actual physical/packaged capture remain pending."
+        }
+      ]
     },
     {
       "key": "2192",
