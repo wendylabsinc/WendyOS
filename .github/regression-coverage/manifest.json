@@ -3382,9 +3382,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2795",
       "title": "Fix broken links across the docs site",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Documentation links changed without a route/link regression in the PR. A documentation build alone does not prove every referenced destination resolves.",
-      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "required_follow_up": "Retain the required rendered branch/latest crawls and pinned upstream example contracts. Example existence and editable-source checks do not claim physical compilation/flashing or moving-main compatibility.",
       "evidence": [
         {
           "tests": [
@@ -3395,6 +3395,11 @@
         },
         {
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
+          "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
       ]
     },
@@ -3446,9 +3451,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1980",
       "title": "wendy-lite: fix example name in getting-started doc",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The documentation example name was corrected without an example-existence test.",
-      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "required_follow_up": "Retain the required rendered branch/latest crawls and pinned upstream example contracts. Example existence and editable-source checks do not claim physical compilation/flashing or moving-main compatibility.",
       "evidence": [
         {
           "tests": [
@@ -3459,6 +3464,11 @@
         },
         {
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
+          "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
       ]
     },
@@ -3467,9 +3477,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1958",
       "title": "wendy-lite: restructure documentation into topic-specific files",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The example-repository links were corrected while docs were reorganized. No link-validation fixture was found.",
-      "required_follow_up": "Verify the required existing documentation job executes the rendered route or example checks against the published source and both deployment prefixes.",
+      "required_follow_up": "Retain the required rendered branch/latest crawls and pinned upstream example contracts. Example existence and editable-source checks do not claim physical compilation/flashing or moving-main compatibility.",
       "evidence": [
         {
           "tests": [
@@ -3480,6 +3490,11 @@
         },
         {
           "result": "Root executed the exact extracted Fumadocs build step locally: branch-regression-workflow and latest exports both passed591routes/1128HTTPdestinations/55aliases; pinned upstream example baseline and three controls passed. Deployment artifact inspection found only the branch tree and its checksum file. Updated crawler additionally passed22README file/HTTP references. Hosted execution remains pending."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131515212427",
+          "result": "Required hosted docs build passed. Both actual branch and latest exports each resolved 591 HTML routes, 1128 HTTP destinations, all 55 historical aliases and 22 README references with zero failures. Pinned template/native Git trees resolved the documented examples and editable source; all three mismatch/missing-source/missing-directory controls failed as intended. Artifact 13988110202 contains both zero-failure crawl reports."
         }
       ]
     },
@@ -3506,9 +3521,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2808",
       "title": "docs: stop preview deploys and moved pages from producing 404s",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Sitemap tests cover generated routes, but deployment hostname/preview behavior also depends on hosting configuration.",
-      "required_follow_up": "Require actual served preview bytes to match this revision export, plus public latest alias/destination responses, canonical URLs, anchors and preview robots/analytics. The hosted probe is registered in the existing deployment job; public evidence is pending.",
+      "required_follow_up": "Retain exact-preview artifact comparison and public latest compatibility checks in the existing deployment job. This covers the 55 historical aliases and preview indexing/analytics policy, not every public route, root hosting rewrites or browser execution.",
       "evidence": [
         {
           "tests": [
@@ -3525,6 +3540,11 @@
             ".github/workflows/fumadocs.yml"
           ],
           "result": "All 11 real HTTP failure controls pass locally. Full exported mirror verifies 210 bounded requests across 55 historical aliases and their destinations for each prefix. Current public /latest is checked independently of the preview revision; no public execution claimed yet."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313452302/job/131518136984",
+          "result": "Actual public HTTPS probe completed 210 requests with zero failures. It checked 55 historical aliases and 49 destination routes for both the exact published branch preview and current public latest. Preview response bytes matched the downloaded export, with canonical URLs, fallback links, anchors, robots exclusion and no analytics verified. Artifact 13986973220 records every response status/digest and the exact preview source commit; latest is explicitly an independent public revision."
         }
       ]
     },
