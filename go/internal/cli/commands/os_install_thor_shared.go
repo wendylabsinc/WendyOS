@@ -85,26 +85,9 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		return err
 	}
 
-	// Resolve provisioning up front: interactive prompts and pre-enrollment run
-	// before the flash UI takes over the terminal, and a bad flag or failed
-	// enrollment aborts before we touch USB. Written to the config image in
-	// stepProvision, then flashed like a disk install's config partition.
-	creds, err := resolveWiFiCredentialsList(wifi)
-	if err != nil {
-		return err
-	}
-	name, err := resolveDeviceName(deviceName)
-	if err != nil {
-		return err
-	}
 	if err := checkInstallConfirmable("flashing the Jetson AGX Thor", force); err != nil {
 		return err
 	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
-	if err != nil {
-		return err
-	}
-	enrolled := provJSON != nil
 
 	// Brief the user (Windows briefing includes the WinUSB driver note),
 	// then confirm before touching USB.
@@ -118,10 +101,30 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		return err
 	}
 
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
 	dev, err := pickThorRecoveryDevice()
 	if err != nil {
 		return err
 	}
+
+	// Resolve provisioning before the flash UI takes over the terminal, so a
+	// bad flag or failed enrollment aborts before anything is written. Written
+	// to the config image in stepProvision, then flashed like a disk install's
+	// config partition.
+	creds, err := resolveWiFiCredentialsList(wifi)
+	if err != nil {
+		return err
+	}
+	name, err := resolveDeviceName(deviceName)
+	if err != nil {
+		return err
+	}
+	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
+	if err != nil {
+		return err
+	}
+	enrolled := provJSON != nil
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target:   dev.Label,
 		warning:  []string{tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone.")},

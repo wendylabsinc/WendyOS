@@ -2,7 +2,6 @@
 
 package discovery
 
-// interfaceIsUSBBacked is a no-op on non-Linux platforms; USB-vs-LAN labelling
-// there relies on the interface/display-name heuristics in
-// looksLikeUSBConnection.
-func interfaceIsUSBBacked(string) bool { return false }
+// usbGadgetIdentityFn is nil off Linux: there is no sysfs to read the USB
+// identity from, so looksLikeUSBConnection uses the interface and display names.
+var usbGadgetIdentityFn func(string) bool

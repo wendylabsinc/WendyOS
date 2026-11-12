@@ -382,9 +382,30 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 		return err
 	}
 
+	if err := checkInstallConfirmable("flashing the "+humanReadableDeviceType(board.deviceType), force); err != nil {
+		return err
+	}
+	// Find the board before asking for Wi-Fi, name or enrollment: USB access
+	// is only known once it is attached, and a refusal must not come last.
+	if err := confirmDragonwingReady(board, plan.version, force); err != nil {
+		return err
+	}
+
+	dev, err := pickDragonwingEDLDevice(board)
+	if err != nil {
+		if isEDLAccessErr(err) {
+			if runtime.GOOS == "windows" {
+				fmt.Println("\n" + dragonwingUSBAccessHint())
+			} else {
+				fmt.Println("\n" + usbAccessDeniedLine("board"))
+			}
+		}
+		return err
+	}
+
 	// Resolve what the flash will write up front, as Thor does: the prompts
 	// must run before the flash UI takes over the terminal, and a bad flag
-	// should abort before the board is touched.
+	// should abort before the board is written.
 	creds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return err
@@ -393,26 +414,11 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	if err != nil {
 		return err
 	}
-	if err := checkInstallConfirmable("flashing the "+humanReadableDeviceType(board.deviceType), force); err != nil {
-		return err
-	}
 	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
 	if err != nil {
 		return err
 	}
 	enrolled := provJSON != nil
-
-	if err := confirmDragonwingReady(board, plan.version, force); err != nil {
-		return err
-	}
-
-	dev, err := pickDragonwingEDLDevice(board)
-	if err != nil {
-		if isEDLAccessErr(err) {
-			fmt.Println("\n" + dragonwingUSBAccessHint())
-		}
-		return err
-	}
 
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target: dragonwingTargetLabel(dev),
