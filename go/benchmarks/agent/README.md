@@ -179,7 +179,7 @@ read/write-rate charts. Comparison produces `comparison.md` and
 
 The default policy requires both a 10% change and a metric-specific absolute
 floor, such as 0.5 CPU percentage points or 5 MiB RSS. These are starting values,
-not established Wendy performance budgets. A change smaller than one counter
+not established Wendy performance budgets. A change of at most one counter
 step, such as one CPU clock tick over the measured phase, is always within
 tolerance, so short profiles do not report tick noise. Changes within tolerance are not
 proof of equivalence; review repetition ranges and repeat noisy comparisons.

@@ -101,6 +101,18 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(compare(ticks((0, 0)), ticks((0, 1.11)))["rows"][0]["status"], "within tolerance")
         self.assertEqual(compare(ticks((0, 0)), ticks((2.22, 2.22)))["rows"][0]["status"], "regression")
 
+    def test_exactly_one_counter_step_survives_float_error(self):
+        # Seen in a pair run of identical binaries: one 10 ms tick over 10
+        # operations, as computed from float second counters.
+        key = "agent.process.cpu_seconds_per_operation"
+        def runs(value):
+            result = report((value, value), key)
+            for run in result["runs"]:
+                run["resolution"] = {key: .001}
+            return result
+        row = next(r for r in compare(runs(0), runs(0.0010000000000000009))["rows"] if r["metric"] == key)
+        self.assertEqual(row["status"], "within tolerance")
+
     def test_invalid_policy(self):
         for policy in ({}, {"missing": {"relative": .1, "absolute": 1}},
                        {"cpu": {"relative": -1, "absolute": 1}}):

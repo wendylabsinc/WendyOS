@@ -84,9 +84,11 @@ def compare(baseline, candidate, policy=None):
             b = metric_values(new[name], metric)
             before, after = statistics.median(a), statistics.median(b)
             delta = after - before
-            # A change within one counter step (such as a CPU clock tick) is noise.
+            # A change of up to one counter step (such as a CPU clock tick) is
+            # noise. The step is widened slightly because float arithmetic on
+            # tick-based seconds can land a hair above an exact step.
             resolution = max(r.get("resolution", {}).get(metric, 0) for r in old[name] + new[name])
-            tolerance = max(abs(before) * rule["relative"], rule["absolute"], resolution)
+            tolerance = max(abs(before) * rule["relative"], rule["absolute"], resolution * (1 + 1e-9))
             worse = delta * (-1 if rule.get("direction") == "higher" else 1)
             status = "regression" if worse > tolerance else "improvement" if worse < -tolerance else "within tolerance"
             rows.append({"scenario": name, "metric": metric, "baseline": before, "candidate": after,
