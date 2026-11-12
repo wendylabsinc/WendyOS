@@ -1322,10 +1322,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2674",
       "title": "Keep Cloud presence alive over slow mesh uplinks",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Extensive TLS, lease-history, offer-admission and slow-path tests exist. Real slow BLE uplink presence and relay behavior is not established by these fixtures alone.",
-      "required_follow_up": "Run the multi-node slow-link/renewal scenario with bounded loss and verify ongoing sessions survive.",
-      "evidence": []
+      "required_follow_up": "Verify required local slow-uplink renewal, retained-session traffic and mutation controls in hosted network CI. Physical radio and kernel route movement are separate transport coverage.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/shared/cloudrelay/relay_path_traffic_test.go",
+            ".github/scripts/test-relay-path-traffic.sh"
+          ],
+          "result": "Two real loopback TCP forwarding paths carry relay frames while the renewal socket read is held. Pending and acknowledged renewal cases require live payloads, five successful replacement-path probes, identical signed/persisted lease on presence reconnect, same admitted session and recovered traffic. Ten local race runs plus existing end-to-end tests pass; session-context, discarded-lease and blocking-renewal mutations fail. Loopback gRPC is plaintext; holder proofs and HPKE dial instructions are real. Long-idle keepalive, physical slow radio and kernel routing changes are not claimed."
+        }
+      ]
     },
     {
       "key": "2670",
@@ -1454,10 +1462,25 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2474",
       "title": "fix(cloudrelay): keep v2 relay connections alive and the lease across path moves (WDY-3682)",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests check keepalive configuration and path/session behavior. Longer idle relay periods and physical uplink moves are not established by configuration assertions alone.",
-      "required_follow_up": "Add a relay idle-duration test with path movement and verify the original lease/session remains usable.",
-      "evidence": []
+      "required_follow_up": "Verify required production TLS keepalive at real idle durations plus existing path-move/session/lease assertions in hosted network CI.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/shared/cloudrelay/relay_path_traffic_test.go",
+            ".github/scripts/test-relay-path-traffic.sh"
+          ],
+          "result": "Two real loopback TCP forwarding paths carry relay frames while the renewal socket read is held. Pending and acknowledged renewal cases require live payloads, five successful replacement-path probes, identical signed/persisted lease on presence reconnect, same admitted session and recovered traffic. Ten local race runs plus existing end-to-end tests pass; session-context, discarded-lease and blocking-renewal mutations fail. Loopback gRPC is plaintext; holder proofs and HPKE dial instructions are real. Long-idle keepalive, physical slow radio and kernel routing changes are not claimed."
+        },
+        {
+          "tests": [
+            "go/internal/shared/cloudrelay/relay_idle_keepalive_test.go",
+            ".github/scripts/test-relay-path-traffic.sh"
+          ],
+          "result": "Unchanged production 30-second keepalive preserves three original TLS sockets, lease, presence and session payloads after 40 seconds of application silence across a 35-second idle-expiring TCP proxy. A concurrent child omitting only keepalive loses its same-session read with EOF. Local race validation passes in 42 seconds; hosted invocation is required once. Trust is private to subprocesses, with no system trust changes. Physical route migration is separate from this idle transport contract."
+        }
+      ]
     },
     {
       "key": "2420",
@@ -1524,20 +1547,34 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1743",
       "title": "Let a fleet member be reached over the cloud tunnel",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Later tests cover explicitly named targets taking the Cloud fallback branch. They do not exercise a complete multi-member fleet deployment through the tunnel.",
-      "required_follow_up": "Add a two-member fleet test with one LAN member and one Cloud-only member and verify target identities.",
-      "evidence": []
+      "required_follow_up": "Verify real local Cloud tunnel fallback and requested-target assertions in the existing required commands race suite at the final PR head.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/buildhost_cloud_transport_test.go"
+          ],
+          "result": "Real loopback TCP, outer broker mTLS and inner Agent mTLS carry distinct fleet requests and a build-host capability/BuildImage spec, log and terminal result after genuine refused direct TCP. Explicit names select the correct target while a primary-device decoy stays unused. Four direct-only/wrong-name controls fail as expected. Normal local tests pass; optional local race compilation stopped for disk pressure, with no race result claimed. Hosted race execution remains pending. No real BuildKit compilation or physical delivery is claimed."
+        }
+      ]
     },
     {
       "key": "1729",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1729",
       "title": "Give the build-host connection the cloud fallback its doc claims",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests check fallback target-name selection, but not a complete remote build-host connection through the Cloud tunnel.",
-      "required_follow_up": "Add a build-host fallback test that fails direct dialing and completes a build over a pinned Cloud connection.",
-      "evidence": []
+      "required_follow_up": "Verify real local Cloud tunnel fallback and requested-target assertions in the existing required commands race suite at the final PR head.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/buildhost_cloud_transport_test.go"
+          ],
+          "result": "Real loopback TCP, outer broker mTLS and inner Agent mTLS carry distinct fleet requests and a build-host capability/BuildImage spec, log and terminal result after genuine refused direct TCP. Explicit names select the correct target while a primary-device decoy stays unused. Four direct-only/wrong-name controls fail as expected. Normal local tests pass; optional local race compilation stopped for disk pressure, with no race result claimed. Hosted race execution remains pending. No real BuildKit compilation or physical delivery is claimed."
+        }
+      ]
     },
     {
       "key": "2579",
@@ -2258,10 +2295,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2130",
       "title": "Reuse app-owned camera feeds for shared capture",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "HTTP ownership, JPEG and cancellation tests exist; the actual GStreamer pipeline can skip without its runtime.",
-      "required_follow_up": "Run the shared-camera pipeline with GStreamer installed and assert no second camera open occurs.",
-      "evidence": []
+      "required_follow_up": "Verify decoded owner pixels, lifecycle, actual Linux syscall no-camera-open evidence and both mutation controls in the required media job.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/camera_shared_capture_integration_test.go",
+            ".github/scripts/test-shared-camera-capture.sh"
+          ],
+          "result": "Actual owner HTTP JPEG feed flows through production shared capture, GStreamer and hub to two decoded pixel consumers. First cancellation preserves fresh changed frames for the second; final cancellation ends feed/encoder; incompatible requests are refused. Normal and race tests pass locally, and stale-pixel/reopen controls fail. Owner/process discovery seam is synthetic. Linux gate requires v4l2src and strace and rejects any physical-camera open; that hosted syscall evidence remains pending. Native hardware contention is not claimed."
+        }
+      ]
     },
     {
       "key": "1954",
@@ -2308,10 +2353,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1739",
       "title": "Report contended cameras correctly and share already claimed cameras",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests cover camera-busy diagnosis, shared-source selection and PipeWire parsing. Real camera contention and shared capture can still differ by driver.",
-      "required_follow_up": "Run two consumers against one camera and verify sharing, cancellation and the busy error for an incompatible request.",
-      "evidence": []
+      "required_follow_up": "Retain portable shared-consumer/cancellation/incompatible-request assertions. Add actual native driver contention and busy-discovery coverage; synthetic owner/process identity does not establish hardware EBUSY behavior.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/camera_shared_capture_integration_test.go",
+            ".github/scripts/test-shared-camera-capture.sh"
+          ],
+          "result": "Actual owner HTTP JPEG feed flows through production shared capture, GStreamer and hub to two decoded pixel consumers. First cancellation preserves fresh changed frames for the second; final cancellation ends feed/encoder; incompatible requests are refused. Normal and race tests pass locally, and stale-pixel/reopen controls fail. Owner/process discovery seam is synthetic. Linux gate requires v4l2src and strace and rejects any physical-camera open; that hosted syscall evidence remains pending. Native hardware contention is not claimed."
+        }
+      ]
     },
     {
       "key": "2011",
@@ -2876,10 +2929,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2247",
       "title": "Add read-only SO-101 hardware reader example for macOS and Linux",
       "package": "13",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "SO-101 reader tests cover serial resynchronization, identity and timeout handling. They are example-level tests; regular execution on macOS/Linux hardware is not established.",
-      "required_follow_up": "Run test_reader.py in CI and retain a recorded serial trace with stray headers and delayed responses.",
-      "evidence": []
+      "required_follow_up": "Run the exact-target native macOS/Linux adapter procedure with the owner, record actual baud/readings/hotplug/ownership observations, and retain the separate required portable PTY suites. Hardware cases remain not_run.",
+      "evidence": [
+        {
+          "tests": [
+            "Examples/SO101Reader/test_reader.py",
+            "Examples/SO101Reader/fixtures/stray-header-delayed.synthetic.json",
+            ".github/scripts/run-so101-reader-regressions.py",
+            ".github/regression-coverage/manual/so101-reader-acceptance.py",
+            ".github/scripts/so101_reader_acceptance_test.py"
+          ],
+          "result": "All 38 portable reader tests pass locally, including literal READ requests and retained synthetic stray-header/delayed bytes through real PTYs. Existing Linux/macOS jobs now require this suite with appropriate Python/lsof and no skipped cases; hosted execution pending. Eight offline acceptance-helper tests pass. The exact-target human procedure pins native host/adapter/source/config inventory, records bounded read-only baseline/reopen/hotplug/rebind/ownership/permission cases and child-only cleanup, and preserves historical Mac evidence separately. All new physical cases are not_run; PTYs do not establish native custom baud or real USB acceptance."
+        }
+      ]
     },
     {
       "key": "2246",
