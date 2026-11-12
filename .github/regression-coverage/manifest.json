@@ -1761,10 +1761,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2261",
       "title": "fix: prefer wired connections over Wi-Fi",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover route choice, advertisement ranking and delayed path moves. Actual multi-interface routing and roaming remain environment-dependent.",
-      "required_follow_up": "Run a network-namespace integration scenario that changes the preferred uplink during a session.",
-      "evidence": []
+      "required_follow_up": "Require the real broker uplink namespace gate and both controls in the existing Linux network job. Verify held-session continuity through preferred-route change and new presence/tunnel source after the session drains. Native kernel execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-broker-uplink-namespace.sh",
+            ".github/scripts/broker_uplink_namespace_test.py",
+            "go/internal/agent/services/broker_uplink_namespace_test.go"
+          ],
+          "result": "Actual TunnelBrokerClient.Run uses TLS presence/tunnel RPCs, kernel source lookup, a reachability probe and unchanged10-second path timers. Two veth routes model Wi-Fi/wired uplinks. Exact-byte tunneled TCP must survive more than two checks after the wired route becomes preferred; after drain, new presence/tunnel traffic must use its source address. Controls disable migration or active-session protection. Native race and ordinary-user Linux wire controls pass; normal/two-control Linux race binaries compile; two offline admission checks and ShellCheck pass. Read-only peer review clear. Registered in the existing network job; privileged namespace normal/control execution remains pending. Physical radio, sysfs hardware classification and Avahi publication are outside this fixture."
+        }
+      ]
     },
     {
       "key": "2224",

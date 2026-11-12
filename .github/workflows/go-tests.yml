@@ -576,6 +576,8 @@ jobs:
         run: bash .github/scripts/test-chunk-stall-ownership.sh "$RUNNER_TEMP/chunk-stall-ownership"
       - name: Require link-local traffic across competing interface routes
         run: bash .github/scripts/test-linklocal-multi-interface.sh "$RUNNER_TEMP/linklocal-multi-interface"
+      - name: Require broker uplink migration after active sessions drain
+        run: bash .github/scripts/test-broker-uplink-namespace.sh "$RUNNER_TEMP/broker-uplink"
       - name: Preserve transfer and interface recovery evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -585,6 +587,7 @@ jobs:
             ${{ runner.temp }}/chunk-stall-transport/*.log
             ${{ runner.temp }}/chunk-stall-ownership/*.log
             ${{ runner.temp }}/linklocal-multi-interface/*.log
+            ${{ runner.temp }}/broker-uplink/*.log
           if-no-files-found: ignore
           retention-days: 7
       - name: Require wired-only automatic ROS discovery
