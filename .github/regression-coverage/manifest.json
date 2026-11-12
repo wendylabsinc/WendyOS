@@ -2217,10 +2217,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2424",
       "title": "Rename the runner janitor to Janitor and keep its Slack job names whole",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The janitor Slack name correction is inline workflow shell with no message-format fixture.",
       "required_follow_up": "Extract and test the job-name parsing, including names containing spaces.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/janitor_report_test.py",
+          "runner": "local macOS; required offline automation job added",
+          "result": "Five tests parse the actual YAML names and execute only the actual local alarm/report writers. Complete channel names and spaces survive; JSON escaping, success/failure/cancellation/offline reports, and runner recording before a failed disk probe are checked. Removing the YAML quoting reproduces the original truncated job-name failure. No cleanup or Slack action is executed."
+        }
+      ],
+      "resolution": "Historical diff confirms YAML comment truncation, not a separate job-name parser. Required fixtures exercise the YAML and local payload generation directly. CI reconciliation remains pending."
     },
     {
       "key": "1724",
@@ -3107,7 +3114,7 @@
             ".github/scripts/tag-built-commit_test.py",
             ".github/scripts/release_provenance_test.py"
           ],
-          "result": "Seven release-gate scenarios plus five workflow contract tests pass. The gate fixture failed against the original fallback behavior. Tests run actual workflow code against real Git refs and a gh policy/API fixture, including moving main, lightweight/annotated wrong tags, concurrent creators, API failures, empty/missing/changed assets and wrong source/repository/workflow. All published artifact types require provenance in their producing job; the real file-inventory shell includes all six published formats and excludes caches. The complete offline suite passes 297 tests. Actionlint workflow validation passes; existing ShellCheck advisories are unchanged."
+          "result": "Seven release-gate scenarios plus five workflow contract tests pass. The gate fixture failed against the original fallback behavior. Tests run actual workflow code against real Git refs and a gh policy/API fixture, including moving main, lightweight/annotated wrong tags, concurrent creators, API failures, empty/missing/changed assets and wrong source/repository/workflow. All published artifact types require provenance in their producing job; the real file-inventory shell includes all six published formats and excludes caches. The complete offline suite passes 302 tests. Actionlint workflow validation passes; existing ShellCheck advisories are unchanged."
         },
         {
           "artifact": "wendy-agent-linux-arm64-2026.11.11-074541.tar.gz",

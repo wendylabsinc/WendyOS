@@ -23,6 +23,7 @@ SUITES = (
     "plugin_pin_test.py",
     "tag-built-commit_test.py",
     "release_provenance_test.py",
+    "janitor_report_test.py",
 )
 
 
