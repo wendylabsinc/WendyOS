@@ -28,4 +28,32 @@ package() {
     else
         install -Dm755 "wendy-cli-linux-arm64/wendy" "${pkgdir}/usr/bin/wendy"
     fi
+
+    # Keep this in sync with packaging/linux/udev/70-wendy-jetson.rules.
+    # AUR receives only PKGBUILD/.SRCINFO, so inline the packaged rule.
+    # Arch's maintained systemd hooks create plugdev before reloading udev rules.
+    install -dm755 "${pkgdir}/usr/lib/udev/rules.d"
+    cat > "${pkgdir}/usr/lib/udev/rules.d/70-wendy-jetson.rules" <<'EOF'
+# NVIDIA Jetson devices used by `wendy os install` Thor flashing:
+# recovery mode (0955:7023 Orin, 0955:7026 Thor) and the initrd-flash
+# ADB gadget (0955:7100). Grants access to plugdev members and, via
+# uaccess, the physically logged-in user.
+#
+# The match is deliberately vendor-wide rather than per-PID: NVIDIA assigns a
+# distinct recovery/gadget PID per Jetson module (oe4t lists 14+), wendy will
+# grow support for more of them, and a stale narrow rule left on user machines
+# would mask later additions. Vendor 0955 devices only expose these interfaces
+# transiently in recovery/flashing mode, so the extra grant is bounded. On distros without a plugdev
+# group (e.g. Fedora/RHEL) create it and add yourself, or run with sudo:
+#   sudo groupadd plugdev && sudo usermod -aG plugdev $USER
+# Must stay identical to usbUdevRule in
+# go/internal/cli/commands/os_install_thor.go (a test asserts it).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+EOF
+    chmod 644 "${pkgdir}/usr/lib/udev/rules.d/70-wendy-jetson.rules"
+
+    # Modern udev requires GROUP names to resolve to a system group.
+    install -dm755 "${pkgdir}/usr/lib/sysusers.d"
+    printf 'g plugdev -\n' > "${pkgdir}/usr/lib/sysusers.d/wendy.conf"
+    chmod 644 "${pkgdir}/usr/lib/sysusers.d/wendy.conf"
 }

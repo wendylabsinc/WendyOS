@@ -70,6 +70,16 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	}
 	defer os.RemoveAll(handoffDir)
 
+	// Resolve recovery USB access before asking for configuration. The selected
+	// physical target is still confirmed below, immediately before flashing.
+	if err := confirmOrinReady(opts); err != nil {
+		return err
+	}
+	dev, err := pickOrinRecoveryDevice(opts)
+	if err != nil {
+		return err
+	}
+
 	creds, err := resolveWiFiCredentialsList(opts.WiFi)
 	if err != nil {
 		return err
@@ -87,13 +97,6 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	}
 	enrolled := provJSON != nil
 
-	if err := confirmOrinReady(opts); err != nil {
-		return err
-	}
-	dev, err := pickOrinRecoveryDevice(opts)
-	if err != nil {
-		return err
-	}
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target:   dev.Describe(),
 		warning:  []string{tui.WarningMessage(fmt.Sprintf("This erases QSPI and all data on the selected %s, including /data. This cannot be undone.", strings.ToUpper(opts.Storage)))},

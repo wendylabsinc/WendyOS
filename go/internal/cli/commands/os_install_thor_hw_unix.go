@@ -42,12 +42,15 @@ func pickThorRecoveryDevice() (thorDevice, error) {
 	return thorDevice{PathKey: dev.PathKey, Label: dev.Describe()}, nil
 }
 
+// Stubbed by install-flow tests to exercise USB denial without hardware.
+var listInstallRecoveryDevices = rcm.ListRecoveryDevices
+
 // pickUnixRecoveryDevice selects only devices matching the requested family.
 // Filtering happens before the single-device fast path and on every rescan, so
 // an attached Orin can never be selected by a Thor installation (or vice versa).
 func pickUnixRecoveryDevice(hints recoveryWaitHints, match func(rcm.RecoveryDevice) bool) (rcm.RecoveryDevice, error) {
 	scan := func() ([]rcm.RecoveryDevice, error) {
-		devs, err := rcm.ListRecoveryDevices()
+		devs, err := listInstallRecoveryDevices()
 		return filterRecoveryDevices(devs, match), err
 	}
 	for {

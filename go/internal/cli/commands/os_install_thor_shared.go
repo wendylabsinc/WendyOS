@@ -34,6 +34,9 @@ import (
 // alarming "bad state" recovery box. The platform thorOpenGadget hooks wrap it.
 var errGadgetUnreachable = errors.New("thor flashing gadget did not appear over USB")
 
+// Stubbed by install-flow tests so they never elevate the test process.
+var ensureThorInstallAccess = ensureThorRootAccess
+
 // thorDevice identifies a selected Jetson in recovery mode, platform-neutrally.
 // PathKey is the stable physical-location key used to re-find the device across
 // the RCM→gadget re-enumeration; Label is a human description.
@@ -45,10 +48,9 @@ type thorDevice struct {
 }
 
 // installThor flashes a Jetson AGX Thor over USB recovery: plan the flashpack,
-// brief + confirm, prepare the host (Windows installs the WinUSB driver), pick
-// the device, then run download → stage-1 RCM boot → stage-2 partition flash as a
-// BuildKit-style step list. Stage-2 is the shared Go engine (flashengine) on all
-// platforms.
+// brief + select an accessible device, collect configuration, prepare the host,
+// then confirm before download → stage-1 RCM boot → stage-2 partition flash.
+// Stage-2 is the shared Go engine (flashengine) on all platforms.
 func installThor(ctx context.Context, version string, nightly, force bool, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int, agent *localInstallAgent) error {
 	if err := agent.checkArchitecture("arm64"); err != nil {
 		return err
@@ -59,7 +61,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	// failure never surprises the user mid-flash (WDY-1843). On a successful sudo
 	// re-exec this replaces the process and does not return. Windows elevates
 	// only the driver helper via UAC if either USB stage needs a binding repair.
-	if err := ensureThorRootAccess(); err != nil {
+	if err := ensureThorInstallAccess(); err != nil {
 		return err
 	}
 
@@ -84,10 +86,19 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		return err
 	}
 
-	// Resolve provisioning up front: interactive prompts and pre-enrollment run
-	// before the flash UI takes over the terminal, and a bad flag or failed
-	// enrollment aborts before we touch USB. Written to the config image in
-	// stepProvision, then flashed like a disk install's config partition.
+	// Brief the user (Windows briefing includes the WinUSB driver note),
+	// then confirm before touching USB.
+	if err := confirmThorReady(plan.version, force); err != nil {
+		return err
+	}
+
+	dev, err := pickThorRecoveryDevice()
+	if err != nil {
+		return err
+	}
+
+	// USB access and physical target selection are resolved before configuration.
+	// Provisioning still finishes before the flash UI takes over the terminal.
 	creds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return err
@@ -105,22 +116,12 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	}
 	enrolled := provJSON != nil
 
-	// Brief the user (Windows briefing includes the WinUSB driver note),
-	// then confirm before touching USB.
-	if err := confirmThorReady(plan.version, force); err != nil {
-		return err
-	}
-
 	// Stop any conflicting adb server that would claim the gadget. Windows
 	// prepares each device's driver after identifying the selected USB target.
 	if err := thorPrepareHost(os.Stdout); err != nil {
 		return err
 	}
 
-	dev, err := pickThorRecoveryDevice()
-	if err != nil {
-		return err
-	}
 	if err := confirmRecoveryFlash(recoveryFlashConfirm{
 		target:   dev.Label,
 		warning:  []string{tui.WarningMessage("This erases QSPI + internal NVMe on the Thor. This cannot be undone.")},
