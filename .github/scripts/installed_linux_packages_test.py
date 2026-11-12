@@ -2,11 +2,13 @@
 """Portable artifact tests. They do not claim an apt/dnf/systemd guest was run."""
 import importlib.util
 import json
+import platform
 from pathlib import Path
 import shutil
 import struct
 import subprocess
 import tempfile
+import sys
 import types
 import unittest
 from unittest import mock
@@ -157,6 +159,23 @@ class GuardTests(unittest.TestCase):
 class RpmArtifactTests(unittest.TestCase):
     setUp = DebianArtifactTests.setUp
     package = DebianArtifactTests.package
+
+    @unittest.skipUnless(sys.platform == "linux", "shared release recipe requires Linux packaging tools")
+    def test_shared_release_recipe_packages_exact_input_and_service_files(self):
+        architecture = {"x86_64": "amd64", "aarch64": "arm64"}[platform.machine()]
+        destination = self.directory / "release-packages"
+        # A real ELF supplies artifact bytes only. No Wendy or service is run.
+        MODULE.run("bash", str(SCRIPT.with_name("build-linux-packages.sh")), "2099.01.04-regression-package",
+                   architecture, "/bin/true", "/bin/false", str(destination), timeout=180)
+        self.assertEqual(len(list(destination.iterdir())), 4)
+        for fmt in ("deb", "rpm"):
+            for archive in destination.glob("*." + fmt):
+                name = MODULE.metadata(archive, fmt)["name"]
+                source = Path("/bin/false" if name == "wendy-agent" else "/bin/true")
+                self.assertEqual(MODULE.member_bytes(archive, fmt, "/usr/bin/" + name), source.read_bytes())
+                if name == "wendy-agent":
+                    self.assertEqual(MODULE.member_bytes(archive, fmt, "/usr/lib/systemd/system/wendy-agent.service"),
+                                     (ROOT / "packaging/linux/systemd/wendy-agent.service").read_bytes())
 
     def test_real_rpm_repack_preserves_release_payload_and_changes_recovery_hook(self):
         packages = {}
