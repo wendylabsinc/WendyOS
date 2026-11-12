@@ -657,12 +657,15 @@ jobs:
           path: .ci-v4l2loopback
           persist-credentials: false
       - name: Build and load WendyOS loopback ABI
+        id: loopback-module
         run: |
           make -C .ci-v4l2loopback
           sudo modprobe videodev
           sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
           sudo udevadm settle
           test -c /dev/v4l2loopback
+      - name: Decode authenticated Lite camera frames through the kernel node
+        run: bash .github/scripts/test-lite-camera-loopback.sh
       - name: Exercise the remove ioctl and require execution
         shell: bash
         env:
@@ -691,7 +694,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sensorlink-audio-loopback
-          path: ${{ runner.temp }}/wendy-sensorlink-audio.*/*.log
+          path: |
+            ${{ runner.temp }}/wendy-sensorlink-audio.*/*.log
+            ${{ runner.temp }}/wendy-lite-camera.*/*.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -701,6 +706,13 @@ jobs:
           go test -race ./go/internal/agent/services -run '^TestGStreamerInProcessRunner(_Cancellation)?$' -v -count=1 -timeout 90s | tee "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner ' "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
+
+      - name: Remove the fixture loopback module after early failure
+        if: always() && steps.loopback-module.outcome == 'success'
+        run: |
+          if test -d /sys/module/v4l2loopback; then
+            sudo rmmod v4l2loopback
+          fi
 
   windows:
     name: Windows CLI
