@@ -7,7 +7,7 @@ if [[ ${1:-} != --inside ]]; then
   [[ -x $binary ]]
   test_name=${2:-TestPacketBackendContract}
   case "$test_name" in
-    TestPacketBackendContract|TestDuplicateCarrierPreservesLiveRoute) ;;
+    TestPacketBackendContract|TestDuplicateCarrierPreservesLiveRoute|TestAutomaticROSDiscoveryNeverUsesWirelessPath) ;;
     *) echo 'unsupported isolated network test' >&2; exit 2 ;;
   esac
   export WENDY_PACKET_PARENT_mnt WENDY_PACKET_PARENT_net WENDY_PACKET_PARENT_pid
