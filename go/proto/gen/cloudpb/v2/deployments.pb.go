@@ -224,6 +224,79 @@ func (ReleaseType) EnumDescriptor() ([]byte, []int) {
 	return file_wendycloud_v2_deployments_proto_rawDescGZIP(), []int{2}
 }
 
+type DetachState int32
+
+const (
+	DetachState_DETACH_STATE_UNSPECIFIED DetachState = 0
+	// Cloud received the detach and queued it; the device has not applied it.
+	DetachState_DETACH_STATE_SENT DetachState = 1
+	// The device refused the detach, and its agent does not list DetachDevice
+	// in PullChangesRequest.accepted_operations (an agent that predates
+	// detach). A refusal is judged by the accepted_operations sent with the
+	// pull that delivered that entry, so an old agent's refusal that arrives
+	// after an upgraded agent's first pull is not taken as REFUSED. Cloud sends the detach again once each time the device's
+	// accepted_operations changes to include DetachDevice, until the device
+	// applies it or its validity ends. Until then the device keeps running the
+	// app as a deployment.
+	DetachState_DETACH_STATE_WAITING_FOR_AGENT DetachState = 2
+	// The detach's validity ended before the device applied it. The device
+	// keeps the deleted deployment, which blocks a new app with the same id
+	// there (one instance per app). There is no way out through cloud: the app
+	// is gone, so no new detach can be signed. The device owner removes the app
+	// locally, or resets the device.
+	DetachState_DETACH_STATE_EXPIRED DetachState = 3
+	// An agent that listed DetachDevice, in the pull that delivered the entry,
+	// refused the detach (its outcome is in `outcome` (16)). Final: no re-send. As with EXPIRED, there is no way out
+	// through cloud; the device owner removes the app locally or resets the
+	// device. Cloud's checks at accept make this rare.
+	DetachState_DETACH_STATE_REFUSED DetachState = 4
+)
+
+// Enum value maps for DetachState.
+var (
+	DetachState_name = map[int32]string{
+		0: "DETACH_STATE_UNSPECIFIED",
+		1: "DETACH_STATE_SENT",
+		2: "DETACH_STATE_WAITING_FOR_AGENT",
+		3: "DETACH_STATE_EXPIRED",
+		4: "DETACH_STATE_REFUSED",
+	}
+	DetachState_value = map[string]int32{
+		"DETACH_STATE_UNSPECIFIED":       0,
+		"DETACH_STATE_SENT":              1,
+		"DETACH_STATE_WAITING_FOR_AGENT": 2,
+		"DETACH_STATE_EXPIRED":           3,
+		"DETACH_STATE_REFUSED":           4,
+	}
+)
+
+func (x DetachState) Enum() *DetachState {
+	p := new(DetachState)
+	*p = x
+	return p
+}
+
+func (x DetachState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DetachState) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendycloud_v2_deployments_proto_enumTypes[3].Descriptor()
+}
+
+func (DetachState) Type() protoreflect.EnumType {
+	return &file_wendycloud_v2_deployments_proto_enumTypes[3]
+}
+
+func (x DetachState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DetachState.Descriptor instead.
+func (DetachState) EnumDescriptor() ([]byte, []int) {
+	return file_wendycloud_v2_deployments_proto_rawDescGZIP(), []int{3}
+}
+
 type AppRunningState int32
 
 const (
@@ -257,11 +330,11 @@ func (x AppRunningState) String() string {
 }
 
 func (AppRunningState) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendycloud_v2_deployments_proto_enumTypes[3].Descriptor()
+	return file_wendycloud_v2_deployments_proto_enumTypes[4].Descriptor()
 }
 
 func (AppRunningState) Type() protoreflect.EnumType {
-	return &file_wendycloud_v2_deployments_proto_enumTypes[3]
+	return &file_wendycloud_v2_deployments_proto_enumTypes[4]
 }
 
 func (x AppRunningState) Number() protoreflect.EnumNumber {
@@ -270,7 +343,7 @@ func (x AppRunningState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AppRunningState.Descriptor instead.
 func (AppRunningState) EnumDescriptor() ([]byte, []int) {
-	return file_wendycloud_v2_deployments_proto_rawDescGZIP(), []int{3}
+	return file_wendycloud_v2_deployments_proto_rawDescGZIP(), []int{4}
 }
 
 type ContainerAction int32
@@ -306,11 +379,11 @@ func (x ContainerAction) String() string {
 }
 
 func (ContainerAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendycloud_v2_deployments_proto_enumTypes[4].Descriptor()
+	return file_wendycloud_v2_deployments_proto_enumTypes[5].Descriptor()
 }
 
 func (ContainerAction) Type() protoreflect.EnumType {
-	return &file_wendycloud_v2_deployments_proto_enumTypes[4]
+	return &file_wendycloud_v2_deployments_proto_enumTypes[5]
 }
 
 func (x ContainerAction) Number() protoreflect.EnumNumber {
@@ -319,7 +392,7 @@ func (x ContainerAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ContainerAction.Descriptor instead.
 func (ContainerAction) EnumDescriptor() ([]byte, []int) {
-	return file_wendycloud_v2_deployments_proto_rawDescGZIP(), []int{4}
+	return file_wendycloud_v2_deployments_proto_rawDescGZIP(), []int{5}
 }
 
 type PendingDeviceStatement_Kind int32
@@ -330,6 +403,10 @@ const (
 	// A device leaving the deployment, or the deployment being removed. Never
 	// used for a move: a move is one KIND_ASSIGN with replaces_* set.
 	PendingDeviceStatement_KIND_UNASSIGN PendingDeviceStatement_Kind = 2
+	// By-app read only: a device in the app's removal set the caller cannot
+	// reach. Only a DetachDeviceRequest can cover it. Its row has revision 0
+	// and empty replaces_*.
+	PendingDeviceStatement_KIND_DETACH PendingDeviceStatement_Kind = 3
 )
 
 // Enum value maps for PendingDeviceStatement_Kind.
@@ -338,11 +415,13 @@ var (
 		0: "KIND_UNSPECIFIED",
 		1: "KIND_ASSIGN",
 		2: "KIND_UNASSIGN",
+		3: "KIND_DETACH",
 	}
 	PendingDeviceStatement_Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED": 0,
 		"KIND_ASSIGN":      1,
 		"KIND_UNASSIGN":    2,
+		"KIND_DETACH":      3,
 	}
 )
 
@@ -357,11 +436,11 @@ func (x PendingDeviceStatement_Kind) String() string {
 }
 
 func (PendingDeviceStatement_Kind) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendycloud_v2_deployments_proto_enumTypes[5].Descriptor()
+	return file_wendycloud_v2_deployments_proto_enumTypes[6].Descriptor()
 }
 
 func (PendingDeviceStatement_Kind) Type() protoreflect.EnumType {
-	return &file_wendycloud_v2_deployments_proto_enumTypes[5]
+	return &file_wendycloud_v2_deployments_proto_enumTypes[6]
 }
 
 func (x PendingDeviceStatement_Kind) Number() protoreflect.EnumNumber {
@@ -1799,7 +1878,11 @@ func (x *DeploymentChangeResponse) GetNextPageToken() string {
 // RemoveDeployment or DeleteApp (terminal removal), which it requires there
 // and refuses anywhere else. It accepts replaces_* only when the operator set
 // move_devices and confirmed that device as being in that deployment of the
-// same app.
+// same app. In the by-app read it signs a removal for a KIND_UNASSIGN row by
+// default and a detach only for a device the operator chose to detach, and
+// only a detach for a KIND_DETACH row. When a device's row changes kind
+// between the read and the call, it asks the operator again before it signs
+// the other kind.
 type PendingDeviceStatement struct {
 	state        protoimpl.MessageState      `protogen:"open.v1"`
 	Kind         PendingDeviceStatement_Kind `protobuf:"varint,1,opt,name=kind,proto3,enum=wendycloud.v2.PendingDeviceStatement_Kind" json:"kind,omitempty"`
@@ -1814,8 +1897,11 @@ type PendingDeviceStatement struct {
 	// DeviceAssignment.replaces_deployment_id / replaces_revision.
 	ReplacesDeploymentId string `protobuf:"bytes,5,opt,name=replaces_deployment_id,json=replacesDeploymentId,proto3" json:"replaces_deployment_id,omitempty"`
 	ReplacesRevision     int32  `protobuf:"varint,6,opt,name=replaces_revision,json=replacesRevision,proto3" json:"replaces_revision,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// The device's display name, so the operator knows which device it signs
+	// for. By-app read only.
+	DeviceDisplayName string `protobuf:"bytes,7,opt,name=device_display_name,json=deviceDisplayName,proto3" json:"device_display_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PendingDeviceStatement) Reset() {
@@ -1888,6 +1974,13 @@ func (x *PendingDeviceStatement) GetReplacesRevision() int32 {
 		return x.ReplacesRevision
 	}
 	return 0
+}
+
+func (x *PendingDeviceStatement) GetDeviceDisplayName() string {
+	if x != nil {
+		return x.DeviceDisplayName
+	}
+	return ""
 }
 
 type ListDeploymentRevisionsRequest struct {
@@ -2995,8 +3088,8 @@ type AssetApp struct {
 	// True exactly when cloud still needs any statement for this device for
 	// deployment_id (9): it is in that deployment's pending list (same content
 	// rule as ListPendingDeviceStatements, including a removal it is owed), or
-	// it still lacks the terminal removal an app delete owes it (the by-app
-	// list). Computed from the same record, so this list and both pending
+	// an app delete still has it uncovered, with neither a removal nor a detach
+	// received (the by-app list). Computed from the same record, so this list and both pending
 	// reads never disagree.
 	// Shown as "waiting for its instruction". Cloud-asserted display
 	// information: nothing a device or client acts on, no authority, and never
@@ -3006,8 +3099,17 @@ type AssetApp struct {
 	// runs without a deployment (run directly, or only reported: unassigned
 	// (17)), and from a cloud that predates it.
 	StatementPending bool `protobuf:"varint,19,opt,name=statement_pending,json=statementPending,proto3" json:"statement_pending,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Where a detach of this device stands after its app was deleted
+	// (DeleteAppRequest.device_detachments). Cloud-asserted display
+	// information, nothing a device or client acts on. UNSPECIFIED for every
+	// row that is not a detached app's, and from a cloud that predates it.
+	// Such a row belongs to the deleted app and its deleted deployment: it is
+	// never a deployment of a new app with the same id, and it ends when the
+	// device reports the app as a direct run (then an unassigned (17) row) or
+	// reports it gone.
+	DetachState   DetachState `protobuf:"varint,20,opt,name=detach_state,json=detachState,proto3,enum=wendycloud.v2.DetachState" json:"detach_state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AssetApp) Reset() {
@@ -3171,6 +3273,13 @@ func (x *AssetApp) GetStatementPending() bool {
 		return x.StatementPending
 	}
 	return false
+}
+
+func (x *AssetApp) GetDetachState() DetachState {
+	if x != nil {
+		return x.DetachState
+	}
+	return DetachState_DETACH_STATE_UNSPECIFIED
 }
 
 type ListAssetAppsResponse struct {
@@ -3363,7 +3472,8 @@ func (x *AppDeviceState) GetState() *AssetApp {
 type ListAppDeviceStatesResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Ordered by asset_id. Only devices the caller may see: a hidden device is
-	// absent, and nothing counts it.
+	// absent, and nothing in this list counts it. (The by-app pending read,
+	// gated by the right to delete the app, is the one documented exception.)
 	Rows []*AppDeviceState `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
 	// Empty = the last page.
 	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
@@ -3873,18 +3983,20 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"deployment\x12=\n" +
 	"\brevision\x18\x02 \x01(\v2!.wendycloud.v2.DeploymentRevisionR\brevision\x12>\n" +
 	"\ato_sign\x18\x03 \x03(\v2%.wendycloud.v2.PendingDeviceStatementR\x06toSign\x12&\n" +
-	"\x0fnext_page_token\x18\x04 \x01(\tR\rnextPageToken\"\xd6\x02\n" +
+	"\x0fnext_page_token\x18\x04 \x01(\tR\rnextPageToken\"\x97\x03\n" +
 	"\x16PendingDeviceStatement\x12>\n" +
 	"\x04kind\x18\x01 \x01(\x0e2*.wendycloud.v2.PendingDeviceStatement.KindR\x04kind\x12#\n" +
 	"\rdeployment_id\x18\x02 \x01(\tR\fdeploymentId\x12\x16\n" +
 	"\x06device\x18\x03 \x01(\tR\x06device\x12\x1a\n" +
 	"\brevision\x18\x04 \x01(\x05R\brevision\x124\n" +
 	"\x16replaces_deployment_id\x18\x05 \x01(\tR\x14replacesDeploymentId\x12+\n" +
-	"\x11replaces_revision\x18\x06 \x01(\x05R\x10replacesRevision\"@\n" +
+	"\x11replaces_revision\x18\x06 \x01(\x05R\x10replacesRevision\x12.\n" +
+	"\x13device_display_name\x18\a \x01(\tR\x11deviceDisplayName\"Q\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vKIND_ASSIGN\x10\x01\x12\x11\n" +
-	"\rKIND_UNASSIGN\x10\x02\"\x81\x01\n" +
+	"\rKIND_UNASSIGN\x10\x02\x12\x0f\n" +
+	"\vKIND_DETACH\x10\x03\"\x81\x01\n" +
 	"\x1eListDeploymentRevisionsRequest\x12#\n" +
 	"\rdeployment_id\x18\x01 \x01(\tR\fdeploymentId\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
@@ -3965,7 +4077,7 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\r_image_digest\"Z\n" +
 	"\x14ListAssetAppsRequest\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12'\n" +
-	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\"\xfa\b\n" +
+	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\"\xb9\t\n" +
 	"\bAssetApp\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x19\n" +
 	"\bapp_name\x18\x02 \x01(\tR\aappName\x12)\n" +
@@ -3989,7 +4101,8 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"unassigned\x18\x11 \x01(\bR\n" +
 	"unassigned\x123\n" +
 	"\x13reported_release_id\x18\x12 \x01(\tH\bR\x11reportedReleaseId\x88\x01\x01\x12+\n" +
-	"\x11statement_pending\x18\x13 \x01(\bR\x10statementPendingB\x11\n" +
+	"\x11statement_pending\x18\x13 \x01(\bR\x10statementPending\x12=\n" +
+	"\fdetach_state\x18\x14 \x01(\x0e2\x1a.wendycloud.v2.DetachStateR\vdetachStateB\x11\n" +
 	"\x0f_app_release_idB\x13\n" +
 	"\x11_app_release_nameB\x11\n" +
 	"\x0f_reported_stateB\x0e\n" +
@@ -4065,7 +4178,13 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\tCONTAINER\x10\x00\x12\b\n" +
 	"\x04WASM\x10\x01\x12\n" +
 	"\n" +
-	"\x06CONFIG\x10\x02*r\n" +
+	"\x06CONFIG\x10\x02*\x9a\x01\n" +
+	"\vDetachState\x12\x1c\n" +
+	"\x18DETACH_STATE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11DETACH_STATE_SENT\x10\x01\x12\"\n" +
+	"\x1eDETACH_STATE_WAITING_FOR_AGENT\x10\x02\x12\x18\n" +
+	"\x14DETACH_STATE_EXPIRED\x10\x03\x12\x18\n" +
+	"\x14DETACH_STATE_REFUSED\x10\x04*r\n" +
 	"\x0fAppRunningState\x12!\n" +
 	"\x1dAPP_RUNNING_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19APP_RUNNING_STATE_STOPPED\x10\x01\x12\x1d\n" +
@@ -4073,7 +4192,7 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\x0fContainerAction\x12 \n" +
 	"\x1cCONTAINER_ACTION_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16CONTAINER_ACTION_START\x10\x01\x12\x19\n" +
-	"\x15CONTAINER_ACTION_STOP\x10\x022\xf8\x10\n" +
+	"\x15CONTAINER_ACTION_STOP\x10\x022\xd4\x11\n" +
 	"\x11DeploymentService\x12Q\n" +
 	"\x10CreateAppRelease\x12\x1c.wendycloud.v2.SignedRequest\x1a\x19.wendycloud.v2.AppRelease\"\x04\x88\xb5\x18\x01\x12Q\n" +
 	"\x10UpdateAppRelease\x12\x1c.wendycloud.v2.SignedRequest\x1a\x19.wendycloud.v2.AppRelease\"\x04\x88\xb5\x18\x01\x12b\n" +
@@ -4090,7 +4209,8 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\x1bListDeploymentRevisionMoves\x121.wendycloud.v2.ListDeploymentRevisionMovesRequest\x1a2.wendycloud.v2.ListDeploymentRevisionMovesResponse\x12\x84\x01\n" +
 	"\x1bListPendingDeviceStatements\x121.wendycloud.v2.ListPendingDeviceStatementsRequest\x1a2.wendycloud.v2.ListPendingDeviceStatementsResponse\x12Z\n" +
 	"\fAssignDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a&.wendycloud.v2.DeviceStatementResponse\"\x04\x88\xb5\x18\x01\x12\\\n" +
-	"\x0eUnassignDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a&.wendycloud.v2.DeviceStatementResponse\"\x04\x88\xb5\x18\x01\x12i\n" +
+	"\x0eUnassignDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a&.wendycloud.v2.DeviceStatementResponse\"\x04\x88\xb5\x18\x01\x12Z\n" +
+	"\fDetachDevice\x12\x1c.wendycloud.v2.SignedRequest\x1a&.wendycloud.v2.DeviceStatementResponse\"\x04\x88\xb5\x18\x01\x12i\n" +
 	"\x13HandleReportedState\x12).wendycloud.v2.UpdateReportedStateRequest\x1a#.wendycloud.v2.DesiredStateResponse(\x010\x01\x12Z\n" +
 	"\rListAssetApps\x12#.wendycloud.v2.ListAssetAppsRequest\x1a$.wendycloud.v2.ListAssetAppsResponse\x12l\n" +
 	"\x13ListAppDeviceStates\x12).wendycloud.v2.ListAppDeviceStatesRequest\x1a*.wendycloud.v2.ListAppDeviceStatesResponse\x12d\n" +
@@ -4109,159 +4229,163 @@ func file_wendycloud_v2_deployments_proto_rawDescGZIP() []byte {
 	return file_wendycloud_v2_deployments_proto_rawDescData
 }
 
-var file_wendycloud_v2_deployments_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_wendycloud_v2_deployments_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_wendycloud_v2_deployments_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_wendycloud_v2_deployments_proto_goTypes = []any{
 	(ApplyOutcome)(0),                             // 0: wendycloud.v2.ApplyOutcome
 	(Running)(0),                                  // 1: wendycloud.v2.Running
 	(ReleaseType)(0),                              // 2: wendycloud.v2.ReleaseType
-	(AppRunningState)(0),                          // 3: wendycloud.v2.AppRunningState
-	(ContainerAction)(0),                          // 4: wendycloud.v2.ContainerAction
-	(PendingDeviceStatement_Kind)(0),              // 5: wendycloud.v2.PendingDeviceStatement.Kind
-	(*AppRelease)(nil),                            // 6: wendycloud.v2.AppRelease
-	(*CreateAppReleaseRequest)(nil),               // 7: wendycloud.v2.CreateAppReleaseRequest
-	(*UpdateAppReleaseRequest)(nil),               // 8: wendycloud.v2.UpdateAppReleaseRequest
-	(*ListAppReleasesRequest)(nil),                // 9: wendycloud.v2.ListAppReleasesRequest
-	(*ListAppReleasesResponse)(nil),               // 10: wendycloud.v2.ListAppReleasesResponse
-	(*Deployment)(nil),                            // 11: wendycloud.v2.Deployment
-	(*DeploymentRevision)(nil),                    // 12: wendycloud.v2.DeploymentRevision
-	(*DeviceMove)(nil),                            // 13: wendycloud.v2.DeviceMove
-	(*CreateDeploymentRequest)(nil),               // 14: wendycloud.v2.CreateDeploymentRequest
-	(*DeviceSelection)(nil),                       // 15: wendycloud.v2.DeviceSelection
-	(*UpdateDeploymentRequest)(nil),               // 16: wendycloud.v2.UpdateDeploymentRequest
-	(*RollbackDeploymentRequest)(nil),             // 17: wendycloud.v2.RollbackDeploymentRequest
-	(*RemoveDeploymentRequest)(nil),               // 18: wendycloud.v2.RemoveDeploymentRequest
-	(*DeploymentChangeResponse)(nil),              // 19: wendycloud.v2.DeploymentChangeResponse
-	(*PendingDeviceStatement)(nil),                // 20: wendycloud.v2.PendingDeviceStatement
-	(*ListDeploymentRevisionsRequest)(nil),        // 21: wendycloud.v2.ListDeploymentRevisionsRequest
-	(*ListDeploymentRevisionsResponse)(nil),       // 22: wendycloud.v2.ListDeploymentRevisionsResponse
-	(*ListDeploymentRevisionDevicesRequest)(nil),  // 23: wendycloud.v2.ListDeploymentRevisionDevicesRequest
-	(*ListDeploymentRevisionDevicesResponse)(nil), // 24: wendycloud.v2.ListDeploymentRevisionDevicesResponse
-	(*ListPendingDeviceStatementsRequest)(nil),    // 25: wendycloud.v2.ListPendingDeviceStatementsRequest
-	(*ListDeploymentRevisionMovesRequest)(nil),    // 26: wendycloud.v2.ListDeploymentRevisionMovesRequest
-	(*ListDeploymentRevisionMovesResponse)(nil),   // 27: wendycloud.v2.ListDeploymentRevisionMovesResponse
-	(*ListPendingDeviceStatementsResponse)(nil),   // 28: wendycloud.v2.ListPendingDeviceStatementsResponse
-	(*DeviceStatementResponse)(nil),               // 29: wendycloud.v2.DeviceStatementResponse
-	(*GetDeploymentRequest)(nil),                  // 30: wendycloud.v2.GetDeploymentRequest
-	(*ListDeploymentsRequest)(nil),                // 31: wendycloud.v2.ListDeploymentsRequest
-	(*ListDeploymentsResponse)(nil),               // 32: wendycloud.v2.ListDeploymentsResponse
-	(*UpdateReportedStateRequest)(nil),            // 33: wendycloud.v2.UpdateReportedStateRequest
-	(*CurrentState)(nil),                          // 34: wendycloud.v2.CurrentState
-	(*DesiredStateResponse)(nil),                  // 35: wendycloud.v2.DesiredStateResponse
-	(*DesiredAppState)(nil),                       // 36: wendycloud.v2.DesiredAppState
-	(*ListAssetAppsRequest)(nil),                  // 37: wendycloud.v2.ListAssetAppsRequest
-	(*AssetApp)(nil),                              // 38: wendycloud.v2.AssetApp
-	(*ListAssetAppsResponse)(nil),                 // 39: wendycloud.v2.ListAssetAppsResponse
-	(*ListAppDeviceStatesRequest)(nil),            // 40: wendycloud.v2.ListAppDeviceStatesRequest
-	(*AppDeviceState)(nil),                        // 41: wendycloud.v2.AppDeviceState
-	(*ListAppDeviceStatesResponse)(nil),           // 42: wendycloud.v2.ListAppDeviceStatesResponse
-	(*ListDeviceContainersRequest)(nil),           // 43: wendycloud.v2.ListDeviceContainersRequest
-	(*DeviceContainer)(nil),                       // 44: wendycloud.v2.DeviceContainer
-	(*DeviceService)(nil),                         // 45: wendycloud.v2.DeviceService
-	(*ControlContainerRequest)(nil),               // 46: wendycloud.v2.ControlContainerRequest
-	(*ControlContainerResponse)(nil),              // 47: wendycloud.v2.ControlContainerResponse
-	(*timestamppb.Timestamp)(nil),                 // 48: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),                   // 49: google.protobuf.Duration
-	(*SignedRequest)(nil),                         // 50: wendycloud.v2.SignedRequest
+	(DetachState)(0),                              // 3: wendycloud.v2.DetachState
+	(AppRunningState)(0),                          // 4: wendycloud.v2.AppRunningState
+	(ContainerAction)(0),                          // 5: wendycloud.v2.ContainerAction
+	(PendingDeviceStatement_Kind)(0),              // 6: wendycloud.v2.PendingDeviceStatement.Kind
+	(*AppRelease)(nil),                            // 7: wendycloud.v2.AppRelease
+	(*CreateAppReleaseRequest)(nil),               // 8: wendycloud.v2.CreateAppReleaseRequest
+	(*UpdateAppReleaseRequest)(nil),               // 9: wendycloud.v2.UpdateAppReleaseRequest
+	(*ListAppReleasesRequest)(nil),                // 10: wendycloud.v2.ListAppReleasesRequest
+	(*ListAppReleasesResponse)(nil),               // 11: wendycloud.v2.ListAppReleasesResponse
+	(*Deployment)(nil),                            // 12: wendycloud.v2.Deployment
+	(*DeploymentRevision)(nil),                    // 13: wendycloud.v2.DeploymentRevision
+	(*DeviceMove)(nil),                            // 14: wendycloud.v2.DeviceMove
+	(*CreateDeploymentRequest)(nil),               // 15: wendycloud.v2.CreateDeploymentRequest
+	(*DeviceSelection)(nil),                       // 16: wendycloud.v2.DeviceSelection
+	(*UpdateDeploymentRequest)(nil),               // 17: wendycloud.v2.UpdateDeploymentRequest
+	(*RollbackDeploymentRequest)(nil),             // 18: wendycloud.v2.RollbackDeploymentRequest
+	(*RemoveDeploymentRequest)(nil),               // 19: wendycloud.v2.RemoveDeploymentRequest
+	(*DeploymentChangeResponse)(nil),              // 20: wendycloud.v2.DeploymentChangeResponse
+	(*PendingDeviceStatement)(nil),                // 21: wendycloud.v2.PendingDeviceStatement
+	(*ListDeploymentRevisionsRequest)(nil),        // 22: wendycloud.v2.ListDeploymentRevisionsRequest
+	(*ListDeploymentRevisionsResponse)(nil),       // 23: wendycloud.v2.ListDeploymentRevisionsResponse
+	(*ListDeploymentRevisionDevicesRequest)(nil),  // 24: wendycloud.v2.ListDeploymentRevisionDevicesRequest
+	(*ListDeploymentRevisionDevicesResponse)(nil), // 25: wendycloud.v2.ListDeploymentRevisionDevicesResponse
+	(*ListPendingDeviceStatementsRequest)(nil),    // 26: wendycloud.v2.ListPendingDeviceStatementsRequest
+	(*ListDeploymentRevisionMovesRequest)(nil),    // 27: wendycloud.v2.ListDeploymentRevisionMovesRequest
+	(*ListDeploymentRevisionMovesResponse)(nil),   // 28: wendycloud.v2.ListDeploymentRevisionMovesResponse
+	(*ListPendingDeviceStatementsResponse)(nil),   // 29: wendycloud.v2.ListPendingDeviceStatementsResponse
+	(*DeviceStatementResponse)(nil),               // 30: wendycloud.v2.DeviceStatementResponse
+	(*GetDeploymentRequest)(nil),                  // 31: wendycloud.v2.GetDeploymentRequest
+	(*ListDeploymentsRequest)(nil),                // 32: wendycloud.v2.ListDeploymentsRequest
+	(*ListDeploymentsResponse)(nil),               // 33: wendycloud.v2.ListDeploymentsResponse
+	(*UpdateReportedStateRequest)(nil),            // 34: wendycloud.v2.UpdateReportedStateRequest
+	(*CurrentState)(nil),                          // 35: wendycloud.v2.CurrentState
+	(*DesiredStateResponse)(nil),                  // 36: wendycloud.v2.DesiredStateResponse
+	(*DesiredAppState)(nil),                       // 37: wendycloud.v2.DesiredAppState
+	(*ListAssetAppsRequest)(nil),                  // 38: wendycloud.v2.ListAssetAppsRequest
+	(*AssetApp)(nil),                              // 39: wendycloud.v2.AssetApp
+	(*ListAssetAppsResponse)(nil),                 // 40: wendycloud.v2.ListAssetAppsResponse
+	(*ListAppDeviceStatesRequest)(nil),            // 41: wendycloud.v2.ListAppDeviceStatesRequest
+	(*AppDeviceState)(nil),                        // 42: wendycloud.v2.AppDeviceState
+	(*ListAppDeviceStatesResponse)(nil),           // 43: wendycloud.v2.ListAppDeviceStatesResponse
+	(*ListDeviceContainersRequest)(nil),           // 44: wendycloud.v2.ListDeviceContainersRequest
+	(*DeviceContainer)(nil),                       // 45: wendycloud.v2.DeviceContainer
+	(*DeviceService)(nil),                         // 46: wendycloud.v2.DeviceService
+	(*ControlContainerRequest)(nil),               // 47: wendycloud.v2.ControlContainerRequest
+	(*ControlContainerResponse)(nil),              // 48: wendycloud.v2.ControlContainerResponse
+	(*timestamppb.Timestamp)(nil),                 // 49: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),                   // 50: google.protobuf.Duration
+	(*SignedRequest)(nil),                         // 51: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_deployments_proto_depIdxs = []int32{
-	48, // 0: wendycloud.v2.AppRelease.created_at:type_name -> google.protobuf.Timestamp
-	48, // 1: wendycloud.v2.AppRelease.updated_at:type_name -> google.protobuf.Timestamp
+	49, // 0: wendycloud.v2.AppRelease.created_at:type_name -> google.protobuf.Timestamp
+	49, // 1: wendycloud.v2.AppRelease.updated_at:type_name -> google.protobuf.Timestamp
 	2,  // 2: wendycloud.v2.AppRelease.release_type:type_name -> wendycloud.v2.ReleaseType
 	2,  // 3: wendycloud.v2.CreateAppReleaseRequest.release_type:type_name -> wendycloud.v2.ReleaseType
-	6,  // 4: wendycloud.v2.ListAppReleasesResponse.app_releases:type_name -> wendycloud.v2.AppRelease
-	48, // 5: wendycloud.v2.Deployment.created_at:type_name -> google.protobuf.Timestamp
+	7,  // 4: wendycloud.v2.ListAppReleasesResponse.app_releases:type_name -> wendycloud.v2.AppRelease
+	49, // 5: wendycloud.v2.Deployment.created_at:type_name -> google.protobuf.Timestamp
 	1,  // 6: wendycloud.v2.Deployment.desired_state:type_name -> wendycloud.v2.Running
-	48, // 7: wendycloud.v2.Deployment.updated_at:type_name -> google.protobuf.Timestamp
-	48, // 8: wendycloud.v2.Deployment.removed_at:type_name -> google.protobuf.Timestamp
-	49, // 9: wendycloud.v2.Deployment.validity:type_name -> google.protobuf.Duration
+	49, // 7: wendycloud.v2.Deployment.updated_at:type_name -> google.protobuf.Timestamp
+	49, // 8: wendycloud.v2.Deployment.removed_at:type_name -> google.protobuf.Timestamp
+	50, // 9: wendycloud.v2.Deployment.validity:type_name -> google.protobuf.Duration
 	1,  // 10: wendycloud.v2.DeploymentRevision.desired_state:type_name -> wendycloud.v2.Running
-	15, // 11: wendycloud.v2.DeploymentRevision.selection:type_name -> wendycloud.v2.DeviceSelection
-	48, // 12: wendycloud.v2.DeploymentRevision.created_at:type_name -> google.protobuf.Timestamp
-	49, // 13: wendycloud.v2.DeploymentRevision.validity:type_name -> google.protobuf.Duration
+	16, // 11: wendycloud.v2.DeploymentRevision.selection:type_name -> wendycloud.v2.DeviceSelection
+	49, // 12: wendycloud.v2.DeploymentRevision.created_at:type_name -> google.protobuf.Timestamp
+	50, // 13: wendycloud.v2.DeploymentRevision.validity:type_name -> google.protobuf.Duration
 	1,  // 14: wendycloud.v2.CreateDeploymentRequest.running:type_name -> wendycloud.v2.Running
-	48, // 15: wendycloud.v2.CreateDeploymentRequest.valid_until:type_name -> google.protobuf.Timestamp
-	49, // 16: wendycloud.v2.CreateDeploymentRequest.validity:type_name -> google.protobuf.Duration
+	49, // 15: wendycloud.v2.CreateDeploymentRequest.valid_until:type_name -> google.protobuf.Timestamp
+	50, // 16: wendycloud.v2.CreateDeploymentRequest.validity:type_name -> google.protobuf.Duration
 	1,  // 17: wendycloud.v2.UpdateDeploymentRequest.desired_state:type_name -> wendycloud.v2.Running
-	15, // 18: wendycloud.v2.UpdateDeploymentRequest.devices:type_name -> wendycloud.v2.DeviceSelection
-	49, // 19: wendycloud.v2.UpdateDeploymentRequest.validity:type_name -> google.protobuf.Duration
-	49, // 20: wendycloud.v2.RollbackDeploymentRequest.validity:type_name -> google.protobuf.Duration
-	11, // 21: wendycloud.v2.DeploymentChangeResponse.deployment:type_name -> wendycloud.v2.Deployment
-	12, // 22: wendycloud.v2.DeploymentChangeResponse.revision:type_name -> wendycloud.v2.DeploymentRevision
-	20, // 23: wendycloud.v2.DeploymentChangeResponse.to_sign:type_name -> wendycloud.v2.PendingDeviceStatement
-	5,  // 24: wendycloud.v2.PendingDeviceStatement.kind:type_name -> wendycloud.v2.PendingDeviceStatement.Kind
-	12, // 25: wendycloud.v2.ListDeploymentRevisionsResponse.revisions:type_name -> wendycloud.v2.DeploymentRevision
-	13, // 26: wendycloud.v2.ListDeploymentRevisionMovesResponse.moves:type_name -> wendycloud.v2.DeviceMove
-	20, // 27: wendycloud.v2.ListPendingDeviceStatementsResponse.statements:type_name -> wendycloud.v2.PendingDeviceStatement
-	11, // 28: wendycloud.v2.ListDeploymentsResponse.deployments:type_name -> wendycloud.v2.Deployment
-	34, // 29: wendycloud.v2.UpdateReportedStateRequest.current_states:type_name -> wendycloud.v2.CurrentState
+	16, // 18: wendycloud.v2.UpdateDeploymentRequest.devices:type_name -> wendycloud.v2.DeviceSelection
+	50, // 19: wendycloud.v2.UpdateDeploymentRequest.validity:type_name -> google.protobuf.Duration
+	50, // 20: wendycloud.v2.RollbackDeploymentRequest.validity:type_name -> google.protobuf.Duration
+	12, // 21: wendycloud.v2.DeploymentChangeResponse.deployment:type_name -> wendycloud.v2.Deployment
+	13, // 22: wendycloud.v2.DeploymentChangeResponse.revision:type_name -> wendycloud.v2.DeploymentRevision
+	21, // 23: wendycloud.v2.DeploymentChangeResponse.to_sign:type_name -> wendycloud.v2.PendingDeviceStatement
+	6,  // 24: wendycloud.v2.PendingDeviceStatement.kind:type_name -> wendycloud.v2.PendingDeviceStatement.Kind
+	13, // 25: wendycloud.v2.ListDeploymentRevisionsResponse.revisions:type_name -> wendycloud.v2.DeploymentRevision
+	14, // 26: wendycloud.v2.ListDeploymentRevisionMovesResponse.moves:type_name -> wendycloud.v2.DeviceMove
+	21, // 27: wendycloud.v2.ListPendingDeviceStatementsResponse.statements:type_name -> wendycloud.v2.PendingDeviceStatement
+	12, // 28: wendycloud.v2.ListDeploymentsResponse.deployments:type_name -> wendycloud.v2.Deployment
+	35, // 29: wendycloud.v2.UpdateReportedStateRequest.current_states:type_name -> wendycloud.v2.CurrentState
 	1,  // 30: wendycloud.v2.CurrentState.reported_state:type_name -> wendycloud.v2.Running
 	0,  // 31: wendycloud.v2.CurrentState.outcome:type_name -> wendycloud.v2.ApplyOutcome
-	36, // 32: wendycloud.v2.DesiredStateResponse.desired_app_states:type_name -> wendycloud.v2.DesiredAppState
-	48, // 33: wendycloud.v2.DesiredStateResponse.cert_expires_at:type_name -> google.protobuf.Timestamp
+	37, // 32: wendycloud.v2.DesiredStateResponse.desired_app_states:type_name -> wendycloud.v2.DesiredAppState
+	49, // 33: wendycloud.v2.DesiredStateResponse.cert_expires_at:type_name -> google.protobuf.Timestamp
 	1,  // 34: wendycloud.v2.DesiredAppState.desired_state:type_name -> wendycloud.v2.Running
 	2,  // 35: wendycloud.v2.DesiredAppState.release_type:type_name -> wendycloud.v2.ReleaseType
 	1,  // 36: wendycloud.v2.AssetApp.desired_state:type_name -> wendycloud.v2.Running
 	1,  // 37: wendycloud.v2.AssetApp.reported_state:type_name -> wendycloud.v2.Running
-	48, // 38: wendycloud.v2.AssetApp.reported_at:type_name -> google.protobuf.Timestamp
-	48, // 39: wendycloud.v2.AssetApp.deployment_created_at:type_name -> google.protobuf.Timestamp
+	49, // 38: wendycloud.v2.AssetApp.reported_at:type_name -> google.protobuf.Timestamp
+	49, // 39: wendycloud.v2.AssetApp.deployment_created_at:type_name -> google.protobuf.Timestamp
 	2,  // 40: wendycloud.v2.AssetApp.release_type:type_name -> wendycloud.v2.ReleaseType
 	0,  // 41: wendycloud.v2.AssetApp.outcome:type_name -> wendycloud.v2.ApplyOutcome
-	38, // 42: wendycloud.v2.ListAssetAppsResponse.asset_apps:type_name -> wendycloud.v2.AssetApp
-	38, // 43: wendycloud.v2.AppDeviceState.state:type_name -> wendycloud.v2.AssetApp
-	41, // 44: wendycloud.v2.ListAppDeviceStatesResponse.rows:type_name -> wendycloud.v2.AppDeviceState
-	3,  // 45: wendycloud.v2.DeviceContainer.running_state:type_name -> wendycloud.v2.AppRunningState
-	45, // 46: wendycloud.v2.DeviceContainer.services:type_name -> wendycloud.v2.DeviceService
-	3,  // 47: wendycloud.v2.DeviceService.running_state:type_name -> wendycloud.v2.AppRunningState
-	4,  // 48: wendycloud.v2.ControlContainerRequest.action:type_name -> wendycloud.v2.ContainerAction
-	48, // 49: wendycloud.v2.ControlContainerRequest.valid_until:type_name -> google.protobuf.Timestamp
-	50, // 50: wendycloud.v2.DeploymentService.CreateAppRelease:input_type -> wendycloud.v2.SignedRequest
-	50, // 51: wendycloud.v2.DeploymentService.UpdateAppRelease:input_type -> wendycloud.v2.SignedRequest
-	9,  // 52: wendycloud.v2.DeploymentService.ListAppReleases:input_type -> wendycloud.v2.ListAppReleasesRequest
-	50, // 53: wendycloud.v2.DeploymentService.CreateDeployment:input_type -> wendycloud.v2.SignedRequest
-	50, // 54: wendycloud.v2.DeploymentService.CreateDeploymentV2:input_type -> wendycloud.v2.SignedRequest
-	30, // 55: wendycloud.v2.DeploymentService.GetDeployment:input_type -> wendycloud.v2.GetDeploymentRequest
-	31, // 56: wendycloud.v2.DeploymentService.ListDeployments:input_type -> wendycloud.v2.ListDeploymentsRequest
-	50, // 57: wendycloud.v2.DeploymentService.UpdateDeployment:input_type -> wendycloud.v2.SignedRequest
-	50, // 58: wendycloud.v2.DeploymentService.RollbackDeployment:input_type -> wendycloud.v2.SignedRequest
-	50, // 59: wendycloud.v2.DeploymentService.RemoveDeployment:input_type -> wendycloud.v2.SignedRequest
-	21, // 60: wendycloud.v2.DeploymentService.ListDeploymentRevisions:input_type -> wendycloud.v2.ListDeploymentRevisionsRequest
-	23, // 61: wendycloud.v2.DeploymentService.ListDeploymentRevisionDevices:input_type -> wendycloud.v2.ListDeploymentRevisionDevicesRequest
-	26, // 62: wendycloud.v2.DeploymentService.ListDeploymentRevisionMoves:input_type -> wendycloud.v2.ListDeploymentRevisionMovesRequest
-	25, // 63: wendycloud.v2.DeploymentService.ListPendingDeviceStatements:input_type -> wendycloud.v2.ListPendingDeviceStatementsRequest
-	50, // 64: wendycloud.v2.DeploymentService.AssignDevice:input_type -> wendycloud.v2.SignedRequest
-	50, // 65: wendycloud.v2.DeploymentService.UnassignDevice:input_type -> wendycloud.v2.SignedRequest
-	33, // 66: wendycloud.v2.DeploymentService.HandleReportedState:input_type -> wendycloud.v2.UpdateReportedStateRequest
-	37, // 67: wendycloud.v2.DeploymentService.ListAssetApps:input_type -> wendycloud.v2.ListAssetAppsRequest
-	40, // 68: wendycloud.v2.DeploymentService.ListAppDeviceStates:input_type -> wendycloud.v2.ListAppDeviceStatesRequest
-	43, // 69: wendycloud.v2.DeploymentService.ListDeviceContainers:input_type -> wendycloud.v2.ListDeviceContainersRequest
-	50, // 70: wendycloud.v2.DeploymentService.ControlContainer:input_type -> wendycloud.v2.SignedRequest
-	6,  // 71: wendycloud.v2.DeploymentService.CreateAppRelease:output_type -> wendycloud.v2.AppRelease
-	6,  // 72: wendycloud.v2.DeploymentService.UpdateAppRelease:output_type -> wendycloud.v2.AppRelease
-	10, // 73: wendycloud.v2.DeploymentService.ListAppReleases:output_type -> wendycloud.v2.ListAppReleasesResponse
-	11, // 74: wendycloud.v2.DeploymentService.CreateDeployment:output_type -> wendycloud.v2.Deployment
-	19, // 75: wendycloud.v2.DeploymentService.CreateDeploymentV2:output_type -> wendycloud.v2.DeploymentChangeResponse
-	11, // 76: wendycloud.v2.DeploymentService.GetDeployment:output_type -> wendycloud.v2.Deployment
-	32, // 77: wendycloud.v2.DeploymentService.ListDeployments:output_type -> wendycloud.v2.ListDeploymentsResponse
-	19, // 78: wendycloud.v2.DeploymentService.UpdateDeployment:output_type -> wendycloud.v2.DeploymentChangeResponse
-	19, // 79: wendycloud.v2.DeploymentService.RollbackDeployment:output_type -> wendycloud.v2.DeploymentChangeResponse
-	19, // 80: wendycloud.v2.DeploymentService.RemoveDeployment:output_type -> wendycloud.v2.DeploymentChangeResponse
-	22, // 81: wendycloud.v2.DeploymentService.ListDeploymentRevisions:output_type -> wendycloud.v2.ListDeploymentRevisionsResponse
-	24, // 82: wendycloud.v2.DeploymentService.ListDeploymentRevisionDevices:output_type -> wendycloud.v2.ListDeploymentRevisionDevicesResponse
-	27, // 83: wendycloud.v2.DeploymentService.ListDeploymentRevisionMoves:output_type -> wendycloud.v2.ListDeploymentRevisionMovesResponse
-	28, // 84: wendycloud.v2.DeploymentService.ListPendingDeviceStatements:output_type -> wendycloud.v2.ListPendingDeviceStatementsResponse
-	29, // 85: wendycloud.v2.DeploymentService.AssignDevice:output_type -> wendycloud.v2.DeviceStatementResponse
-	29, // 86: wendycloud.v2.DeploymentService.UnassignDevice:output_type -> wendycloud.v2.DeviceStatementResponse
-	35, // 87: wendycloud.v2.DeploymentService.HandleReportedState:output_type -> wendycloud.v2.DesiredStateResponse
-	39, // 88: wendycloud.v2.DeploymentService.ListAssetApps:output_type -> wendycloud.v2.ListAssetAppsResponse
-	42, // 89: wendycloud.v2.DeploymentService.ListAppDeviceStates:output_type -> wendycloud.v2.ListAppDeviceStatesResponse
-	44, // 90: wendycloud.v2.DeploymentService.ListDeviceContainers:output_type -> wendycloud.v2.DeviceContainer
-	47, // 91: wendycloud.v2.DeploymentService.ControlContainer:output_type -> wendycloud.v2.ControlContainerResponse
-	71, // [71:92] is the sub-list for method output_type
-	50, // [50:71] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	3,  // 42: wendycloud.v2.AssetApp.detach_state:type_name -> wendycloud.v2.DetachState
+	39, // 43: wendycloud.v2.ListAssetAppsResponse.asset_apps:type_name -> wendycloud.v2.AssetApp
+	39, // 44: wendycloud.v2.AppDeviceState.state:type_name -> wendycloud.v2.AssetApp
+	42, // 45: wendycloud.v2.ListAppDeviceStatesResponse.rows:type_name -> wendycloud.v2.AppDeviceState
+	4,  // 46: wendycloud.v2.DeviceContainer.running_state:type_name -> wendycloud.v2.AppRunningState
+	46, // 47: wendycloud.v2.DeviceContainer.services:type_name -> wendycloud.v2.DeviceService
+	4,  // 48: wendycloud.v2.DeviceService.running_state:type_name -> wendycloud.v2.AppRunningState
+	5,  // 49: wendycloud.v2.ControlContainerRequest.action:type_name -> wendycloud.v2.ContainerAction
+	49, // 50: wendycloud.v2.ControlContainerRequest.valid_until:type_name -> google.protobuf.Timestamp
+	51, // 51: wendycloud.v2.DeploymentService.CreateAppRelease:input_type -> wendycloud.v2.SignedRequest
+	51, // 52: wendycloud.v2.DeploymentService.UpdateAppRelease:input_type -> wendycloud.v2.SignedRequest
+	10, // 53: wendycloud.v2.DeploymentService.ListAppReleases:input_type -> wendycloud.v2.ListAppReleasesRequest
+	51, // 54: wendycloud.v2.DeploymentService.CreateDeployment:input_type -> wendycloud.v2.SignedRequest
+	51, // 55: wendycloud.v2.DeploymentService.CreateDeploymentV2:input_type -> wendycloud.v2.SignedRequest
+	31, // 56: wendycloud.v2.DeploymentService.GetDeployment:input_type -> wendycloud.v2.GetDeploymentRequest
+	32, // 57: wendycloud.v2.DeploymentService.ListDeployments:input_type -> wendycloud.v2.ListDeploymentsRequest
+	51, // 58: wendycloud.v2.DeploymentService.UpdateDeployment:input_type -> wendycloud.v2.SignedRequest
+	51, // 59: wendycloud.v2.DeploymentService.RollbackDeployment:input_type -> wendycloud.v2.SignedRequest
+	51, // 60: wendycloud.v2.DeploymentService.RemoveDeployment:input_type -> wendycloud.v2.SignedRequest
+	22, // 61: wendycloud.v2.DeploymentService.ListDeploymentRevisions:input_type -> wendycloud.v2.ListDeploymentRevisionsRequest
+	24, // 62: wendycloud.v2.DeploymentService.ListDeploymentRevisionDevices:input_type -> wendycloud.v2.ListDeploymentRevisionDevicesRequest
+	27, // 63: wendycloud.v2.DeploymentService.ListDeploymentRevisionMoves:input_type -> wendycloud.v2.ListDeploymentRevisionMovesRequest
+	26, // 64: wendycloud.v2.DeploymentService.ListPendingDeviceStatements:input_type -> wendycloud.v2.ListPendingDeviceStatementsRequest
+	51, // 65: wendycloud.v2.DeploymentService.AssignDevice:input_type -> wendycloud.v2.SignedRequest
+	51, // 66: wendycloud.v2.DeploymentService.UnassignDevice:input_type -> wendycloud.v2.SignedRequest
+	51, // 67: wendycloud.v2.DeploymentService.DetachDevice:input_type -> wendycloud.v2.SignedRequest
+	34, // 68: wendycloud.v2.DeploymentService.HandleReportedState:input_type -> wendycloud.v2.UpdateReportedStateRequest
+	38, // 69: wendycloud.v2.DeploymentService.ListAssetApps:input_type -> wendycloud.v2.ListAssetAppsRequest
+	41, // 70: wendycloud.v2.DeploymentService.ListAppDeviceStates:input_type -> wendycloud.v2.ListAppDeviceStatesRequest
+	44, // 71: wendycloud.v2.DeploymentService.ListDeviceContainers:input_type -> wendycloud.v2.ListDeviceContainersRequest
+	51, // 72: wendycloud.v2.DeploymentService.ControlContainer:input_type -> wendycloud.v2.SignedRequest
+	7,  // 73: wendycloud.v2.DeploymentService.CreateAppRelease:output_type -> wendycloud.v2.AppRelease
+	7,  // 74: wendycloud.v2.DeploymentService.UpdateAppRelease:output_type -> wendycloud.v2.AppRelease
+	11, // 75: wendycloud.v2.DeploymentService.ListAppReleases:output_type -> wendycloud.v2.ListAppReleasesResponse
+	12, // 76: wendycloud.v2.DeploymentService.CreateDeployment:output_type -> wendycloud.v2.Deployment
+	20, // 77: wendycloud.v2.DeploymentService.CreateDeploymentV2:output_type -> wendycloud.v2.DeploymentChangeResponse
+	12, // 78: wendycloud.v2.DeploymentService.GetDeployment:output_type -> wendycloud.v2.Deployment
+	33, // 79: wendycloud.v2.DeploymentService.ListDeployments:output_type -> wendycloud.v2.ListDeploymentsResponse
+	20, // 80: wendycloud.v2.DeploymentService.UpdateDeployment:output_type -> wendycloud.v2.DeploymentChangeResponse
+	20, // 81: wendycloud.v2.DeploymentService.RollbackDeployment:output_type -> wendycloud.v2.DeploymentChangeResponse
+	20, // 82: wendycloud.v2.DeploymentService.RemoveDeployment:output_type -> wendycloud.v2.DeploymentChangeResponse
+	23, // 83: wendycloud.v2.DeploymentService.ListDeploymentRevisions:output_type -> wendycloud.v2.ListDeploymentRevisionsResponse
+	25, // 84: wendycloud.v2.DeploymentService.ListDeploymentRevisionDevices:output_type -> wendycloud.v2.ListDeploymentRevisionDevicesResponse
+	28, // 85: wendycloud.v2.DeploymentService.ListDeploymentRevisionMoves:output_type -> wendycloud.v2.ListDeploymentRevisionMovesResponse
+	29, // 86: wendycloud.v2.DeploymentService.ListPendingDeviceStatements:output_type -> wendycloud.v2.ListPendingDeviceStatementsResponse
+	30, // 87: wendycloud.v2.DeploymentService.AssignDevice:output_type -> wendycloud.v2.DeviceStatementResponse
+	30, // 88: wendycloud.v2.DeploymentService.UnassignDevice:output_type -> wendycloud.v2.DeviceStatementResponse
+	30, // 89: wendycloud.v2.DeploymentService.DetachDevice:output_type -> wendycloud.v2.DeviceStatementResponse
+	36, // 90: wendycloud.v2.DeploymentService.HandleReportedState:output_type -> wendycloud.v2.DesiredStateResponse
+	40, // 91: wendycloud.v2.DeploymentService.ListAssetApps:output_type -> wendycloud.v2.ListAssetAppsResponse
+	43, // 92: wendycloud.v2.DeploymentService.ListAppDeviceStates:output_type -> wendycloud.v2.ListAppDeviceStatesResponse
+	45, // 93: wendycloud.v2.DeploymentService.ListDeviceContainers:output_type -> wendycloud.v2.DeviceContainer
+	48, // 94: wendycloud.v2.DeploymentService.ControlContainer:output_type -> wendycloud.v2.ControlContainerResponse
+	73, // [73:95] is the sub-list for method output_type
+	51, // [51:73] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_deployments_proto_init() }
@@ -4284,7 +4408,7 @@ func file_wendycloud_v2_deployments_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_deployments_proto_rawDesc), len(file_wendycloud_v2_deployments_proto_rawDesc)),
-			NumEnums:      6,
+			NumEnums:      7,
 			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   1,
