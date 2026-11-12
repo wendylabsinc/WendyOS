@@ -407,11 +407,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Audit workflow trust boundaries
-        run: |
-          python3 .github/scripts/ci_security_test.py
-          python3 -m venv "$RUNNER_TEMP/workflow-audit"
-          "$RUNNER_TEMP/workflow-audit/bin/pip" install --disable-pip-version-check zizmor==1.32.0
-          "$RUNNER_TEMP/workflow-audit/bin/zizmor" --offline --no-config --no-ignores --min-severity high --min-confidence high .github
+        run: bash .github/scripts/workflow-audit.sh
 
   # Preserve the existing required "Test" check after splitting its work.
   test:

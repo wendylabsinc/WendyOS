@@ -53,6 +53,30 @@ class WorkflowSecurityTests(unittest.TestCase):
                 result = subprocess.run(['bash', '-c', condition], env={**os.environ, 'attempt_id': identifier})
                 self.assertEqual(result.returncode, expected)
 
+    def test_audit_gates_share_one_script(self):
+        for filename, name in [('go-tests.yml', 'workflow-security'),
+                               ('swift-e2e-tests.yml', 'swift-e2e-local-ubuntu')]:
+            with self.subTest(job=name):
+                block = job(filename, name)
+                self.assertIn('run: bash .github/scripts/workflow-audit.sh', block)
+                self.assertNotIn('zizmor', block)
+        script = (ROOT / '.github/scripts/workflow-audit.sh').read_text()
+        self.assertIn('--require-hashes', script)
+        self.assertIn('--no-config --no-ignores', script)
+        requirements = (ROOT / '.github/scripts/workflow-audit-requirements.txt').read_text()
+        self.assertRegex(requirements, r'(?m)^zizmor==\d+\.\d+\.\d+ \\$')
+        self.assertRegex(requirements, r'--hash=sha256:[0-9a-f]{64}')
+
+    def test_e2e_audit_failure_fails_job_after_suite(self):
+        ubuntu = job('swift-e2e-tests.yml', 'swift-e2e-local-ubuntu')
+        audit = ubuntu.index('id: workflow-audit')
+        suite = ubuntu.index('uses: ./.github/actions/swift-e2e-run')
+        fail = ubuntu.index("steps.workflow-audit.outcome == 'failure'")
+        self.assertLess(audit, suite)
+        self.assertLess(suite, fail)
+        self.assertIn('continue-on-error: true', ubuntu[audit:suite])
+        self.assertIn('exit 1', ubuntu[fail:])
+
     def test_security_failure_cannot_pass_go_aggregate(self):
         aggregate = job('go-tests.yml', 'test')
         self.assertIn('workflow-security', aggregate)

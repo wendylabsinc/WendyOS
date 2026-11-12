@@ -148,12 +148,12 @@ jobs:
         with:
           persist-credentials: false
       # This job is required by the default-branch ruleset and runs on every PR.
+      # An audit failure (a finding or a PyPI outage) fails the job only after
+      # the E2E suite runs, so it never discards the run's E2E results.
       - name: Audit workflow trust boundaries
-        run: |
-          python3 .github/scripts/ci_security_test.py
-          python3 -m venv "$RUNNER_TEMP/workflow-audit"
-          "$RUNNER_TEMP/workflow-audit/bin/pip" install --disable-pip-version-check zizmor==1.32.0
-          "$RUNNER_TEMP/workflow-audit/bin/zizmor" --offline --no-config --no-ignores --min-severity high --min-confidence high .github
+        id: workflow-audit
+        continue-on-error: true
+        run: bash .github/scripts/workflow-audit.sh
       # The Linux wendy CLI links libusb via cgo (Thor flashing); the harness
       # builds the CLI on this runner.
       - name: Install libusb
@@ -172,6 +172,11 @@ jobs:
           transport: local
           setup: true
           managed_agent: true
+      - name: Fail on workflow audit
+        if: ${{ !cancelled() && steps.workflow-audit.outcome == 'failure' }}
+        run: |
+          echo "::error title=Workflow audit failed::See the 'Audit workflow trust boundaries' step. This run's E2E results are unaffected."
+          exit 1
 
   # Physical/future route ledger.
   # Keep disabled routes close to the hosted local jobs so re-enabling a route is

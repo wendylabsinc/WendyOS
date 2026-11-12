@@ -19,19 +19,21 @@ were resolved through their upstream repositories; this change does not upgrade
 action major versions.
 
 The required `Local: Ubuntu 24` check audits all workflows and composite actions
-with zizmor 1.32.0, blocking high-severity, high-confidence findings. The Go test
-aggregate also fails when this audit fails or is skipped. The CLI is used directly
-because the vendor action does not expose the `--no-config` and `--no-ignores`
-flags needed to prevent inline exclusions from suppressing this gate. Lower
-confidence findings still require manual review. A passing scanner is not proof
-that a workflow is safe.
+with zizmor 1.32.0, blocking high-severity, high-confidence findings. It runs the
+E2E suite even when the audit fails, then fails the job. The Go test aggregate
+also fails when this audit fails or is skipped. Both gates run
+`.github/scripts/workflow-audit.sh`, which installs zizmor by hash from
+`workflow-audit-requirements.txt`; update the version and hashes together. The
+CLI is used directly because the vendor action does not expose the `--no-config`
+and `--no-ignores` flags needed to prevent inline exclusions from suppressing
+this gate. Lower confidence findings still require manual review. A passing
+scanner is not proof that a workflow is safe.
 
-Run the local checks with:
+Run the local checks (Python 3.11 or later) with:
 
 ```sh
-python3 .github/scripts/ci_security_test.py
+bash .github/scripts/workflow-audit.sh
 python3 .github/scripts/swift_e2e_gate_test.py
-uvx --from zizmor==1.32.0 zizmor --offline --no-config --no-ignores --min-severity high --min-confidence high .github
 ```
 
 ## Controls outside this repository
