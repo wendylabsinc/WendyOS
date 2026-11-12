@@ -1673,10 +1673,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1663",
       "title": "fix(agent): never run ROS 2 discovery over WiFi",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests check interface eligibility and wireless detection. Later DDS namespace tests help, but the absence of actual Wi-Fi discovery traffic is not directly asserted.",
-      "required_follow_up": "Capture DDS traffic in a multi-interface namespace and assert automatic discovery never uses Wi-Fi.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/hoststats/rosbattery/discovery_policy_linux_test.go",
+            ".github/scripts/test-ros-discovery-policy.sh"
+          ],
+          "result": "Real battery monitor and RTPS participant capture parsed SPDP packets across private veth paths with fixture wireless metadata. Explicit wireless discovery is a positive control; automatic discovery must use wired paths and emit no packets on a wireless-only host. Normal and omitted-filter Linux binaries compile; required namespace execution and mutation result await CI. No physical radio coverage is claimed."
+        }
+      ]
     },
     {
       "key": "2266",
@@ -2636,30 +2644,54 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1825",
       "title": "fix: identify macOS signer by fingerprint",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Signer selection uses a fingerprint. Release execution checks a real signature, but no ambiguous-name/multiple-certificate fixture was found for SetupSigningCI.sh.",
-      "required_follow_up": "Mock security-tool output with duplicate names and assert exact fingerprint selection.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/signing_ci_test.py",
+            ".github/scripts/signing_ci_tools.py"
+          ],
+          "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
+        }
+      ]
     },
     {
       "key": "1791",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1791",
       "title": "fix: isolate CI notarization credentials",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Notarization credentials were isolated in CI scripts. No test was found proving one job cannot reuse another job's credential state.",
-      "required_follow_up": "Test temporary keychain/profile creation and cleanup on success, failure and cancellation.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/signing_ci_test.py",
+            ".github/scripts/signing_ci_tools.py"
+          ],
+          "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
+        }
+      ]
     },
     {
       "key": "1789",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1789",
       "title": "fix: prepare self-hosted macOS release builds",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The self-hosted release build setup was repaired. Real builds exercise it, but no repeat-run/keychain-isolation fixture was found.",
-      "required_follow_up": "Run the signing setup twice in an isolated user environment and verify cleanup and deterministic signer choice.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/signing_ci_test.py",
+            ".github/scripts/signing_ci_tools.py"
+          ],
+          "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
+        }
+      ]
     },
     {
       "key": "2127",
@@ -2856,10 +2888,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2448",
       "title": "Add verified training workflows and experimental Wendy MCP V1",
       "package": "14",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "MCP and job tests cover explicit target selection, cancellation and artifact validation. The PR also introduces durable job/approval workflows that need host-process lifecycle checks.",
-      "required_follow_up": "Exercise supervisor restart, unsafe artifact entries and readiness-default behavior through a local job host.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/jobops/lifecycle_linux_test.go",
+            ".github/scripts/test-job-supervisor-lifetime.sh"
+          ],
+          "result": "Real local RPC/job hosts test transport reconnection without duplicate steps, supervisor death, bounded TERM/timeout and startup, safe artifact retrieval and readiness defaults. A reproduced supervisor-death leak is fixed with an owned process guard. Existing macOS jobops tests pass; Linux cases compile. Final reviewed Linux execution and the lost-supervisor cleanup negative control await required CI."
+        }
+      ]
     },
     {
       "key": "2485",
