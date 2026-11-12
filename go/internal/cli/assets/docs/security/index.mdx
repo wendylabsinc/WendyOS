@@ -51,7 +51,7 @@ design — provisioning is the mitigation. The provisioning window is time-bound
 operators; pre-enrollment at imaging time eliminates it entirely. Once provisioned, all
 communication moves to mTLS on port 50052, and the plaintext port is shut down.
 
-**Delegated image delivery (Linux).** A build host's device certificate alone
+**Delegated image delivery.** A build host's device certificate alone
 cannot stage chunks or mutate the target's OCI registry. Delivery requires a
 versioned operator-signed grant, admitted by the target while the operator's
 certificate is valid. Its operator certificate chain and tenant identity are checked against the
@@ -66,7 +66,11 @@ expires, until its delivery deadline. New admission after certificate expiry is
 refused. Builder key rotation requires a new grant. Publication compares the
 current tag with the operator's expected prior image; a completed grant cannot
 restore a tag subsequently changed by an operator. Device enrollment reset
-revokes the stored grants. These permissions authorize image delivery; image
+revokes the stored grants. The enrolled macOS push registry uses the same grant
+format and key binding; its loopback pull registry remains read-only. Native
+verification requires macOS 26 or later, matching the ML-DSA PKI requirement.
+Device grants permit scoped staging, publication and metadata probes, not image
+downloads, catalog/tag enumeration, referrers or deletion. These permissions authorize image delivery; image
 signatures remain a separate verification mechanism.
 
 The registry grant covers scoped uploads, upload resume/commit and publication,

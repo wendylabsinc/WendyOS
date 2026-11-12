@@ -16,6 +16,10 @@ struct RPCIdentityInterceptor: ServerInterceptor {
 
     static func deviceRPCAllowed(_ method: String) -> Bool {
         switch method {
+        case "wendy.agent.services.v2.WendyBuildDeliveryService/GetDeliveryCapabilities",
+            "wendy.agent.services.v2.WendyBuildDeliveryService/AdmitDelivery",
+            "wendy.agent.services.v2.WendyBuildDeliveryService/GetDeliveryStatus":
+            return true
         case Wendy_Agent_Services_V1_WendyContainerService.Method.QueryChunks.descriptor
             .fullyQualifiedMethod,
             Wendy_Agent_Services_V1_WendyContainerService.Method.QueryLayers.descriptor
@@ -43,6 +47,29 @@ struct RPCIdentityInterceptor: ServerInterceptor {
             details: [.errorInfo(reason: "RPC_IDENTITY_DENIED", domain: "wendy.dev")]
         )
         return RPCError(code: status.code, message: message, metadata: status.rpcErrorMetadata)
+    }
+
+    /// Reused by the OCI listener after TLS path verification. A device never
+    /// gains an ambient management capability through a different transport.
+    static func checkOperator(
+        leaf: Certificate?,
+        expectedScope: OrgIdentity.Scope?,
+        orgMode: ClientCertAuthorizer.OrgEnforcementMode
+    ) throws {
+        guard let leaf else { throw denied("management requires operator credentials") }
+        let identity: OrgIdentity.WendyIdentity?
+        do { identity = try OrgIdentity.identity(fromLeaf: leaf) } catch {
+            throw denied("malformed operator identity")
+        }
+        if let identity {
+            guard identity.entityType == "user", let expectedScope, expectedScope.isKnown,
+                identity.scope.matches(expectedScope)
+            else { throw denied("management requires a matching tenant operator") }
+        } else {
+            guard orgMode == .grace, legacyUser(leaf) else {
+                throw denied("management requires operator credentials")
+            }
+        }
     }
 
     static func check(

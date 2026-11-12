@@ -61,6 +61,7 @@ actor ProvisioningService: Wendy_Agent_Services_V1_WendyProvisioningService.Simp
     private var provisioningInFlight = false
 
     private var onProvisioned: (@Sendable (ProvisioningCerts) async -> Void)?
+    private var onBeforeUnprovisioned: (@Sendable () async throws -> Void)?
     private var onUnprovisioned: (@Sendable () async -> Void)?
 
     init(
@@ -110,10 +111,12 @@ actor ProvisioningService: Wendy_Agent_Services_V1_WendyProvisioningService.Simp
 
     func setCallbacks(
         onProvisioned: (@Sendable (ProvisioningCerts) async -> Void)?,
-        onUnprovisioned: (@Sendable () async -> Void)?
+        onUnprovisioned: (@Sendable () async -> Void)?,
+        onBeforeUnprovisioned: (@Sendable () async throws -> Void)? = nil
     ) {
         self.onProvisioned = onProvisioned
         self.onUnprovisioned = onUnprovisioned
+        self.onBeforeUnprovisioned = onBeforeUnprovisioned
     }
 
     func provisioningInfo() -> ProvisioningInfo {
@@ -270,6 +273,7 @@ actor ProvisioningService: Wendy_Agent_Services_V1_WendyProvisioningService.Simp
         )
 
         do {
+            try await self.onBeforeUnprovisioned?()
             try self.store.clear()
         } catch {
             self.logger.error(

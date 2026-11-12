@@ -58,13 +58,17 @@ device already staged rather than restarting. This leg is scoped to one build â€
 the host dials the target's agent with its own certificate, pinned to that one
 device, so a build for one target cannot deliver to another.
 
-A device whose agent predates chunked delivery receives a registry push instead,
+A target without chunked delivery support, including the native macOS agent,
+receives a registry push instead,
 as does a build run with `--chunking=off`. The build log says which route it took.
 
 These delivery modes apply to the build host's own connection to the target.
 They are unchanged by the separate [CLI upload rules for Cloud v2](../run.md#uploads-over-cloud-v2).
 
 ## Operator authorization
+
+Native macOS targets support authorized registry delivery on macOS 26 or later.
+Use `--chunking=auto` or `off`; their chunk RPCs remain unimplemented.
 
 You can update the CLI first. It uses the existing delivery flow when the build
 host and every target report that they lack operator authorization support.
