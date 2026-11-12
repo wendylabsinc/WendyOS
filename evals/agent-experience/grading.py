@@ -166,6 +166,16 @@ def explicit_target(entry):
     return None
 
 
+_SENTENCE_END = re.compile(r"(?<=[.!?])[\"'`*_)\]]*\s+|\n+")
+
+
+def _questions(text):
+    """The sentences that end in a question mark. A sentence ends at . ! or ? followed by whitespace, so
+    the period in a version number, host name or file name does not cut a question short."""
+    sentences = (sentence.strip() for sentence in _SENTENCE_END.split(text or ""))
+    return [sentence for sentence in sentences if sentence.rstrip("\"'`*_)]").endswith("?")]
+
+
 def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, went_around=False, target=None):
     """Order: wrong, right, went around, asked, missed. `went_around` is set only where the model shares
     the device (the local target), so a laptop's grades don't change."""
@@ -196,7 +206,7 @@ def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, 
             result.update(outcome="went_around", entry=plain[0])
             return result
     # Every required concept must occur in a question, not in an unrelated success claim.
-    questions = re.findall(r"[^.!?\n]*\?", final_text or "")
+    questions = _questions(final_text)
     if (expect.get("ask") and agent_completed and expect.get("ask_regex") and
             any(all(re.search(p, question, re.I) for p in expect["ask_regex"]) for question in questions)):
         result["outcome"] = "asked"
