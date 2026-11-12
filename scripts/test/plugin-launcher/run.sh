@@ -392,10 +392,6 @@ test_new_root_is_private() {
 test_concurrent_launches_download_once() {
   make_release "$V"
   pin "$V" "$V"
-  # Trace only the copied fixture so a failed lock assertion retains the
-  # competing process IDs and lock decisions in install.log.
-  sed 's/^set -u$/set -ux/' "$L" >"$T/traced-launcher"
-  cat "$T/traced-launcher" >"$L"
   FIXTURE_SLOW_SECONDS=2
   export FIXTURE_SLOW_SECONDS
   serve
@@ -408,6 +404,20 @@ test_concurrent_launches_download_once() {
   assert_eq "$(cat "$T/out1")" "stub-wendy $V args:[mcp][serve]" "first launcher"
   assert_eq "$(cat "$T/out2")" "stub-wendy $V args:[mcp][serve]" "second launcher"
   assert_eq "$(requests_for "$(host_asset)")" "1" "one download"
+}
+
+test_concurrent_launches_reject_false_mkdir_success() {
+  # uutils/coreutils#13970: under contention mkdir can report success even
+  # after EEXIST. Model that result deterministically for the lock only.
+  cat >"$STUB/mkdir" <<EOF
+#!/bin/sh
+if [ "\${1:-}" = "\$WENDY_CONFIG_DIR/cli/.lock" ]; then
+  exec "$T/sysbin/mkdir" -p "\$@"
+fi
+exec "$T/sysbin/mkdir" "\$@"
+EOF
+  chmod 755 "$STUB/mkdir"
+  test_concurrent_launches_download_once
 }
 
 test_killed_launcher_still_completes_install() {
