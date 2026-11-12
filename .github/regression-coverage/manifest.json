@@ -1018,20 +1018,34 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2478",
       "title": "Agent pulls and verifies its operator-signed postbox (T13)",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Postbox tests check signatures, timestamps, replay and acknowledgements. Persistence failure and restart behavior should be verified across a real process boundary, not only service fixtures.",
-      "required_follow_up": "Crash after applying an entry but before saving its mark, restart, and verify safe retry and acknowledgement.",
-      "evidence": []
+      "required_follow_up": "Exercise actual process exits around claim, action, decision and ack persistence. Honor the implementation contract: claimed but undecided actions report interrupted failure without reapplying; acknowledgement delivery can retry safely.",
+      "evidence": [
+        {
+          "test": "go/internal/agent/services/postbox_crash_test.go",
+          "runner": "local macOS",
+          "result": "Five actual child-process exits cover before/after claim, after applying, after decision persistence, and after remote ack before local ack persistence. Two fresh restarts verify action counts, durable outcomes/high-water marks and device-signed acknowledgements. Removing interrupted-entry settlement fails the new test. All postbox tests pass under the race detector."
+        }
+      ],
+      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
     },
     {
       "key": "2104",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2104",
       "title": "fix(cli): skip expired session certs when dialing a device",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests validate certificate expiry and preference helpers. They do not directly assert the whole connection ladder never sends the expired leaf.",
       "required_follow_up": "Add a TLS server that records presented credentials during fallback dialing.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": "go/internal/cli/commands/expired_certs_tls_test.go",
+          "runner": "local macOS",
+          "result": "A real TLS/gRPC fallback server records client leaf bytes. A valid alternative excludes the expired stored session; with all sessions expired, the expired credential reaches the diagnostic handshake and cannot connect. Bypassing the production expiry filter fails the observed-credential assertion. Race run passed."
+        }
+      ],
+      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
     },
     {
       "key": "2429",
@@ -1088,20 +1102,34 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2179",
       "title": "cli: add hidden Cloud login targets for transition",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The original tests protected legacy defaults and hidden transition flags, but later sign-in work intentionally changes those defaults.",
       "required_follow_up": "Assess current auth tests against the supported flow; retire obsolete transition assertions explicitly.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": "go/internal/cli/commands/auth_endpoint_contract_test.go",
+          "runner": "local macOS",
+          "result": "The default/production/development commands select their supported OIDC authorities; only explicit legacy selects the old dashboard. Existing mode, hidden-flag, retired-flag and issuer/callback tests passed under -race. The transition flags remain supported and hidden, so they are retained rather than falsely retired."
+        }
+      ],
+      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
     },
     {
       "key": "3d45835bb",
       "url": "https://github.com/wendylabsinc/wendyos/commit/3d45835bb0a8d264f2f80f33e0a7ac7e1cf77621",
       "title": "Fix auth URL",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "A hard-coded auth URL was corrected; later auth flow tests cover URL construction, but the old endpoint has since been replaced.",
       "required_follow_up": "Retain tests against the currently supported login endpoint and callback contract.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": "go/internal/cli/commands/auth_endpoint_contract_test.go",
+          "runner": "local macOS",
+          "result": "Literal URL assertions protect the old dashboard fix under explicit legacy and the currently supported default OIDC authority. A real HTTP callback returns the expected signed-in redirect and authorization code; issuer mismatch/realm validation fixtures also passed under -race."
+        }
+      ],
+      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
     },
     {
       "key": "2278",
