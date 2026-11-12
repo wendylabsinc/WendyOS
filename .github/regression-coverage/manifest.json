@@ -1026,7 +1026,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2282",
       "title": "Keep enrolled device identities stable across restarts",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests protect identity persistence and refusal of inconsistent state. The change spans Go and Swift enrollment/storage paths; real interruption during key-store repair is not fully verified.",
       "required_follow_up": "Add process-crash/restart tests at each credential/state write boundary for both agents.",
       "evidence": [
@@ -1037,16 +1037,25 @@
           ],
           "runner": "local macOS",
           "result": "Both agents exercise 12 real process exits: before and after durable key/state writes during initial enrollment, permission repair and legacy migration. Two fresh child processes recover and verify the same enrollment/key, honest initial commit state, stripped legacy key, private file modes and unchanged subsequent-start metadata. Swift also signs a challenge with the recovered key. Premature legacy-key removal mutations fail in both languages. Go provisioning tests pass under -race; all 26 Swift provisioning tests pass. Required CI pending."
+        },
+        {
+          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
+          "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444558/job/131203988231",
+          "result": "Required Swift suite explicitly reports ProvisioningStore process crashes passed in 4.967s; all 12 process-interruption scenarios execute."
         }
       ],
-      "resolution": "Process-crash coverage is implemented and locally verified. This tests process interruption, not physical power-loss behavior. Required Go and Swift CI must pass before verification."
+      "resolution": "Exact regression assertions and local mutation evidence reconciled with passing required CI at 1371e9c78. Verified in the stack; not merged. Later commits still require their own final-head CI."
     },
     {
       "key": "2478",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2478",
       "title": "Agent pulls and verifies its operator-signed postbox (T13)",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Postbox tests check signatures, timestamps, replay and acknowledgements. Persistence failure and restart behavior should be verified across a real process boundary, not only service fixtures.",
       "required_follow_up": "Exercise actual process exits around claim, action, decision and ack persistence. Honor the implementation contract: claimed but undecided actions report interrupted failure without reapplying; acknowledgement delivery can retry safely.",
       "evidence": [
@@ -1054,16 +1063,21 @@
           "test": "go/internal/agent/services/postbox_crash_test.go",
           "runner": "local macOS",
           "result": "Five actual child-process exits cover before/after claim, after applying, after decision persistence, and after remote ack before local ack persistence. Two fresh restarts verify action counts, durable outcomes/high-water marks and device-signed acknowledgements. Removing interrupted-entry settlement fails the new test. All postbox tests pass under the race detector."
+        },
+        {
+          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
+          "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
       ],
-      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
+      "resolution": "Exact regression assertions and local mutation evidence reconciled with passing required CI at 1371e9c78. Verified in the stack; not merged. Later commits still require their own final-head CI."
     },
     {
       "key": "2104",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2104",
       "title": "fix(cli): skip expired session certs when dialing a device",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests validate certificate expiry and preference helpers. They do not directly assert the whole connection ladder never sends the expired leaf.",
       "required_follow_up": "Add a TLS server that records presented credentials during fallback dialing.",
       "evidence": [
@@ -1071,9 +1085,14 @@
           "test": "go/internal/cli/commands/expired_certs_tls_test.go",
           "runner": "local macOS",
           "result": "A real TLS/gRPC fallback server records client leaf bytes. A valid alternative excludes the expired stored session; with all sessions expired, the expired credential reaches the diagnostic handshake and cannot connect. Bypassing the production expiry filter fails the observed-credential assertion. Race run passed."
+        },
+        {
+          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
+          "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
       ],
-      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
+      "resolution": "Exact regression assertions and local mutation evidence reconciled with passing required CI at 1371e9c78. Verified in the stack; not merged. Later commits still require their own final-head CI."
     },
     {
       "key": "2429",
@@ -1175,7 +1194,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2179",
       "title": "cli: add hidden Cloud login targets for transition",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The original tests protected legacy defaults and hidden transition flags, but later sign-in work intentionally changes those defaults.",
       "required_follow_up": "Assess current auth tests against the supported flow; retire obsolete transition assertions explicitly.",
       "evidence": [
@@ -1183,16 +1202,21 @@
           "test": "go/internal/cli/commands/auth_endpoint_contract_test.go",
           "runner": "local macOS",
           "result": "The default/production/development commands select their supported OIDC authorities; only explicit legacy selects the old dashboard. Existing mode, hidden-flag, retired-flag and issuer/callback tests passed under -race. The transition flags remain supported and hidden, so they are retained rather than falsely retired."
+        },
+        {
+          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
+          "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
       ],
-      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
+      "resolution": "Exact regression assertions and local mutation evidence reconciled with passing required CI at 1371e9c78. Verified in the stack; not merged. Later commits still require their own final-head CI."
     },
     {
       "key": "3d45835bb",
       "url": "https://github.com/wendylabsinc/wendyos/commit/3d45835bb0a8d264f2f80f33e0a7ac7e1cf77621",
       "title": "Fix auth URL",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "A hard-coded auth URL was corrected; later auth flow tests cover URL construction, but the old endpoint has since been replaced.",
       "required_follow_up": "Retain tests against the currently supported login endpoint and callback contract.",
       "evidence": [
@@ -1200,16 +1224,21 @@
           "test": "go/internal/cli/commands/auth_endpoint_contract_test.go",
           "runner": "local macOS",
           "result": "Literal URL assertions protect the old dashboard fix under explicit legacy and the currently supported default OIDC authority. A real HTTP callback returns the expected signed-in redirect and authorization code; issuer mismatch/realm validation fixtures also passed under -race."
+        },
+        {
+          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
+          "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
       ],
-      "resolution": "Coverage is implemented and locally verified; required CI execution on the identity PR remains pending."
+      "resolution": "Exact regression assertions and local mutation evidence reconciled with passing required CI at 1371e9c78. Verified in the stack; not merged. Later commits still require their own final-head CI."
     },
     {
       "key": "2278",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2278",
       "title": "feat(mcp): tool titles, relay manifest and wendy cloud mcp (WDY-3675, WDY-3660)",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "MCP manifest, authorization and compatibility tests cover published catalogue handling. The pairing UI and connected relay approval path are not covered by unit tests alone.",
       "required_follow_up": "Add a client/relay fixture for old/new catalogues, denied approval and a completed pairing session.",
       "evidence": [
@@ -1217,16 +1246,21 @@
           "test": "go/internal/cli/commands/cloud_mcp_journey_test.go:TestCloudMCPPairingJourneyCatalogues",
           "runner": "local macOS",
           "result": "A real gRPC relay stream and production MCP server exercise denial followed by accepted pairing, initialization, exact catalogue/title/schema output and a successful status call for current and supported older catalogues. Denied-binding frames are ignored both before and after acceptance; response IDs, binding and sequence numbers are checked. Removing the binding guard fails the test. All CloudMCP tests pass under -race."
+        },
+        {
+          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
+          "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
         }
       ],
-      "resolution": "The complete pairing journey is implemented and locally verified alongside existing catalogue-mismatch and per-call approval tests. Required CI remains pending."
+      "resolution": "Exact regression assertions and local mutation evidence reconciled with passing required CI at 1371e9c78. Verified in the stack; not merged. Later commits still require their own final-head CI."
     },
     {
       "key": "2134",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2134",
       "title": "Plugin: CLI launcher that installs a pinned, verified Wendy CLI",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Launcher fixtures cover shell and PowerShell behavior, while security relies on provenance and platform trust tools. This audit did not run the Windows launcher or attestation checks.",
       "required_follow_up": "Require launcher fixtures on both OSes and negative tests for wrong signer/workflow and interrupted download.",
       "evidence": [
@@ -1245,9 +1279,18 @@
             "scripts/test/plugin-launcher/run.sh"
           ],
           "result": "CI traces show two mkdir lock acquisitions succeeding concurrently, matching uutils/coreutils#13970. A deterministic false-success mkdir fixture failed before an exclusive noclobber PID claim was added and passes afterward. All 32 local POSIX cases pass. Windows and macOS native CI passed on the preceding head; new Linux execution remains pending."
+        },
+        {
+          "head": "1371e9c783510c68e74d1820dbd2d40205588f1e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444699/job/131204184152",
+          "result": "Required Linux Race tests passed, including services in 172.584s and commands in 308.622s. Exact new test entry points contain no skip paths. The previously recorded assertions and mutation checks protect this entry."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43224444686",
+          "result": "Required Linux/macOS POSIX and Windows launcher jobs all passed at 1371e9c78, including exclusive PID-claim contention and interrupted-download retries. Offline automation regressions, including provenance rejection fixtures, also passed in Go Tests."
         }
       ],
-      "resolution": "Go Tests now requires the reusable Linux/macOS/Windows launcher jobs. Relevant pinning and fixture paths trigger the aggregate. Complete native CI before marking verified."
+      "resolution": "Exact regression assertions and local mutation evidence reconciled with passing required CI at 1371e9c78. Verified in the stack; not merged. Later commits still require their own final-head CI."
     },
     {
       "key": "2676",
