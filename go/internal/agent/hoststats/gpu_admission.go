@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -72,13 +73,43 @@ func ReadGPUAdmission(ctx context.Context, owned []string) ([]GPUAdmission, erro
 	if err != nil {
 		return nil, fmt.Errorf("NVIDIA index query failed: %w", err)
 	}
-	inventory, err := runBounded(exec.CommandContext(ctx, path, "-q", "-x"))
+	inventory, err := runLimited(exec.CommandContext(ctx, path, "-q", "-x"), maxGPUInventoryOutput)
 	if err != nil {
 		return nil, fmt.Errorf("NVIDIA process query failed: %w", err)
 	}
 	model, _ := os.ReadFile("/proc/device-tree/model")
 	unified := strings.Contains(string(model), "Jetson")
 	return parseGPUAdmission(indices, inventory, owned, unified, ProcessCgroup)
+}
+
+// maxGPUInventoryOutput bounds `nvidia-smi -q -x`. Unlike the CSV queries, the
+// full XML lists every supported clock pair: one RTX 4090 on driver 535 emits
+// about 73 KiB, past maxGPUToolOutput, and every further GPU adds as much.
+const maxGPUInventoryOutput = 4 << 20 // 4 MiB
+
+// runLimited reads at most limit bytes of cmd's stdout. Unlike runBounded,
+// output past the limit is an error rather than a prefix: a truncated XML
+// document is no observation. The process is killed at once instead of being
+// left blocked on a full pipe until the context deadline.
+func runLimited(cmd *exec.Cmd, limit int64) ([]byte, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	if int64(len(data)) > limit {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("output exceeds %d bytes", limit)
+	}
+	waitErr := cmd.Wait()
+	if readErr != nil {
+		return nil, readErr
+	}
+	return data, waitErr
 }
 
 func parseGPUAdmission(indices, inventory []byte, owned []string, unified bool, cgroup func(uint32) (string, error)) ([]GPUAdmission, error) {
