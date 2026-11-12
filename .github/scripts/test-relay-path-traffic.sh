@@ -58,3 +58,6 @@ grep -q '^--- PASS: TestRelayIdleKeepalive ' "$output/idle-keepalive.log"
 grep -q 'IDLE_KEEPALIVE_PRESERVED' "$output/idle-keepalive.log"
 grep -q 'IDLE_CONTROL_TRANSPORT_EXPIRED' "$output/idle-keepalive.log"
 if grep -q -- '--- SKIP:' "$output/idle-keepalive.log"; then exit 1; fi
+
+# Keep the original captured-lease race distinct from traffic/path assertions.
+bash .github/scripts/test-presence-watcher-race.sh "$output/presence-watcher-race"
