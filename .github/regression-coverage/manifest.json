@@ -2329,9 +2329,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2399",
       "title": "fix(agent): record sensor-link microphones on PipeWire hosts",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests verify source listing and capture-target selection on PipeWire, but do not record audio through a live PipeWire/ALSA bridge.",
-      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "required_follow_up": "Retain the required Linux media gate, exact output assertions and discriminating regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2339,6 +2339,11 @@
             ".github/scripts/test-sensorlink-audio-loopback.sh"
           ],
           "result": "Proposed hosted kernel fixture uses real audioloop Manager writers, two source identities, private live PipeWire, production adapter and ALSA recording, with exact PCM markers in sealed WAVs. Normal and two source-routing mutation variants cross-compile for Linux; offline guards pass. Actual snd-aloop/sample checks remain pending."
+        },
+        {
+          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
+          "result": "Required Linux media job passed actual real-ALSA recording with a live private PipeWire daemon. Two SensorLink microphone identities retained exact PCM in sealed WAVs. The PipeWire-only routing control failed to start recording and the crossed-subdevice control failed on microphone identity. Owned daemon/account/module cleanup completed."
         }
       ]
     },
@@ -2347,9 +2352,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2350",
       "title": "Fix Lite sensor connections and verify host loopback support",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Protocol and host-module checks exist. The host-sensor support fixture is hardware-gated, and module presence alone does not verify video/audio delivery.",
-      "required_follow_up": "Execute the authenticated microphone normal/negative controls with the corrected private PipeWire runtime. Camera kernel delivery and its controls have passed; full audio sample delivery remains pending.",
+      "required_follow_up": "Retain the required Linux media gate, exact output assertions and discriminating regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2378,6 +2383,11 @@
           "head": "4c898e0aacce6961d449dcfade759966dc1ed034",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315180056/job/131521484536",
           "result": "The actual authenticated Lite camera normal test and both kernel-pixel/setup-budget controls passed. Audio did not execute: the private daemon UID could not traverse RUNNER_TEMP. The isolated runtime-directory correction is now in PR2875; microphone and full dual-media proof remain pending."
+        },
+        {
+          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
+          "result": "Required Linux media job passed authenticated Lite camera delivery through real v4l2loopback decode and microphone delivery through real ALSA capture. Camera exact pixel phases and both controls passed; actual mTLS/WendyCom microphone exact PCM, identity, cancellation and device release passed. Combined setup-budget, wrong channel and missing PCM controls all failed specifically. The shared source address-change gate also passed with both modules alive."
         }
       ]
     },
@@ -2443,9 +2453,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1858",
       "title": "Remote sensor mounting: pair a device's camera & mic (macOS source)",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "SensorLink/audio tests cover reconnect and source resolution, plus simulator fixtures. Complete camera/microphone delivery after source-address change is hardware-gated.",
-      "required_follow_up": "Require the authenticated source address-change gate while both owned media modules remain loaded in the existing Linux media job. Verify exact camera pixels and microphone samples before and after reconnection with stable principal/channel identities. Physical macOS capture drivers and multicast discovery are not claimed.",
+      "required_follow_up": "Retain the required Linux media gate, exact output assertions and discriminating regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2454,6 +2464,11 @@
             ".github/scripts/test-source-restart-loopback.sh"
           ],
           "result": "Actual mTLS/WendyCom camera and microphone protocol fixture passes native race and isolated Linux execution. Hosted gate uses production RunPairing with a resolver changing source IP, actual v4l2loopback decoding and ALSA capture in both phases. Normal and stale-address control compile; actual combined kernel run remains pending."
+        },
+        {
+          "head": "a98c1fe40153c8f0dcf2c9ff358e6780abda41e7",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
+          "result": "Required Linux media job passed the production source re-resolution/restart journey: both authenticated camera and microphone streams moved from the original source address to the new IP, with stable source/channel identities and exact decoded kernel pixels/PCM before and after. The stale-address control failed specifically because both channels did not reconnect. This is actual Linux kernel endpoint/protocol proof; it does not claim physical Mac capture or multicast-radio execution."
         }
       ]
     },
