@@ -855,10 +855,11 @@ func main() {
 		meshSvc := services.NewMeshService(logger, configPath, deviceScope(provisioningSvc))
 		meshSvc.SetIngressAuthorizer(meshIngress)
 		buildSvc := services.NewBuildService(logger, services.BuildServiceOptions{
-			ConfigPath:   configPath,
-			Chunks:       buildChunkSource,
-			Peers:        meshDialer,
-			ContextLocks: buildContextLocks,
+			DeliverySource: deliverySource,
+			ConfigPath:     configPath,
+			Chunks:         buildChunkSource,
+			Peers:          meshDialer,
+			ContextLocks:   buildContextLocks,
 			// Legacy fallback for a CLI that does not put each target's actual
 			// mTLS agent port in PushTarget.
 			TargetAgentPort: uint16(mtlsPortNum),

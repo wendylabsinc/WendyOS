@@ -20,6 +20,7 @@ import (
 )
 
 type Snapshot struct {
+	TrustAnchors     []*x509.Certificate
 	Provisioned      bool
 	Scope            certs.Scope
 	Store            *builddelivery.Store
@@ -119,6 +120,7 @@ func (m *Manager) Get() (Snapshot, error) {
 			seen[string(c.Raw)] = true
 		}
 	}
+	result.TrustAnchors = roots
 	result.Store = m.store
 	result.Target = target
 	result.ImagePrefix = m.prefix

@@ -280,8 +280,10 @@ type GetBuildCapabilitiesResponse struct {
 	// Empty when reachable. Otherwise a short reason phrased for a developer,
 	// e.g. "cannot resolve registry-1.docker.io", which the CLI prints as-is.
 	InternetDetail string `protobuf:"bytes,16,opt,name=internet_detail,json=internetDetail,proto3" json:"internet_detail,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Understands and forwards target-admitted, key-bound delivery contracts.
+	AuthorizedDelivery bool `protobuf:"varint,17,opt,name=authorized_delivery,json=authorizedDelivery,proto3" json:"authorized_delivery,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GetBuildCapabilitiesResponse) Reset() {
@@ -426,6 +428,13 @@ func (x *GetBuildCapabilitiesResponse) GetInternetDetail() string {
 	return ""
 }
 
+func (x *GetBuildCapabilitiesResponse) GetAuthorizedDelivery() bool {
+	if x != nil {
+		return x.AuthorizedDelivery
+	}
+	return false
+}
+
 // ChunkManifest reconstructs a byte stream from chunks already written through
 // WendyContainerService.WriteChunks, which is a generic sha256-addressed store.
 // Order is significant.
@@ -557,9 +566,13 @@ type PushTarget struct {
 	// mTLS gRPC port of this target's agent. The CLI copies the port from the
 	// connection that actually reached this device; zero makes the build host
 	// use its configured/default target-agent port.
-	AgentPort     uint32 `protobuf:"varint,4,opt,name=agent_port,json=agentPort,proto3" json:"agent_port,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	AgentPort uint32 `protobuf:"varint,4,opt,name=agent_port,json=agentPort,proto3" json:"agent_port,omitempty"`
+	// Operator-signed contract and its durable target admission. Required for
+	// device-authenticated delivery, including registry fallback.
+	DeliveryAuthorizationJws string `protobuf:"bytes,6,opt,name=delivery_authorization_jws,json=deliveryAuthorizationJws,proto3" json:"delivery_authorization_jws,omitempty"`
+	DeliverySession          string `protobuf:"bytes,7,opt,name=delivery_session,json=deliverySession,proto3" json:"delivery_session,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *PushTarget) Reset() {
@@ -618,6 +631,20 @@ func (x *PushTarget) GetAgentPort() uint32 {
 		return x.AgentPort
 	}
 	return 0
+}
+
+func (x *PushTarget) GetDeliveryAuthorizationJws() string {
+	if x != nil {
+		return x.DeliveryAuthorizationJws
+	}
+	return ""
+}
+
+func (x *PushTarget) GetDeliverySession() string {
+	if x != nil {
+		return x.DeliverySession
+	}
+	return ""
 }
 
 type BuildSpec struct {
@@ -1029,7 +1056,7 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"7\n" +
 	"\x1bSetBuildHostEnabledResponse\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"\x1d\n" +
-	"\x1bGetBuildCapabilitiesRequest\"\x89\x06\n" +
+	"\x1bGetBuildCapabilitiesRequest\"\xba\x06\n" +
 	"\x1cGetBuildCapabilitiesResponse\x12-\n" +
 	"\x12buildkit_available\x18\x01 \x01(\bR\x11buildkitAvailable\x12)\n" +
 	"\x10buildkit_version\x18\x02 \x01(\tR\x0fbuildkitVersion\x12\x0e\n" +
@@ -1047,7 +1074,8 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"\x0echunk_delivery\x18\r \x01(\bR\rchunkDelivery\x128\n" +
 	"\x18internet_check_supported\x18\x0e \x01(\bR\x16internetCheckSupported\x12-\n" +
 	"\x12internet_reachable\x18\x0f \x01(\bR\x11internetReachable\x12'\n" +
-	"\x0finternet_detail\x18\x10 \x01(\tR\x0einternetDetail\"Q\n" +
+	"\x0finternet_detail\x18\x10 \x01(\tR\x0einternetDetail\x12/\n" +
+	"\x13authorized_delivery\x18\x11 \x01(\bR\x12authorizedDelivery\"Q\n" +
 	"\rChunkManifest\x12!\n" +
 	"\fchunk_hashes\x18\x01 \x03(\fR\vchunkHashes\x12\x1d\n" +
 	"\n" +
@@ -1060,7 +1088,7 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"build_args\x18\x02 \x03(\v27.wendy.agent.services.v2.DockerfileBuild.BuildArgsEntryR\tbuildArgs\x1a<\n" +
 	"\x0eBuildArgsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9f\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x88\x02\n" +
 	"\n" +
 	"PushTarget\x12\x1d\n" +
 	"\n" +
@@ -1070,7 +1098,9 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"repository\x18\x03 \x01(\tR\n" +
 	"repository\x12\x1d\n" +
 	"\n" +
-	"agent_port\x18\x04 \x01(\rR\tagentPortJ\x04\b\x01\x10\x02R\basset_id\"\xc2\x03\n" +
+	"agent_port\x18\x04 \x01(\rR\tagentPort\x12<\n" +
+	"\x1adelivery_authorization_jws\x18\x06 \x01(\tR\x18deliveryAuthorizationJws\x12)\n" +
+	"\x10delivery_session\x18\a \x01(\tR\x0fdeliverySessionJ\x04\b\x01\x10\x02R\basset_id\"\xc2\x03\n" +
 	"\tBuildSpec\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12@\n" +

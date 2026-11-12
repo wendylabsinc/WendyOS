@@ -64,6 +64,36 @@ as does a build run with `--chunking=off`. The build log says which route it too
 These delivery modes apply to the build host's own connection to the target.
 They are unchanged by the separate [CLI upload rules for Cloud v2](../run.md#uploads-over-cloud-v2).
 
+## Operator authorization
+
+You can update the CLI first. It uses the existing delivery flow when the build
+host and every target report that they lack operator authorization support.
+Update the build host and all targets together to enable authorized delivery.
+A mix of supported and unsupported agents stops the build before submission.
+
+For authorized delivery, the CLI verifies the builder's public certificate
+against its locally trusted PKI and selected device identity. It uses the existing
+operator certificate to sign and admit a separate job on each target, without
+requesting an additional certificate from Cloud. The job binds the build
+inputs, builder identity and public key, exact image reference, previous image
+digest, a 64 GiB transfer budget and a delivery deadline of 24 hours. An intervening
+change to the image reference causes publication to fail rather than overwrite it.
+
+The worker presents its own device certificate and the admitted session for both
+chunk delivery and OCI registry push. It receives the signed contract and public
+operator certificate chain; the operator's signing key stays on the CLI machine.
+The contract authorizes delivery of a build whose output digest is not yet known.
+It is independent of image signing.
+
+This separates delivery authority from the operator connection; it does not add a
+job queue. The current `BuildImage` RPC remains a streamed build and cancels when
+its CLI connection is closed. A queued worker must retain the signed assignment
+and admitted session when scheduling delivery later.
+
+A builder certificate renewed with the same key can continue the job. A key
+rotation requires a new job authorization; current agent renewal rekeys, so a job
+that spans that renewal fails closed and must be authorized again.
+
 ## Delivery credentials
 
 On the registry-push route, the agent exposes a loopback endpoint for BuildKit to

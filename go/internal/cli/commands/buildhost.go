@@ -505,6 +505,13 @@ func runRemoteBuild(
 		} else {
 			spec.PushTargets = pushTargets
 		}
+		destinations := map[string]*grpcclient.AgentConnection{pushTargets[0].GetAssetUuid(): target}
+		for i, conn := range fleetConns {
+			destinations[pushTargets[i+1].GetAssetUuid()] = conn
+		}
+		if err := authorizeRemoteBuild(buildCtx, builder, spec, destinations); err != nil {
+			return err
+		}
 		buildResult, err = streamRemoteBuild(buildCtx, builder, spec, stream)
 		return err
 	}); err != nil {
@@ -574,18 +581,9 @@ func startAfterReportedDelivery(result *agentpbv2.BuildImageResult, assetID stri
 	return start()
 }
 
-// reportedDeliveryError returns the build host's failure for one target. An
-// empty delivery list is the legacy single-target contract: older build hosts
-// reported delivery failure through the stream status and success by EOF, so
-// there is no per-target result to inspect.
-//
-// Once a host sends any per-target results, absence is a failure. Failing
-// closed prevents the CLI from creating a container from an older image that
-// happens to remain registered under the same :latest name.
+// reportedDeliveryError requires the build host to confirm delivery to this
+// target before the CLI can launch an image by its mutable tag.
 func reportedDeliveryError(result *agentpbv2.BuildImageResult, assetID string) error {
-	if result == nil || len(result.GetDeliveries()) == 0 {
-		return nil
-	}
 	for _, delivery := range result.GetDeliveries() {
 		if delivery.GetAssetUuid() != assetID {
 			continue
@@ -831,7 +829,7 @@ func consumeBuildProgress(recv func() (*agentpbv2.BuildImageProgress, error), ou
 	for {
 		msg, err := recv()
 		if err == io.EOF {
-			return nil, nil
+			return nil, fmt.Errorf("build host closed the stream before reporting a build result: %w", io.ErrUnexpectedEOF)
 		}
 		if err != nil {
 			return nil, err

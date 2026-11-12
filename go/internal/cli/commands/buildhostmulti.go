@@ -111,6 +111,9 @@ func buildServicesRemote(
 
 		spec := serviceBuildSpec(base, repo, platform, dockerfile, buildArgs, chunking, manifest)
 
+		if err := authorizeRemoteBuild(ctx, builder, spec, map[string]*grpcclient.AgentConnection{base.GetAssetUuid(): conn}); err != nil {
+			return err
+		}
 		result, err := streamRemoteBuild(ctx, builder, spec, buildOut)
 		if err != nil {
 			return classifyRemoteBuildError(host, err)
