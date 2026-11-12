@@ -126,6 +126,10 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
                              ".github/regression-coverage/manual/fixtures/jetson-display/main.c",
                              "swift/Scripts/SetupSigningCI.sh", "swift/Scripts/Build.sh",
                              "Examples/SO101Reader/reader.py", "Examples/SO101Reader/test_reader.py",
+                             "web-client/tests/desktop-mesh.test.mjs", "web-client/tests/mesh-topology.test.mjs",
+                             "web-client/electron/service.mjs", "web-client/desktop/types.ts",
+                             "web-client/lib/mesh-topology.ts", "web-client/components/mesh-network.tsx",
+                             "go/internal/cli/browserauth/topology.go", "go/proto/gen/litepb/wendy_com_msg.pb.go",
                              "Examples/WendyNotify/Sources/WendyNotify/Router.swift",
                              "Examples/WendyNotify/Tests/WendyNotifyTests/RequestPathTests.swift"):
                 self.assertTrue(any(fnmatch.fnmatchcase(filename, pattern) for pattern in config["on"][event]["paths"]),

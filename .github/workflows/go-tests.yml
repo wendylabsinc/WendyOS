@@ -11,8 +11,11 @@ on:
       - 'web-client/public/**'
       - 'web-client/package.json'
       - 'web-client/package-lock.json'
-      - 'web-client/tests/credential-store.test.mjs'
-      - 'web-client/tests/wendy-web-bridge.test.mjs'
+      - 'web-client/tests/**'
+      - 'web-client/lib/**'
+      - 'web-client/electron/**'
+      - 'web-client/desktop/**'
+      - 'web-client/components/**'
       - 'web-client/scripts/build-wasm.mjs'
       - 'go/simulator/go2/go2_sim/**'
       - 'Proto/**'
@@ -46,8 +49,11 @@ on:
       - 'web-client/public/**'
       - 'web-client/package.json'
       - 'web-client/package-lock.json'
-      - 'web-client/tests/credential-store.test.mjs'
-      - 'web-client/tests/wendy-web-bridge.test.mjs'
+      - 'web-client/tests/**'
+      - 'web-client/lib/**'
+      - 'web-client/electron/**'
+      - 'web-client/desktop/**'
+      - 'web-client/components/**'
       - 'web-client/scripts/build-wasm.mjs'
       - 'go/simulator/go2/go2_sim/**'
       - 'Proto/**'
@@ -521,6 +527,16 @@ jobs:
         run: bash .github/scripts/test-operator-spare-recovery.sh "$RUNNER_TEMP/operator-spare-recovery"
       - name: Require persisted clock trust and packet expiry across restarts
         run: bash .github/scripts/test-clock-packet-restart.sh "$RUNNER_TEMP/clock-packet-restart"
+      - name: Require service publication recovery through renewed identities
+        run: bash .github/scripts/test-service-packet-recovery.sh "$RUNNER_TEMP/service-packet-recovery"
+      - name: Preserve service publication evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: service-packet-recovery
+          path: ${{ runner.temp }}/service-packet-recovery
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
@@ -618,6 +634,8 @@ jobs:
           for test in TestRelocateGPTDarwinRawDiskImage TestMarkFATVolumes_DiskImage TestStopTargetIndexing TestStopTargetIndexingNoMountedFAT TestUnmountDarwinDisk; do
             grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
           done
+      - name: Require native resolver and stale discovery cache regressions
+        run: bash .github/scripts/test-darwin-discovery.sh
       - name: Exercise the native BLE bridge without a radio
         env:
           CGO_ENABLED: '1'
@@ -762,6 +780,17 @@ jobs:
           go test -race ./go/internal/agent/services -run '^TestGStreamerInProcessRunner(_Cancellation)?$' -v -count=1 -timeout 90s | tee "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner ' "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
+
+      - name: Require authenticated IP-camera pump consumer lifecycle
+        run: bash .github/scripts/test-ipcam-loopback-lifecycle.sh
+      - name: Preserve IP-camera lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ipcam-loopback-lifecycle
+          path: ${{ runner.temp }}/wendy-ipcam-lifecycle.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Remove the owned fixture loopback module
         if: always() && steps.loopback-module.outputs.loaded == 'true'
