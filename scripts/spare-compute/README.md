@@ -108,8 +108,13 @@ Agent authority, although this supervisor uses only the read-only resource
 stats RPC. Keep its image and source trusted. Test, review and model services have
 no admin socket. Their monitors run as root, but launch workloads with UID/GID
 10001, an empty supplementary-group list, and no admin socket environment.
-Only the root supervisor writes permission files; workload users cannot renew
-them. The monitors require private PID namespaces and must not use host PID mode.
+Within this app, only the root supervisor writes permission files; workload
+users cannot renew them. The monitors require private PID namespaces and must
+not use host PID mode. Wendy shares persistent volumes between apps by name, so
+another app on the device that declares `spare-control` can write the same
+permission files, and one that declares `spare-tests`, `spare-reviews` or
+`spare-models` sees those caches and results. Do not deploy untrusted apps that
+use these volume names on the same device.
 
 Wendy persistent volumes store source snapshots, reports, corpus inputs, the Go
 build cache and model weights. Temporary Go executables, mutation work directories
