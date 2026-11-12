@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 )
 
 func TestThorElevationDecision(t *testing.T) {
@@ -92,8 +93,11 @@ func TestErrThorNeedsRoot(t *testing.T) {
 	if strings.Contains(msg, "usb-setup") {
 		t.Errorf("error must not point at usb-setup, which does not install the Jetson rule: %q", msg)
 	}
-	if runtime.GOOS == "linux" && !strings.Contains(msg, usbUdevRulePath) {
-		t.Errorf("linux error should give the udev rule install commands: %q", msg)
+	if runtime.GOOS == "linux" && !strings.Contains(msg, cliupdate.InstallCommand("linux")) {
+		t.Errorf("linux error should point at installing the package: %q", msg)
+	}
+	if strings.Contains(msg, "udev") || strings.Contains(msg, "tee") {
+		t.Errorf("error must not ask the user to write a rule: %q", msg)
 	}
 }
 
@@ -102,10 +106,11 @@ func TestThorElevationReason(t *testing.T) {
 		t.Errorf("darwin reason should mention macOS root: %q", thorElevationReason("darwin"))
 	}
 	linux := thorElevationReason("linux")
-	for _, want := range []string{usbUdevRulePath, udevRuleFor(usbUdevRule, hostHasPlugdev()), "udevadm control --reload-rules"} {
-		if !strings.Contains(linux, want) {
-			t.Errorf("linux reason should give the udev rule install commands (missing %q): %q", want, linux)
-		}
+	if !strings.Contains(linux, cliupdate.InstallCommand("linux")) {
+		t.Errorf("linux reason should point at installing the package: %q", linux)
+	}
+	if strings.Contains(linux, "udev") || strings.Contains(linux, "tee") {
+		t.Errorf("linux reason must not ask the user to write a rule: %q", linux)
 	}
 	// `wendy device usb-setup` configures the USB-C network link, not the
 	// Jetson recovery rule, so the hint must not send people there.

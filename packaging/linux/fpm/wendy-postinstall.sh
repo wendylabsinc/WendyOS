@@ -1,4 +1,16 @@
 #!/bin/sh
+# The udev rules grant access to the plugdev group, which Fedora/RHEL (and other
+# non-Debian distros) lack; udev drops a rule line naming a missing group. Create
+# it as a system group from the packaged sysusers.d entry before reloading udev.
+# An existing plugdev (Debian/Ubuntu) is left untouched.
+if ! getent group plugdev >/dev/null 2>&1; then
+    if command -v systemd-sysusers >/dev/null 2>&1; then
+        systemd-sysusers /usr/lib/sysusers.d/wendy.conf 2>/dev/null ||
+            groupadd -r plugdev 2>/dev/null || true
+    else
+        groupadd -r plugdev 2>/dev/null || true
+    fi
+fi
 # Reload udev so the packaged rules apply without a reboot.
 # Best-effort (|| true): containers, chroots and minimal systems have no running
 # udev, and package installation must not fail there. The trigger is scoped to

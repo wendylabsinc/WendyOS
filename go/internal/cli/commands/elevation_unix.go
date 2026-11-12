@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -61,8 +62,8 @@ const (
 )
 
 // wendyJetsonUdevRulePaths are the standard udev rules directories where the
-// 70-wendy-jetson.rules file (installed by the deb/rpm/AUR package, or by hand with
-// jetsonUdevRuleInstallHint) grants non-root access to the Jetson
+// 70-wendy-jetson.rules file (installed by the deb/rpm/AUR package, or by hand)
+// grants non-root access to the Jetson
 // recovery/flashing USB device.
 var wendyJetsonUdevRulePaths = []string{
 	"/etc/udev/rules.d/70-wendy-jetson.rules",
@@ -171,14 +172,6 @@ func thorTelemetryEnv(environ []string) []string {
 	return append(out, key+analytics.AttemptID(nil))
 }
 
-// jetsonUdevRuleInstallHint returns the shell commands that install the wendy
-// Jetson udev rule by hand — the same rule the wendy packages ship — one per
-// line, each prefixed with indent.
-func jetsonUdevRuleInstallHint(indent string) string {
-	return indent + "echo '" + udevRuleFor(usbUdevRule, hostHasPlugdev()) + "' | sudo tee " + usbUdevRulePath + "\n" +
-		indent + "sudo udevadm control --reload-rules && sudo udevadm trigger"
-}
-
 // thorElevationReason is the explanation printed just before the sudo re-exec,
 // tailored per platform.
 func thorElevationReason(goos string) string {
@@ -186,8 +179,7 @@ func thorElevationReason(goos string) string {
 		return "Flashing a Jetson AGX Thor needs administrator access — it talks to the board's USB recovery device directly, which requires root on macOS."
 	}
 	return "Flashing a Jetson AGX Thor needs USB access to the board's recovery device.\n" +
-		"  Tip: install the udev rule once (the wendy deb, rpm and AUR packages include it) to skip sudo next time:\n" +
-		jetsonUdevRuleInstallHint("    ")
+		"  Tip: install wendy with its package to skip sudo next time: " + cliupdate.InstallCommand("linux")
 }
 
 // createElevatedRunDirs creates, as the user, the cache and log directories the
@@ -202,13 +194,12 @@ func createElevatedRunDirs() {
 
 // errThorNeedsRoot is returned when a Thor flash needs elevation but cannot obtain
 // it here (no interactive terminal to prompt on, or no sudo on PATH). It carries
-// the exact command to re-run, plus the Linux udev alternative.
+// the exact command to re-run, plus the Linux package alternative.
 func errThorNeedsRoot() error {
 	msg := "flashing a Jetson AGX Thor requires administrator access — it opens the board's USB recovery device directly, which needs root.\n" +
 		"  Re-run:  sudo wendy install --device-type " + thorDeviceType
 	if runtime.GOOS == "linux" {
-		msg += "\n  Or install the udev rule once (the wendy deb, rpm and AUR packages include it), then no sudo is needed:\n" +
-			jetsonUdevRuleInstallHint("    ")
+		msg += "\n  Or install wendy with its package, then no sudo is needed: " + cliupdate.InstallCommand("linux")
 	}
 	return errors.New(msg)
 }

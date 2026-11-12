@@ -10,39 +10,19 @@ import (
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashpack"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 )
 
-// The usbAccessHintBox tells tarball users to install usbUdevRule verbatim, and
-// the deb/rpm install packaging/linux/udev/70-wendy-jetson.rules. The two must
-// stay identical: /etc/udev/rules.d overrides /usr/lib/udev/rules.d for the same
-// filename, so a stale hint-box copy would permanently mask the packaged rule.
-func TestUsbUdevRuleMatchesPackagedRule(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "..", "packaging", "linux", "udev", "70-wendy-jetson.rules")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading packaged udev rule: %v", err)
-	}
-	var rules []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			rules = append(rules, line)
-		}
-	}
-	if len(rules) != 1 || rules[0] != usbUdevRule {
-		t.Fatalf("packaged udev rule diverged from usbUdevRule:\npackaged: %q\nconst:    %q", rules, usbUdevRule)
-	}
-}
-
-// The AUR package ships group-free copies (Arch has no plugdev group, and udev
-// drops a whole rule line naming an unknown group). They must equal what the
-// hint prints on such a host.
-func TestArchUdevRulesMatchGroupFreeHint(t *testing.T) {
-	for file, rule := range map[string]string{
-		"70-wendy-jetson.rules":   usbUdevRule,
-		"70-wendy-qualcomm.rules": edlUdevRule,
+// Every package ships the same rules naming plugdev, and creates plugdev where
+// the distro lacks it: udev drops a whole rule line naming a missing group, so
+// the rules and the sysusers.d entry must agree on the group.
+func TestPackagedUdevRulesAndPlugdevGroup(t *testing.T) {
+	pkg := filepath.Join("..", "..", "..", "..", "packaging", "linux")
+	for file, vendor := range map[string]string{
+		"70-wendy-jetson.rules":   "0955",
+		"70-wendy-qualcomm.rules": "05c6",
 	} {
-		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packaging", "arch", "wendy", file))
+		data, err := os.ReadFile(filepath.Join(pkg, "udev", file))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -52,13 +32,39 @@ func TestArchUdevRulesMatchGroupFreeHint(t *testing.T) {
 				rules = append(rules, line)
 			}
 		}
-		want := udevRuleFor(rule, false)
-		if len(rules) != 1 || rules[0] != want || strings.Contains(want, "GROUP") {
+		want := `SUBSYSTEM=="usb", ATTRS{idVendor}=="` + vendor + `", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
+		if len(rules) != 1 || rules[0] != want {
 			t.Errorf("%s: got %q, want %q", file, rules, want)
 		}
 	}
-	if udevRuleFor(usbUdevRule, true) != usbUdevRule {
-		t.Error("a host with plugdev must get the packaged deb/rpm rule unchanged")
+	sysusers, err := os.ReadFile(filepath.Join(pkg, "sysusers", "wendy.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sysusers), "\ng plugdev -\n") {
+		t.Errorf("sysusers.d entry must create plugdev as a system group:\n%s", sysusers)
+	}
+}
+
+// The Linux access message is one sentence with one next step, and never asks
+// the user to create a group or write a rule.
+func TestLinuxUSBAccessStep(t *testing.T) {
+	for _, packaged := range []bool{true, false} {
+		got := linuxUSBAccessStep("Jetson", packaged)
+		for _, bad := range []string{"groupadd", "udev", "tee", "\n"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("packaged=%v: must not contain %q: %q", packaged, bad, got)
+			}
+		}
+		if !strings.Contains(got, "with sudo") {
+			t.Errorf("packaged=%v: should offer sudo: %q", packaged, got)
+		}
+	}
+	if got := linuxUSBAccessStep("Jetson", true); !strings.Contains(got, "usermod -aG plugdev $USER") {
+		t.Errorf("packaged: should say how to join plugdev: %q", got)
+	}
+	if got := linuxUSBAccessStep("Jetson", false); !strings.Contains(got, cliupdate.InstallCommand("linux")) {
+		t.Errorf("unpackaged: should say how to install the package: %q", got)
 	}
 }
 
@@ -73,17 +79,13 @@ func TestUsbAccessHintLines(t *testing.T) {
 	if !strings.Contains(mac, "recovery mode") {
 		t.Errorf("darwin hint should tell the user to re-enter recovery mode, got:\n%s", mac)
 	}
-	if strings.Contains(mac, usbUdevRule) {
-		t.Errorf("darwin hint should not contain the Linux udev rule, got:\n%s", mac)
+	if strings.Contains(mac, "udev") {
+		t.Errorf("darwin hint should not mention Linux udev rules, got:\n%s", mac)
 	}
 
-	// Linux: keep the udev-rule guidance verbatim so the parity test stays meaningful.
 	lin := strings.Join(usbAccessHintLines("linux"), "\n")
-	if want := udevRuleFor(usbUdevRule, hostHasPlugdev()); !strings.Contains(lin, want) {
-		t.Errorf("linux hint should contain the udev rule %q, got:\n%s", want, lin)
-	}
-	if !hostHasPlugdev() && strings.Contains(lin, "plugdev") {
-		t.Errorf("linux hint must not mention plugdev on a host without that group, got:\n%s", lin)
+	if want := linuxUSBAccessStep("Jetson", wendyPackagedRule("70-wendy-jetson.rules")); !strings.Contains(lin, want) {
+		t.Errorf("linux hint should be the one-sentence step %q, got:\n%s", want, lin)
 	}
 }
 
