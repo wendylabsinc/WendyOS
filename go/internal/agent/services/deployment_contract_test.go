@@ -295,6 +295,11 @@ func TestCheckConfig(t *testing.T) {
 		`{"b":{"a":1,"a":2}}`:                                false,
 		`{"c":[{"a":1,"a":2}]}`:                              false,
 		`{"a":}`:                                             false,
+		`{"env":1,"ENV":2}`:                                  false,
+		`{"k":1,"\u212a":2}`:                                 false, // Kelvin sign folds to k
+		`{"a":{"env":1},"b":{"ENV":1}}`:                      true,
+		`{"a":1e400}`:                                        true,
+		`{"a":123456789012345678901234567890}`:               true,
 	} {
 		if err := checkConfig(config); (err == nil) != ok {
 			t.Errorf("checkConfig(%.20q) = %v, want ok %v", config, err, ok)
@@ -527,6 +532,77 @@ func TestPostboxNullStateEntryFailsSafe(t *testing.T) {
 		f.control("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, nil)
 		if err := f.p.cycle(context.Background()); err == nil || len(f.ctr.stopCalls) != 0 {
 			t.Fatalf("%s: err %v, stops %v: want the postbox held", field, err, f.ctr.stopCalls)
+		}
+	}
+}
+
+// Every crash point of a removal: restarting from each state write either
+// finishes the removal and reports it applied, or (crash after the claim,
+// before the commit) reports the entry failed against the app. The old
+// deployment never comes back.
+func TestPostboxRemovalCrashPoints(t *testing.T) {
+	for _, kind := range []string{"unassign", "terminal", "absent"} {
+		for k := 0; ; k++ {
+			f := newPBFixture(t)
+			dep := uuid.NewString()
+			first := f.assignment(dep, "web", 1)
+			f.statement(assignNew, dep, first, 0)
+			f.cycle()
+			f.p.waitPulls()
+			var writes [][]byte
+			write := f.p.write
+			f.p.write = func(dir, name string, data []byte) error {
+				writes = append(writes, slices.Clone(data))
+				return write(dir, name, data)
+			}
+			switch kind {
+			case "unassign":
+				f.statement(unassignNew, dep, nil, 2)
+			case "terminal":
+				f.statement(unassignNew, dep, nil, maxRevision)
+			case "absent":
+				a := f.assignment(dep, "web", 2)
+				a.DesiredState = cloudpbv2.Running_ABSENT
+				f.statement(assignNew, dep, a, 0)
+			}
+			f.cycle()
+			f.p.waitPulls()
+			if k >= len(writes) {
+				break
+			}
+			f.p.write = write
+			var snap postboxState
+			if err := json.Unmarshal(writes[k], &snap); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(f.dir, postboxStateFile), writes[k], 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f.p.mu.Lock()
+			f.p.state = nil
+			f.p.mu.Unlock()
+			f.cycle()
+			f.p.waitPulls()
+			o := f.outcome("web")
+			removed := len(f.p.snapshot().Removals) == 0 && o.EntryID == 2 && o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED &&
+				(kind == "absent" || f.held(dep) == nil && f.mark(dep).Removed)
+			// Only a crash before the removal reached the disk may lose it.
+			onDisk := snap.Marks[dep] != nil && snap.Marks[dep].Revision != 1
+			interrupted := !onDisk && snap.Pending != nil &&
+				o.EntryID == 2 && o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED
+			if !removed && !interrupted {
+				t.Fatalf("%s, crash after write %d (pending %+v): outcome %+v, held %+v, mark %+v, removals %v",
+					kind, k, snap.Pending, o, f.held(dep), f.mark(dep), f.p.snapshot().Removals)
+			}
+			// The old statement never comes back.
+			again := proto.Clone(first).(*cloudpbv2.DeviceAssignment)
+			again.ExpiresAt = timestamppb.New(f.now.Add(2 * time.Hour))
+			f.statement(assignNew, dep, again, 0)
+			f.cycle()
+			f.p.waitPulls()
+			if h := f.held(dep); removed && h != nil && h.DesiredState != cloudpbv2.Running_ABSENT.String() {
+				t.Fatalf("%s, crash after write %d: the removed deployment came back", kind, k)
+			}
 		}
 	}
 }

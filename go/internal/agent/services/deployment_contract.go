@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"google.golang.org/protobuf/proto"
 
@@ -69,6 +70,7 @@ func checkConfig(config string) error {
 		return fmt.Errorf("the configuration is %d bytes, over the %d byte limit", len(config), maxConfigSize)
 	}
 	dec := json.NewDecoder(strings.NewReader(config))
+	dec.UseNumber() // a number's text is kept: 1e400 is valid JSON
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return errors.New("the configuration is not a JSON object")
 	}
@@ -83,7 +85,9 @@ func checkConfig(config string) error {
 
 // checkJSONObject reads the rest of an object whose '{' was read, refusing a
 // key that appears twice in it or in any object nested inside it: which of
-// two values counts would depend on the parser.
+// two values counts would depend on the parser. Keys equal ignoring case
+// count as the same key, because Go's JSON decoder (the start step's) matches
+// field names without regard to case, so the last of them would win.
 func checkJSONObject(dec *json.Decoder) error {
 	seen := map[string]bool{}
 	for dec.More() {
@@ -92,16 +96,29 @@ func checkJSONObject(dec *json.Decoder) error {
 			return err
 		}
 		key, _ := tok.(string)
-		if seen[key] {
+		folded := foldKey(key)
+		if seen[folded] {
 			return fmt.Errorf("key %q appears twice", key)
 		}
-		seen[key] = true
+		seen[folded] = true
 		if err := checkJSONValue(dec); err != nil {
 			return err
 		}
 	}
 	_, err := dec.Token() // '}'
 	return err
+}
+
+// foldKey maps every rune to the smallest rune of its case-fold orbit, so
+// foldKey(a) == foldKey(b) exactly when strings.EqualFold(a, b).
+func foldKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
+		}
+		return least
+	}, s)
 }
 
 func checkJSONValue(dec *json.Decoder) error {
@@ -272,6 +289,7 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 		if absent {
 			queueRemoval(st, app)
 		}
+		markCommitted(st, entryID)
 	}); err != nil {
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "save", err
 	}
@@ -307,6 +325,16 @@ func pullSucceeded(o cloudpbv2.ApplyOutcome) bool {
 	return false
 }
 
+// markCommitted records that entryID's change is on disk, so an interrupted
+// entry is finished on restart instead of reported failed.
+func markCommitted(st *postboxState, entryID int64) {
+	if st.Pending != nil && st.Pending.EntryID == entryID {
+		pend := *st.Pending
+		pend.Committed = true
+		st.Pending = &pend
+	}
+}
+
 // queueRemoval records app for release removal; removeReleases clears it once
 // done, and every cycle retries it until then.
 func queueRemoval(st *postboxState, app string) {
@@ -320,7 +348,7 @@ func queueRemoval(st *postboxState, app string) {
 // the app is queued for removal. Then its pull stops (so nothing it imports
 // outlives the deployment) and the app's releases go; after a crash the
 // queued removal is retried. A duplicate removal is consumed without effect.
-func (p *Postbox) applyUnassign(ctx context.Context, r *cloudpbv2.UnassignDeviceRequest) (string, cloudpbv2.ApplyOutcome, string, error) {
+func (p *Postbox) applyUnassign(ctx context.Context, entryID int64, r *cloudpbv2.UnassignDeviceRequest) (string, cloudpbv2.ApplyOutcome, string, error) {
 	dep := r.GetDeploymentId()
 	p.mu.Lock()
 	duplicate, err := unassignOrder(p.state, r)
@@ -344,6 +372,7 @@ func (p *Postbox) applyUnassign(ctx context.Context, r *cloudpbv2.UnassignDevice
 		if app != "" {
 			queueRemoval(st, app)
 		}
+		markCommitted(st, entryID)
 	}); err != nil {
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "save", err
 	}
