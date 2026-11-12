@@ -443,140 +443,294 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2639",
       "title": "ci: skip AI analysis on green E2E runs",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Workflow-shape, report and shell tests exist. Some run in E2E/review-specific workflows, so their execution is conditional.",
       "required_follow_up": "Ensure the workflow-contract tests run on every relevant workflow change, including cancellation and dependency failure.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/swift_e2e_gate_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2637",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2637",
       "title": "ci: preserve main Swift E2E runs across pushes",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "The workflow changes cancellation policy, but no overlapping-push test demonstrates that a main E2E run survives while stale PR runs cancel.",
       "required_follow_up": "Add a workflow-contract test for the event/ref-dependent concurrency policy.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/ci_execution_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2660",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2660",
       "title": "ci: review source material instead of generated protocol output",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Python tests cover oversized/generated diff handling and source filtering. API/docs review execution is opt-in and differs from the always-on Go job.",
       "required_follow_up": "Run the review helper test suites independently of opting into an AI review.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_workflow_test.py",
+            ".github/scripts/review_sources_test.py",
+            ".github/scripts/security_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2313",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2313",
       "title": "fix(ci): preserve large API histories and bound reconciliation repair",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Python tests cover large histories, bounded repair and preservation of accepted decisions. They run through review-specific workflows rather than a general helper-test gate.",
       "required_follow_up": "Run the helper suites on every .github/scripts change, independent of the review label.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_comment_test.py",
+            ".github/scripts/api_review_run_test.py",
+            ".github/scripts/api_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2260",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2260",
       "title": "Fix API and security review batching for oversized file patches",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Tests cover oversized patches, original-line evidence, malformed fragments and hard limits. Their execution remains tied to review workflows.",
       "required_follow_up": "Move the pure Python regression suites into an unconditional script-test job.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_comment_test.py",
+            ".github/scripts/api_review_test.py",
+            ".github/scripts/review_diff_test.py",
+            ".github/scripts/security_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2216",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2216",
       "title": "fix(ci): use current trusted main for API automation",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Tests prove automation selects trusted current main and refuses invalid refs. Execution is conditional on the API review workflow.",
       "required_follow_up": "Run the workflow-contract tests without requiring the API review opt-in label.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_workflow_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2215",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2215",
       "title": "Require re-review for competing API predecessor claims",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Tests explicitly reject competing predecessor claims and preserve unrelated acceptance. Execution remains conditional on API-review automation.",
       "required_follow_up": "Run these deterministic state tests independently of the review label.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_comment_test.py",
+            ".github/scripts/api_review_run_test.py",
+            ".github/scripts/api_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2213",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2213",
       "title": "Repair stateful API review request compatibility",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Full-run and schema tests cover request compatibility and accepted-decision persistence. The tests are not a universal PR gate.",
       "required_follow_up": "Execute the helper suites for every automation-source change.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_comment_test.py",
+            ".github/scripts/api_review_run_test.py",
+            ".github/scripts/api_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2212",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2212",
       "title": "Restore API review without decision reconciliation",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "A regression prevents mixed-revision pages from reviving stale acceptance. The earlier reconciliation implementation has been changed again since this repair.",
       "required_follow_up": "Keep the current mixed-revision fixture and run it independently of review invocation.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_comment_test.py",
+            ".github/scripts/api_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2203",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2203",
       "title": "Preserve accepted API decisions across review passes",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Tests cover stable acceptance, material changes, withdrawn decisions and human edits. API review is opt-in, so existing tests alone do not assure every code change runs them.",
       "required_follow_up": "Make the pure state-transition test suite an ordinary CI check.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_comment_test.py",
+            ".github/scripts/api_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2183",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2183",
       "title": "Make API decisions easier to scan",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Formatting tests protect fence length, source excerpts and rollout compatibility. The API-helper suites are not a universal PR check.",
       "required_follow_up": "Execute the formatting/schema fixtures on every helper change.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_comment_test.py",
+            ".github/scripts/api_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "1978",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1978",
       "title": "fix(ci): enforce API review response schema",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Schema tests reject malformed locations and refusals even when JSON shape is valid. They execute through API review automation.",
       "required_follow_up": "Run the response-validation unit suite on every helper change.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "1824",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1824",
       "title": "ci: require review for API surface changes",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "API surface snapshot tests cover CLI discovery. They do not test the runner dependency installation that failed.",
       "required_follow_up": "Add a clean-runner smoke command that builds and runs the API detector.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/api-snapshot-smoke.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711899",
+          "runner": "Linux CI",
+          "result": "Actual API detector built, discovered 282 commands, and rated removal of install high risk."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "1727",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1727",
       "title": "Make WendyOS AI security review demonstrably sensitive and fail closed",
       "package": "01",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Extensive tests cover complete diffs, size limits, invalid evidence and fail-closed output. Security automation tests are workflow-driven and this audit did not evaluate model review quality.",
       "required_follow_up": "Run the deterministic helper tests for every script change and preserve the sensitivity fixtures.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/security_review_test.py"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "runner": "Linux CI",
+          "result": "278 offline tests passed without skips on an ordinary draft PR with no review labels. Required aggregate checks the automation job result."
+        }
+      ],
+      "resolution": "The regression runs independently of review invocation in required CI."
     },
     {
       "key": "2248",
@@ -2490,30 +2644,72 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2799",
       "title": "ci: reject shared contract pins outside service-protos master",
       "package": "18",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "CI checks pin ancestry and regenerated output. The authoritative ancestry script is downloaded from service-protos, whose implementation and tests are outside this checkout.",
       "required_follow_up": "Add fixtures for an off-master pin, unavailable policy source and generated drift; verify the external policy tests separately.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/shared_contracts_test.py",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "result": "Actual shell entry points tested with source download failure, rejected pin, invalid aliases/exceptions, failed export/compilation, and generated drift. Committed file hashes remain unchanged on failure."
+        },
+        {
+          "test": ".github/workflows/go-tests.yml:shared-grpc-api-contracts",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711219",
+          "result": "Real pinned source policy, generators and generated output checks passed."
+        },
+        {
+          "test": "https://github.com/wendylabsinc/service-protos/blob/e6a7e1d26fa04d915d2fdbef2a283a4995b8185d/tools/test-check-pin.sh",
+          "command": "bash tools/test-check-pin.sh",
+          "runner": "local macOS",
+          "result": "20 upstream tests passed: actual merged/off-master graphs, misleading shallow caller, environment isolation, invalid/unknown pins, unavailable source, infrastructure failures and cleanup. Upstream buf workflow runs this suite on PRs/master pushes."
+        }
+      ],
+      "resolution": "Source/failure boundaries have negative fixtures plus real generation checks. Upstream ancestry policy separately inspected and tested."
     },
     {
       "key": "2768",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2768",
       "title": "build: use shared Cloud contracts and guard the full catalogue",
       "package": "18",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Full catalogue validation is now an executable CI check, but the PR adds no negative fixture for omitted Cloud v1 aliases.",
       "required_follow_up": "Test an intentionally missing/extra alias and require validation to fail.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/shared_contracts_test.py",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "result": "Actual shell entry points tested with source download failure, rejected pin, invalid aliases/exceptions, failed export/compilation, and generated drift. Committed file hashes remain unchanged on failure."
+        },
+        {
+          "test": ".github/workflows/go-tests.yml:shared-grpc-api-contracts",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711219",
+          "result": "Real pinned source policy, generators and generated output checks passed."
+        }
+      ],
+      "resolution": "Source/failure boundaries have negative fixtures plus real generation checks. Upstream ancestry policy separately inspected and tested."
     },
     {
       "key": "2716",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2716",
       "title": "build: generate Agent and System APIs from the shared pin",
       "package": "18",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Go and Swift wire tests protect moved messages, and CI checks generated contracts. Fetching the pinned HTTPS source itself lacks a dedicated failure/reproducibility fixture.",
       "required_follow_up": "Test unavailable or mismatched contract sources and verify generation fails without mutating committed output.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/shared_contracts_test.py",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711782",
+          "result": "Actual shell entry points tested with source download failure, rejected pin, invalid aliases/exceptions, failed export/compilation, and generated drift. Committed file hashes remain unchanged on failure."
+        },
+        {
+          "test": ".github/workflows/go-tests.yml:shared-grpc-api-contracts",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43207922551/job/131147711219",
+          "result": "Real pinned source policy, generators and generated output checks passed."
+        }
+      ],
+      "resolution": "Source/failure boundaries have negative fixtures plus real generation checks. Upstream ancestry policy separately inspected and tested."
     },
     {
       "key": "2803",
@@ -2536,32 +2732,38 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2781",
       "title": "fix(dependabot): ignore incompatible Pillow updates for Go2 and G1",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "The Dependabot ignore rule reduces recurrence of the Pillow mismatch, but it does not test runtime compatibility.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": ".github/scripts/test-simulator-dependencies.py",
+          "job": "simulator-python310",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Both shipped requirement sets install on Python 3.10 and pass pip check, MuJoCo stepping, ONNX CPU load, JPEG round trip and YAML parsing."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     },
     {
       "key": "2756",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2756",
       "title": "fix(simulator): restore Pillow 12.3.0 for Go2 and G1 runtimes",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "The Python 3.10 incompatibility was fixed by pinning Pillow 12.3.0. No test found installs both simulator requirement sets under their supported Python 3.10 runtime.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": ".github/scripts/test-simulator-dependencies.py",
+          "job": "simulator-python310",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Both Go2 and G1 shipped requirement sets pass actual Python 3.10 installation and native dependency smoke tests."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     },
     {
       "key": "2703",
@@ -2584,32 +2786,38 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2724",
       "title": "Center the macOS device landing page empty state",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "The empty-state centering change has a screenshot but no automated layout assertion.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": "go/macos/Tests/LayoutRegressionTests.swift",
+          "job": "native-app-regressions",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Actual ContentView frames remain centered in both axes at two window sizes. Historical pre-fix layout fails the local mutation check."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     },
     {
       "key": "2702",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2702",
       "title": "Fix macOS and iOS native app builds",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "These are Go archive and Swift compilation fixes for go/macos. Existing Swift CI builds the separate swift/ agent tree; no go/macos app build was found in the workflows.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": ".github/scripts/test-native-app.sh",
+          "job": "native-app-regressions",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Both native targets compile Go archives and Swift code, then pass macOS/iOS suites without unexpected skips."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     },
     {
       "key": "2573",
@@ -2648,16 +2856,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2613",
       "title": "Fix silent corruption when fast-flashing an NVMe drive on Windows",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "A real Windows synchronous-handle regression compares every mapped block after concurrent writes. The portable writer contract is also tested. The native Windows CI command filters omit TestHandleWriterAtConcurrentWrites.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": "go/internal/cli/commands:TestHandleWriterAtConcurrentWrites",
+          "job": "windows-telemetry",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Real Windows handle writer checks every mapped block after concurrent writes; CI requires three PASS records."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     },
     {
       "key": "2684",
@@ -2680,48 +2891,57 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2255",
       "title": "Extend VM serial passthrough to macOS and Linux hosts",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "Serial persistence and bridge tests exist, but native Windows CI does not select serial lifetime/cancellation tests for the OVERLAPPED correction.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": "go/internal/cli/vm:TestWindowsSerialPendingIO,TestWindowsSerialCloseCancelsPendingIO",
+          "job": "windows-telemetry",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Real Windows named-pipe pending I/O with GC and cancellation/close races each pass three times. Skips cannot satisfy the job."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     },
     {
       "key": "2169",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2169",
       "title": "Fix main CI failures and GStreamer shutdown races",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "A real GStreamer cancellation regression exists, but it skips when the library cannot load. The ordinary Go dependency installation does not install GStreamer.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": "go/internal/agent/services:TestGStreamerInProcessRunner,TestGStreamerInProcessRunner_Cancellation",
+          "job": "gstreamer-regressions",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Installed GStreamer elements produce actual output and terminate on cancellation under the race detector. Both PASS records required."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     },
     {
       "key": "2142",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2142",
       "title": "fix(agent): remove v4l2loopback nodes by passing the node number by value",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "verified",
       "audit_finding": "TestLoopbackNodeRemoveDeletesTheNode checks the actual ioctl, but skips unless root and a v4l2loopback control device are available. The ordinary Go job supplies neither, and the host fixture checks support rather than this deletion test.",
       "required_follow_up": "Candidate for closure after PR merge and successful required execution; verify exact assertions and CI path selection.",
       "evidence": [
         {
-          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
+          "test": "go/internal/agent/ipcam:TestLoopbackNodeRemoveDeletesTheNode",
+          "job": "camera-node-regression",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
-          "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+          "result": "Real v4l2loopback 0.15.4 kernel module loaded; privileged ioctl node removal test passes without skipping."
         }
-      ]
+      ],
+      "resolution": "Required native CI passed. The stack contains verified coverage for the audited gap; PR merge remains pending."
     }
   ]
 }
