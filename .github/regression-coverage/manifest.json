@@ -1302,19 +1302,27 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2676",
       "title": "Use spare mesh slots for faster paths and standby carriers",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Carrier-selection and broker lifecycle tests cover capacity and fallback. Cold-start diagnostics are present in a broad mesh change; live route replacement across native clients is not established.",
-      "required_follow_up": "Test bounded broker failure reasons and a cold-start/recovery journey while changing the preferred carrier.",
-      "evidence": []
+      "required_follow_up": "Require the cold broker and spare carrier gate in the existing Linux network job. Real TLS/gVisor TCP and management RPC behavior is covered; kernel-TUN, radio and GUI journeys are not claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/operator_spare_recovery_test.go",
+            ".github/scripts/test-operator-spare-recovery.sh"
+          ],
+          "result": "A cold TLS EOF leaves no admissions or RPCs and records a bounded private diagnostic. Production stop/re-enable advances its durable generation, then the same TCP connection survives slow-to-fast carrier selection and fallback through retained standby; management RPCs work in every phase. Local race and isolated capability-free Linux execution pass; missing-diagnostic and eager-standby-retirement controls fail. Required hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "2675",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2675",
       "title": "Use persisted clock trust and monotonic mesh announcement lifetimes",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Clock/announcement tests cover monotonic lifetimes, recovery and persisted trust; this broad change also touches several transport and route state machines.",
-      "required_follow_up": "Require the two-node packet/runtime restart gate and wall-clock scheduling control in Linux CI. The full production receiver lease advances through existing injectable clocks; actual OS suspend, radio and kernel-TUN execution are not claimed.",
+      "required_follow_up": "Retain the required existing CI gate and its regression controls.",
       "evidence": [
         {
           "tests": [
@@ -1323,6 +1331,11 @@
             ".github/scripts/test-clock-packet-restart.sh"
           ],
           "result": "Two real TLS/Babel/gVisor nodes preserve bidirectional TCP across forward/backward certificate-wall jumps, expire the unchanged 15-minute receiver lease while transport remains connected, then stop/join and reconstruct from persisted clock/certificate/origin files to recover traffic. Two local race runs and an isolated capability-free Linux run pass; UTC-coupled scheduling control fails the actual TCP assertion. Hosted required gate remains pending."
+        },
+        {
+          "head": "80881935847ad1aa99398ea3c41223abfc705456",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315968691/job/131523940942",
+          "result": "Required Linux network job passed. Two full runtime tests preserved bidirectional TCP across forward/backward wall changes, expired the unchanged 15-minute receiver lease while the carrier remained live, and recovered traffic after reconstructing both nodes from persisted clock/certificate/origin files. The UTC-coupled scheduling control failed specifically on live TCP after the wall-clock jump."
         }
       ]
     },
@@ -2326,7 +2339,7 @@
       "package": "08",
       "status": "coverage_added_pending_ci",
       "audit_finding": "Protocol and host-module checks exist. The host-sensor support fixture is hardware-gated, and module presence alone does not verify video/audio delivery.",
-      "required_follow_up": "Provide supported kernel sound modules in the existing Linux media job, then execute authenticated Lite microphone and camera normal/negative controls and verify exact sample/pixel delivery and owned cleanup.",
+      "required_follow_up": "Execute the authenticated microphone normal/negative controls with the corrected private PipeWire runtime. Camera kernel delivery and its controls have passed; full audio sample delivery remains pending.",
       "evidence": [
         {
           "tests": [
@@ -2350,6 +2363,11 @@
             ".github/scripts/test-sensorlink-audio-loopback.sh"
           ],
           "result": "Adds actual mTLS/WendyCom Audio descriptor, subscription and changing PCM through production Supervisor, real audioloop Manager/aplay and arecord. Asserts fresh exact PCM, identity/channel, one authenticated connection, cancellation/release and exclusive device reopen. Native transport race checks pass and Linux normal plus three regression controls compile. No hosted PCM execution yet: PR2875 Azure kernel lacks sound modules."
+        },
+        {
+          "head": "4c898e0aacce6961d449dcfade759966dc1ed034",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315180056/job/131521484536",
+          "result": "The actual authenticated Lite camera normal test and both kernel-pixel/setup-budget controls passed. Audio did not execute: the private daemon UID could not traverse RUNNER_TEMP. The isolated runtime-directory correction is now in PR2875; microphone and full dual-media proof remain pending."
         }
       ]
     },
@@ -2415,10 +2433,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1858",
       "title": "Remote sensor mounting: pair a device's camera & mic (macOS source)",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "SensorLink/audio tests cover reconnect and source resolution, plus simulator fixtures. Complete camera/microphone delivery after source-address change is hardware-gated.",
-      "required_follow_up": "Run a source restart/address-change scenario and verify both streams resume with the same identity.",
-      "evidence": []
+      "required_follow_up": "Require the authenticated source address-change gate while both owned media modules remain loaded in the existing Linux media job. Verify exact camera pixels and microphone samples before and after reconnection with stable principal/channel identities. Physical macOS capture drivers and multicast discovery are not claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/mcusource/source_restart_fixture_test.go",
+            "go/internal/agent/mcusource/source_restart_loopback_linux_test.go",
+            ".github/scripts/test-source-restart-loopback.sh"
+          ],
+          "result": "Actual mTLS/WendyCom camera and microphone protocol fixture passes native race and isolated Linux execution. Hosted gate uses production RunPairing with a resolver changing source IP, actual v4l2loopback decoding and ALSA capture in both phases. Normal and stale-address control compile; actual combined kernel run remains pending."
+        }
+      ]
     },
     {
       "key": "1831",
@@ -2867,9 +2894,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2251",
       "title": "Protect stable releases and run integration tests only for releases",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Workflow conditions protect stable releases and limit hardware jobs. Later release-priority tests cover scheduling, but publication/tag protection is not fully exercised.",
-      "required_follow_up": "Require current-source release policy tests and immutable-tag regressions in the existing offline CI job. Original fix af463f100 protected queued stable jobs from cancellation and limited hardware entry points; it did not implement a new tag-overwrite mechanism.",
+      "required_follow_up": "Retain the required existing CI gate and its regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2878,6 +2905,11 @@
             ".github/scripts/release_provenance_test.py"
           ],
           "result": "Four policy tests execute actual workflow expressions and the real version-classification shell across 32 event/ref/publish/skip combinations; restored shared-group, cancellation and push-hardware policies are rejected. Seven real Git reference/provenance fixture tests pass, including existing mismatched lightweight/annotated tags and concurrent creators. No release dispatch/publication or hardware job was performed. Hosted gate remains pending."
+        },
+        {
+          "head": "80881935847ad1aa99398ea3c41223abfc705456",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43315968691/job/131523941170",
+          "result": "All four release-policy cases passed in the required 393-test offline job. Actual workflow expressions and version shell step cover 32 typed event/ref/publish/skip combinations; original stable-run cancellation, shared group and hardware-on-push mutations are rejected. Existing Git tag immutability controls also passed."
         }
       ]
     },
@@ -2958,10 +2990,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2127",
       "title": "fix(ci): repair Fumadocs audit and runtime guest Go setup",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The fixes touch the docs dependency audit and guest Go setup. The recurring build/scan checks exist, but no isolated guest bootstrap regression was found.",
-      "required_follow_up": "Build the runtime guest from a clean environment and assert its toolchain and dependency audit pass.",
-      "evidence": []
+      "required_follow_up": "Require clean native runtime-guest build, kernel/initramfs inspection and included-tool execution in the existing Linux install job and native arm64 release job; retain Fumadocs npm ci and dependency audit. VM boot, VZ and vsock traffic are separate gaps.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-runtime-guest-bootstrap.py",
+            ".github/scripts/runtime_guest_bootstrap_test.py",
+            "swift/WendyAgentMac/RuntimeGuest/README.md"
+          ],
+          "result": "Actual clean arm64 bootstrap passed with isolated empty Go caches, unchanged build.sh, root module files selected by setup-go and an existing ordinary Docker builder. Kernel 6.12.117-0-virt matched 904 module files; proxy metadata matched Linux/arm64 CGO0. BuildKit/containerd/nerdctl/runc and proxy argument rejection executed from produced initramfs in read-only network-free containers. Seven offline controls pass, including original nested module paths. Native amd64 required CI remains pending; no VM boot or hardware proof."
+        }
+      ]
     },
     {
       "key": "2406",
