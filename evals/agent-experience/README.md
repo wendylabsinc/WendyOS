@@ -240,22 +240,21 @@ A task or scenario carries an `expect` block with `right` and `wrong` matchers
 | --- | --- |
 | `wrong` | A `wrong` matcher hit |
 | `right` | A `right` matcher hit and no `wrong` matcher did |
-| `asked` | `expect.ask` is true, the agent finished, and one question satisfies every scenario-specific `ask_regex` criterion |
+| `asked` | `expect.ask` is true, the agent finished its turn, and its final text contains `?` |
 | `missed` | None of the above |
 
 Precedence is wrong, then right, then asked, then missed. `asked` happens only when
 `expect.ask` is true. An ask scenario may list `right` paths too; then doing the job
-and asking first both pass. A right matcher identifies the action. An optional `sequence` requires ordered steps, each listing alternative MCP or CLI matchers. A step needs its own call, and a known failed call cannot satisfy a right matcher. The catalog requires observed results with `require_result: true`; uncaptured canned fallbacks cannot pass. Explicit device selectors must match the requested target.
-
-Wendy chat starts with every tool group enabled and never calls `wendy_tools`, so a
-`wendy_tools` step should not be required for every client. Instead, a `missed` scenario attempt by
+and asking first both pass. A right path is a single call, not a sequence: Wendy
+chat starts with every tool group enabled and never calls `wendy_tools`, so a
+`wendy_tools` step can't be required. Instead, a `missed` scenario attempt by
 Claude or Codex sets `hidden_group` when the scenario's group isn't `core` and no
 `wendy_tools` call enabled that group or `all`. Wendy chat never sets it, since it
 has every group from the start. Help lookups (`--help` and `-h`) are never graded.
 A `cli` matcher compares whole words from the start of the subcommand path, either
 as written up to the first flag or with flags skipped, so `wendy vm --yes create`
-matches `vm create`. End-to-end success still requires its independent verifier; the tool-choice
-outcome is reported separately. These rules check actions and evidence, not the semantic correctness of the final prose.
+matches `vm create`. End-to-end success rules are unchanged; the tool-choice
+outcome is reported next to them.
 
 ```sh
 python3 evals/agent-experience/benchmark.py --rescore results/<experiment>
@@ -507,8 +506,8 @@ wendy device attach sh.wendy.evals.model-tool-report -- cat /results/last-error.
 
 Stop and resume: `wendy device apps stop sh.wendy.evals.model-tool-report` gives the
 GPU back. Starting it again, or a reboot, resumes a pass that was halted or cut off.
-A pass whose `pass.json` says `finished` is not rerun. A new model, CLI commit, context/server configuration, server binary, or `EVAL_PASS`
-starts a new pass directory under `/results`. Existing passes keep their original evidence.
+A pass whose `pass.json` says `finished` is not rerun. A new model, a new CLI commit
+or a new `EVAL_PASS` starts a new pass directory under `/results`.
 
 Switch models by redeploying with `--env EVAL_MODEL=<key>`, a key in `models.json`
 (`qwen3.8-flash-next` or `qwen3-coder-30b-a3b`), for example
@@ -520,74 +519,7 @@ container is root with the admin socket, so a model can bypass the shim and prox
 they record and fake normal calls but are not a safety boundary here. The results
 describe how a local model copes with Wendy, not how Claude Code or Codex would.
 
-## Inference identity and token diagnostics
-
-Local runs save `inference-identity.json` with the model repository/revision,
-quantization and weight hashes, context size, server binary hash and arguments,
-chat-template hash, generation defaults, CPU/GPU/memory information and driver
-version. Unavailable identity fields stay explicit. A comparison with changed or
-incomplete local identity cannot pass. Model-to-model experiments should use the
-same Wendy agent and harness; use `--allow-mismatch` for the descriptive report.
-
-A loopback observer forwards actual model requests to llama-server unchanged and
-writes `inference-requests.jsonl`. It records provider usage, server-reported
-prompt/decode rates when supplied, time to first output, total request duration,
-and message/tool-schema byte sizes. It stores no prompt or completion text.
-Partial streams remain incomplete; missing server timings remain unknown.
-Requests are attached to attempts by their agent-process time window. The report
-shows timing sample coverage and median speeds during attempts separately from
-the baseline generation. The observer adds HTTP forwarding overhead to measured
-wall time, so compare runs with the same observer enabled.
-
-Every run also writes `token-diagnostics.json` and `token-diagnostics.md`. Provider
-counts preserve their available scope: request for Wendy, turn for Codex, session
-for Claude. Wendy delegated usage retains its agent ID. Tool diagnostics show
-observed result bytes, repeated calls, retries after an observed error, and missing
-results. The optional size estimate is UTF-8 bytes divided by four, not a tokenizer
-or billing measurement. It does not attribute repeated context, cache effects,
-images or tool schemas to individual tools. Repeated calls can be legitimate
-polling. `inference-summary.json` retains coverage for measured local request speeds.
-
-## Automated suites
-
-`agent-evals.yml` runs the harness tests on Linux and macOS for relevant PRs.
-These tests use fake agents and local HTTP fixtures; they spend no model tokens
-and make no device changes.
-
-`suites.json` versions a small live `smoke` suite covering discovery, validation,
-simulator creation, deployment and repair, plus a broader `nightly` suite. Preview:
-
-```sh
-python3 evals/agent-experience/run_suite.py --suite smoke \
-  --config /path/to/lab.json --wendy /path/to/wendy \
-  --treatment /path/to/checkout --output results/smoke
-```
-
-Add `--execute` to run models and devices. The lab configuration supplies the
-agents, targets, credentials through existing logins, and budget. Missing lab
-fixtures or captures remain uncovered and prevent a passing comparison.
-
-The workflow's daily live job is disabled until `WENDY_EVAL_LAB_ENABLED=true`.
-Provision a dedicated account passing the scenario preflight on a self-hosted
-runner labelled `wendy-evals`, with Python 3.12, Go, Docker/buildx, cached VM images,
-a compatible ARM64 agent, configured model clients and disposable targets. Create
-the `agent-evals` GitHub environment and set `WENDY_EVAL_CONFIG` to an absolute lab
-configuration path outside the checkout. Config files must contain no API keys.
-Set `WENDY_EVAL_BASELINE_REF` to an approved immutable baseline commit. The default
-is `main~1`; manual runs can select a baseline revision and suite.
-
-The job builds both treatments and runs them with the same candidate harness,
-then compares them. Each side has the configuration's own budget, so the maximum
-reserved experiment spend is twice that budget. Repetitions default to 40 per
-side in CI and can be set through `WENDY_EVAL_REPETITIONS`; exhausting the budget
-leaves coverage incomplete. Runs serialize access to the lab and retain manifests,
-transcripts and verifier results for 14 days. Live jobs never run on PR events.
-Only approved baseline code should run on this credentialed lab account.
-
 ## Comparing a branch
-
-See the [sample comparison](examples/comparison.md) and [report screenshot](examples/comparison.png).
-They use synthetic data to show pass, regression and insufficient-evidence results.
 
 Compare a candidate branch against `main` with the same agents, models and
 scenarios. The baseline run's agents learn from main's skills and plugin, through a
@@ -614,12 +546,6 @@ and prints the table. A row is one kind, task, target and agent. A row is flagge
   attempt is good when its outcome is right or asked and it didn't end as
   `host_state_changed`, `interrupted`, `mcp_contaminated` or `mcp_unverified`, the
   same rule as a scenario's success.
-- `success_rate`: the lower bound of a 95% Newcombe interval for baseline minus
-  candidate success rate exceeds `--success-tolerance`, default 0.10 absolute.
-  This uses the recorded `success` boolean, independently of tool choice. At least
-  `--min-attempts` observations per side are required, default 10. Reports also
-  include each side's Wilson interval. Intervals apply per comparison, not to the
-  whole suite simultaneously.
 - `tokens` or `time`: the candidate median exceeds the baseline maximum by more
   than `--margin` (default 0.25), with at least two known values per side. Fewer is
   reported as insufficient. Unknown usage is counted, never zero.
@@ -628,16 +554,10 @@ A row present on one side only is marked and never flagged. When a run has a
 `rescored-*` directory, the latest one is read.
 
 Exit codes: 2 when the runs differ in non-treatment fields, 1 when any row is
-flagged, 3 for insufficient evidence, and 0 only for a supported pass. Missing
-coverage, unrun cases, unscored attempts, unknown success/usage/time, malformed
-results, and intervals that cannot exclude the allowed success-rate loss prevent
-a pass. Equal small samples are not evidence of equivalent reliability: ten
-successes on each side are still inconclusive with the default 10-point tolerance.
-Forty successes on each side can exclude that loss. `--allow-mismatch` permits
-an exploratory report but never a passing gate. The fields are the runner, harness, task and scenario hashes,
-the agent version, model, command/settings and context policy, the target kind and device,
-and the local inference identity when present. The harness hash
-(`harness_sha256`) covers every `*.py` here, `cli_safe.json`, `suites.json`, `models.json` and both capture trees. `--allow-mismatch` compares despite a mismatch.
+flagged, 0 otherwise. The fields are the runner, harness, task and scenario hashes,
+the agent version and model, and the target kind and device. The harness hash
+(`harness_sha256`) covers every `*.py` here, `cli_safe.json` and the `canned/`
+tree. `--allow-mismatch` compares despite a mismatch.
 
 `--confirm N` reruns each flagged row N times with the candidate's recorded
 invocation, then compares again. A flag is confirmed only when the rerun added
