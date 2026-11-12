@@ -2644,9 +2644,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1825",
       "title": "fix: identify macOS signer by fingerprint",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Signer selection uses a fingerprint. Release execution checks a real signature, but no ambiguous-name/multiple-certificate fixture was found for SetupSigningCI.sh.",
-      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain exact signer, isolated credentials and cleanup assertions in the required offline job; signing-script changes trigger it.",
       "evidence": [
         {
           "tests": [
@@ -2654,6 +2654,12 @@
             ".github/scripts/signing_ci_tools.py"
           ],
           "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "runner": "required Linux offline automation",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666212",
+          "result": "All 352 offline tests passed. Seven signing tests executed duplicate-name selection, isolated notary profiles, repeat runs, injected failures/cancellation and mutation controls without skipped test cases."
         }
       ]
     },
@@ -2662,9 +2668,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1791",
       "title": "fix: isolate CI notarization credentials",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Notarization credentials were isolated in CI scripts. No test was found proving one job cannot reuse another job's credential state.",
-      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain exact signer, isolated credentials and cleanup assertions in the required offline job; signing-script changes trigger it.",
       "evidence": [
         {
           "tests": [
@@ -2672,6 +2678,12 @@
             ".github/scripts/signing_ci_tools.py"
           ],
           "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "runner": "required Linux offline automation",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666212",
+          "result": "All 352 offline tests passed. Seven signing tests executed duplicate-name selection, isolated notary profiles, repeat runs, injected failures/cancellation and mutation controls without skipped test cases."
         }
       ]
     },
@@ -2680,9 +2692,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1789",
       "title": "fix: prepare self-hosted macOS release builds",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The self-hosted release build setup was repaired. Real builds exercise it, but no repeat-run/keychain-isolation fixture was found.",
-      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain exact signer, isolated credentials and cleanup assertions in the required offline job; signing-script changes trigger it.",
       "evidence": [
         {
           "tests": [
@@ -2690,6 +2702,12 @@
             ".github/scripts/signing_ci_tools.py"
           ],
           "result": "Seven offline tests execute actual SetupSigningCI.sh, Build.sh and workflow cleanup with recording native-tool substitutes. Duplicate signer names require exact fingerprints; overlapping job states isolate credentials; repeat setup and failures/SIGTERM at eleven setup stages plus signing/notarization preserve existing user keychains. Three negative controls reject name-based signing and unscoped notary credentials. Local tests pass; required offline CI is pending. No real keychains or credentials were used."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "runner": "required Linux offline automation",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666212",
+          "result": "All 352 offline tests passed. Seven signing tests executed duplicate-name selection, isolated notary profiles, repeat runs, injected failures/cancellation and mutation controls without skipped test cases."
         }
       ]
     },
