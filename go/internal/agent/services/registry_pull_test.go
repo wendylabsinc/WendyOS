@@ -245,6 +245,12 @@ func (r *importRecorder) RemoveReleases(_ context.Context, app string, keep []st
 	return r.removeErr
 }
 
+// RemoveReleaseImages is recorded as a removal of app "images".
+func (r *importRecorder) RemoveReleaseImages(context.Context) error {
+	r.removed = append(r.removed, removal{app: "images"})
+	return r.removeErr
+}
+
 func (r *importRecorder) ImportRelease(_ context.Context, img ReleaseImage) error {
 	r.imported = append(r.imported, img)
 	r.blobs = map[string][]byte{}

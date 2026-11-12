@@ -665,6 +665,7 @@ type crashingControl struct{}
 func (crashingControl) StartApp(context.Context, string) error      { panic("agent killed") }
 func (crashingControl) StopApp(context.Context, string) error       { panic("agent killed") }
 func (crashingControl) AppOf(_ context.Context, name string) string { return name }
+func (crashingControl) RemoveReleaseImages(context.Context) error   { panic("agent killed") }
 func (crashingControl) RemoveReleases(context.Context, string, []string) error {
 	panic("agent killed")
 }

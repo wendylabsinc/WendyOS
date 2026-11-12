@@ -102,6 +102,9 @@ type postboxControl interface {
 	// RemoveReleases deletes app's registry releases except the release ids
 	// in keep, and the containers running one; every app's when app is "".
 	RemoveReleases(ctx context.Context, app string, keep []string) error
+	// RemoveReleaseImages deletes every registry release image and collects
+	// its content, leaving containers alone.
+	RemoveReleaseImages(ctx context.Context) error
 }
 
 // postboxState is everything that must survive a restart. It belongs to one
@@ -1350,6 +1353,17 @@ func (c containerControl) RemoveReleases(ctx context.Context, app string, keep [
 		}
 	}
 	return remover.DeleteReleaseImages(ctx, app, keep)
+}
+
+// RemoveReleaseImages deletes every release image without touching a
+// container: the reset uses it while the net shutdown has not drained, since
+// deleting an app tears down its container networking.
+func (c containerControl) RemoveReleaseImages(ctx context.Context) error {
+	remover, ok := c.svc.containerd.(releaseRemover)
+	if !ok {
+		return nil
+	}
+	return remover.DeleteReleaseImages(ctx, "", nil)
 }
 
 // ImportRelease imports through the containerd client when it can.

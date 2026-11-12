@@ -402,13 +402,17 @@ func (p *Postbox) removeReleases(ctx context.Context, app string) error {
 }
 
 // RemoveAllReleases stops every pull and removes every registry release and
-// the containers running one: the reset path.
-func (p *Postbox) RemoveAllReleases(ctx context.Context) error {
+// the containers running one: the reset path. imagesOnly leaves the
+// containers to a later run (the reset's restart recovery).
+func (p *Postbox) RemoveAllReleases(ctx context.Context, imagesOnly bool) error {
 	p.mu.Lock()
 	deps := slices.Collect(maps.Keys(p.pulls))
 	p.mu.Unlock()
 	for _, dep := range deps {
 		p.stopPull(dep)
+	}
+	if imagesOnly {
+		return p.control.RemoveReleaseImages(ctx)
 	}
 	return p.control.RemoveReleases(ctx, "", nil)
 }

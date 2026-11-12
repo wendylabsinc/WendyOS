@@ -346,8 +346,12 @@ func main() {
 	containerSvc := services.NewContainerService(logger, containerdClient,
 		containerSvcOpts...,
 	)
-	removeAllReleases := func(ctx context.Context) error {
-		return services.NewPostboxControl(containerSvc).RemoveReleases(ctx, "", nil)
+	removeAllReleases := func(ctx context.Context, imagesOnly bool) error {
+		control := services.NewPostboxControl(containerSvc)
+		if imagesOnly {
+			return control.RemoveReleaseImages(ctx)
+		}
+		return control.RemoveReleases(ctx, "", nil)
 	}
 	shellSvc := services.NewShellService(logger, hostexec.New())
 	audioSvc := services.NewAudioService(logger)
@@ -430,10 +434,15 @@ func main() {
 		completed := len(resetStatus.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 || provisioningSvc.LocalResetCompleted()
 		// The recovery also removes every registry release: a reset whose
 		// removal failed is confirmed only once they are gone.
-		releaseCleanup := resetReleaseCleanup(runtime.GOOS, ctrdErr, nil, removeAllReleases)
+		// Without containerd it gives up after a few tries and exits: the
+		// service manager restarts the agent, which connects again.
+		releaseCleanup := resetReleaseCleanup(runtime.GOOS, ctrdErr, containerdAddr, nil, removeAllReleases, func(err error) {
+			logger.Error("Reset release removal cannot run without containerd; restarting the agent", zap.Error(err))
+			os.Exit(1)
+		})
 		recoverCompletedResetMesh(ctx, completed, 5*time.Second,
 			func(ctx context.Context) error {
-				return errors.Join(cleanupResetMesh(ctx), releaseCleanup(ctx))
+				return errors.Join(cleanupResetMesh(ctx), releaseCleanup(ctx, false))
 			}, provisioningSvc.SetResetCleanupError, func(err error) {
 				logger.Error("Reset net cleanup incomplete; completion and enrollment remain unavailable", zap.Error(err))
 			})
@@ -1626,12 +1635,15 @@ func main() {
 		defer cleanupCancel()
 		// No decrypted registry release outlives the enrollment it was for.
 		// It runs before the net check below returns; a failure keeps the
-		// reset unconfirmed and the restart recovery retries it.
+		// reset unconfirmed and the restart recovery retries it. While the
+		// net shutdown has not drained, only the release images go: deleting
+		// an app tears down its container networking. The recovery removes
+		// the rest.
 		var pb releaseResetter
 		if postbox != nil {
 			pb = postbox
 		}
-		releasesErr := resetReleaseCleanup(runtime.GOOS, ctrdErr, pb, removeAllReleases)(cleanupCtx)
+		releasesErr := resetReleaseCleanup(runtime.GOOS, ctrdErr, containerdAddr, pb, removeAllReleases, nil)(cleanupCtx, stopErr != nil)
 		if stopErr != nil {
 			// Do not reclaim kernel objects while an undrained worker may still
 			// use them. Reset stays unconfirmed; the scheduled restart retries.

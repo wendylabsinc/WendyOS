@@ -215,7 +215,7 @@ func TestPostboxResetRemovesEveryRelease(t *testing.T) {
 	}})
 	f.assignEntry(r.assign)
 	f.cycleWithin(5 * time.Second)
-	if err := f.p.RemoveAllReleases(context.Background()); err != nil {
+	if err := f.p.RemoveAllReleases(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	f.p.mu.Lock()
@@ -443,5 +443,25 @@ func TestPostboxPullRecordsOnlyForItsOwnEntry(t *testing.T) {
 	f.p.recordPullState(a, 1, "c1", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED)
 	if o := f.p.snapshot().Outcomes["web"]; o.Outcome != outcomePulling {
 		t.Fatalf("replaced entry state: %+v", o)
+	}
+}
+
+// While the net shutdown has not drained, reset removes only the release
+// images: deleting an app would tear down its container networking.
+func TestPostboxResetImagesOnlyLeavesTheApps(t *testing.T) {
+	f := newPBFixture(t)
+	rec := f.withArtifacts(&fakeArtifacts{r: f.release(t)})
+	if err := f.p.RemoveAllReleases(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(rec.removed, []removal{{app: "images"}}, removal.equal) {
+		t.Fatalf("removed %v: want only the release images", rec.removed)
+	}
+	m := &releaseRemoverMock{mockContainerdClient: &mockContainerdClient{resolvedIDs: map[string][]string{"web": {"web"}}}, apps: []string{"web"}}
+	if err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).RemoveReleaseImages(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"delete releases of "}; !slices.Equal(m.steps, want) {
+		t.Fatalf("steps %v, want %v", m.steps, want)
 	}
 }
