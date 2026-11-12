@@ -39,30 +39,64 @@ func TestOrinFullInstallSeedSim(t *testing.T) {
 	}
 	device := envOr("WENDY_ORIN_SEED_SIM_DEVICE", "jetson-orin-nano")
 	storage := envOr("WENDY_ORIN_SEED_SIM_STORAGE", "nvme")
-	runs, _ := strconv.Atoi(envOr("WENDY_ORIN_SEED_SIM_RUNS", "3"))
+	runs, err := strconv.Atoi(envOr("WENDY_ORIN_SEED_SIM_RUNS", "3"))
+	if err != nil || runs < 1 || runs > 3 {
+		t.Fatal("WENDY_ORIN_SEED_SIM_RUNS must be between 1 and 3")
+	}
 	diskBytes := int64(128) << 30
 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dm, ver, err := resolveDeviceArtifact(device, os.Getenv("WENDY_ORIN_SEED_SIM_VERSION"), os.Getenv("WENDY_ORIN_SEED_SIM_NIGHTLY") == "1", 0)
-	if err != nil {
-		t.Fatalf("resolving %s: %v", device, err)
-	}
-	info, err := getRecoveryFlashpackInfo(dm, device, ver, storage)
-	if err != nil {
-		t.Fatal(err)
+	var info *recoveryFlashpackInfo
+	var ver string
+	var agent *localInstallAgent
+	if fixture := os.Getenv("WENDY_ORIN_SEED_SIM_FIXTURE"); fixture != "" {
+		pinned, err := readOrinSeedFixture(fixture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		device, storage, ver = pinned.Device, pinned.Storage, pinned.Version
+		info = &recoveryFlashpackInfo{URL: pinned.URL, Checksum: pinned.SHA256, SizeBytes: pinned.SizeBytes,
+			Device: device, Storage: storage, Version: ver}
+		agent, err = readInstallAgent(os.Getenv("WENDY_ORIN_SEED_SIM_AGENT"))
+		if err != nil {
+			t.Fatalf("pinned rehearsal requires an explicit real arm64 Agent binary: %v", err)
+		}
+		if err := agent.checkArchitecture("arm64"); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		dm, resolved, err := resolveDeviceArtifact(device, os.Getenv("WENDY_ORIN_SEED_SIM_VERSION"), os.Getenv("WENDY_ORIN_SEED_SIM_NIGHTLY") == "1", 0)
+		if err != nil {
+			t.Fatalf("resolving %s: %v", device, err)
+		}
+		ver = resolved
+		info, err = getRecoveryFlashpackInfo(dm, device, ver, storage)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	cacheDir, err := osCacheDir()
 	if err != nil {
 		t.Fatal(err)
 	}
+	ref := flashpack.RecoveryRef{Device: device, Storage: storage, Version: ver}
+	if source := os.Getenv("WENDY_ORIN_SEED_SIM_ARCHIVE"); source != "" {
+		if err := stageOrinSeedArchive(source, flashpack.RecoveryTarballCachePath(cacheDir, ref), info); err != nil {
+			t.Fatal(err)
+		}
+	}
 	start := time.Now()
-	fp, cached, err := resolveT234Flashpack(cacheDir, flashpack.RecoveryRef{Device: device, Storage: storage, Version: ver}, info, func(s string) {})
+	fp, cached, err := resolveT234Flashpack(cacheDir, ref, info, func(s string) { t.Log(s) })
 	if err != nil {
 		t.Fatalf("flashpack: %v", err)
 	}
 	t.Logf("flashpack %s %s %s cached=%v (%s)", device, storage, ver, cached, time.Since(start).Round(time.Second))
+	baselineConfig, err := os.ReadFile(fp.ConfigImage())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	diskPath := filepath.Join(outDir, storage+".img")
 	if err := os.Remove(diskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -90,13 +124,14 @@ func TestOrinFullInstallSeedSim(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run %d: workspace: %v", i, err)
 		}
+		t.Cleanup(func() { _ = os.RemoveAll(ws) })
 		configRel, err := filepath.Rel(fp.FlashImagesDir(), fp.ConfigImage())
 		if err != nil {
 			t.Fatal(err)
 		}
 		injected := filepath.Join(ws, configRel)
 		var log strings.Builder
-		if err := injectRecoveryConfig(injected, creds, name, nil, &log, func(string) {}, nil); err != nil {
+		if err := injectRecoveryConfig(injected, creds, name, nil, &log, func(string) {}, agent); err != nil {
 			t.Fatalf("run %d: inject: %v\n%s", i, err, log.String())
 		}
 		if s := strings.TrimSpace(log.String()); s != "" {
@@ -132,11 +167,18 @@ func TestOrinFullInstallSeedSim(t *testing.T) {
 			if err := verifySeed(conf, name, creds); err != nil {
 				t.Errorf("run %d %s: %v\n--- wendy.conf ---\n%s", i, stage.label, err, conf)
 			}
+			if agent != nil {
+				verifyOrinSeedAgent(t, stage.img, agent.data)
+			}
 		}
 		if magic, err := ext4MagicAt(flashed); err != nil {
 			t.Errorf("run %d: %v", i, err)
 		} else if magic {
 			t.Errorf("run %d: flashed config partition still carries an ext4 superblock", i)
+		}
+		verifyOrinSeedCacheUnchanged(t, fp.ConfigImage(), baselineConfig)
+		if !t.Failed() {
+			t.Logf("ORIN_SEED_VERIFIED run=%d device=%s storage=%s version=%s", i, device, storage, ver)
 		}
 	}
 }
