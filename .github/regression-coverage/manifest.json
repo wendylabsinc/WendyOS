@@ -1928,10 +1928,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1988",
       "title": "npu: provide the driver-locked runtime to containers, not the framework",
       "package": "07",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests verify the Qualcomm runtime mounts avoid image-owned framework paths. They do not load a real NPU model using the injected runtime.",
-      "required_follow_up": "Add a Dragonwing model-load/inference smoke test with a framework supplied by the image.",
-      "evidence": []
+      "required_follow_up": "Execute the prepared IQ-9075 procedure on a reserved board with the candidate Agent and pinned companion app. Hardware observations remain not_run.",
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/qualcomm-npu-rehearsal.py",
+          "tests": [
+            ".github/scripts/npu_hardware_test.py"
+          ],
+          "companion_commit": "157a2dec629287aa5d1257f7a837f99700961f59",
+          "result": "Prepared seven IQ-9075 observations using the pinned Qwen app, disposable app/volume identities, image-owned QAIRT framework hashes and actual two-image model output. Three replacement cycles require old owner/worker exit before new FastRPC acquisition; a paused-worker case requires bounded refusal without SIGKILL or replacement. Generated from real companion Git objects; offline checks validate source pinning, command isolation, changed-artifact refusal and HTTP error/redirect handling. No device was contacted.",
+          "hardware_execution": "not_run"
+        }
+      ],
+      "resolution": "The vendor-only behavior has a target-specific human procedure with actual inference, runtime provenance, process traces and cleanup. Script readiness is not a hardware pass."
     },
     {
       "key": "2554",
@@ -1948,10 +1959,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2547",
       "title": "fix(agent): drain NPU owner before replacing or stopping its container",
       "package": "07",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests check graceful NPU draining and refusal to force-kill on wait failures. They fake task behavior and do not reproduce a vendor driver retaining ownership.",
-      "required_follow_up": "Run two successive NPU workloads and verify the first fully releases the device before the second starts.",
-      "evidence": []
+      "required_follow_up": "Execute the prepared IQ-9075 procedure on a reserved board with the candidate Agent and pinned companion app. Hardware observations remain not_run.",
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/qualcomm-npu-rehearsal.py",
+          "tests": [
+            ".github/scripts/npu_hardware_test.py"
+          ],
+          "companion_commit": "157a2dec629287aa5d1257f7a837f99700961f59",
+          "result": "Prepared seven IQ-9075 observations using the pinned Qwen app, disposable app/volume identities, image-owned QAIRT framework hashes and actual two-image model output. Three replacement cycles require old owner/worker exit before new FastRPC acquisition; a paused-worker case requires bounded refusal without SIGKILL or replacement. Generated from real companion Git objects; offline checks validate source pinning, command isolation, changed-artifact refusal and HTTP error/redirect handling. No device was contacted.",
+          "hardware_execution": "not_run"
+        }
+      ],
+      "resolution": "The vendor-only behavior has a target-specific human procedure with actual inference, runtime provenance, process traces and cleanup. Script readiness is not a hardware pass."
     },
     {
       "key": "2540",
@@ -1960,11 +1982,16 @@
       "package": "07",
       "status": "partial",
       "audit_finding": "The cgroup permission refresh test checks renumbered NPU device IDs. It does not start a container against a changed real node.",
-      "required_follow_up": "Reconcile both-runtime node-recreation/cgroup enforcement and the omit-refresh mutation. Prepare physical vendor-accelerator restart/renumbering cases with actual model output; kernel fixture success alone does not prove vendor access.",
+      "required_follow_up": "Prepare physical vendor-accelerator restart/renumbering cases with actual model output. Both-runtime real-node/cgroup enforcement and the omit-refresh mutation passed; tun/loop fixtures do not prove vendor access.",
       "evidence": [
         {
           "test": "go/internal/agent/containerd/device_numbers_integration_test.go",
           "result": "Added a real-kernel device-number test for a persisted NPU entitlement. Private character nodes move from tun 10:200 to loop-control 10:237; the restarted container must open the new node through its cgroup and report the new numbers without recreation. A missing node must prevent start. The omit-refresh mutation must fail. Normal and mutant Linux binaries compile; hosted execution is pending. This does not execute a Qualcomm or NVIDIA vendor driver."
+        },
+        {
+          "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430930927",
+          "result": "Both containerd 1.7 and current passed real-kernel device-node restart and missing-node refusal. The restarted unchanged container opened the moved node and reported a:ed instead of a:c8. Omitting device refresh failed specifically on stale a:c8 access. This proves portable device/cgroup repair, not vendor model execution."
         }
       ]
     },
@@ -1975,11 +2002,16 @@
       "package": "07",
       "status": "partial",
       "audit_finding": "Device-spec refresh, missing-node and monitor behavior are tested; current containerd integration adds persistence coverage. Actual vendor GPU/NPU device access after renumbering remains a hardware gap.",
-      "required_follow_up": "Reconcile both-runtime node-recreation/cgroup enforcement and the omit-refresh mutation. Prepare physical vendor-accelerator restart/renumbering cases with actual model output; kernel fixture success alone does not prove vendor access.",
+      "required_follow_up": "Prepare physical vendor-accelerator restart/renumbering cases with actual model output. Both-runtime real-node/cgroup enforcement and the omit-refresh mutation passed; tun/loop fixtures do not prove vendor access.",
       "evidence": [
         {
           "test": "go/internal/agent/containerd/device_numbers_integration_test.go",
           "result": "Added a real-kernel device-number test for a persisted NPU entitlement. Private character nodes move from tun 10:200 to loop-control 10:237; the restarted container must open the new node through its cgroup and report the new numbers without recreation. A missing node must prevent start. The omit-refresh mutation must fail. Normal and mutant Linux binaries compile; hosted execution is pending. This does not execute a Qualcomm or NVIDIA vendor driver."
+        },
+        {
+          "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430930927",
+          "result": "Both containerd 1.7 and current passed real-kernel device-node restart and missing-node refusal. The restarted unchanged container opened the moved node and reported a:ed instead of a:c8. Omitting device refresh failed specifically on stale a:c8 access. This proves portable device/cgroup repair, not vendor model execution."
         }
       ]
     },
