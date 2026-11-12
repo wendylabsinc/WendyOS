@@ -119,6 +119,21 @@ function Test-ChecksumMismatchInstallsNothing($c) {
     if (Test-Path (Join-Path $env:WENDY_CONFIG_DIR "cli\$V")) { throw 'nothing may be installed' }
 }
 
+function Test-TruncatedDownloadCanRetry($c) {
+    New-Release $c $V
+    $marker = Join-Path $c.Fix 'truncate-downloads'
+    Set-Content $marker 'truncate every asset'
+    Start-Fixtures $c
+    $r = Invoke-Cmd $c @('mcp', 'serve')
+    Assert-Equal $r.Code 1 'truncated download exit'
+    Assert-Equal $r.Out '' 'no partial CLI ran'
+    if (Test-Path (Join-Path $env:WENDY_CONFIG_DIR "cli\$V")) { throw 'partial release was installed' }
+    Remove-Item $marker
+    $r = Invoke-Cmd $c @('mcp', 'serve')
+    Assert-Equal $r.Code 0 'complete retry exit'
+    Assert-Equal $r.Out "stub-wendy $V args:[mcp][serve]" 'complete retry runs verified CLI'
+}
+
 function Test-PathWendyNewEnoughIsUsed($c) {
     New-Release $c $V
     New-StubExe (Join-Path $c.T 'stubbin\wendy.exe') '2026.11.01-000000'

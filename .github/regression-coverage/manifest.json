@@ -1146,10 +1146,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2134",
       "title": "Plugin: CLI launcher that installs a pinned, verified Wendy CLI",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Launcher fixtures cover shell and PowerShell behavior, while security relies on provenance and platform trust tools. This audit did not run the Windows launcher or attestation checks.",
       "required_follow_up": "Require launcher fixtures on both OSes and negative tests for wrong signer/workflow and interrupted download.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/plugin_pin_test.py",
+            "scripts/test/plugin-launcher/run.sh",
+            "scripts/test/plugin-launcher/run.ps1"
+          ],
+          "runner": "local macOS and pending native CI",
+          "result": "Three provenance/publication tests passed; the POSIX launcher suite passed all 31 cases, including HTTP truncation followed by a verified retry. The gh fixture checks exact signer selectors and models rejection; it does not replace GitHub cryptographic verification. The Windows truncation/retry case is added but not yet executed."
+        }
+      ],
+      "resolution": "Go Tests now requires the reusable Linux/macOS/Windows launcher jobs. Relevant pinning and fixture paths trigger the aggregate. Complete native CI before marking verified."
     },
     {
       "key": "2676",

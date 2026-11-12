@@ -357,6 +357,21 @@ test_rosetta_shell_installs_arm64() {
   assert_eq "$(requests_for "wendy-cli-darwin-arm64-$V.tar.gz")" "1" "fetched darwin-arm64"
 }
 
+test_truncated_download_can_retry() {
+  make_release "$V"
+  pin "$V" "$V"
+  touch "$FIX/truncate-downloads"
+  serve
+  sh "$L" mcp serve >"$T/out" 2>"$T/err"
+  assert_eq "$?" "1" "truncated download exit"
+  assert_eq "$(cat "$T/out")" "" "no partial CLI ran"
+  [ ! -d "$WENDY_CONFIG_DIR/cli/$V" ] || fail_case "partial release was installed"
+  rm "$FIX/truncate-downloads"
+  out=$(sh "$L" mcp serve 2>"$T/retry.err")
+  assert_eq "$?" "0" "complete retry exit"
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "complete retry runs verified CLI"
+}
+
 test_other_os_is_unsupported() {
   make_release "$V"
   pin "$V" "$V"

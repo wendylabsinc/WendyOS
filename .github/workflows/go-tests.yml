@@ -27,6 +27,8 @@ on:
       - 'scripts/sync-agent-skills.py'
       - 'scripts/package-chatgpt-plugin.py'
       - 'scripts/test-package-chatgpt-plugin.py'
+      - 'scripts/pin-cli.sh'
+      - 'scripts/test/plugin-launcher/**'
       - 'packaging/linux/fpm/**'
   pull_request:
     paths:
@@ -52,6 +54,8 @@ on:
       - 'scripts/sync-agent-skills.py'
       - 'scripts/package-chatgpt-plugin.py'
       - 'scripts/test-package-chatgpt-plugin.py'
+      - 'scripts/pin-cli.sh'
+      - 'scripts/test/plugin-launcher/**'
       - 'packaging/linux/fpm/**'
 
 concurrency:
@@ -62,6 +66,9 @@ permissions:
   contents: read
 
 jobs:
+  plugin-launcher:
+    uses: ./.github/workflows/plugin-launcher.yml
+
   dependency-security:
     uses: ./.github/workflows/security.yml
 
@@ -584,7 +591,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, plugin-launcher]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -605,6 +612,7 @@ jobs:
           DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
           LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
           DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
+          PLUGIN_LAUNCHER_RESULT: ${{ needs.plugin-launcher.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -626,6 +634,7 @@ jobs:
           test "$DEPENDENCY_SECURITY_RESULT" = success
           test "$LINUX_INSTALL_RESULT" = success
           test "$DARWIN_INSTALL_RESULT" = success
+          test "$PLUGIN_LAUNCHER_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
