@@ -30,6 +30,7 @@ SUITES = (
     "npu_hardware_test.py",
     "tensorrt_restart_test.py",
     "oci_retry_test.py",
+    "signing_ci_test.py",
     "integration-discover_test.py",
 )
 

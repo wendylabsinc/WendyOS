@@ -35,6 +35,8 @@ on:
       - 'scripts/pin-cli.sh'
       - 'scripts/test/plugin-launcher/**'
       - 'packaging/linux/fpm/**'
+      - 'swift/Scripts/SetupSigningCI.sh'
+      - 'swift/Scripts/Build.sh'
   pull_request:
     paths:
       - '.gitattributes'
@@ -67,6 +69,8 @@ on:
       - 'scripts/pin-cli.sh'
       - 'scripts/test/plugin-launcher/**'
       - 'packaging/linux/fpm/**'
+      - 'swift/Scripts/SetupSigningCI.sh'
+      - 'swift/Scripts/Build.sh'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -179,6 +183,9 @@ jobs:
         # -timeout is per package: internal/cli/commands alone took 296.146s
         # of the former 300s under -race on main 08a9cb01 (2026-11-11).
         run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 600s
+
+      - name: Require bounded job supervision and transport recovery
+        run: bash .github/scripts/test-job-supervisor-lifetime.sh "$RUNNER_TEMP/job-supervisor-lifetime"
 
       - name: Fuzz stream boundaries and sparse flash ranges
         run: |
@@ -461,6 +468,8 @@ jobs:
           done
       - name: Require live registry and management connection lifetimes
         run: bash .github/scripts/test-management-lifetime.sh "$RUNNER_TEMP/management-lifetime"
+      - name: Require wired-only automatic ROS discovery
+        run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
         run: bash .github/scripts/test-tls-udp-admission.sh "$RUNNER_TEMP/tls-udp-admission"
       - name: Require duplicate rejection with an incumbent forwarding route
