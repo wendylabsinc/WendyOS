@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -24,6 +25,12 @@ func TestLiteCameraDeliversDecodedPixelsThroughKernelLoopback(t *testing.T) {
 	}
 	if os.Getenv("GITHUB_ACTIONS") != "true" || os.Getenv("RUNNER_ENVIRONMENT") != "github-hosted" || os.Geteuid() != 0 {
 		t.Fatal("kernel camera fixture is restricted to the disposable hosted CI runner")
+	}
+	if !regexp.MustCompile(`^ci-lite-[0-9a-f]{12}$`).MatchString(os.Getenv("WENDY_TEST_LITE_CAMERA_LABEL")) {
+		t.Fatal("unique outer-cleanup camera label was not supplied")
+	}
+	if ipcam.MCUBandStart != 96 {
+		t.Fatal("outer cleanup reservation must match the MCU node band")
 	}
 	path := fmt.Sprintf("/dev/video%d", ipcam.MCUBandStart)
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
