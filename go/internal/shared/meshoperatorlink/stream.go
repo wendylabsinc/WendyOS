@@ -71,15 +71,17 @@ func completePeerCertificates(chain []*x509.Certificate, candidates IssuerCandid
 }
 
 type control struct {
-	Stream   uint32                  `cbor:"s,omitempty"`
-	Credit   uint32                  `cbor:"c,omitempty"`
-	Error    string                  `cbor:"e,omitempty"`
-	Kind     string                  `cbor:"k"`
-	Instance meshoperator.InstanceID `cbor:"n,omitempty"`
+	AgentWindow uint32                  `cbor:"w,omitempty"` // Optional hello/ready receive-window maximum.
+	Stream      uint32                  `cbor:"s,omitempty"`
+	Credit      uint32                  `cbor:"c,omitempty"`
+	Error       string                  `cbor:"e,omitempty"`
+	Kind        string                  `cbor:"k"`
+	Instance    meshoperator.InstanceID `cbor:"n,omitempty"`
 }
 type Link struct {
 	writeMu frameWriteMutex
 
+	agentWindow  uint32 // Immutable negotiated maximum; zero retains the legacy limit.
 	agentMu      sync.Mutex
 	agent        *agentStream
 	agentID      uint32
@@ -141,8 +143,15 @@ func readyWithClock(ctx context.Context, c *tls.Conn, address netip.Addr, server
 }
 
 func readyWithValidity(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time, verifyExpiry func() (time.Time, error)) (*Link, error) {
+	return readyWithAgentWindow(ctx, c, address, server, expires, certNow, verifyExpiry, agentWindow)
+}
+
+func readyWithAgentWindow(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time, verifyExpiry func() (time.Time, error), window uint32) (*Link, error) {
+	if window < agentWindow || window > agentTCPWindow {
+		return nil, errors.New("invalid operator agent window")
+	}
 	started := time.Now()
-	l := &Link{conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, verifyExpiry: verifyExpiry, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
+	l := &Link{agentWindow: window, conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, verifyExpiry: verifyExpiry, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
 	if certNow != nil {
 		remaining := expires.Sub(certNow())
 		if remaining <= 0 {

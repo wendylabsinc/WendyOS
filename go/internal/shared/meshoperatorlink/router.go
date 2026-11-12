@@ -85,7 +85,8 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if len(c.ConnectionState().PeerCertificates) == 0 {
 		return nil, errors.New("missing router identity")
 	}
-	if err = writeControl(c, control{Kind: "operator-router-hello", Instance: cfg.Instance}); err != nil {
+	offeredWindow := agentWindowOffer(c)
+	if err = writeControl(c, control{Kind: "operator-router-hello", Instance: cfg.Instance, AgentWindow: offeredWindow}); err != nil {
 		return nil, err
 	}
 	reply, err := readControl(c)
@@ -95,6 +96,13 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if reply.Kind != "operator-router-ready" {
 		return nil, errors.New("missing operator router readiness")
 	}
+	window, err := negotiateAgentWindow(offeredWindow, reply.AgentWindow)
+	if err != nil {
+		return nil, err
+	}
+	if reply.AgentWindow != 0 && (offeredWindow == 0 || reply.AgentWindow > offeredWindow) {
+		return nil, errors.New("operator router selected an unoffered agent window")
+	}
 	peer, err := meshid.PeerFromPrincipal(cfg.Identity.Operator().Principal())
 	if err != nil {
 		return nil, err
@@ -103,7 +111,7 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if err != nil {
 		return nil, err
 	}
-	l, err := routerReady(ctx, c, cfg.Router, self, false, minTime(expires, cfg.Identity.NotAfter()), nil)
+	l, err := routerReadyWithValidity(ctx, c, cfg.Router, self, false, minTime(expires, cfg.Identity.NotAfter()), nil, nil, nil, window)
 	if err != nil {
 		return nil, err
 	}
@@ -226,14 +234,22 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if err != nil {
 		return nil, err
 	}
-	if err = writeControl(c, control{Kind: "operator-router-ready"}); err != nil {
+	window, err := negotiateAgentWindow(agentWindowOffer(c), hello.AgentWindow)
+	if err != nil {
+		return nil, err
+	}
+	var selectedWindow uint32
+	if hello.AgentWindow != 0 && agentWindowOffer(c) != 0 {
+		selectedWindow = window
+	}
+	if err = writeControl(c, control{Kind: "operator-router-ready", AgentWindow: selectedWindow}); err != nil {
 		return nil, err
 	}
 	var clock func() time.Time
 	if policy != nil {
 		clock = func() time.Time { return policy.BaseTime(policy.WallTime()) }
 	}
-	l, err := routerReadyWithValidity(ctx, c, peer, peer, true, identity.NotAfter(), clock, verifyExpiry, agent)
+	l, err := routerReadyWithValidity(ctx, c, peer, peer, true, identity.NotAfter(), clock, verifyExpiry, agent, window)
 	if err != nil {
 		return nil, err
 	}
@@ -253,11 +269,11 @@ func routerReady(ctx context.Context, c *tls.Conn, peer, self meshid.Device, ser
 }
 
 func routerReadyWithClock(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, agent func(context.Context, net.Conn) error) (*RouterLink, error) {
-	return routerReadyWithValidity(ctx, c, peer, self, server, expires, clock, nil, agent)
+	return routerReadyWithValidity(ctx, c, peer, self, server, expires, clock, nil, agent, agentWindow)
 }
 
-func routerReadyWithValidity(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, verifyExpiry func() (time.Time, error), agent func(context.Context, net.Conn) error) (*RouterLink, error) {
-	base, err := readyWithValidity(ctx, c, self.MeshAddress(), server, expires, clock, verifyExpiry)
+func routerReadyWithValidity(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, verifyExpiry func() (time.Time, error), agent func(context.Context, net.Conn) error, window uint32) (*RouterLink, error) {
+	base, err := readyWithAgentWindow(ctx, c, self.MeshAddress(), server, expires, clock, verifyExpiry, window)
 	if err != nil {
 		return nil, err
 	}

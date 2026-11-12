@@ -2,6 +2,7 @@ package meshoperatorlink
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -12,6 +13,39 @@ import (
 )
 
 const agentWindow = 32 * 1024
+
+// One management stream per link: the receive ring is capped at 256 KiB;
+// larger wire values are rejected. At 10 ms RTT this allows 25 MiB/s before
+// credit latency alone limits throughput, versus 3.1 MiB/s for legacy peers.
+const agentTCPWindow = 256 * 1024
+
+// Only the actual TLS underlay qualifies. Address strings and transport hints
+// cannot distinguish native TCP from BLE, relay streams, or unknown wrappers.
+// Call only after the operator/router identities have been authenticated.
+func agentWindowOffer(c *tls.Conn) uint32 {
+	if _, ok := c.NetConn().(*net.TCPConn); ok {
+		return agentTCPWindow
+	}
+	return 0
+}
+
+func negotiateAgentWindow(local, peer uint32) (uint32, error) {
+	if peer != 0 && (peer < agentWindow || peer > agentTCPWindow) {
+		return 0, errors.New("invalid operator router agent window")
+	}
+	if local == 0 || peer == 0 {
+		return agentWindow, nil
+	}
+	return min(local, peer), nil
+}
+
+func (l *Link) receiveWindow() uint32 {
+	if l.agentWindow == 0 {
+		return agentWindow
+	}
+	return l.agentWindow
+}
+
 const agentFramePayload = 1100 - 4 // Stream ID shares the existing1100-byte frame budget.
 
 var ErrAgentUnavailable = errors.New("adjacent operator peer has no management stream")
@@ -26,9 +60,11 @@ type agentStream struct {
 	id                                       uint32
 	mu                                       sync.Mutex
 	writeMu                                  sync.Mutex
-	buffer                                   [agentWindow]byte
+	buffer                                   []byte
 	head, size                               int
 	receiveCredit, pendingCredit, sendCredit uint32
+	sendWindow                               uint32
+	admitted                                 bool
 	ready                                    chan error
 	done                                     chan struct{}
 	readWake, writeWake                      chan struct{}
@@ -39,7 +75,7 @@ type agentStream struct {
 }
 
 func newAgentStream(l *Link, id, sendCredit uint32) *agentStream {
-	return &agentStream{link: l, id: id, receiveCredit: agentWindow, sendCredit: sendCredit,
+	return &agentStream{link: l, id: id, buffer: make([]byte, l.receiveWindow()), receiveCredit: l.receiveWindow(), sendCredit: sendCredit, sendWindow: sendCredit, admitted: sendCredit != 0,
 		ready: make(chan error, 1), done: make(chan struct{}), readWake: make(chan struct{}, 1), writeWake: make(chan struct{}, 1)}
 }
 func wake(ch chan struct{}) {
@@ -76,7 +112,7 @@ func (l *Link) OpenAgent(ctx context.Context) (net.Conn, error) {
 	c := newAgentStream(l, l.agentID, 0)
 	l.agent = c
 	l.agentMu.Unlock()
-	if err := l.queueControl(control{Kind: "operator-agent-open", Stream: c.id, Credit: agentWindow}); err != nil {
+	if err := l.queueControl(control{Kind: "operator-agent-open", Stream: c.id, Credit: l.receiveWindow()}); err != nil {
 		c.close(false)
 		return nil, err
 	}
@@ -117,7 +153,7 @@ func (l *Link) currentAgent(id uint32) *agentStream {
 func (l *Link) agentControl(m control) (bool, error) {
 	switch m.Kind {
 	case "operator-agent-open":
-		if !l.server || m.Stream == 0 || m.Credit == 0 || m.Credit > agentWindow {
+		if !l.server || m.Stream == 0 || m.Credit == 0 || m.Credit > l.receiveWindow() {
 			return true, errors.New("invalid operator agent open")
 		}
 		l.agentMu.Lock()
@@ -148,7 +184,7 @@ func (l *Link) agentControl(m control) (bool, error) {
 		// Close marks agentClosing under this same mutex before Wait can run.
 		l.workers.Add(1)
 		l.agentMu.Unlock()
-		if err := l.queueControl(control{Kind: "operator-agent-ready", Stream: c.id, Credit: agentWindow}); err != nil {
+		if err := l.queueControl(control{Kind: "operator-agent-ready", Stream: c.id, Credit: l.receiveWindow()}); err != nil {
 			c.close(false)
 			l.agentMu.Lock()
 			l.agentServing = false
@@ -177,10 +213,16 @@ func (l *Link) agentControl(m control) (bool, error) {
 			}
 			return true, nil
 		}
-		if m.Credit == 0 || m.Credit > agentWindow {
+		if m.Credit == 0 || m.Credit > l.receiveWindow() {
 			return true, errors.New("invalid operator agent window")
 		}
 		c.mu.Lock()
+		if c.admitted {
+			c.mu.Unlock()
+			return true, errors.New("duplicate operator agent ready")
+		}
+		c.admitted = true
+		c.sendWindow = m.Credit
 		c.sendCredit = m.Credit
 		c.mu.Unlock()
 		wake(c.writeWake)
@@ -195,7 +237,7 @@ func (l *Link) agentControl(m control) (bool, error) {
 			return true, nil
 		}
 		c.mu.Lock()
-		if m.Credit == 0 || m.Credit > agentWindow-c.sendCredit {
+		if !c.admitted || m.Credit == 0 || c.sendCredit > c.sendWindow || m.Credit > c.sendWindow-c.sendCredit {
 			c.mu.Unlock()
 			return true, errors.New("invalid operator agent credit")
 		}
