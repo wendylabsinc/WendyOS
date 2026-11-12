@@ -37,6 +37,7 @@ SUITES = (
     "linklocal_multi_interface_test.py",
     "linklocal_windows_test.py",
     "chunk_stall_ownership_test.py",
+    "broker_uplink_namespace_test.py",
     "accelerator_renumbering_test.py",
     "so101_reader_acceptance_test.py",
     "tensorrt_restart_test.py",
