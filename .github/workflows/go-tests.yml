@@ -296,6 +296,65 @@ jobs:
           sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
           grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
 
+  packet-backends:
+    name: Kernel and userspace packet contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: packet-backends
+      - name: Install kernel networking tools
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Compile both packet backends with the race detector
+        run: go test -race -c -o "$RUNNER_TEMP/packet-backends.test" ./go/internal/cli/netmesh
+      - name: Require identical tenant and route behavior
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/packet-backends.test" | tee "$RUNNER_TEMP/packet-backends.log"
+          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/packet-backends.log"; then exit 1; fi
+          for backend in userspace kernel; do
+            grep -q -- "--- PASS: TestPacketBackendContract/$backend " "$RUNNER_TEMP/packet-backends.log"
+          done
+      - name: Prove tenant admission and route withdrawal assertions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          kernel = Path('go/internal/agent/localmesh/kernel_linux.go').resolve()
+          guard = '\tif !peer.IsValid() || peer.Tenant() != k.device.Tenant() {\n\t\treturn nil, errors.New("mesh peer is outside the network tenant")\n\t}\n'
+          text = kernel.read_text()
+          assert text.count(guard) == 1
+          variants = [('tenant', kernel, text.replace(guard, ''))]
+          userspace = Path('go/internal/cli/netmesh/network.go').resolve()
+          text = userspace.read_text()
+          needle = '\tn.routes = next\n'
+          assert text.count(needle) == 1
+          retain = '\tfor address, id := range n.routes { if _, ok := next[address]; !ok { next[address] = id } }\n'
+          variants.append(('withdrawal', userspace, text.replace(needle, retain + needle)))
+          for name, source, text in variants:
+              mutated = root / (name + '-mutation.go')
+              mutated.write_text(text)
+              (root / (name + '-overlay.json')).write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
+          PY
+          for mutation in tenant withdrawal; do
+            go test -race -overlay="$RUNNER_TEMP/$mutation-overlay.json" -c -o "$RUNNER_TEMP/$mutation.test" ./go/internal/cli/netmesh
+            if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/$mutation.test" > "$RUNNER_TEMP/$mutation.log" 2>&1; then
+              cat "$RUNNER_TEMP/$mutation.log"
+              echo "$mutation mutation unexpectedly passed" >&2
+              exit 1
+            fi
+            cat "$RUNNER_TEMP/$mutation.log"
+          done
+          grep -q 'foreign tenant acquired a packet port' "$RUNNER_TEMP/tenant.log"
+          grep -q 'unrouted packet reached carrier: withdrawn' "$RUNNER_TEMP/withdrawal.log"
+
   multicast-interfaces:
     name: Multicast interface lifecycle
     runs-on: ubuntu-24.04
@@ -742,7 +801,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, hostname-restart, operator-policy, multicast-interfaces, plugin-launcher]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, hostname-restart, operator-policy, multicast-interfaces, packet-backends, plugin-launcher]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -765,6 +824,7 @@ jobs:
           HOSTNAME_RESTART_RESULT: ${{ needs.hostname-restart.result }}
           OPERATOR_POLICY_RESULT: ${{ needs.operator-policy.result }}
           MULTICAST_INTERFACES_RESULT: ${{ needs.multicast-interfaces.result }}
+          PACKET_BACKENDS_RESULT: ${{ needs.packet-backends.result }}
           LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
           DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
           PLUGIN_LAUNCHER_RESULT: ${{ needs.plugin-launcher.result }}
@@ -791,6 +851,7 @@ jobs:
           test "$HOSTNAME_RESTART_RESULT" = success
           test "$OPERATOR_POLICY_RESULT" = success
           test "$MULTICAST_INTERFACES_RESULT" = success
+          test "$PACKET_BACKENDS_RESULT" = success
           test "$LINUX_INSTALL_RESULT" = success
           test "$DARWIN_INSTALL_RESULT" = success
           test "$PLUGIN_LAUNCHER_RESULT" = success
