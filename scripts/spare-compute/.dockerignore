@@ -2,6 +2,6 @@
 !Dockerfile
 !*.py
 !config.json
-!host_shell.proto
+!resource_stats.proto
 !model/
 !model/lease_runner.py

@@ -60,15 +60,17 @@ class AdmissionTests(unittest.TestCase):
         sample = self.sample(8)
         sample["gpus"][0]["foreign"] = True
         result = self.update(policy, sample)
-        self.assertFalse(result["cpu"] or result["gpu"])
+        self.assertTrue(result["cpu"])
+        self.assertFalse(result["gpu"])
 
     def test_memory_pressure_yields(self):
         result = self.update(self.admitted(), self.sample(8, memory_available=1024**3))
         self.assertFalse(result["cpu"] or result["gpu"])
 
-    def test_unknown_gpu_fails_closed_on_nvidia_host(self):
+    def test_unknown_gpu_denies_inference_but_allows_cpu_work(self):
         result = self.update(self.admitted(), self.sample(8, gpu_known=False, gpus=[]))
-        self.assertFalse(result["cpu"] or result["gpu"])
+        self.assertTrue(result["cpu"])
+        self.assertFalse(result["gpu"])
 
     def test_cpu_host_never_grants_gpu(self):
         policy = governor.Policy(idle_seconds=0)
@@ -86,6 +88,19 @@ class AdmissionTests(unittest.TestCase):
             result = policy.update(self.sample(8))
         self.assertFalse(result["cpu"] or result["gpu"])
 
+    def test_unified_memory_requires_explicit_budget_and_reserve(self):
+        for budget, available, granted in [(0, 100, False), (80, 83, False), (80, 100, True)]:
+            policy = governor.Policy(idle_seconds=0, unified_model_gib=budget)
+            for tick in (0, 2):
+                sample = self.sample(tick, memory_available=available * 1024**3)
+                sample["gpus"][0].update(unified=True, free_mib=None)
+                result = self.update(policy, sample)
+            self.assertEqual(result["gpu"], granted)
+            if granted:
+                sample = self.sample(4, memory_available=3 * 1024**3)
+                sample["gpus"][0].update(unified=True, free_mib=None)
+                self.assertFalse(self.update(policy, sample)["gpu"])
+
     def test_missing_expired_future_and_reboot_leases_denied(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "lease.json"
@@ -100,34 +115,42 @@ class AdmissionTests(unittest.TestCase):
             self.assertFalse(lease_valid(path, "gpu", 10, "boot"))
 
 class HostTransportTests(unittest.TestCase):
-    def test_host_shell_wire_stream(self):
+    def test_stats_wire_call_and_missing_stats(self):
         try:
             import grpc
-            import host_shell_pb2 as pb
+            import resource_stats_pb2 as pb
         except ImportError:
-            self.skipTest("run inside the built image for the generated protobuf and gRPC runtime")
+            self.skipTest("run inside the built image for protobuf and gRPC")
         from concurrent.futures import ThreadPoolExecutor
-        def handle(requests, context):
-            request = next(requests)
-            self.assertEqual(list(request.start.command[:3]), ["python3", "-u", "-c"])
-            self.assertEqual(request.start.command[-1], "sh.wendy.spare-compute")
-            yield pb.HostShellResponse(stdout_data=b'SPARE_SAM')
-            yield pb.HostShellResponse(stdout_data=b'PLE {"time":1}\r\n')
-            yield pb.HostShellResponse(exit_code=0)
+        response = pb.GetResourceStatsResponse(
+            host=pb.HostStats(cpu_total_jiffies=1000, cpu_idle_jiffies=900,
+                             cpu_count=4, mem_total_bytes=10000, mem_available_bytes=9000),
+            containers=[pb.ResourceContainerStats(app_name="our_app_worker", cpu_usage_nanos=2000000),
+                        pb.ResourceContainerStats(app_name="our_app_model", cpu_usage_nanos=3000000),
+                        pb.ResourceContainerStats(app_name="our_app_other_worker", cpu_usage_nanos=9000000)])
         with tempfile.TemporaryDirectory() as directory:
             socket = str(Path(directory) / "agent.sock")
             server = grpc.server(ThreadPoolExecutor(max_workers=1))
             server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(
-                "wendy.agent.services.v1.WendyShellService", {"HostShell": grpc.stream_stream_rpc_method_handler(
-                    handle, request_deserializer=pb.HostShellRequest.FromString,
-                    response_serializer=pb.HostShellResponse.SerializeToString)}),))
+                "wendy.agent.services.v1.WendyContainerService", {"GetResourceStats": grpc.unary_unary_rpc_method_handler(
+                    lambda request, context: response,
+                    request_deserializer=pb.GetResourceStatsRequest.FromString,
+                    response_serializer=pb.GetResourceStatsResponse.SerializeToString)}),))
             server.add_insecure_port("unix:" + socket)
             server.start()
             try:
-                samples = governor.samples(socket, "sh.wendy.spare-compute")
-                self.assertEqual(next(samples), {"time": 1})
-                with self.assertRaises(RuntimeError):
-                    next(samples)
+                stream = governor.samples(socket, "our_app")
+                with patch("governor.Path.read_text", return_value="boot"):
+                    sample = next(stream)
+                stream.close()
+                self.assertEqual(sample["own_cpu_usec"], 5000)
+                self.assertEqual(sample["cpu_count"], 4)
+                self.assertFalse(sample["gpu_known"])
+                with self.assertRaises(ValueError):
+                    governor.observation(response, "missing", 1)
+                response.ClearField("host")
+                with self.assertRaises(ValueError):
+                    governor.observation(response, "our_app", 1)
             finally:
                 server.stop(0).wait()
 

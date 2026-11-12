@@ -8,9 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN GOBIN=/usr/local/bin go install github.com/go-gremlins/gremlins/cmd/gremlins@${GREMLINS_VERSION} \
     && go clean -modcache -cache
 RUN useradd --uid 10001 --create-home worker && mkdir /state /work && chown worker:worker /state /work
-COPY worker.py review.py config.json entrypoint.py bootstrap.py governor.py host_probe.py host_shell.proto /opt/worker/
+COPY worker.py review.py config.json entrypoint.py bootstrap.py governor.py resource_stats.proto /opt/worker/
 COPY model/lease_runner.py /opt/worker/model/
-RUN protoc -I/opt/worker --python_out=/opt/worker /opt/worker/host_shell.proto
+RUN protoc -I/opt/worker --python_out=/opt/worker /opt/worker/resource_stats.proto
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/state/home \
     GOCACHE=/state/cache/build GOMODCACHE=/state/cache/mod \
     WORK_ROOT=/work/source WORK_TMP=/work/tmp GOTOOLCHAIN=local
