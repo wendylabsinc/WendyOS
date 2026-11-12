@@ -52,8 +52,8 @@ var runRefusals = []struct{ code, phrase, message, nextStep string }{
 		// the class, so the phrase picks this one out.
 		code:     "project_target_mismatch",
 		phrase:   "the device's agent does not support",
-		message:  "Nothing was deployed: the device's agent does not support an entitlement in wendy.json and would start the app without that access. The output names the entitlement.",
-		nextStep: "Ask the user whether to update the device (wendy device update) or remove the entitlement from wendy.json, then run again.",
+		message:  "Nothing was deployed: the device does not support an entitlement in wendy.json. The output names the entitlement and why.",
+		nextStep: "Show the user the next steps in the output (usually wendy device update, or removing the entitlement from wendy.json) and ask before changing anything, then run again.",
 	},
 }
 

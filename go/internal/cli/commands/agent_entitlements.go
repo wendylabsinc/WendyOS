@@ -40,9 +40,17 @@ func checkAgentEntitlements(resp *agentpb.GetAgentVersionResponse, cfgs ...*appc
 	if len(unknown) > 1 {
 		noun = "entitlements"
 	}
+	reason, fix := "it would start the app without that access", "Update the device: wendy device update"
+	// A newer agent alone does not add arduino-bridge; the UNO Q image must run Arduino's router.
+	if len(unknown) == 1 && unknown[0] == appconfig.EntitlementArduinoBridge {
+		reason, fix = `"arduino-bridge" needs an Arduino UNO Q`, "Run it on an Arduino UNO Q"
+		if resp.GetDeviceType() == arduinoUnoQDeviceType {
+			reason, fix = `"arduino-bridge" needs a WendyOS with Arduino's router`, "Update WendyOS: wendy os update"
+		}
+	}
 	return withNextSteps(commandErrorf(errProjectTargetMismatch,
-		"the device's agent does not support the %s %s in wendy.json (agent version %s); it would start the app without that access",
-		strings.Join(quoted, ", "), noun, resp.GetVersion()),
-		"Update the device: wendy device update",
+		"the device's agent does not support the %s %s in wendy.json (agent version %s); %s",
+		strings.Join(quoted, ", "), noun, resp.GetVersion(), reason),
+		fix,
 		"Or remove the entitlement from wendy.json if the app does not need it.")
 }

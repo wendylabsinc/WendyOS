@@ -37,6 +37,7 @@ var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementNotifications: "Send app notifications",
 	appconfig.EntitlementAdmin:         "Full local control of the device agent",
 	appconfig.EntitlementBuild:         "Grant privileges for nested container builds",
+	appconfig.EntitlementArduinoBridge: "Talk to the Arduino UNO Q microcontroller's sketch",
 }
 
 // frameworkDescriptions mirrors entitlementDescriptions for the "frameworks"
