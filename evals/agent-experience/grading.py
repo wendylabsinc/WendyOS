@@ -109,11 +109,18 @@ def matches(matcher, entry, adapter=None):
     return "args_regex" not in matcher or re.search(matcher["args_regex"], text) is not None
 
 
+def _placeholder(entry):
+    """A proxy fallback reply: a canned MCP tool whose capture is missing. A CLI call the shim cans without
+    a capture is its designed silent success; commands whose output matters are listed in cli_canned, and
+    readiness requires those captures."""
+    return entry.get("channel") == "mcp" and entry.get("canned") and entry.get("captured") is False
+
+
 def _first(matchers, trace, adapter, require_result=False, right=False):
     for j, entry in enumerate(trace):
         for i, matcher in enumerate(matchers):
             if right and (entry.get("is_error") is True or
-                          (require_result and entry.get("canned") and entry.get("captured") is False) or
+                          (require_result and _placeholder(entry)) or
                           (require_result and entry.get("is_error") is not False)):
                 continue
             if matches(matcher, entry, adapter):

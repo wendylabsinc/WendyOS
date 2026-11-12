@@ -176,6 +176,19 @@ class ScenarioQuality(unittest.TestCase):
         removal = next(r for r in rows if r['id'] == 'app-remove-free-space')['expect']
         self.assertEqual(g.grade([self.entry('container_delete', app_name='other', delete_image=True)], removal, '', True)['outcome'], 'missed')
 
+    def test_cli_call_the_shim_cans_without_a_capture_still_counts(self):
+        # The shim cans every CLI call outside the allowlist; only cli_canned commands must have a capture.
+        expect = {'right': [{'cli': 'device bluetooth connect'}, {'tool': 'bluetooth_connect'}], 'require_result': True}
+        argv = ['device', 'bluetooth', 'connect', '5C:F3:70:12:34:56']
+        def cli(code):
+            return build_trace('claude', [], proxy_records=[],
+                               cli_records=[{'argv': argv, 'canned': True, 'captured': False, 'exit_code': code, 't': 1}])
+        self.assertEqual(g.grade(cli(0), expect, '', True)['outcome'], 'right')
+        self.assertEqual(g.grade(cli(1), expect, '', True)['outcome'], 'missed')
+        fallback = build_trace('claude', [], cli_records=[], proxy_records=[
+            {'tool': 'bluetooth_connect', 'arguments': {}, 'canned': True, 'captured': False, 'is_error': False, 't': 1}])
+        self.assertEqual(g.grade(fallback, expect, '', True)['outcome'], 'missed')
+
     def test_suite_plan_is_explicit_and_dry_by_default(self):
         argv = command('smoke', '/c', '/w', '/t', '/o')
         self.assertNotIn('--execute', argv)
