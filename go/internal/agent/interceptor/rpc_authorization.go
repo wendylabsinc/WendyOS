@@ -32,6 +32,12 @@ func deviceRPCAllowed(method string) bool {
 		agentpb.WendyContainerService_WriteChunks_FullMethodName,
 		agentpb.WendyContainerService_PrepareImage_FullMethodName:
 		return true
+	// Public device identity material and admission of an operator-signed grant;
+	// the admission handler also binds the caller to its operator or builder key.
+	case agentpbv2.WendyBuildDeliveryService_GetDeliveryCapabilities_FullMethodName,
+		agentpbv2.WendyBuildDeliveryService_AdmitDelivery_FullMethodName,
+		agentpbv2.WendyBuildDeliveryService_GetDeliveryStatus_FullMethodName:
+		return true
 	// Legacy peer agents carry application TCP streams through MeshDial.
 	// Its handler independently restricts the tenant and running-app ingress.
 	case agentpbv2.WendyMeshService_MeshDial_FullMethodName:

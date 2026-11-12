@@ -283,23 +283,8 @@ func validate(c Claims) error {
 			return errors.New("invalid SHA-256 binding")
 		}
 	}
-	ref, err := reference.Parse(c.Reference)
-	if err != nil {
-		return errors.New("invalid delivery reference")
-	}
-	named, ok := ref.(reference.Named)
-	if !ok || named.Name() != strings.Split(c.Reference, ":")[0] {
-		return errors.New("delivery reference must contain only a repository and tag")
-	}
-	parts := strings.Split(named.Name(), "/")
-	if len(parts) > 1 && (strings.ContainsAny(parts[0], ".:") || parts[0] == "localhost") {
-		return errors.New("delivery reference cannot contain a registry host")
-	}
-	if _, ok = ref.(reference.Tagged); !ok {
-		return errors.New("delivery reference requires an explicit tag")
-	}
-	if _, ok = ref.(reference.Digested); ok {
-		return errors.New("delivery reference cannot be a digest")
+	if err := ValidateReference(c.Reference); err != nil {
+		return err
 	}
 	if c.ExpectedDigest != "" {
 		if len(c.ExpectedDigest) != 71 || !strings.HasPrefix(c.ExpectedDigest, "sha256:") {
@@ -424,4 +409,28 @@ func uniqueJSON(d *json.Decoder, depth int) error {
 	}
 	_, err = d.Token()
 	return err
+}
+
+// ValidateReference accepts an exact local repository:tag, without a registry host or digest alias.
+func ValidateReference(refText string) error {
+	ref, err := reference.Parse(refText)
+	if err != nil {
+		return errors.New("invalid delivery reference")
+	}
+	named, ok := ref.(reference.Named)
+	if !ok || named.Name() != strings.Split(refText, ":")[0] {
+		return errors.New("delivery reference must contain only a repository and tag")
+	}
+	parts := strings.Split(named.Name(), "/")
+	if len(parts) > 1 && (strings.ContainsAny(parts[0], ".:") || parts[0] == "localhost") {
+		return errors.New("delivery reference cannot contain a registry host")
+	}
+	if _, ok = ref.(reference.Tagged); !ok {
+		return errors.New("delivery reference requires an explicit tag")
+	}
+	if _, ok = ref.(reference.Digested); ok {
+		return errors.New("delivery reference cannot be a digest")
+	}
+
+	return nil
 }

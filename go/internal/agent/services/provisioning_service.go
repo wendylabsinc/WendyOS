@@ -196,6 +196,14 @@ func (s *ProvisioningService) ProvisioningCerts() (certPEM, chainPEM string, key
 	return s.certPEM, s.chainPEM, keyData
 }
 
+// ProvisioningPublicCertificates returns the current public material without
+// allocating a copy of the private key for capability or delegation checks.
+func (s *ProvisioningService) ProvisioningPublicCertificates() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.certPEM, s.chainPEM
+}
+
 func (s *ProvisioningService) ProvisioningInfo() (cloudHost string, orgID, assetID int32, enrolled bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
