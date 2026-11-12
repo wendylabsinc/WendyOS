@@ -109,8 +109,8 @@ type postboxControl interface {
 	// path `wendy run` takes, then starts it or leaves it stopped. replaced
 	// reports whether it got as far as replacing the app's container.
 	StartRelease(ctx context.Context, s ReleaseStart) (replaced bool, err error)
-	// AppState is the image of the app's container and whether it runs.
-	AppState(ctx context.Context, app string) (image string, present, running bool)
+	// AppState is the app's container as the runtime holds it.
+	AppState(ctx context.Context, app string) AppContainerState
 	// RemoveReleases deletes app's registry releases except the release ids
 	// in keep, and the containers running one; every app's when app is "".
 	RemoveReleases(ctx context.Context, app string, keep []string) error

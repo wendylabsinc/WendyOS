@@ -260,8 +260,10 @@ func (r *importRecorder) ReleaseAppConfig(_ context.Context, app, _, digest stri
 
 // fakeApp is the app's container in the fake runtime.
 type fakeApp struct {
-	image   string
-	running bool
+	image         string
+	env           []string
+	running       bool
+	stoppedByUser bool
 }
 
 func (r *importRecorder) StartRelease(_ context.Context, s ReleaseStart) (bool, error) {
@@ -273,15 +275,15 @@ func (r *importRecorder) StartRelease(_ context.Context, s ReleaseStart) (bool, 
 	if err != nil && r.beforeReplace {
 		return false, err
 	}
-	r.app = &fakeApp{image: ReleaseImageName(s.AppID, s.ReleaseID), running: err == nil && s.Run}
+	r.app = &fakeApp{image: ReleaseImageName(s.AppID, s.ReleaseID), env: s.Env, running: err == nil && s.Run, stoppedByUser: err == nil && !s.Run}
 	return true, err
 }
 
-func (r *importRecorder) AppState(context.Context, string) (string, bool, bool) {
+func (r *importRecorder) AppState(context.Context, string) AppContainerState {
 	if r.app == nil {
-		return "", false, false
+		return AppContainerState{}
 	}
-	return r.app.image, true, r.app.running
+	return AppContainerState{Image: r.app.image, Env: r.app.env, Present: true, Running: r.app.running, StoppedByUser: r.app.stoppedByUser}
 }
 
 // removal is one RemoveReleases call, or a PruneReleases call (prune).
