@@ -705,3 +705,66 @@ func TestPostboxCommittedRemovalFailingAtRestart(t *testing.T) {
 		t.Fatalf("outcome %+v, removals %v: want the failed removal reported and kept queued", o, f.p.snapshot().Removals)
 	}
 }
+
+// Ruling B: a refused statement that is not news (refused in verification,
+// behind the accepted revision, or a conflicting copy of it) is audit only
+// and keeps the held deployment's outcome. A refused newer revision
+// (configuration, one instance, move) is reported against the app under its
+// own entry. Either way the held deployment stays untouched.
+func TestPostboxRefusalReporting(t *testing.T) {
+	for name, tc := range map[string]struct {
+		statement func(f *pbFixture, dep string) (string, *cloudpbv2.DeviceAssignment)
+		reported  cloudpbv2.ApplyOutcome // UNSPECIFIED = not reported
+	}{
+		"expired copy (verification)": {func(f *pbFixture, dep string) (string, *cloudpbv2.DeviceAssignment) {
+			a := f.assignment(dep, "web", 3)
+			a.ExpiresAt = timestamppb.New(f.now.Add(-time.Second))
+			return dep, a
+		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED},
+		"below the mark": {func(f *pbFixture, dep string) (string, *cloudpbv2.DeviceAssignment) {
+			return dep, f.assignment(dep, "web", 1)
+		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED},
+		"conflicting copy": {func(f *pbFixture, dep string) (string, *cloudpbv2.DeviceAssignment) {
+			return dep, f.assignment(dep, "web", 2)
+		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED},
+		"newer revision, bad configuration": {func(f *pbFixture, dep string) (string, *cloudpbv2.DeviceAssignment) {
+			a := f.assignment(dep, "web", 3)
+			a.ConfigJson = "[]"
+			return dep, a
+		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED},
+		"newer revision, one instance": {func(f *pbFixture, _ string) (string, *cloudpbv2.DeviceAssignment) {
+			other := uuid.NewString()
+			return other, f.assignment(other, "web", 1)
+		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_TARGET},
+		"newer revision, move": {func(f *pbFixture, dep string) (string, *cloudpbv2.DeviceAssignment) {
+			other := uuid.NewString()
+			a := f.assignment(other, "web", 1)
+			a.ReplacesDeploymentId, a.ReplacesRevision = dep, 2 // at the held assignment's mark
+			return other, a
+		}, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE},
+	} {
+		f := newPBFixture(t)
+		r := f.release(t)
+		r.assign.Revision, r.assign.ConfigJson = 2, "{}"
+		rec := f.withArtifacts(&fakeArtifacts{r: r})
+		dep := r.assign.GetDeploymentId()
+		f.assignEntry(r.assign)
+		f.cycle()
+		f.p.waitPulls()
+		held, before := *f.held(dep), f.outcome("web")
+		target, a := tc.statement(f, dep)
+		f.statement(assignNew, target, a, 0)
+		f.cycle()
+		f.p.waitPulls()
+		o := f.outcome("web")
+		switch {
+		case tc.reported == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED && o != before:
+			t.Errorf("%s: outcome %+v, want the held deployment's %+v kept", name, o, before)
+		case tc.reported != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED && (o.EntryID != 2 || o.Outcome != tc.reported):
+			t.Errorf("%s: outcome %+v, want %v reported for entry 2", name, o, tc.reported)
+		}
+		if h := f.held(dep); h == nil || h.EntryID != held.EntryID || f.mark(dep).Revision != 2 || len(rec.imported) != 1 || len(rec.removed) != 1 {
+			t.Errorf("%s: held %+v, mark %+v, imports %d, removals %v: want the running deployment untouched", name, h, f.mark(dep), len(rec.imported), rec.removed)
+		}
+	}
+}
