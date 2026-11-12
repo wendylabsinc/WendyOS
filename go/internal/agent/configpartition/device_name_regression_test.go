@@ -77,15 +77,15 @@ func TestPersistDeviceNameFailureKeepsPreviousIdentity(t *testing.T) {
 	}
 }
 
-func TestPersistDeviceNameWarnsWhenOverrideCannotBeRemoved(t *testing.T) {
+func TestPersistDeviceNameRejectsWhenOverrideCannotBeRemoved(t *testing.T) {
 	root := t.TempDir()
 	blocked := filepath.Join(root, "etc/wendy-agent/hostname/child")
 	if err := os.MkdirAll(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	core, logs := observer.New(zap.WarnLevel)
-	if err := persistDeviceName(zap.New(core), root, "new-device"); err != nil {
-		t.Fatal(err)
+	if err := persistDeviceName(zap.New(core), root, "new-device"); err == nil {
+		t.Fatal("reported success while an explicit hostname still overrides the device name")
 	}
 	if logs.FilterMessage("Could not clear explicit hostname; it will keep overriding the device name").Len() != 1 {
 		t.Fatalf("missing warning: %v", logs.All())
