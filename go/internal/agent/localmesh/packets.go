@@ -37,15 +37,21 @@ func EncodeIP(id uint32, packet []byte) ([][]byte, error) {
 	for offset := 0; offset < len(packet); {
 		n := min(DatagramLimit-fragmentHeader, len(packet)-offset)
 		d := make([]byte, fragmentHeader+n)
-		d[0] = PacketIP
-		binary.BigEndian.PutUint32(d[1:5], id)
-		binary.BigEndian.PutUint16(d[5:7], uint16(len(packet)))
-		binary.BigEndian.PutUint16(d[7:9], uint16(offset))
-		copy(d[9:], packet[offset:offset+n])
+		writeIPFragment(d, id, packet, offset)
 		out = append(out, d)
 		offset += n
 	}
 	return out, nil
+}
+
+// writeIPFragment fills one already-sized carrier frame. Callers validate the
+// complete packet and bound offset and destination length before calling it.
+func writeIPFragment(d []byte, id uint32, packet []byte, offset int) {
+	d[0] = PacketIP
+	binary.BigEndian.PutUint32(d[1:5], id)
+	binary.BigEndian.PutUint16(d[5:7], uint16(len(packet)))
+	binary.BigEndian.PutUint16(d[7:9], uint16(offset))
+	copy(d[fragmentHeader:], packet[offset:offset+len(d)-fragmentHeader])
 }
 
 func validIP(p []byte) bool {

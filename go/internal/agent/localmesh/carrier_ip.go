@@ -1,7 +1,6 @@
 package localmesh
 
 import (
-	"encoding/binary"
 	"errors"
 	"sync"
 
@@ -16,6 +15,9 @@ const (
 
 // carrierDatagrams is the nonblocking admission and current-capacity contract.
 // Accepted payloads can still be lost after admission; none is a wire receipt.
+// TrySendDatagram must own any accepted bytes before returning, allowing its
+// caller to reuse the supplied buffer. The pinned quic-go implementation copies
+// admitted bytes and returns immediately without retaining rejected buffers.
 type carrierDatagrams interface {
 	TrySendDatagram([]byte) error
 	CurrentMaxDatagramPayloadSize() (int64, error)
@@ -48,6 +50,11 @@ type carrierIPSender struct {
 	negotiated int
 	mu         sync.Mutex
 	stats      CarrierIPStats
+	// A single bounded workspace avoids allocating framing bytes which QUIC
+	// must immediately copy into its own queue. Keep this lock separate from
+	// the stats lock so diagnostics can read while an admission is in progress.
+	sendMu sync.Mutex
+	frame  [WholeIPDatagramLimit]byte
 }
 
 func (s *carrierIPSender) snapshot() CarrierIPStats {
@@ -77,20 +84,22 @@ func (s *carrierIPSender) sendIP(id uint32, packet []byte) error {
 	if !validIP(packet) {
 		return errors.New("invalid carrier IP packet")
 	}
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
 	capacity, err := s.sender.CurrentMaxDatagramPayloadSize()
 	if err != nil {
 		return err
 	}
 	if len(packet)+fragmentHeader <= s.negotiated && int64(len(packet)+fragmentHeader) <= capacity && len(packet) > DatagramLimit-fragmentHeader {
-		whole := make([]byte, fragmentHeader+len(packet))
-		whole[0] = PacketIP
-		binary.BigEndian.PutUint32(whole[1:5], id)
-		binary.BigEndian.PutUint16(whole[5:7], uint16(len(packet)))
-		copy(whole[fragmentHeader:], packet)
+		whole := s.frame[:fragmentHeader+len(packet)]
+		writeIPFragment(whole, id, packet, 0)
 		err = s.sender.TrySendDatagram(whole)
 		if err == nil {
 			s.add(func(c *CarrierIPStats) { c.WholePackets++; c.Fragments++; c.Bytes += uint64(len(whole)) })
 			return nil
+		}
+		if errors.Is(err, quic.ErrDatagramQueueFull) {
+			return s.refusal(err, false)
 		}
 		var large *quic.DatagramTooLargeError
 		if !errors.As(err, &large) {
@@ -98,31 +107,30 @@ func (s *carrierIPSender) sendIP(id uint32, packet []byte) error {
 		}
 		s.add(func(c *CarrierIPStats) { c.WholeFallbacks++ })
 	}
-	fragments, err := EncodeIP(id, packet)
-	if err != nil {
-		return err
-	}
-	for i, fragment := range fragments {
+	for offset := 0; offset < len(packet); {
+		n := min(DatagramLimit-fragmentHeader, len(packet)-offset)
+		fragment := s.frame[:fragmentHeader+n]
+		writeIPFragment(fragment, id, packet, offset)
 		if err = s.sender.TrySendDatagram(fragment); err != nil {
-			return s.refusal(err, i > 0)
+			return s.refusal(err, offset > 0)
 		}
 		s.add(func(c *CarrierIPStats) {
 			c.Fragments++
 			c.Bytes += uint64(len(fragment))
-			if i == 0 {
-				if len(fragments) == 1 {
+			if offset == 0 {
+				if n == len(packet) {
 					c.WholePackets++
 				} else {
 					c.FragmentedPackets++
 				}
 			}
 		})
+		offset += n
 	}
 	return nil
 }
 
 func (s *carrierIPSender) refusal(err error, partial bool) error {
-	var large *quic.DatagramTooLargeError
 	if errors.Is(err, quic.ErrDatagramQueueFull) {
 		s.add(func(c *CarrierIPStats) {
 			c.QueueDrops++
@@ -132,6 +140,7 @@ func (s *carrierIPSender) refusal(err error, partial bool) error {
 		})
 		return nil
 	}
+	var large *quic.DatagramTooLargeError
 	if errors.As(err, &large) {
 		s.add(func(c *CarrierIPStats) {
 			c.SizeDrops++
