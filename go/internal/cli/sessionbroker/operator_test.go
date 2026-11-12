@@ -185,7 +185,11 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		return session, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	lifetime := 30 * time.Second
+	if algorithm == "P256-native-restart" {
+		lifetime = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), lifetime)
 	defer cancel()
 	now := time.Now()
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -278,14 +282,14 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 			t.Fatal(err)
 		}
 	}
-	if algorithm == "P256-process" {
+	if algorithm == "P256-process" || algorithm == "P256-native-restart" {
 		t.Setenv("WENDY_CONFIG_DIR", directory)
 	}
 	oldDir, oldLoad, oldLaunch := configDir, loadConfig, launchOperatorBroker
 	t.Cleanup(func() { configDir, loadConfig, launchOperatorBroker = oldDir, oldLoad, oldLaunch })
 	configDir = func() (string, error) { return directory, nil }
 	cfg := &config.Config{CurrentContext: "operator", Auth: []config.AuthConfig{{Name: "operator", CloudGRPC: "fixture.invalid:443", Certificates: []config.CertificateInfo{certificate}}}}
-	if algorithm == "P256-process" {
+	if algorithm == "P256-process" || algorithm == "P256-native-restart" {
 		if err := config.Save(cfg); err != nil {
 			t.Fatal(err)
 		}
@@ -487,6 +491,11 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 			}
 		}
 		return ctx.Err()
+	}
+
+	if algorithm == "P256-native-restart" {
+		operatorNativeRestartJourney(t, ctx, directory, principal, router, socket.Addr().String(), service, &admitted, &withdrawn)
+		return
 	}
 
 	if strings.HasPrefix(algorithm, "P256-legacy") {
