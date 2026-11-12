@@ -22,6 +22,10 @@ on:
         description: Baseline treatment revision in this repository (default WENDY_EVAL_BASELINE_REF, else main~1)
         type: string
         default: ''
+      repetitions:
+        description: Attempts per task, agent and target on each side (default WENDY_EVAL_REPETITIONS, else 40)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -73,12 +77,13 @@ jobs:
     needs: harness
     runs-on: [self-hosted, wendy-evals]
     environment: agent-evals
-    timeout-minutes: 360
+    # Attempts run one after another on both sides: size the suite, repetitions and agents to this limit.
+    timeout-minutes: ${{ fromJSON(vars.WENDY_EVAL_TIMEOUT_MINUTES || '360') }}
     env:
       LAB_CONFIG: ${{ vars.WENDY_EVAL_CONFIG }}
       BASELINE_REF: ${{ inputs.baseline_ref || vars.WENDY_EVAL_BASELINE_REF || 'main~1' }}
       SUITE: ${{ inputs.suite || 'nightly' }}
-      REPETITIONS: ${{ vars.WENDY_EVAL_REPETITIONS || '40' }}
+      REPETITIONS: ${{ inputs.repetitions || vars.WENDY_EVAL_REPETITIONS || '40' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
