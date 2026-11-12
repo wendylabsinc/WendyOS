@@ -1483,10 +1483,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2575",
       "title": "[WN2] Exchange complete device manifests over a binary mesh protocol",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Gossip tests cover descriptor ordering, renewed leaves and unsupported artifacts. The PR also changes publication/recovery across multiple transport processes.",
-      "required_follow_up": "Add a publish-failure/recovery scenario proving accepted services remain reachable with a renewed identity.",
-      "evidence": []
+      "required_follow_up": "Require accepted-service TCP continuity across a real signing failure and recovery after same-principal leaf renewal in the existing Linux network job. Retain both lost-rollback and stale-descriptor negative controls.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/service_packet_recovery_test.go",
+            "go/internal/agent/localmesh/service_runtime_fixture_test.go",
+            "go/internal/agent/localmesh/certificate_exchange_stale_test.go",
+            ".github/scripts/test-service-packet-recovery.sh"
+          ],
+          "result": "Actual production Catalog-to-ControlHub, signing and binary gossip run over TLS/Babel/gVisor. A persisted publisher restarts with a longer-lived leaf while its receiver retains the old identity; accepted advertised TCP survives a signer refusal and subsequent re-signing. Local race and isolated Linux runtime pass; lost-intent rollback and restored fatal stale-descriptor controls fail. This exposed and fixes a real stale-certificate carrier disconnect. Required hosted gate remains pending; no hardware or kernel-TUN claim."
+        }
+      ]
     },
     {
       "key": "2569",
@@ -2462,10 +2472,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1704",
       "title": "WDY-2430: IP-camera container parity (Phase 3) \u2014 v4l2loopback nodes, ref-counted pump, camera test",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Camera/probe/loopback tests and CLI help tests exist. Real v4l2loopback/GStreamer container delivery can skip without kernel and media dependencies.",
-      "required_follow_up": "Run a privileged media pipeline job with required dependencies and fail on skipped lifecycle tests.",
-      "evidence": []
+      "required_follow_up": "Execute the required final media fixture against the owned v4l2loopback module. Verify exact decoded pixels, shared viewer/container-demand lifetime, full idle grace, reacquisition and node removal; an ignored-container-demand control must fail. Physical firmware and actual OCI camera mounting are separate scope.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/ipcam_loopback_lifecycle_linux_test.go",
+            "go/internal/agent/services/ipcam_stream_freshness_test.go",
+            ".github/scripts/test-ipcam-loopback-lifecycle.sh"
+          ],
+          "result": "Actual authenticated synthetic RTSP/RTP decoded pixel freshness passes locally under race; deleting the production decoder fails. Kernel normal and ignored-container-demand binaries compile. The hosted gate exercises the production Loopback provider and in-process GStreamer pump with independent V4L2 consumers, two viewers, container-only demand, ten-second idle grace, reacquisition and final removal. Actual kernel execution remains pending."
+        }
+      ]
     },
     {
       "key": "1739",
@@ -2620,30 +2639,59 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2078",
       "title": "fix(discovery): hide stale cached LAN devices",
       "package": "09",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Model tests hide cached rows until confirmation and Darwin resolver tests cover lookup failure. The native resolver tests are not selected by the Darwin BLE CI job.",
-      "required_follow_up": "Run the Darwin discovery package tests and include stale-cache/failed-resolve scenarios.",
-      "evidence": []
+      "required_follow_up": "Require the native Bonjour resolver, stale-cache visibility and failed-resolve negative control in the existing macOS CLI/device job. The separate physical BLE scan remains outside this native DNS gate.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-darwin-discovery.sh",
+            "go/internal/shared/discovery/mdns_darwin_test.go",
+            "go/internal/cli/commands/discover_stream_test.go"
+          ],
+          "result": "Native Darwin Bonjour registration/browse/cancellation and failed-resolve cases passed under race checks, as did both stale-cache confirmation cases. The fabricated-host overlay failed all four expected failed-resolution variants. Required hosted macOS execution remains pending; no physical BLE execution is claimed."
+        }
+      ]
     },
     {
       "key": "2671",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2671",
       "title": "Report active mesh carriers and consistent device names",
       "package": "09",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Go tests cover active BLE selection and Cloud identity binding; desktop mesh/topology tests cover labels. Their workflow trigger coverage is narrower than the backend sources that can change these contracts.",
-      "required_follow_up": "Run the desktop topology suites for all mesh backend and UI changes.",
-      "evidence": []
+      "required_follow_up": "Require the existing browser/desktop topology suites when their graph, reporter, component, test, Go backend or protocol sources change. These are non-UI data/transport tests; no visual or click behavior is claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "web-client/tests/desktop-mesh.test.mjs",
+            "web-client/tests/mesh-topology.test.mjs",
+            ".github/workflows/go-tests.yml",
+            ".github/scripts/ci_execution_test.py"
+          ],
+          "result": "All 52 desktop mesh and topology tests passed locally without skips. The existing Browser WASM job already runs all web-client test files and WASM topology tests; push/PR paths now also include their library, Electron, desktop, component and test sources. Hosted execution of the expanded gate remains pending; runner count is unchanged."
+        }
+      ]
     },
     {
       "key": "2583",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2583",
       "title": "[WN11] Include Lite and CLI routers in the mesh topology UI",
       "package": "09",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Topology tests cover failed reporters, authenticated identity and optional protocol variants. Browser/native reporter fallback and UI execution are not all guaranteed by existing workflow triggers.",
-      "required_follow_up": "Run the browser and desktop topology suites whenever mesh protocol or reporter code changes.",
-      "evidence": []
+      "required_follow_up": "Require the existing browser/desktop topology suites when their graph, reporter, component, test, Go backend or protocol sources change. These are non-UI data/transport tests; no visual or click behavior is claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "web-client/tests/desktop-mesh.test.mjs",
+            "web-client/tests/mesh-topology.test.mjs",
+            ".github/workflows/go-tests.yml",
+            ".github/scripts/ci_execution_test.py"
+          ],
+          "result": "All 52 desktop mesh and topology tests passed locally without skips. The existing Browser WASM job already runs all web-client test files and WASM topology tests; push/PR paths now also include their library, Electron, desktop, component and test sources. Hosted execution of the expanded gate remains pending; runner count is unchanged."
+        }
+      ]
     },
     {
       "key": "49fa7f963",
