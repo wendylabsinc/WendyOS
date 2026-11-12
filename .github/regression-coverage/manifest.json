@@ -2662,10 +2662,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2565",
       "title": "wifi: fix WPA3 connect on Jetson Orin Nano and AGX Orin",
       "package": "10",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Fake nmcli tests cover WPA profiles and migration/retry rules. The Jetson WPA3 driver behavior that triggered the bug is not exercised by those tests.",
-      "required_follow_up": "Add a hardware WPA3 association check for the affected Orin variants.",
-      "evidence": []
+      "required_follow_up": "Run the prepared fourteen-case physical procedure on one reserved WendyOS Orin Nano and one AGX Orin. Require fresh AP-confirmed SAE/PMF, exact MAC/BSSID, interface-bound traffic, saved-profile/startup repair, reboot and wrong-password recovery. Record hardware execution separately; all cases remain not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/orin-wpa3-rehearsal.py",
+            ".github/scripts/orin_wpa3_rehearsal_test.py"
+          ],
+          "result": "Prepared an inventory-bound fourteen-case procedure with hashed CLI/Agent/AP/recovery records, explicit wired maintenance access, hidden passphrase entry, non-secret nmcli captures, owned profile/marker reset boundaries and restoration. Two preparation tests cover both boards, all not_run states, generated shell syntax, refusal of ambiguous inventories, no CLI execution and no overwrite. Peer reviewed against production repair and CLI paths. No physical Wi-Fi association has been run."
+        }
+      ]
     },
     {
       "key": "2341",
