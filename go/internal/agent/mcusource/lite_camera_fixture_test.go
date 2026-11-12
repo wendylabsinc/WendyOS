@@ -45,6 +45,16 @@ type liteCameraFixture struct {
 
 func newLiteCameraFixture(t *testing.T, ctx context.Context) *liteCameraFixture {
 	t.Helper()
+	return newLiteSensorFixture(t, ctx, false)
+}
+
+func newLiteMicrophoneFixture(t *testing.T, ctx context.Context) *liteCameraFixture {
+	t.Helper()
+	return newLiteSensorFixture(t, ctx, true)
+}
+
+func newLiteSensorFixture(t *testing.T, ctx context.Context, microphone bool) *liteCameraFixture {
+	t.Helper()
 	const base = "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/"
 	fixture := &liteCameraFixture{pairing: SensorPairing{SourcePrincipalURI: base + "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Transport: "wendycom", Name: "synthetic-lite-camera"}}
 	if name := os.Getenv("WENDY_TEST_LITE_CAMERA_LABEL"); name != "" {
@@ -68,6 +78,14 @@ func newLiteCameraFixture(t *testing.T, ctx context.Context) *liteCameraFixture 
 	}
 	fixture.address = listener.Addr().String()
 	frames := [2][]byte{liteCameraJPEG(t, 0), liteCameraJPEG(t, 1)}
+	descriptor := &sensorlinkpb.SensorDescriptor{ChannelId: 1, InputId: 1, Name: "camera",
+		Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 64, Height: 48, Fps: 25}}}
+	if microphone {
+		fixture.pairing.Name = "synthetic-lite-microphone"
+		frames = [2][]byte{bytes.Repeat(liteMicrophoneMarker(0), 2), bytes.Repeat(liteMicrophoneMarker(1), 2)}
+		descriptor = &sensorlinkpb.SensorDescriptor{ChannelId: 1, InputId: 1, Name: "microphone",
+			Format: &sensorlinkpb.SensorDescriptor_Audio{Audio: &sensorlinkpb.AudioFormat{Codec: sensorlinkpb.AudioFormat_PCM_S16LE, SampleRate: 48000, Channels: 1}}}
+	}
 	serverCtx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -155,10 +173,7 @@ func newLiteCameraFixture(t *testing.T, ctx context.Context) *liteCameraFixture 
 			response := &litepb.WendyComResponse{RequestId: command.RequestId}
 			switch {
 			case command.GetSensorLinkGetManifest() != nil:
-				response.Data = &litepb.WendyComResponse_SensorLinkManifest{SensorLinkManifest: &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{
-					ChannelId: 1, InputId: 1, Name: "camera",
-					Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 64, Height: 48, Fps: 25}},
-				}}}}
+				response.Data = &litepb.WendyComResponse_SensorLinkManifest{SensorLinkManifest: &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{descriptor}}}
 			case command.GetSensorLinkSubscribe() != nil:
 				channels := command.GetSensorLinkSubscribe().GetChannelId()
 				if len(channels) != 1 || channels[0] != 1 {
@@ -305,5 +320,66 @@ func TestLiteCameraFixtureAuthenticatesAndDeliversChangingPixels(t *testing.T) {
 	}
 	if !fixture.verifiedConsumer.Load() || fixture.accepted.Load() != 1 {
 		t.Fatal("manifest and video did not use one mutually authenticated connection")
+	}
+}
+
+// Each period is 20ms of 48kHz signed16 PCM. Two periods per WendyCom frame
+// match the source's 40ms cadence; phase markers have unrelated sample values.
+func liteMicrophoneMarker(phase int32) []byte {
+	seed := uint32(0x12345678)
+	if phase == 1 {
+		seed = 0x87654321
+	}
+	marker := make([]byte, 960*2)
+	for i := 0; i < len(marker); i += 2 {
+		seed ^= seed << 13
+		seed ^= seed >> 17
+		seed ^= seed << 5
+		binary.LittleEndian.PutUint16(marker[i:], uint16(seed))
+	}
+	return marker
+}
+
+func TestLiteMicrophoneFixtureAuthenticatesAndDeliversChangingPCM(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fixture := newLiteMicrophoneFixture(t, ctx)
+	transport, err := fixture.transport(fixture.pairing, fixture.address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	if err := transport.(interface{ Connect(context.Context) error }).Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := transport.FetchManifest(ctx)
+	if err != nil || len(manifest.GetSensors()) != 1 || manifest.Sensors[0].GetAudio().GetCodec() != sensorlinkpb.AudioFormat_PCM_S16LE {
+		t.Fatalf("microphone manifest: %+v, %v", manifest, err)
+	}
+	frames, closeStream, err := transport.Stream(ctx, []uint32{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStream()
+	for _, phase := range []int32{0, 1} {
+		fixture.phase.Store(phase)
+		want := bytes.Repeat(liteMicrophoneMarker(phase), 2)
+		for {
+			select {
+			case frame, ok := <-frames:
+				if !ok {
+					t.Fatal("authenticated microphone stream closed")
+				}
+				if frame.ChannelID == 1 && bytes.Equal(frame.Payload, want) {
+					goto observedPCM
+				}
+			case <-ctx.Done():
+				t.Fatal("authenticated microphone did not deliver changed PCM")
+			}
+		}
+	observedPCM:
+	}
+	if !fixture.verifiedConsumer.Load() || fixture.accepted.Load() != 1 {
+		t.Fatal("microphone manifest and PCM did not use one authenticated connection")
 	}
 }

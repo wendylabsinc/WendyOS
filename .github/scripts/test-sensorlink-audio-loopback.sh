@@ -68,6 +68,38 @@ for control in pipewire-only crossed-microphones; do
   go test -race -overlay "$output/$control.json" -c -o "$output/$control.test" ./go/internal/agent/services
 done
 
+# The same owned snd-aloop fixture also verifies the missing authenticated
+# Lite microphone hop: WendyCom -> Supervisor -> aplay -> kernel -> arecord.
+microphone_test=TestLiteMicrophoneDeliversPCMThroughAuthenticatedKernelLoopback
+go test -race -c -o "$output/lite-microphone.test" ./go/internal/agent/mcusource
+python3 - "$output" <<'PY_MICROPHONE'
+import json
+from pathlib import Path
+import sys
+
+out = Path(sys.argv[1])
+source = Path('go/internal/agent/mcusource/supervisor.go').resolve()
+original = source.read_text()
+controls = {
+    'lite-combined-budget': (
+        'if connector, ok := tr.(interface{ Connect(context.Context) error }); ok {',
+        'if connector, ok := tr.(interface{ Connect(context.Context) error }); false && ok {'),
+    'lite-wrong-channel': (
+        '} else if aw := audioWriters[f.ChannelID]; aw != nil {',
+        '} else if aw := audioWriters[f.ChannelID+1]; aw != nil {'),
+    'lite-no-pcm': ('aw.WritePCM(f.Payload)', 'aw.WritePCM(nil)'),
+}
+for name, (before, after) in controls.items():
+    if original.count(before) != 1:
+        raise SystemExit(f'{name} no longer identifies one source site')
+    replacement = out / f'{name}.go'
+    replacement.write_text(original.replace(before, after))
+    (out / f'{name}.json').write_text(json.dumps({'Replace': {str(source): str(replacement)}}))
+PY_MICROPHONE
+for control in lite-combined-budget lite-wrong-channel lite-no-pcm; do
+  go test -race -overlay "$output/$control.json" -c -o "$output/$control.test" ./go/internal/agent/mcusource
+done
+
 created_user=0
 loaded_module=0
 daemon_launcher=
@@ -212,7 +244,7 @@ run_fixture() {
   sudo -n env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
     WENDY_SENSORLINK_AUDIO_LOOPBACK=1 WENDY_TEST_PIPEWIRE_RUNTIME="$daemon_directory/runtime" \
     python3 .github/scripts/run-owned-media-test.py --timeout 60 -- "$1" \
-      -test.run "^${test_name}$" -test.v -test.count=1 -test.timeout=0
+      -test.run "^${2:-$test_name}$" -test.v -test.count=1 -test.timeout=0
 }
 run_fixture "$output/services.test" | tee "$output/normal.log"
 grep -q "^--- PASS: $test_name " "$output/normal.log"
@@ -228,3 +260,21 @@ for control in pipewire-only crossed-microphones; do
 done
 grep -q 'live SensorLink recording could not start:' "$output/pipewire-only.log"
 grep -Eq 'kernel recording (crossed microphone identities|did not preserve exact microphone PCM)' "$output/crossed-microphones.log"
+
+# No extra module, account, daemon or runner: the authenticated source uses the
+# already reserved audio kernel fixture after the direct capture regressions.
+run_fixture "$output/lite-microphone.test" "$microphone_test" | tee "$output/lite-microphone.log"
+grep -q "^--- PASS: $microphone_test " "$output/lite-microphone.log"
+if grep -q '^--- SKIP:' "$output/lite-microphone.log"; then exit 1; fi
+for control in lite-combined-budget lite-wrong-channel lite-no-pcm; do
+  if run_fixture "$output/$control.test" "$microphone_test" > "$output/$control.log" 2>&1; then
+    cat "$output/$control.log"
+    echo "Authenticated Lite microphone did not reject $control" >&2
+    exit 1
+  fi
+  cat "$output/$control.log"
+  grep -q "^--- FAIL: $microphone_test " "$output/$control.log"
+done
+grep -q 'Lite microphone ended before kernel capture became live:' "$output/lite-combined-budget.log"
+grep -q 'Lite microphone did not deliver to its kernel playback writer' "$output/lite-wrong-channel.log"
+grep -Eq 'kernel microphone (consumer did not record two seconds|did not preserve fresh authenticated PCM)' "$output/lite-no-pcm.log"
