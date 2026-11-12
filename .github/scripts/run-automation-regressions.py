@@ -18,6 +18,7 @@ SUITES = (
     "security_review_test.py",
     "swift_e2e_gate_test.py",
     "ci_execution_test.py",
+    "shared_contracts_test.py",
 )
 
 
