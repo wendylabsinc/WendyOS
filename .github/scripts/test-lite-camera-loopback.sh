@@ -7,8 +7,18 @@ if [[ "${GITHUB_ACTIONS:-}" != true || "${RUNNER_ENVIRONMENT:-}" != github-hoste
   exit 2
 fi
 cd "$(git rev-parse --show-toplevel)"
-test -c /dev/v4l2loopback
-test "$(cat /sys/module/v4l2loopback/version)" = 0.15.4
+if [[ ! -c /dev/v4l2loopback ]]; then
+  echo 'Expected the owned v4l2loopback control device at /dev/v4l2loopback; the media module setup did not complete.' >&2
+  exit 2
+fi
+if ! module_version="$(cat /sys/module/v4l2loopback/version 2>/dev/null)"; then
+  echo 'Cannot read the loaded v4l2loopback module version; refusing the kernel camera fixture.' >&2
+  exit 2
+fi
+if [[ "$module_version" != 0.15.4 ]]; then
+  printf 'Expected v4l2loopback module version 0.15.4; found <%s>. Build the exact pinned checkout without its .gitversion development marker before loading it.\n' "$module_version" >&2
+  exit 2
+fi
 for element in v4l2src jpegdec videoconvert fdsink; do
   gst-inspect-1.0 "$element" > /dev/null
 done

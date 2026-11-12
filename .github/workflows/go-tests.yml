@@ -657,7 +657,24 @@ jobs:
       - name: Build and load WendyOS loopback ABI
         id: loopback-module
         run: |
+          set -euo pipefail
+          loopback_revision="$(git -C .ci-v4l2loopback rev-parse HEAD)"
+          if [[ "$loopback_revision" != 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4 ]]; then
+            echo "::error::Unexpected v4l2loopback source revision: $loopback_revision"
+            exit 1
+          fi
+          git -C .ci-v4l2loopback diff --exit-code HEAD --
+          # The pinned release's Git checkout includes this development marker.
+          # It makes MODULE_VERSION a git-describe snapshot instead of
+          # the canonical 0.15.4 header version. Remove only the marker, as in
+          # upstream's release tarball; keep the exact source and ABI guard.
+          rm -- .ci-v4l2loopback/.gitversion
           make -C .ci-v4l2loopback
+          loopback_version="$(modinfo -F version .ci-v4l2loopback/v4l2loopback.ko)"
+          if [[ "$loopback_version" != 0.15.4 ]]; then
+            echo "::error::Expected built v4l2loopback version 0.15.4; got <$loopback_version>"
+            exit 1
+          fi
           sudo modprobe videodev
           sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
           sudo udevadm settle
