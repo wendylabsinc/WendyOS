@@ -56,9 +56,11 @@ import (
 //	release kind other than CONTAINER, unreadable OCI
 //	manifest, local staging or containerd import fails       APPLY_FAILED
 //	assignment expired before the pull (re)started           PULL_REFUSED
-//	imported, desired state RUNNING: nothing starts the app
-//	until starting it with its configuration exists          outcomeNotStarted
-//	imported, desired state STOPPED (install only)           APPLIED
+//	release definition missing, invalid, for another app or
+//	with several services; configuration not applicable      APPLY_FAILED
+//	create or start failed (the last applied statement's app
+//	is put back when this attempt replaced it)               APPLY_FAILED
+//	started (RUNNING) or created and stopped (STOPPED)       APPLIED
 //
 // The pull runs beside the postbox's command queue (pullJob): the
 // assignment's entry is decided at once as outcomePulling, and the pull's
@@ -189,6 +191,9 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	// A resumed pull starts without a failure, where pullRetry checks the
 	// expiry: nothing is fetched under a statement that has expired.
 	if !p.trustedNow().Before(a.GetExpiresAt().AsTime()) {
+		// Not applied. A swap a crash interrupted may have left no app:
+		// the last applied statement's app is put back.
+		p.putBackPrevious(ctx, a)
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED, "expired", errors.New("the assignment expired before its pull started")
 	}
 	// Named by a hash: the deployment id is cloud's string, not a path.
@@ -340,6 +345,7 @@ func (p *Postbox) finishPull(ctx context.Context, a *cloudpbv2.DeviceAssignment,
 		}
 		done := *held
 		done.Pulled = true
+		done.Applied = outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED
 		st.Assignments = maps.Clone(st.Assignments)
 		st.Assignments[a.GetDeploymentId()] = &done
 		if o := st.Outcomes[a.GetAppId()]; o == nil || o.EntryID <= entryID {

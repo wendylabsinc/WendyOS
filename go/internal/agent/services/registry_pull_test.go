@@ -237,7 +237,13 @@ type importRecorder struct {
 	appConfig []byte
 	starts    []ReleaseStart
 	startErr  func(ReleaseStart) error
-	digests   []string // the manifest digests the definition was read for
+	// beforeReplace: startErr failures happen before the container is
+	// replaced (a refused validation). app is the app's container as the
+	// fake runtime holds it.
+	beforeReplace bool
+	app           *fakeApp
+	arts          *fakeArtifacts // the registry this recorder's postbox pulls from
+	digests       []string       // the manifest digests the definition was read for
 }
 
 func (r *importRecorder) HasRelease(_ context.Context, _, release, _ string) bool {
@@ -252,12 +258,30 @@ func (r *importRecorder) ReleaseAppConfig(_ context.Context, app, _, digest stri
 	return []byte(`{"appId":"` + app + `"}`), nil
 }
 
-func (r *importRecorder) StartRelease(_ context.Context, s ReleaseStart) error {
+// fakeApp is the app's container in the fake runtime.
+type fakeApp struct {
+	image   string
+	running bool
+}
+
+func (r *importRecorder) StartRelease(_ context.Context, s ReleaseStart) (bool, error) {
 	r.starts = append(r.starts, s)
+	var err error
 	if r.startErr != nil {
-		return r.startErr(s)
+		err = r.startErr(s)
 	}
-	return nil
+	if err != nil && r.beforeReplace {
+		return false, err
+	}
+	r.app = &fakeApp{image: ReleaseImageName(s.AppID, s.ReleaseID), running: err == nil && s.Run}
+	return true, err
+}
+
+func (r *importRecorder) AppState(context.Context, string) (string, bool, bool) {
+	if r.app == nil {
+		return "", false, false
+	}
+	return r.app.image, true, r.app.running
 }
 
 // removal is one RemoveReleases call, or a PruneReleases call (prune).
@@ -308,7 +332,7 @@ func refuseArtifacts(string, string, string, string) (cloudpbv2.DeviceArtifactSe
 }
 
 func (f *pbFixture) withArtifacts(a *fakeArtifacts) *importRecorder {
-	rec := &importRecorder{postboxControl: f.p.control}
+	rec := &importRecorder{postboxControl: f.p.control, arts: a}
 	f.p.control = rec
 	f.p.retry = time.Millisecond
 	f.p.dialArtifacts = func(string, string, string, string) (cloudpbv2.DeviceArtifactServiceClient, io.Closer, error) {
