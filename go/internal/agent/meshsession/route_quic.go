@@ -1,6 +1,7 @@
 package meshsession
 
 import (
+	"net"
 	"net/netip"
 	"time"
 
@@ -33,6 +34,35 @@ func quicConfigForRoute(snapshot localmesh.NodeSnapshot, peer meshid.Device, now
 		}
 	}
 	return config
+}
+
+// serverQUICConfig gives an incoming session the same startup profile the
+// client would choose: faster only when the client's address has a current
+// installed route through a forwarding-ready direct LAN link to that device.
+// The Initial's source address is not yet validated, but it selects only
+// congestion startup. Replies follow the installed route to that address,
+// anti-amplification still bounds what is sent before validation, and TLS
+// authenticates the client as before.
+func serverQUICConfig(snapshot func() localmesh.NodeSnapshot, remote net.Addr) *quic.Config {
+	udp, ok := remote.(*net.UDPAddr)
+	if snapshot == nil || !ok {
+		return quicConfig()
+	}
+	address, ok := netip.AddrFromSlice(udp.IP)
+	if !ok {
+		return quicConfig()
+	}
+	address = address.Unmap()
+	view := snapshot()
+	// Read the clock after the view, as the dialing side does: a refresh
+	// between the two would otherwise look like a snapshot from the future.
+	now := time.Now()
+	for _, link := range view.Links {
+		if link.Device.IsValid() && link.Device.MeshAddress() == address {
+			return quicConfigForRoute(view, link.Device, now)
+		}
+	}
+	return quicConfig()
 }
 
 // Keep TCP and UDP startup selection behind the same current-route check.

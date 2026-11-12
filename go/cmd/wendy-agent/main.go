@@ -1173,6 +1173,9 @@ func main() {
 				stopSessions()
 				return
 			}
+			// Sessions from a current direct LAN neighbour get the same startup
+			// profile the dialing side would choose.
+			sessionServer.SetRouteSnapshot(currentAppRoutes(appClient))
 			// Publish app capabilities only after both sockets have bound. A
 			// listener failure ends the carriers and their signed advertisement.
 			ready := make(chan struct{}, 2)

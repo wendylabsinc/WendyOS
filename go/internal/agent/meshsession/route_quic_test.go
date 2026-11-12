@@ -218,3 +218,131 @@ func TestDirectLANRecoversDroppedInitial(t *testing.T) {
 		})
 	}
 }
+
+func TestServerQUICStartupFollowsClientRoute(t *testing.T) {
+	a, b := fixtureCredentials(t)
+	fromClient := &net.UDPAddr{IP: a.Device.MeshAddress().AsSlice(), Port: 4242}
+	for _, tc := range []struct {
+		name   string
+		view   func() localmesh.NodeSnapshot
+		remote net.Addr
+		fast   bool
+	}{
+		{"direct LAN client", func() localmesh.NodeSnapshot { return directLANView(a.Device) }, fromClient, true},
+		{"BLE client", func() localmesh.NodeSnapshot {
+			s := directLANView(a.Device)
+			s.Links[0].Transport = "ble"
+			return s
+		}, fromClient, false},
+		{"other device's address", func() localmesh.NodeSnapshot { return directLANView(b.Device) }, fromClient, false},
+		{"route withdrawn", func() localmesh.NodeSnapshot {
+			s := directLANView(a.Device)
+			s.ForwardingRoutes = nil
+			return s
+		}, fromClient, false},
+		{"stale", func() localmesh.NodeSnapshot {
+			s := directLANView(a.Device)
+			s.CapturedAt = time.Now().Add(-2 * time.Second)
+			return s
+		}, fromClient, false},
+		{"no runtime", nil, fromClient, false},
+		{"non-UDP address", func() localmesh.NodeSnapshot { return directLANView(a.Device) }, &net.TCPAddr{IP: fromClient.IP, Port: fromClient.Port}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{}
+			s.SetRouteSnapshot(tc.view)
+			got, err := s.listenConfig().GetConfigForClient(&quic.ClientInfo{RemoteAddr: tc.remote})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rtt, burst := time.Second, uint32(4)
+			if tc.fast {
+				rtt, burst = 100*time.Millisecond, 10
+			}
+			if got.InitialRTT != rtt || got.InitialCongestionWindowPackets != burst {
+				t.Fatalf("startup = %s/%d", got.InitialRTT, got.InitialCongestionWindowPackets)
+			}
+			if got.InitialPacketSize != 1200 || !got.DisablePathMTUDiscovery || got.Allow0RTT || got.GetConfigForClient != nil {
+				t.Fatal("changed MTU, early data or per-client policy")
+			}
+		})
+	}
+}
+
+// meshSourceConn presents a loopback client as its mesh address, as the routed
+// TUN does, and drops the server's opening flight.
+type meshSourceConn struct {
+	net.PacketConn
+	mesh    *net.UDPAddr
+	client  atomic.Pointer[net.UDPAddr]
+	started time.Time
+	writes  atomic.Int32
+}
+
+func (c *meshSourceConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(p)
+	if err != nil {
+		return n, addr, err
+	}
+	c.client.Store(addr.(*net.UDPAddr))
+	return n, c.mesh, nil
+}
+
+func (c *meshSourceConn) WriteTo(p []byte, _ net.Addr) (int, error) {
+	c.writes.Add(1)
+	if time.Since(c.started) < 100*time.Millisecond {
+		return len(p), nil
+	}
+	return c.PacketConn.WriteTo(p, c.client.Load())
+}
+
+func TestDirectLANServerRecoversDroppedServerFlight(t *testing.T) {
+	a, b := fixtureCredentials(t)
+	for _, fast := range []bool{false, true} {
+		t.Run(map[bool]string{false: "conservative", true: "direct LAN"}[fast], func(t *testing.T) {
+			serverTLS, err := b.PeerTLSWithTickets(a.Device, ALPN, "app-quic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer udp.Close()
+			wire := &meshSourceConn{PacketConn: udp, mesh: &net.UDPAddr{IP: a.Device.MeshAddress().AsSlice(), Port: 4242}, started: time.Now()}
+			transport := &quic.Transport{Conn: wire}
+			defer transport.Close()
+			server := &Server{}
+			if fast {
+				server.SetRouteSnapshot(func() localmesh.NodeSnapshot { return directLANView(a.Device) })
+			}
+			listener, err := transport.Listen(serverTLS, server.listenConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			cfg, err := a.PeerTLSWithTickets(b.Device, ALPN, "app-quic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+			defer cancel()
+			// The client keeps conservative startup so only the server's
+			// retransmission timing differs between the two cases.
+			started := time.Now()
+			conn, err := quic.DialAddr(ctx, udp.LocalAddr().String(), cfg, quicConfig())
+			elapsed := time.Since(started)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.CloseWithError(0, "test done")
+			t.Logf("dropped server opening flight: handshake=%s, server datagrams=%d", elapsed, wire.writes.Load())
+			if fast && elapsed >= 1500*time.Millisecond {
+				t.Fatal("direct LAN server did not recover before conservative probe budget")
+			}
+			if !fast && elapsed < 1800*time.Millisecond {
+				t.Fatal("conservative server startup probed too early")
+			}
+		})
+	}
+}
