@@ -17,15 +17,54 @@ def job(filename, name):
     return match[1]
 
 
+def permissions_values(text, indent):
+    """Return each `permissions:` value at this indent, inline or as a block."""
+    lines = text.splitlines()
+    prefix = ' ' * indent + 'permissions:'
+    values = []
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
+            continue
+        value = [line[len(prefix):].split('#', 1)[0]]
+        for nested in lines[index + 1:]:
+            content = nested.split('#', 1)[0]
+            if not content.strip():
+                continue
+            if len(nested) - len(nested.lstrip()) <= indent:
+                break
+            value.append(content)
+        values.append(' '.join(value))
+    return values
+
+
+def grants_write(text, indent):
+    # Matches block and flow-style `scope: write` as well as `write-all`.
+    return any(re.search(r'\bwrite\b', value) for value in permissions_values(text, indent))
+
+
 class WorkflowSecurityTests(unittest.TestCase):
+    def test_permission_parser_catches_write_forms(self):
+        for snippet, expected in [
+            ('permissions:\n  contents: read\n  pull-requests: write\nfoo: 1\n', True),
+            ('permissions: write-all\n', True),
+            ('permissions: { contents: read, pull-requests: write }\n', True),
+            ('permissions:\n  # never write here\n  contents: read\njobs:\n  x: write\n', False),
+            ('permissions: read-all\n', False),
+            ('permissions: {}\n', False),
+        ]:
+            with self.subTest(snippet=snippet):
+                self.assertEqual(grants_write(snippet, 0), expected)
+        self.assertTrue(grants_write('    permissions: write-all\n', 4))
+        self.assertFalse(grants_write('      permissions: write-all\n', 4))
+
     def test_code_execution_jobs_have_no_write_tokens(self):
         for filename, names in [('swift-tests.yml', ['test', 'build', 'lint']),
                                 ('swift-e2e-tests.yml', ['swift-e2e-local-macos', 'swift-e2e-local-ubuntu'])]:
             text = (ROOT / '.github/workflows' / filename).read_text()
             defaults = text.split('\njobs:', 1)[0]
-            self.assertNotRegex(defaults, r'(?m)^  [a-z-]+: write$', filename)
+            self.assertFalse(grants_write(defaults, 0), filename)
             for name in names:
-                self.assertNotRegex(job(filename, name), r'(?m)^      [a-z-]+: write$', name)
+                self.assertFalse(grants_write(job(filename, name), 4), name)
 
     def test_lint_comment_job_does_not_execute_pr_code(self):
         comment = job('swift-tests.yml', 'lint-comment')
