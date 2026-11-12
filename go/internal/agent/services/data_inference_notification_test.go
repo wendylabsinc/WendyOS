@@ -139,8 +139,8 @@ func TestCampaignCloudAuthorizationFailureIsTerminal(t *testing.T) {
 	}
 	cancel()
 	<-done
-	if reported == "" || !strings.Contains(reported, "device notification delivery is refused") {
-		t.Fatalf("missing immediate authorization error: %q", reported)
+	if !strings.Contains(reported, "PermissionDenied") || !strings.Contains(reported, "Cloud notification delivery failed") || strings.Contains(reported, "device notification delivery is refused") {
+		t.Fatalf("missing safe immediate authorization error: %q", reported)
 	}
 	if cloud.calls.Load() != 1 {
 		t.Fatalf("authorization failure retried %d times", cloud.calls.Load())
