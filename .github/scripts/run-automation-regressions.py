@@ -32,6 +32,7 @@ SUITES = (
     "gpu_hardware_test.py",
     "npu_hardware_test.py",
     "orin_wpa3_rehearsal_test.py",
+    "mac_camera_rehearsal_test.py",
     "accelerator_renumbering_test.py",
     "so101_reader_acceptance_test.py",
     "tensorrt_restart_test.py",

@@ -2546,10 +2546,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2011",
       "title": "Fix Mac camera stream startup crash",
       "package": "08",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "The Mac camera startup crash fix changes capture startup, but no direct startup-crash regression was found in the changed tests or current camera tests inspected.",
-      "required_follow_up": "Exercise camera start and stop under actor/concurrency checking with the same callback ordering as the crash.",
-      "evidence": []
+      "required_follow_up": "Run the prepared exact-Mac startup/stop and concurrent capture procedure with the signed instrumented candidate; require fresh decoded frames, unchanged listener process and no actor or AVFoundation configuration diagnostics. Retain physical evidence separately.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-rehearsal.py",
+            ".github/scripts/mac_camera_rehearsal_test.py"
+          ],
+          "result": "Physical Mac acceptance generator and 11 offline checks pass. The plan pins the signed packaged app, source, CLI/decoder, camera identity, listener and disposable authentication profiles. It provides bounded headless capture/decode commands, repeated startup/stop under recorded actor instrumentation, overlapping streams, cancellation/reuse and independent physical release observations. All ten cases and cleanup remain not_run; generation and offline tests perform no native inventory, permission change or hardware access."
+        }
+      ],
+      "resolution": "Detailed physical procedure and bounded observation helper are prepared. Hardware execution is not claimed."
     },
     {
       "key": "2321",
@@ -2588,7 +2597,7 @@
       "package": "08",
       "status": "partial",
       "audit_finding": "Swift video service tests cover authorization/rate bounds. Real AVFoundation streaming and packaged-app listener behavior remain outside those fixtures.",
-      "required_follow_up": "Require the live plaintext/mTLS VideoService transport suite in existing Swift CI. Prepare and retain a physical AVFoundation and packaged-agent listener procedure for real capture/teardown; controlled source transport tests do not establish that hardware behavior.",
+      "required_follow_up": "Reconcile the live VideoService plaintext/mTLS suite in required Swift CI. The physical packaged-camera procedure is prepared; its real capture, authorization boundary and teardown observations remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -2596,6 +2605,13 @@
             "swift/WendyAgentCore/Sources/WendyAgent/Services/VideoService.swift"
           ],
           "result": "Twelve focused Swift adapter/transport tests pass locally. Actual loopback HTTP/2 plaintext and mTLS paths reject no/foreign certificates and wrong-role clients before camera access, enforce two sessions, preserve sibling streaming, cancel idle/pre-first-frame captures, handle error/cancel races and reuse exactly two slots. Original production failed both idle wire-cancellation cases: GRPCCore signals the RPC handle instead of cancelling the response producer task. The fix races that handle with frame copy and joins cancellation before release. Hosted execution and actual physical/packaged capture remain pending."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/mac-camera-rehearsal.py",
+            ".github/scripts/mac_camera_rehearsal_test.py"
+          ],
+          "result": "Physical Mac acceptance generator and 11 offline checks pass. The plan pins the signed packaged app, source, CLI/decoder, camera identity, listener and disposable authentication profiles. It provides bounded headless capture/decode commands, repeated startup/stop under recorded actor instrumentation, overlapping streams, cancellation/reuse and independent physical release observations. All ten cases and cleanup remain not_run; generation and offline tests perform no native inventory, permission change or hardware access."
         }
       ]
     },
