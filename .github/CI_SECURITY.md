@@ -7,9 +7,15 @@ because it pushes release tags and Homebrew changes. Its Homebrew App token is
 limited to that repository and contents/pull-request writes.
 
 Swift lint runs PR code without a write token. A separate job posts its bounded
-output as data, without checking out the PR. The E2E analyzer builds its review
-scripts from the PR base commit and fetches the proposed commit only for a diff.
-Artifact identifiers must be a single bounded path component.
+output as data, without checking out the PR. The E2E analyzer builds and runs its
+tools from the PR base commit. It fetches the proposed commit only as data: the
+review diff and the PR's E2E test sources, copied in as regular files, which the
+report and AI review parse but never compile. A PR's script, Swift, or
+dependency changes therefore never run beside the review credentials. This does
+not stop a same-repository PR that edits the workflow itself (see below). The
+base aggregator reads the PR's attempt artifacts, so a change to their format
+must stay readable by the previous aggregator, or that PR's analysis fails until
+it merges. Artifact identifiers must be a single bounded path component.
 
 Actions use full commit SHAs, and Dependabot proposes their updates. The Arch
 Linux release container is pinned by digest. Dependabot does not update

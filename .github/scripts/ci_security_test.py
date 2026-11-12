@@ -4,6 +4,8 @@ from pathlib import Path
 import os
 import re
 import subprocess
+import tempfile
+import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +17,14 @@ def job(filename, name):
     if not match:
         raise AssertionError(f'Missing job {name}')
     return match[1]
+
+
+def step_script(block, name):
+    match = re.search(rf'(?m)^      - name: {re.escape(name)}\n(?:        .*\n)*?'
+                      r'        run: \|\n((?:          .*\n|\n)+)', block)
+    if not match:
+        raise AssertionError(f'Missing run step {name}')
+    return textwrap.dedent(match[1])
 
 
 def permissions_values(text, indent):
@@ -78,9 +88,72 @@ class WorkflowSecurityTests(unittest.TestCase):
         analyze = job('swift-e2e-tests.yml', 'swift-e2e-analyze')
         self.assertIn('ref: ${{ github.event.pull_request.base.sha || github.sha }}', analyze)
         self.assertIn('persist-credentials: false', analyze)
-        self.assertIn('git fetch --no-tags origin "$PR_HEAD_SHA"', analyze)
-        self.assertIn('--diff "${PR_BASE_SHA}...${PR_HEAD_SHA}"', analyze)
+        fetch = step_script(analyze, 'Fetch PR head as review data')
+        self.assertIn('git fetch --no-tags origin "$PR_HEAD_SHA"', fetch)
+        self.assertNotIn('${{', fetch)
+        self.assertIn('PR_DIFF_RANGE: ${{ steps.pr-head.outputs.diff_range }}', analyze)
+        self.assertIn('--diff "$PR_DIFF_RANGE"', analyze)
         self.assertNotIn('git checkout', analyze)
+        # Head test sources must replace base ones before the tools read them.
+        self.assertLess(analyze.index('Fetch PR head as review data'),
+                        analyze.index('Perform Swift E2E AI Review'))
+        self.assertLess(analyze.index('Fetch PR head as review data'),
+                        analyze.index('Render Swift E2E Report'))
+
+    def test_pr_test_sources_are_copied_as_regular_files(self):
+        script = step_script(job('swift-e2e-tests.yml', 'swift-e2e-analyze'),
+                             'Fetch PR head as review data')
+        tests = 'swift/WendyE2ETests/Tests/WendyE2ETests'
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            env = {**os.environ, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+                   'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.com',
+                   'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.com'}
+
+            def git(cwd, *args):
+                return subprocess.run(['git', *args], cwd=cwd, env=env, check=True,
+                                      capture_output=True, text=True).stdout.strip()
+
+            source = tmp / 'source'
+            (source / tests).mkdir(parents=True)
+            git(source, 'init', '-q', '-b', 'main')
+            (source / tests / 'OldTests.swift').write_text('// base\n')
+            git(source, 'add', '-A')
+            git(source, 'commit', '-q', '-m', 'base')
+            base = git(source, 'rev-parse', 'HEAD')
+            git(source, 'checkout', '-q', '-b', 'pr')
+            (source / tests / 'OldTests.swift').unlink()
+            (source / tests / 'Helpers').mkdir()
+            (source / tests / 'NewTests.swift').write_text('// head\n')
+            (source / tests / 'Helpers' / 'Fixture.swift').write_text('// helper\n')
+            (source / tests / 'LeakTests.swift').symlink_to('/etc/hostname')
+            git(source, 'add', '-A')
+            git(source, 'commit', '-q', '-m', 'head')
+            head = git(source, 'rev-parse', 'HEAD')
+
+            work = tmp / 'work'
+            git(tmp, 'clone', '-q', str(source), str(work))
+            git(work, 'checkout', '-q', '--detach', base)
+            (tmp / 'runner').mkdir()
+            output = tmp / 'output'
+
+            def run(head_sha, base_sha):
+                return subprocess.run(['bash', '-c', script], cwd=work, capture_output=True, text=True,
+                                      env={**env, 'PR_HEAD_SHA': head_sha, 'PR_BASE_SHA': base_sha,
+                                           'RUNNER_TEMP': str(tmp / 'runner'), 'GITHUB_OUTPUT': str(output)})
+
+            result = run(head, base)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            copied = sorted(str(p.relative_to(work / tests)) for p in (work / tests).rglob('*'))
+            self.assertEqual(copied, ['Helpers', 'Helpers/Fixture.swift', 'NewTests.swift'])
+            self.assertFalse((work / tests / 'LeakTests.swift').is_symlink())
+            self.assertIn(f'diff_range={base}...{head}', output.read_text())
+
+            for bad in ['', 'HEAD', '-' + head[1:], head.upper()]:
+                with self.subTest(head=bad):
+                    result = run(bad, base)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('::error::', result.stdout)
 
     def test_artifact_ids_cannot_escape_or_inject_paths(self):
         analyze = job('swift-e2e-tests.yml', 'swift-e2e-analyze')

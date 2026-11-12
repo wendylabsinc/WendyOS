@@ -518,7 +518,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Review tools run trusted base code; downloaded attempts are data.
+          # Analyzer code comes from the base commit, so a PR's script, Swift or
+          # dependency changes never run beside the review credentials. A PR
+          # that edits this workflow still controls the job (.github/
+          # CI_SECURITY.md). Attempts and PR test sources are read as data.
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
@@ -673,6 +676,39 @@ jobs:
             --output-dir "${RUNNER_TEMP}/wendy" \
             "${attempt_dirs[@]}"
 
+      # The report lists tests, and the AI review its `// AI:` requests, from
+      # E2E test sources. Use the PR's, so added or edited tests line up with
+      # their results. They are copied in as regular files and only parsed:
+      # `swift run swift-e2e-testing` never builds test targets.
+      - name: Fetch PR head as review data
+        id: pr-head
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ || ! "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Pull request head or base SHA is missing or malformed (head '${PR_HEAD_SHA}', base '${PR_BASE_SHA}')."
+            exit 1
+          fi
+          git fetch --no-tags origin "$PR_HEAD_SHA"
+          echo "diff_range=${PR_BASE_SHA}...${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+          tests_path=swift/WendyE2ETests/Tests/WendyE2ETests
+          staging="$(mktemp -d "${RUNNER_TEMP}/pr-e2e-tests.XXXXXX")"
+          if git cat-file -e "${PR_HEAD_SHA}:${tests_path}" 2>/dev/null; then
+            git archive --format=tar "$PR_HEAD_SHA" "$tests_path" \
+              | tar -x -C "$staging" --no-same-owner --no-same-permissions
+          fi
+          # A symlink could point the report or AI review at runner files.
+          find "$staging" ! -type f ! -type d -print -delete
+          mkdir -p "$staging/$tests_path"
+          rm -rf "$tests_path"
+          mv "$staging/$tests_path" "$tests_path"
+
       - name: Set up Node.js for review tools
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -826,8 +862,7 @@ jobs:
         shell: bash
         env:
           DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_DIFF_RANGE: ${{ steps.pr-head.outputs.diff_range }}
           # Expose exactly one credential, chosen by the auth probe above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.review-auth.outputs.auth_mode == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           ANTHROPIC_API_KEY: ${{ steps.review-auth.outputs.auth_mode == 'api-key' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -856,10 +891,12 @@ jobs:
           }
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Read the proposed diff without checking out or running its scripts.
-            [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ && "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-            git fetch --no-tags origin "$PR_HEAD_SHA"
-            review_args+=(--diff "${PR_BASE_SHA}...${PR_HEAD_SHA}")
+            # The PR head is fetched as data; nothing from it runs here.
+            if [[ -z "$PR_DIFF_RANGE" ]]; then
+              echo "::error::No PR diff range; see the 'Fetch PR head as review data' step."
+              exit 1
+            fi
+            review_args+=(--diff "$PR_DIFF_RANGE")
           elif [[ -n "${DIFF_BASE_REF}" ]]; then
             resolved_base="$(resolve_diff_base_ref "${DIFF_BASE_REF}" || true)"
             if [[ -z "${resolved_base}" ]]; then
