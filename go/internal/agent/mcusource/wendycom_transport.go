@@ -219,19 +219,28 @@ func (t *wendycomTransport) FetchManifest(ctx context.Context) (*sensorlinkpb.Se
 }
 
 func (t *wendycomTransport) Stream(ctx context.Context, channels []uint32) (<-chan *sensorlink.SensorFrame, func() error, error) {
-	c, err := t.clientFor(ctx)
+	frames := make(channelFrameSink, sensorFIFOFrames)
+	closeStream, err := t.streamFrames(ctx, channels, frames)
 	if err != nil {
 		return nil, nil, err
 	}
+	return frames, closeStream, nil
+}
+
+func (t *wendycomTransport) streamFrames(ctx context.Context, channels []uint32, frames frameSink) (func() error, error) {
+	c, err := t.clientFor(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s := &wendycomStream{
 		logger: t.logger.With(zap.Uint32s("channels", append([]uint32(nil), channels...))),
-		frames: make(chan *sensorlink.SensorFrame, 8),
+		frames: frames,
 	}
 	// Listen before subscribing so the first frames are not lost.
 	removeListener := c.AddSensorDataListener(s.deliver)
 	if err := c.SensorLinkSubscribe(channels, wendycomSubscribeTimeout); err != nil {
 		removeListener()
-		return nil, nil, fmt.Errorf("mcusource: wendycom subscribe: %w", err)
+		return nil, fmt.Errorf("mcusource: wendycom subscribe: %w", err)
 	}
 	stop := make(chan struct{})
 	go func() {
@@ -263,7 +272,7 @@ func (t *wendycomTransport) Stream(ctx context.Context, channels []uint32) (<-ch
 		})
 		return nil
 	}
-	return s.frames, closeFn, nil
+	return closeFn, nil
 }
 
 func (t *wendycomTransport) Close() error {
@@ -282,7 +291,7 @@ func (t *wendycomTransport) Close() error {
 // loop, reassembling the SensorData chunks a board splits its frames into.
 type wendycomStream struct {
 	logger *zap.Logger
-	frames chan *sensorlink.SensorFrame
+	frames frameSink
 
 	// mu orders deliver against finish. A deliver can still be running after
 	// its listener is removed — the client dispatches to a snapshot of its
@@ -294,10 +303,9 @@ type wendycomStream struct {
 	lastDropLog           time.Time
 }
 
-// deliver runs on the client's read loop, so it must never block: a full
-// queue drops the frame rather than stalling the whole connection, as the
-// other transports do. Frames are reassembled before the queue, so a drop
-// loses a whole frame, never a single chunk.
+// deliver runs on the client's read loop, so it must never block. The sink
+// applies the caller's queue policy only after a whole frame is reassembled;
+// replacing a camera frame never discards just one of its chunks.
 func (s *wendycomStream) deliver(d *sensorlinkpb.SensorData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -308,9 +316,7 @@ func (s *wendycomStream) deliver(d *sensorlinkpb.SensorData) {
 	if f == nil {
 		return
 	}
-	select {
-	case s.frames <- f:
-	default:
+	if s.frames.offer(f) {
 		s.dropped++
 		s.droppedTotal++
 	}
@@ -329,7 +335,7 @@ func (s *wendycomStream) finish() {
 		return
 	}
 	s.closed = true
-	close(s.frames)
+	s.frames.finish()
 	s.logDropsLocked()
 }
 

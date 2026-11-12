@@ -37,6 +37,16 @@ func (s *Stream) Close() error {
 // Connect dials the source, reads its manifest, subscribes to channels, and
 // streams frames until Close or a read error.
 func Connect(ctx context.Context, d Dialer, addr string, channels []uint32) (*Stream, error) {
+	frames := make(channelFrameSink, sensorFIFOFrames)
+	s, err := connectFrames(ctx, d, addr, channels, frames)
+	if err != nil {
+		return nil, err
+	}
+	s.Frames = frames
+	return s, nil
+}
+
+func connectFrames(ctx context.Context, d Dialer, addr string, channels []uint32, frames frameSink) (*Stream, error) {
 	conn, err := d.Dial(ctx, addr)
 	if err != nil {
 		return nil, fmt.Errorf("mcusource: dial %s: %w", addr, err)
@@ -59,10 +69,9 @@ func Connect(ctx context.Context, d Dialer, addr string, channels []uint32) (*St
 		s.Close()
 		return nil, fmt.Errorf("mcusource: subscribe: %w", err)
 	}
-	frames := make(chan *sensorlink.SensorFrame, 8)
-	s.Manifest, s.Frames = manifest, frames
+	s.Manifest = manifest
 	go func() {
-		defer close(frames)
+		defer frames.finish()
 		defer s.Close()
 		var asm sensorlink.Assembler
 		for {
@@ -75,13 +84,7 @@ func Connect(ctx context.Context, d Dialer, addr string, channels []uint32) (*St
 				continue
 			}
 			if f := asm.Add(d); f != nil {
-				select {
-				case frames <- f:
-				case <-sctx.Done():
-					return
-				default:
-					// Backpressure: drop rather than block the source.
-				}
+				frames.offer(f)
 			}
 		}
 	}()

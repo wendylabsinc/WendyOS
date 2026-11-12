@@ -357,7 +357,15 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		return false, nil
 	}
 
-	frames, closeStream, err := tr.Stream(ctx, subs)
+	var latest []uint32
+	for _, ch := range cams {
+		// H.264 frames can depend on earlier frames. Only independent JPEG
+		// frames may replace pending frames, and only for mounted cameras.
+		if writers[ch.ChannelId] != nil && ch.GetVideo().Codec == sensorlinkpb.VideoFormat_MJPEG {
+			latest = append(latest, ch.ChannelId)
+		}
+	}
+	nextFrame, closeStream, err := streamLiveFrames(ctx, tr, subs, latest)
 	if err != nil {
 		return false, err
 	}
@@ -376,7 +384,11 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		case <-stop:
 		}
 	}()
-	for f := range frames {
+	for {
+		f, ok := nextFrame()
+		if !ok {
+			break
+		}
 		if w := writers[f.ChannelID]; w != nil {
 			frame, ok := frameToCamera(f, cams)
 			if !ok {
