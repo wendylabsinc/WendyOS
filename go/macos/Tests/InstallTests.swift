@@ -1,4 +1,5 @@
 import AVKit
+import SwiftTerm
 import SwiftUI
 import WebKit
 import XCTest
@@ -98,6 +99,25 @@ final class InstallTests: XCTestCase {
         XCTAssertFalse(session.verified)
         XCTAssertTrue(session.installed)
         XCTAssertTrue(session.result?.contains("not verified") == true)
+    }
+    @MainActor func testCompletedInstallerCannotBeChangedByDuplicateExitCallbacks() {
+        for firstExit: Int32? in [256, nil] {
+            let session = InstallSession()
+            let terminal = LocalProcessTerminalView(frame: .zero)
+            session.terminal = terminal
+            session.running = true
+            session.processTerminated(source: terminal, exitCode: firstExit)
+            let failure = session.result
+            XCTAssertFalse(session.installed)
+            XCTAssertFalse(session.running)
+
+            // A second notification after the child has already been reaped
+            // must not turn a failed or unknown exit into success.
+            session.processTerminated(source: terminal, exitCode: 0)
+            XCTAssertFalse(session.installed)
+            XCTAssertFalse(session.verified)
+            XCTAssertEqual(session.result, failure)
+        }
     }
     @MainActor func testBundled3DGuidesLoadOfflineInWebKit() async throws {
         for board in ["jetson-orin-nano", "dragonwing-iq-9075", "raspberry-pi-5"] {

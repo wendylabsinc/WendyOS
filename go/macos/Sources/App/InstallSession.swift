@@ -134,7 +134,12 @@
             // LocalProcessTerminalView uses SwiftTerm's default main queue.
             let sourceID = ObjectIdentifier(source)
             MainActor.assumeIsolated {
-                guard self.terminal.map(ObjectIdentifier.init) == sourceID else { return }
+                // Accept one completion for the active process. A duplicate
+                // notification after it was reaped must not replace failure
+                // or unknown status with a zero-initialized exit status.
+                guard self.running, self.terminal.map(ObjectIdentifier.init) == sourceID else {
+                    return
+                }
                 self.running = false
                 if exitCode == 0 {
                     if self.operation == .install {
