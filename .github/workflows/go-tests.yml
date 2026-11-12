@@ -459,6 +459,37 @@ jobs:
               test -z "$(git status --porcelain)"
             )
           done
+      - name: Require duplicate rejection with an incumbent forwarding route
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/operator-current.test" TestDuplicateCarrierPreservesLiveRoute | tee "$RUNNER_TEMP/duplicate-route.log"
+          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/duplicate-route.log"; then exit 1; fi
+          grep -q '^--- PASS: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-route.log"
+      - name: Prove rejection happens before routing publication
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          source = Path('go/internal/agent/localmesh/node.go').resolve()
+          text = source.read_text()
+          guard = '\tif !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {\n\t\treturn nil\n\t}\n'
+          bind = '\tBindConnectionLink(ctx, p.id, p.cost, p.signalCapacityRetire)\n'
+          assert text.count(guard) == 1 and text.count(bind) == 1
+          # Reproduce the original ordering: publish a link before arbitration.
+          mutated = root / 'duplicate-late-admission.go'
+          mutated.write_text(text.replace(guard, '').replace(bind, guard + bind))
+          (root / 'duplicate-late-admission.json').write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
+          PYCODE
+          go test -overlay="$RUNNER_TEMP/duplicate-late-admission.json" -c -o "$RUNNER_TEMP/duplicate-late-admission.test" ./go/internal/agent/localmesh
+          if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/duplicate-late-admission.test" TestDuplicateCarrierPreservesLiveRoute 2>&1 | tee "$RUNNER_TEMP/duplicate-late-admission.log"; then
+            echo 'Late duplicate arbitration unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'rejected duplicate published a routing link' "$RUNNER_TEMP/duplicate-late-admission.log"
+          grep -q '^--- FAIL: TestDuplicateCarrierPreservesLiveRoute ' "$RUNNER_TEMP/duplicate-late-admission.log"
       - name: Require operator routing, warm rollback and DNS cleanup
         shell: bash
         run: |
