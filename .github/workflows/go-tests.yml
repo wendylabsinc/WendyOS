@@ -591,7 +591,7 @@ jobs:
       - name: Install camera and GStreamer fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-tools libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev
           gst-inspect-1.0 fakesrc
           gst-inspect-1.0 fdsink
       - name: Compile the physical EGL probe and reject software fallback
@@ -629,6 +629,11 @@ jobs:
           go test -c -o "$RUNNER_TEMP/ipcam.test" ./go/internal/agent/ipcam
           sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
           grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
+
+      - name: Decode H264 without a producer parser and require regression controls
+        run: bash .github/scripts/test-gstreamer-no-parser.sh
+      - name: Decode shared SensorLink capture and reject loopback opens
+        run: bash .github/scripts/test-sensorlink-capture.sh
 
       - name: Require actual pipeline output and shutdown
         shell: bash

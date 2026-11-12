@@ -1783,10 +1783,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2549",
       "title": "feat(inference): run yolo_onnx campaigns on the Jetson GPU through TensorRT",
       "package": "07",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "TensorRT worker tests fake CUDA/runtime dependencies and cover cache/build behavior. They do not prove recovery after device reboot with the installed GPU stack.",
-      "required_follow_up": "Run the Jetson inference fixture across agent/device restart and verify cached engine reuse and healthy output.",
-      "evidence": []
+      "required_follow_up": "Execute the prepared four-case physical TensorRT cache/restart procedure on a reserved Orin Nano with the pinned model and candidate Agent. Hardware execution remains not_run.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/inference/test_worker.py",
+            ".github/scripts/tensorrt_restart_test.py"
+          ],
+          "result": "Real fresh worker processes reuse the same persisted engine bytes/mtime and keep noisy native stdout out of protocol JSON. GPU dependencies in that portable test are scripted. Four physical TensorRT cases cover baseline, Agent restart, online reboot and offline reboot, retaining campaign identity, cache hashes/mtimes and fresh GPU prediction episodes. Seven local tests pass; forced rebuild and unclaimed native stdout controls fail as expected. Physical cases remain not_run.",
+          "script": ".github/regression-coverage/manual/jetson-tensorrt-restart.py",
+          "hardware_execution": "not_run"
+        }
+      ],
+      "resolution": "The installed GPU-stack restart/reboot gap has a target-specific human procedure; portable process/cache evidence is tested separately and does not claim hardware execution."
     },
     {
       "key": "2347",
@@ -1949,10 +1960,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2554",
       "title": "Fix saved NPU grants and mesh duplicate admission on restart",
       "package": "07",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests check NPU mount refresh and rejected duplicate mesh admission. They do not verify an actual restarted NPU workload and live mesh teardown together.",
-      "required_follow_up": "Add independent runtime tests for NPU restart and duplicate carrier rejection without published links.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Retain the vendor NPU restart/renumbering requirement separately; no physical execution is claimed.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/duplicate_route_linux_test.go",
+            ".github/scripts/test-packet-backends.sh"
+          ],
+          "result": "Added real-kernel incumbent TUN/FIB/UDP forwarding across three real authenticated QUIC duplicate handshakes, with no transient routing registration and a positive admission control after claim release. A late-arbitration mutation reproduces publication before rejection. Linux binaries compile; hosted namespace execution remains pending. The Qualcomm human procedure includes an actual model restart, but physical device renumbering remains separate and unexecuted."
+        }
+      ]
     },
     {
       "key": "2547",
@@ -2030,10 +2049,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2698",
       "title": "agent: send H.264 from x264enc when h264parse is missing; apps explain VP8",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests verify encoder selection, x264 byte-stream arguments and the VP8 error message. They do not decode a real x264 stream with h264parse absent.",
-      "required_follow_up": "Run a GStreamer fixture without h264parse and verify a viewer decodes its output.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Do not mark verified until the real required job passes with its regression controls.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/video_no_parser_integration_test.go",
+            ".github/scripts/test-gstreamer-no-parser.sh"
+          ],
+          "result": "Real GStreamer producer registry contains x264 and VP8 but no h264parse. Initial and late viewers decode actual H.264 with checked RGB pixels. Local race-enabled execution and two specific failure controls passed. Required Linux media job registration reuses the existing runner; hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "2650",
@@ -2060,10 +2087,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2401",
       "title": "fix(agent): capture SensorLink cameras without opening their loopback node",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "SensorLink feed/hub tests cover teeing, cancellation and format changes. A live loopback-free capture pipeline is not established by the unit fixtures.",
-      "required_follow_up": "Run SensorLink capture with no loopback node opened and verify decoded frames reach a client.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Do not mark verified until the real required job passes with its regression controls.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/sensorlink_capture_integration_test.go",
+            ".github/scripts/test-sensorlink-capture.sh"
+          ],
+          "result": "Actual SensorFrameFeed, producer, shared hub and GStreamer deliver decoded pixels to two clients. One cancellation preserves fresh changed output for the other; final cancellation tears down encoder/feed. Three local race runs passed; reverting SensorLink routing fails. Required Linux strace rejects loopback opens by service/codec children; that hosted trace remains pending."
+        }
+      ]
     },
     {
       "key": "2399",
@@ -2457,10 +2492,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1724",
       "title": "Fix OCI race condition",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "This is a CI OCI-export retry change in test-ci.sh, despite the broad title. No regression test was found for retry count or disposable-builder scope.",
-      "required_follow_up": "Inject transient export failure, daemon death and permanent failure; assert one retry and no deletion of a user's builder.",
-      "evidence": []
+      "required_follow_up": "Reconcile the registered required CI job at the final PR head. Do not mark verified until the real required job passes with its regression controls.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/oci_retry_test.py"
+          ],
+          "result": "Full test-ci.sh subprocess runs against stateful local CLI/Docker fixtures. Fourteen failure/success scenarios cover transient export, dead daemon, permanent failure, exactly one retry, later-test reporting and user-builder preservation. Five tests pass locally; omitted cleanup/ownership and extra-retry controls fail. Required offline CI execution remains pending."
+        }
+      ]
     },
     {
       "key": "2504",

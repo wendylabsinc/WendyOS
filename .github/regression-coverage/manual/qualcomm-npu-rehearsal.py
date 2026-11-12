@@ -76,9 +76,9 @@ def generate(inventory, output):
     artifacts.append(info_artifact)
     endpoint = helpers.line(raw["endpoint"], "endpoint").rstrip("/")
     url = urlsplit(endpoint)
-    if (url.scheme not in ("http", "https") or not url.hostname or url.port != 9110
+    if (url.scheme != "http" or not url.hostname or url.port != 9110
             or url.username or url.password or url.query or url.fragment or url.path):
-        raise ValueError("use the reserved board's direct HTTP(S) endpoint on port 9110, without credentials or a path")
+        raise ValueError("use the reserved board's direct HTTP endpoint on port 9110, without credentials or a path")
     images = []
     for item in raw["images"]:
         image = helpers.artifact(item["path"])
@@ -120,7 +120,7 @@ def generate(inventory, output):
     commands = {"qwen": {
         "deploy": [cli, "--json", "run", "--device", selector, "--prefix", str(project), "--detach", "--no-restart", "--yes"],
         # Explicit --detach is intentional for this long-running HTTP service.
-        # Stop before the reboot phase; there is no automatic reboot in this bundle.
+        # Stop explicitly during final cleanup to disable automatic restart.
         "start": [cli, "--json", "device", "apps", "start", app, "--device", selector, "--detach"],
         "stop": [cli, "--json", "device", "apps", "stop", app, "--device", selector],
         "state": [cli, "--json", "device", "apps", "list", "--device", selector],
