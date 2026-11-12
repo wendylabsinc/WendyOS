@@ -602,6 +602,12 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 					}
 				}
 			}
+			if err != nil && j.campaign.Notify.Webhook == "" {
+				// Cloud's error text can contain notification content or recipient
+				// details. Keep the useful status code in campaign status and logs,
+				// after retry classification has consumed the original error.
+				err = status.Error(status.Code(err), "Cloud notification delivery failed")
+			}
 			j.notificationError(err)
 		}
 	}

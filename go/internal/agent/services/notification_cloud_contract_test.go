@@ -305,3 +305,83 @@ func TestCampaignNotificationsRetryThroughVerifiedCloudMTLS(t *testing.T) {
 		t.Fatal("campaign retry changed identity, trusted attribution or detection metadata")
 	}
 }
+
+func TestCampaignCloudFailureRedactsStatusAndWarnings(t *testing.T) {
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.Unavailable} {
+		t.Run(code.String(), func(t *testing.T) {
+			const privateError = "private audience fixture@example.invalid token=fixture-secret"
+			const failedID = "00000000-0000-4000-8000-000000000003"
+			const recoveredID = "00000000-0000-4000-8000-000000000004"
+			sender, cloud, logs := newNotificationContractCloud(t, true, func(id string, _ int) error {
+				if id == failedID {
+					return status.Error(code, privateError)
+				}
+				return nil
+			})
+			manager, err := data.NewManager(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			warnings := make(chan string, 1)
+			manager.SetWarnLogger(func(message string) { warnings <- message })
+			campaign, err := data.ParseCampaign(inferenceTestYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			campaign.Notify.Webhook = ""
+			job := &campaignInferenceJob{owner: &campaignInferenceManager{service: NewDataService(manager), sender: &CampaignCloudSender{Cloud: sender}}, campaign: campaign}
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			queue := make(chan DetectionNotification, 1)
+			done := make(chan struct{})
+			go func() { defer close(done); job.notifications(ctx, queue) }()
+			defer func() { cancel(); <-done }()
+			queue <- DetectionNotification{ID: failedID, Campaign: campaign.Name, Event: "person_detected"}
+			var warning string
+			select {
+			case warning = <-warnings:
+			case <-ctx.Done():
+				t.Fatal("failed Cloud delivery did not report its outcome")
+			}
+			job.mu.Lock()
+			reported := job.status.NotificationError
+			job.mu.Unlock()
+			for _, text := range []string{reported, warning} {
+				if strings.Contains(text, privateError) || strings.Contains(text, "fixture-secret") || !strings.Contains(text, code.String()) {
+					t.Errorf("campaign error exposed private Cloud response or lost status code: %q", text)
+				}
+			}
+			if strings.Contains(fmt.Sprint(logs.All()), privateError) {
+				t.Error("sender warning exposed private Cloud response")
+			}
+			cloud.mu.Lock()
+			attempts := len(cloud.requests[failedID])
+			cloud.mu.Unlock()
+			wantAttempts := 1
+			if code == codes.Unavailable {
+				wantAttempts = 3
+			}
+			if attempts != wantAttempts {
+				t.Fatalf("error redaction changed retry classification: got %d attempts, want %d", attempts, wantAttempts)
+			}
+			queue <- DetectionNotification{ID: recoveredID, Campaign: campaign.Name, Event: "person_detected"}
+			for {
+				job.mu.Lock()
+				reported = job.status.NotificationError
+				job.mu.Unlock()
+				if reported == "" {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatal("successful Cloud delivery did not clear the error")
+				case <-time.After(time.Millisecond):
+				}
+			}
+			select {
+			case warning := <-warnings:
+				t.Fatalf("successful delivery emitted a warning: %q", warning)
+			default:
+			}
+		})
+	}
+}
