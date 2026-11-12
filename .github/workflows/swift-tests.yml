@@ -33,7 +33,6 @@ concurrency:
 permissions:
   actions: read
   contents: read
-  pull-requests: write
 
 env:
   XCODE_VERSION: '26.3'
@@ -47,6 +46,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
@@ -112,10 +113,15 @@ jobs:
           if-no-files-found: error
 
   build:
+    permissions:
+      actions: read
+      contents: read
     name: Build WendyAgentMac app
     runs-on: macos-15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
@@ -218,15 +224,22 @@ jobs:
           bash ./Scripts/TestLaunchAgentSupervision.sh
 
   lint:
+    permissions:
+      actions: read
+      contents: read
     name: Lint Swift Sources
     # Lint reports to the pull request; scheduled cache runs have none.
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     container: swift:6.2.3
+    outputs:
+      exit_code: ${{ steps.lint.outputs.exit_code }}
+      lint_output: ${{ steps.lint.outputs.lint_output }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Run Swift Lint
@@ -238,14 +251,41 @@ jobs:
           set -o pipefail
           bash ./Scripts/Lint.sh 2>&1 | tee lint_output.txt
           status=${PIPESTATUS[0]}
+          # PR-controlled output cannot terminate the Actions output record.
+          delimiter="$(cat /proc/sys/kernel/random/uuid)"
+          limit=30000
+          size="$(wc -c < lint_output.txt)"
           {
-            echo "lint_output<<EOF"
-            cat lint_output.txt
-            echo "EOF"
+            echo "lint_output<<$delimiter"
+            if (( size > limit )); then
+              # iconv -c drops a multibyte character cut at the limit.
+              head -c "$limit" lint_output.txt | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true
+              printf '\n[Truncated to %d of %d bytes. The Lint Swift Sources job log has the full output.]' "$limit" "$size"
+            else
+              cat lint_output.txt
+            fi
+            printf '\n%s\n' "$delimiter"
             echo "exit_code=$status"
           } >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Fail workflow on lint issues
+        if: steps.lint.outputs.exit_code != '0'
+        run: exit 1
+
+  lint-comment:
+    name: Report Swift lint
+    needs: lint
+    if: >-
+      ${{ always() && !cancelled() &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          needs.lint.outputs.exit_code != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # This job never checks out or executes PR code.
       - name: Remove Previous Lint Comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -269,10 +309,10 @@ jobs:
             }
 
       - name: Comment on PR
-        if: steps.lint.outputs.exit_code != '0'
+        if: needs.lint.outputs.exit_code != '0'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
-          LINT_OUTPUT: ${{ steps.lint.outputs.lint_output }}
+          LINT_OUTPUT: ${{ needs.lint.outputs.lint_output }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -300,7 +340,3 @@ jobs:
             
             Then commit and push the changes.`
             });
-
-      - name: Fail workflow on lint issues
-        if: steps.lint.outputs.exit_code != '0'
-        run: exit 1
