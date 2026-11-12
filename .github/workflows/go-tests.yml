@@ -283,6 +283,53 @@ jobs:
           sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
           grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
 
+  multicast-interfaces:
+    name: Multicast interface lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: multicast-interfaces
+      - name: Install namespace tools
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y iproute2 util-linux
+      - name: Compile real multicast receiver with the race detector
+        run: go test -race -c -o "$RUNNER_TEMP/multicast.test" ./go/internal/agent/timesync
+      - name: Require delivery across interface hotplug and removal
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-multicast-interfaces.sh "$RUNNER_TEMP/multicast.test" | tee "$RUNNER_TEMP/multicast.log"
+          if grep -q -- '--- SKIP:' "$RUNNER_TEMP/multicast.log"; then exit 1; fi
+          grep -q '^--- PASS: TestMulticastInterfaceLifecycle ' "$RUNNER_TEMP/multicast.log"
+      - name: Prove the fixture rejects startup-only subscriptions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path('go/internal/agent/timesync/multicast.go').resolve()
+          text = source.read_text()
+          needle = 'func (m *Manager) refreshMulticast(conn multicastPacketConn, group net.Addr, joined map[int]net.Interface) {'
+          assert text.count(needle) == 1
+          mutated = Path(os.environ['RUNNER_TEMP']) / 'multicast-startup-only.go'
+          mutated.write_text(text.replace(needle, needle + '\nif len(joined) > 0 { return }'))
+          overlay = Path(os.environ['RUNNER_TEMP']) / 'multicast-overlay.json'
+          overlay.write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
+          PY
+          go test -race -overlay="$RUNNER_TEMP/multicast-overlay.json" -c -o "$RUNNER_TEMP/multicast-startup-only.test" ./go/internal/agent/timesync
+          if sudo .github/scripts/test-multicast-interfaces.sh "$RUNNER_TEMP/multicast-startup-only.test" > "$RUNNER_TEMP/multicast-startup-only.log" 2>&1; then
+            cat "$RUNNER_TEMP/multicast-startup-only.log"
+            echo 'Startup-only multicast subscriptions unexpectedly passed' >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/multicast-startup-only.log"
+          grep -q 'multicast proof never arrived on time2' "$RUNNER_TEMP/multicast-startup-only.log"
+          grep -q '^--- FAIL: TestMulticastInterfaceLifecycle ' "$RUNNER_TEMP/multicast-startup-only.log"
+
   operator-policy:
     name: Mesh operator policy and rollback
     runs-on: ubuntu-24.04
@@ -684,7 +731,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, hostname-restart, operator-policy, plugin-launcher]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, hostname-restart, operator-policy, multicast-interfaces, plugin-launcher]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -705,6 +752,7 @@ jobs:
           DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
           HOSTNAME_RESTART_RESULT: ${{ needs.hostname-restart.result }}
           OPERATOR_POLICY_RESULT: ${{ needs.operator-policy.result }}
+          MULTICAST_INTERFACES_RESULT: ${{ needs.multicast-interfaces.result }}
           LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
           DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
           PLUGIN_LAUNCHER_RESULT: ${{ needs.plugin-launcher.result }}
@@ -729,6 +777,7 @@ jobs:
           test "$DEPENDENCY_SECURITY_RESULT" = success
           test "$HOSTNAME_RESTART_RESULT" = success
           test "$OPERATOR_POLICY_RESULT" = success
+          test "$MULTICAST_INTERFACES_RESULT" = success
           test "$LINUX_INSTALL_RESULT" = success
           test "$DARWIN_INSTALL_RESULT" = success
           test "$PLUGIN_LAUNCHER_RESULT" = success
