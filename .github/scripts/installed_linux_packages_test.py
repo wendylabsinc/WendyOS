@@ -2,6 +2,7 @@
 """Portable artifact tests. They do not claim an apt/dnf/systemd guest was run."""
 import importlib.util
 import json
+import os
 import platform
 from pathlib import Path
 import shutil
@@ -132,6 +133,18 @@ class DebianArtifactTests(unittest.TestCase):
 
 
 class GuardTests(unittest.TestCase):
+    def test_health_probe_supplies_guest_account_home_to_real_subprocess(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            command = (sys.executable, "-c", "import json,os; print(json.dumps([os.environ['HOME'], os.environ['WENDY_AGENT_SOCKET']]))")
+            # Reproduce the transient-service environment that broke the real
+            # installed CLI before it could reach the Agent in hosted CI.
+            missing_home = MODULE.run(*command, env={"WENDY_AGENT_SOCKET": MODULE.SOCKET}, check=False)
+            self.assertNotEqual(missing_home.returncode, 0)
+            self.assertIn(b"HOME", missing_home.stderr)
+            result = MODULE.run(*command, env=MODULE.health_probe_environment())
+            self.assertEqual(json.loads(result.stdout), [MODULE.pwd.getpwuid(os.getuid()).pw_dir, MODULE.SOCKET])
+            self.assertNotIn("HOME", os.environ)
+
     def test_host_is_rejected_before_package_manager_calls(self):
         with mock.patch.object(MODULE.sys, "platform", "darwin"), mock.patch.object(MODULE, "run") as run:
             with self.assertRaisesRegex(RuntimeError, "Linux root"):

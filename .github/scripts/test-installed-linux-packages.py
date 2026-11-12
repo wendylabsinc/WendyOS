@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import pwd
 import re
 import shutil
 import struct
@@ -243,6 +244,12 @@ def transaction(fmt, action, paths, log):
     require(not re.search(r"scriptlet.*failed|error:.*scriptlet", log.read_text(), re.I), "RPM scriptlet failed")
 
 
+def health_probe_environment():
+    # Transient system services may omit HOME. Resolve the guest account's home
+    # for the CLI only; never inherit a host path or alter the Agent service.
+    return {**os.environ, "HOME": pwd.getpwuid(os.getuid()).pw_dir, "WENDY_AGENT_SOCKET": SOCKET}
+
+
 def healthy(manifest, timeout=60):
     deadline = time.monotonic() + timeout
     last = "not started"
@@ -255,7 +262,7 @@ def healthy(manifest, timeout=60):
             require(sha(Path(f"/proc/{pid}/exe").read_bytes()) == manifest["packages"]["candidate"]["binary_sha256"],
                     "service runs the wrong executable")
             response = run("/usr/bin/wendy", "--json", "device", "info", timeout=10,
-                           env={**os.environ, "WENDY_AGENT_SOCKET": SOCKET})
+                           env=health_probe_environment())
             info = json.loads(response.stdout)
             require(info["version"] == manifest["expected_binary_version"], "Agent RPC version mismatch")
             require(info["cliVersion"] == manifest["expected_binary_version"], "CLI version mismatch")
