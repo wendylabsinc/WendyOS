@@ -1771,9 +1771,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2224",
       "title": "cli: reach USB devices when several share the 169.254/16 route",
       "package": "05",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Link-aware dials/listeners and error translation have tests. Multiple real USB links sharing 169.254/16 are not reproduced in ordinary CI.",
-      "required_follow_up": "Execute the Linux namespace gate and both binding controls in the existing network job, then complete the separate native Windows two-interface binding requirement.",
+      "required_follow_up": "Require actual Linux and Windows two-interface169.254/16 routing gates and all five binding/byte-order controls in the existing hosted jobs. Native execution remains pending; simulated adapters do not claim physical USB-driver coverage.",
       "evidence": [
         {
           "tests": [
@@ -1782,6 +1782,15 @@
             "go/internal/cli/linklocal/multi_interface_linux_test.go"
           ],
           "result": "Prepared Linux private mount/network/PID namespaces with two real veth peers sharing overlapping 169.254/16 routes. Production Dial, SourceIP and Listen must retain exact device payload/source addresses, callbacks and established sessions through route reversal. Both removed-binding variants compile and require named failures. Two offline admission checks pass. Actual kernel execution is pending on hosted CI; the separate Windows binding requirement remains open. No local privileged or physical USB execution occurred."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-linklocal-windows.py",
+            ".github/scripts/linklocal-windows-network.ps1",
+            ".github/scripts/linklocal_windows_test.py",
+            "go/internal/cli/linklocal/multi_interface_windows_test.go"
+          ],
+          "result": "Prepared hosted-only Windows fixture with two owned Wintun interfaces and real overlapping169.254/16 routes. Production Dial, SourceIP and Listen must return distinct peer data/correct local addresses, including callback and established stream behavior after route reversal. Three controls remove dialing/listening interface binding or restore wrong byte order. Twelve offline admission/lifecycle tests, normal/three-control Windows cross-compiles and PowerShell parsing pass. Guards preserve the preexisting metadata host route and all nonowned routes; refuse preexisting Wintun devices/drivers and overlapping link-local state; drain the exact Windows Job before GUID-specific cleanup. Registered in the existing Windows job. Native execution remains pending; no local driver changes or physical USB execution occurred."
         }
       ]
     },
