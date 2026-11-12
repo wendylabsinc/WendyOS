@@ -90,6 +90,22 @@ jobs:
           python3 scripts/crawl-export.test.py
           python3 scripts/probe-hosted-export.test.py
 
+      - name: Execute documented PAIR invitation and membership semantics
+        working-directory: .
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          fixtures="$(mktemp -d "$RUNNER_TEMP/docs-pair-source.XXXXXX")"
+          trap 'rm -rf "$fixtures"' EXIT
+          git init -q "$fixtures/pair"
+          timeout 120 git -C "$fixtures/pair" fetch -q --depth=1 \
+            https://github.com/NVIDIA/Personal-AI-Router.git \
+            13b68115fa2c9c1d94f1ead1358f8d5a527cfecf
+          git -C "$fixtures/pair" checkout -q --detach FETCH_HEAD
+          python3 .github/scripts/run-owned-media-test.py --timeout 300 -- \
+            python3 go/internal/cli/assets/docs/scripts/test-pair-docs.py \
+            --pair-source "$fixtures/pair"
+
       - name: Verify public npm package versions
         run: |
           set -euo pipefail
