@@ -1574,10 +1574,16 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2122",
       "title": "fix(agent): receive multicast time on every active interface",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Receiver tests cover interfaces appearing during traffic and socket reopen. They use test transport seams rather than real multicast across multiple interfaces.",
       "required_follow_up": "Run a Linux namespace multicast test with interface add/remove during traffic.",
-      "evidence": []
+      "evidence": [
+        {
+          "path": "go/internal/agent/timesync/multicast_namespace_linux_test.go",
+          "result": "Added an opt-in real UDP multicast fixture with three separate sender network namespaces, valid signed Roughtime proofs, and the production interface enumeration and five-second refresh interval. It covers two initial links, a third link added during continuous traffic, link-down membership removal, recreation under the same name with a new kernel index, removal while another link remains usable, and cancellation/socket release. Only the clock write is observed. A required CI job runs the race-enabled fixture and rejects skips, then requires a startup-only-membership mutation to fail on the hotplug proof. Linux compilation, portable timesync race tests, Bash syntax, ShellCheck and actionlint pass. Real namespace execution and the mutation check remain pending CI."
+        }
+      ],
+      "resolution": "Real packets and signed proof delivery replace transport-seam-only evidence for interface lifecycle behavior; closure awaits the required Linux namespace checks."
     },
     {
       "key": "1833",
