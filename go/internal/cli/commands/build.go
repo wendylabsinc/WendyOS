@@ -299,9 +299,9 @@ func newBuildCmd() *cobra.Command {
 // resolveBuildPlatform is the target platform for a `wendy build`: the
 // selected device's own OS/arch when an agent is connected (cfgPlatform
 // overrides the device-reported OS (and arch, when it names one)), or
-// linux/arm64 with no device to ask.
+// the configured platform with no device to ask, defaulting to linux/arm64.
 func resolveBuildPlatform(ctx context.Context, target *SelectedDevice, cfgPlatform string) string {
-	platform := "linux/arm64"
+	platform := resolveAgentPlatform(cfgPlatform, "linux", "arm64")
 	if target != nil && target.Agent != nil {
 		versionResp, err := target.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 		if err == nil {
