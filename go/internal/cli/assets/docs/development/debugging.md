@@ -241,7 +241,7 @@ sudo ctr -n wendy containers list
 sudo ctr -n wendy tasks list
 
 # List via agent gRPC
-wendy apps list
+wendy device apps list
 ```
 
 ### OTA update state
