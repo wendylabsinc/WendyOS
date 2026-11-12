@@ -153,6 +153,10 @@ type postboxState struct {
 	// Marks are the deployment revision marks (deployment_contract.go), by
 	// deployment id.
 	Marks map[string]*postboxMark `json:"marks,omitempty"`
+	// Detached are apps a detach left running as direct runs: a removal of
+	// one only prunes images no container uses, until a new deployment of
+	// the app is applied (applyDetach).
+	Detached []string `json:"detached,omitempty"`
 }
 
 type postboxPending struct {
@@ -222,7 +226,14 @@ var postboxOperations = map[string]string{
 	// RemoveDeployment) are never relayed and never listed here.
 	strings.TrimPrefix(cloudpbv2.DeploymentService_AssignDevice_FullMethodName, "/"):   "wendycloud.v2.DeviceAssignment",
 	strings.TrimPrefix(cloudpbv2.DeploymentService_UnassignDevice_FullMethodName, "/"): "wendycloud.v2.UnassignDeviceRequest",
+	// Detach (service-protos #193): relayed only from inside an app delete.
+	strings.TrimPrefix(cloudpbv2.DeploymentService_DetachDevice_FullMethodName, "/"): "wendycloud.v2.DetachDeviceRequest",
 }
+
+// postboxAccepted is sent with every pull (PullChangesRequest.
+// accepted_operations): descriptive only, so cloud can tell an agent that
+// predates an operation from one that refused an entry. It grants nothing.
+var postboxAccepted = slices.Sorted(maps.Keys(postboxOperations))
 
 // NewPostbox builds the client; it pulls nothing until UpdateIdentity supplies
 // an enrolled identity (the agent passes its boot identity straight away).
@@ -402,7 +413,7 @@ func (p *Postbox) cycle(ctx context.Context) error {
 
 	for {
 		hwm := p.snapshot().HighWater
-		resp, err := client.PullChanges(ctx, &cloudpbv2.PullChangesRequest{AfterEntryId: hwm, Limit: postboxPageSize})
+		resp, err := client.PullChanges(ctx, &cloudpbv2.PullChangesRequest{AfterEntryId: hwm, Limit: postboxPageSize, AcceptedOperations: postboxAccepted})
 		if err != nil {
 			return fmt.Errorf("pulling postbox: %w", err)
 		}
@@ -532,7 +543,7 @@ func (p *Postbox) process(ctx context.Context, client cloudpbv2.DevicePostboxSer
 		// overwrites the outcome of the deployment the device holds. The app
 		// named above serves only to report an interrupted entry.
 		switch req.(type) {
-		case *cloudpbv2.UnassignDeviceRequest, *cloudpbv2.DeviceAssignment:
+		case *cloudpbv2.UnassignDeviceRequest, *cloudpbv2.DeviceAssignment, *cloudpbv2.DetachDeviceRequest:
 			app = ""
 		}
 		return p.decide(ctx, e, desc.Correlation, app, outcome, reason, verr)
@@ -610,6 +621,8 @@ func postboxValidUntil(req proto.Message) *timestamppb.Timestamp {
 	case *cloudpbv2.CreateDeploymentRequest:
 		return r.GetValidUntil()
 	case *cloudpbv2.UnassignDeviceRequest:
+		return r.GetValidUntil()
+	case *cloudpbv2.DetachDeviceRequest:
 		return r.GetValidUntil()
 	case *cloudpbv2.DeviceAssignment:
 		return r.GetExpiresAt()
@@ -853,6 +866,8 @@ func decodePostboxPayload(e *cloudpbv2.PostboxEntry) (proto.Message, error) {
 		req = &cloudpbv2.DeviceAssignment{}
 	case "wendycloud.v2.UnassignDeviceRequest":
 		req = &cloudpbv2.UnassignDeviceRequest{}
+	case "wendycloud.v2.DetachDeviceRequest":
+		req = &cloudpbv2.DetachDeviceRequest{}
 	default:
 		return nil, fmt.Errorf("payload_type %q", e.GetPayloadType())
 	}
@@ -879,6 +894,12 @@ func bindsThisDevice(req proto.Message, resource string, id *postboxIdentity) er
 	case *cloudpbv2.UnassignDeviceRequest:
 		if r.GetDevice() != id.uri || r.GetOrganizationId() != id.tenant || resource != org+"deployment/"+r.GetDeploymentId()+"/device/"+id.uuid {
 			return fmt.Errorf("unassignment for %q (resource %q) is not this device", r.GetDevice(), resource)
+		}
+	case *cloudpbv2.DetachDeviceRequest:
+		// The deployment's resource, as for UnassignDevice; the payload's
+		// device is this device.
+		if r.GetDevice() != id.uri || r.GetOrganizationId() != id.tenant || resource != org+"deployment/"+r.GetDeploymentId()+"/device/"+id.uuid {
+			return fmt.Errorf("detach for %q (resource %q) is not this device", r.GetDevice(), resource)
 		}
 	case *cloudpbv2.CreateDeploymentRequest:
 		// The descriptor names the release, not a device. The signed payload
@@ -919,6 +940,8 @@ func (p *Postbox) apply(ctx context.Context, id *postboxIdentity, entryID int64,
 		return p.applyAssignment(ctx, id, entryID, correlation, r)
 	case *cloudpbv2.UnassignDeviceRequest:
 		return p.applyUnassign(ctx, entryID, r)
+	case *cloudpbv2.DetachDeviceRequest:
+		return p.applyDetach(ctx, entryID, r)
 	case *cloudpbv2.CreateDeploymentRequest:
 		// Registry material is pulled per DeviceAssignment, which carries this
 		// device's wrap; a deployment names a release, not an app, and no key.
@@ -1285,6 +1308,12 @@ func (p *Postbox) postboxApp(ctx context.Context, req proto.Message) string {
 	case *cloudpbv2.UnassignDeviceRequest:
 		// The held deployment's app, so an interrupted removal is reported
 		// against it.
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if a := p.state.Assignments[r.GetDeploymentId()]; a != nil {
+			return a.AppID
+		}
+	case *cloudpbv2.DetachDeviceRequest:
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		if a := p.state.Assignments[r.GetDeploymentId()]; a != nil {

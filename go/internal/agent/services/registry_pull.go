@@ -348,6 +348,9 @@ func (p *Postbox) finishPull(ctx context.Context, a *cloudpbv2.DeviceAssignment,
 		done := *held
 		done.Pulled = true
 		done.Applied = outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED
+		if done.Applied {
+			undetach(st, a.GetAppId()) // the new deployment replaced the direct run
+		}
 		st.Assignments = maps.Clone(st.Assignments)
 		st.Assignments[a.GetDeploymentId()] = &done
 		if o := st.Outcomes[a.GetAppId()]; o == nil || o.EntryID <= entryID {
@@ -412,10 +415,12 @@ func (p *Postbox) removeReleases(ctx context.Context, app string) error {
 			keep = append(keep, a.AppReleaseID)
 		}
 	}
+	// A detached app runs on as a direct run: never removed from here.
+	detached := slices.Contains(p.state.Detached, app)
 	p.mu.Unlock()
 	slices.Sort(keep)
 	remove := p.control.RemoveReleases
-	if len(keep) > 0 {
+	if len(keep) > 0 || detached {
 		remove = p.control.PruneReleases
 	}
 	err := remove(ctx, app, keep)
