@@ -785,80 +785,154 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2679",
       "title": "cli: wait for udev before using the Linux config partition",
       "package": "02",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Retry/udev/mount error cases have unit tests and a hardware test. The hardware test is gated and not part of the default Go execution.",
       "required_follow_up": "Run the Linux loop-device/config-partition case with delayed udev and assert the hardware test does not skip.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366836",
+          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
+          "test_file": "go/internal/cli/commands/install_host_linux_test.go",
+          "result": "Real GPT/FAT loop disk: two empty lsblk replies precede discovery; installed agent and configuration bytes are read back from the mounted partition."
+        }
+      ],
+      "resolution": "The required native host job executed the regression without skipping. The PR aggregate still needs the separate CLI session and macOS PTY failures resolved; merge remains pending."
     },
     {
       "key": "2599",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2599",
       "title": "fix(cli): don't fail the macOS GPT rewrite on raw-device fsync",
       "package": "02",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "A focused test handles raw-device fsync results, including Darwin's behavior, through a substituted writer.",
       "required_follow_up": "Exercise the actual Darwin disk-image/raw-device rewrite path without touching a physical disk.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366824",
+          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
+          "test_file": "go/internal/cli/commands/install_host_darwin_test.go",
+          "result": "An attached hdiutil raw disk returns ENOTTY from Sync, then actual GPT relocation succeeds and independent CRC/backup-header/partition-marker checks pass."
+        }
+      ],
+      "resolution": "The required native host job executed the regression without skipping. The PR aggregate still needs the separate CLI session and macOS PTY failures resolved; merge remains pending."
     },
     {
       "key": "2460",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2460",
       "title": "fix(install): wait for a disconnected drive and re-find it before retrying provisioning (WDY-3974)",
       "package": "02",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Tests reject changed/ambiguous disks and simulate disconnect/re-enumeration. They do not exercise physical USB removal during provisioning.",
       "required_follow_up": "Run a fault-injected block-device integration test and prove no write reaches a replacement disk.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366836",
+          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
+          "test_file": "go/internal/cli/commands/install_host_linux_test.go",
+          "result": "Two real loop disks exchange paths after ENXIO; GUID/size identify the original, its seeded files are read back and the entire replacement image hash stays unchanged. Only the loop type is adapted to the production disk parser."
+        }
+      ],
+      "resolution": "The required native host job executed the regression without skipping. The PR aggregate still needs the separate CLI session and macOS PTY failures resolved; merge remains pending."
     },
     {
       "key": "2057",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2057",
       "title": "fix(cli): make T234 recovery flashing survive USB hubs and slow flushes",
       "package": "02",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Disk discovery, identity, write retry and flush handling have many fixtures. Host-specific disk enumeration and physical detach/slow flush behavior are not all executed by the current CI matrix.",
       "required_follow_up": "Run Darwin disk parsing and native Windows disk tests; retain a bounded removable-device integration rehearsal.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/t234-recovery-rehearsal.py",
+          "validation": "Python syntax and --help checked; T234 generation preview retains not_run for all four cases. No physical hardware was accessed.",
+          "hardware_execution": "not_run"
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366824",
+          "result": "Native macOS disk enumeration and Windows t234 package passed; the additional Linux mounted-loop writer gate is newly added and pending CI."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366884",
+          "result": "Windows CLI job runs the complete t234 package on native Windows."
+        }
+      ],
+      "resolution": "Automatable host fixtures are in required CI; the remaining physical setup has a target-specific human script. Script readiness is not a hardware pass."
     },
     {
       "key": "2143",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2143",
       "title": "fix(cli): make macOS reflash preparation safe and target-scoped",
       "package": "02",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Timeout and parser tests exist, plus a Darwin disk-image test. The latter is platform-specific and is not selected by the dedicated Darwin BLE job.",
       "required_follow_up": "Run the disk-image Spotlight/mount tests in a dedicated macOS install-safety job.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366824",
+          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
+          "test_file": "go/internal/cli/commands/index_marker_darwin_test.go, go/internal/cli/commands/spotlight_darwin_test.go",
+          "result": "Actual mounted FAT disk-image volumes retain Spotlight markers after remount; scoped indexing/unmount paths pass success, force, failure and timeout fixtures."
+        }
+      ],
+      "resolution": "The required native host job executed the regression without skipping. The PR aggregate still needs the separate CLI session and macOS PTY failures resolved; merge remains pending."
     },
     {
       "key": "2126",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2126",
       "title": "fix(cli): stop the Thor sudo re-exec leaving root-owned files in the user's home",
       "package": "02",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Argument, environment and ownership helpers are tested. A full sudo re-exec and interrupted cleanup across user/root ownership is not covered on every supported host.",
       "required_follow_up": "Run an isolated Linux sudo workflow and assert all created files return to the invoking user's ownership.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366836",
+          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
+          "test_file": "go/internal/cli/commands/install_host_linux_test.go",
+          "result": "A real sudo child creates config/cache files; the original user verifies every resulting UID and writes the files again."
+        }
+      ],
+      "resolution": "The required native host job executed the regression without skipping. The PR aggregate still needs the separate CLI session and macOS PTY failures resolved; merge remains pending."
     },
     {
       "key": "1930",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1930",
       "title": "Merge pull request #1930 from wendylabsinc/feat/windows-dragonwing-flash",
       "package": "02",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Windows driver setup and target-selection tests exist. CI cross-compiles commands but does not execute the Windows USB-driver and recovery tests in its native test selection.",
       "required_follow_up": "Execute nonhardware Windows driver-helper tests in PR CI and keep the physical recovery handshake as an explicit gated test.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/windows-edl-handshake.py",
+          "validation": "Python syntax and --help checked; T234 generation preview retains not_run for all four cases. No physical hardware was accessed.",
+          "hardware_execution": "not_run"
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165367646",
+          "result": "Native Windows driver-helper/EDL framing fixtures passed."
+        }
+      ],
+      "resolution": "Automatable host fixtures are in required CI; the remaining physical setup has a target-specific human script. Script readiness is not a hardware pass."
     },
     {
       "key": "1826",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1826",
       "title": "fix(cli): find the T234 flashpkg LUN when nested behind a USB hub (macOS)",
       "package": "02",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Nested-hub ioreg fixtures cover parsing, but the Darwin-only tests are outside the dedicated Darwin BLE CI command.",
       "required_follow_up": "Run the t234 package on macOS in CI and retain nested/direct USB-tree fixtures.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165366824",
+          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
+          "test_file": "go/internal/cli/tegraflash/t234/disk_darwin_test.go",
+          "result": "Native macOS t234 package passed nested/direct USB trees, path topology, serial and per-LUN media matching."
+        }
+      ],
+      "resolution": "The required native host job executed the regression without skipping. The PR aggregate still needs the separate CLI session and macOS PTY failures resolved; merge remains pending."
     },
     {
       "key": "2181",
@@ -874,6 +948,10 @@
           "runner": "local macOS",
           "command": "go test ./go/internal/cli/commands -run \"^(TestOSInstallESP32RefusesBeforeAnyManifestFetch|TestApplyDeviceTypeAlias|TestInstallPlanResolvesAlias|TestOSInstallDriversPreparePinsImageKernel|TestResolveInstallDeviceType)\" -count=1",
           "result": "All 15 target/mode combinations failed before the fix because alias resolution fetched a manifest. After moving refusal before alias/driver resolution, all cases and adjacent alias/driver tests pass. New CI execution pending."
+        },
+        {
+          "test_file": "go/internal/cli/commands/os_install_esp32_preflight_test.go",
+          "result": "All 15 cases pass locally; all failed before the preflight fix. The install-session fixture now uses a supported manifest path and passes with -race. New aggregate execution pending."
         }
       ]
     },
@@ -882,30 +960,48 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2568",
       "title": "cli: guide Dragonwing IQ8 USB2 runtime connection",
       "package": "02",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The PR includes a CRLF frontmatter parser correction as well as USB guidance. Current skill line-ending tests cover parsing, but native Windows MCP execution is not in its CI filter.",
       "required_follow_up": "Run the MCP line-ending suite on Windows and keep the USB command guidance fixture.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165367646",
+          "result": "Windows MCP CRLF and stdio import passed. Linux USB notice fixture remains selected by the ordinary race suite; aggregate rerun pending after correcting the install-session fixture."
+        }
+      ]
     },
     {
       "key": "2589",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2589",
       "title": "fix(mcp): preserve embedded skill line endings on Windows",
       "package": "02",
-      "status": "open",
+      "status": "verified",
       "audit_finding": "Current MCP skill tests cover CRLF and resource-byte preservation, added in adjacent work. Native Windows CI does not execute the MCP package, so checkout/embedded-byte behavior remains unverified there.",
       "required_follow_up": "Run the skill line-ending tests after a Windows checkout with CRLF conversion enabled.",
-      "evidence": []
+      "evidence": [
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43212978003/job/131165367646",
+          "head": "d02410b9c70a982a7c9f9052340364b63d3cd46f",
+          "test_file": "go/internal/cli/mcp/skills_test.go",
+          "result": "A native Windows checkout explicitly converted to CRLF rebuilt the embedded MCP skills. Frontmatter, preserved resource bytes, advertised tools and real stdio import passed without skips."
+        }
+      ],
+      "resolution": "The required native host job executed the regression without skipping. The PR aggregate still needs the separate CLI session and macOS PTY failures resolved; merge remains pending."
     },
     {
       "key": "2790",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2790",
       "title": "fix(cli): clarify Dragonwing flash percentages and IQ9 switch wording",
       "package": "02",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Existing Dragonwing tests check wording fields, but they do not exercise a full progress sequence or validate every percentage shown during flashing.",
       "required_follow_up": "Replay a flash progress trace and assert bounded, correctly labelled percentages and IQ9 instructions.",
-      "evidence": []
+      "evidence": [
+        {
+          "test_file": "go/internal/cli/commands/os_install_dragonwing_progress_test.go",
+          "result": "Actual Firehose session replay passes with two partitions, bounded percentage labels and ACK/NAK completion behavior. IQ9 instructions checked locally; required CI pending."
+        }
+      ]
     },
     {
       "key": "2282",
@@ -2814,7 +2910,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2803",
       "title": "Tag releases at the commit that was built",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "partial",
       "audit_finding": "The release tag now uses the built commit, but no automated moving-main/tag-target regression was found.",
       "required_follow_up": "The shell-tag fixture is present. Add published artifact/provenance SHA agreement; document and test what happens when tag creation fails or an existing tag points elsewhere.",
       "evidence": [
@@ -2822,6 +2918,10 @@
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
+          "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
         }
       ]
     },
@@ -2868,7 +2968,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2703",
       "title": "Fix three-dot menu hit areas on iOS and macOS",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "partial",
       "audit_finding": "The change adjusts SwiftUI menu hit areas without a regression test. The inspected workflows do not build or test this go/macos app target.",
       "required_follow_up": "Shared menu geometry is covered. Add edge activation at the affected call sites, including the macOS menu action, before claiming every menu regression is closed.",
       "evidence": [
@@ -2876,6 +2976,10 @@
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
+          "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
         }
       ]
     },
@@ -2922,7 +3026,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2573",
       "title": "[WN1] Retain WASM memory until firmware replacement",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "partial",
       "audit_finding": "The fix removes StopApp before a WASM replacement so firmware can retain linear memory. No provider Run regression asserting the operation ordering was found.",
       "required_follow_up": "Protocol ordering is covered. Verify retained linear memory and replacement failure recovery on actual supported Lite firmware.",
       "evidence": [
@@ -2930,6 +3034,10 @@
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
+          "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
         }
       ]
     },
@@ -2938,7 +3046,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1859",
       "title": "agent: clear the explicit hostname on a config-partition rename",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "partial",
       "audit_finding": "The implementation deletes the explicit hostname override when applying a config-partition name. Current apply tests check name validity and stub the name application, without asserting removal of the old override.",
       "required_follow_up": "Persistence is covered. Restart the agent/name-advertising path and verify the effective hostname and mDNS name, including a stale override that could not be removed.",
       "evidence": [
@@ -2946,6 +3054,10 @@
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
+          "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
         }
       ]
     },
@@ -2973,7 +3085,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2684",
       "title": "fix(ios): reduce room capture memory use and stop sessions once",
       "package": "priority",
-      "status": "partial_pending_ci",
+      "status": "partial",
       "audit_finding": "MobileTests checks stop-once, dismissal, memory-warning and queued reconstruction behavior. The workflows inspected do not invoke go/macos iOS tests, and the tests do not establish a memory-use ceiling.",
       "required_follow_up": "Lifecycle tests now run. Establish a measured capture/reconstruction memory budget on a LiDAR device and stress repeated start/stop, warning, cancel and reconstruction.",
       "evidence": [
@@ -2981,6 +3093,10 @@
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
           "head": "7204a7723250cd383b207314a845bb6938a7e18f",
           "result": "Native app and race jobs still running; other Go Tests jobs passed at the last check."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
+          "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
         }
       ]
     },
