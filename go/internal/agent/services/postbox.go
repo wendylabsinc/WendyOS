@@ -892,8 +892,15 @@ func (p *Postbox) apply(ctx context.Context, id *postboxIdentity, entryID int64,
 		}
 		p.mu.Unlock()
 		p.saveMu.Unlock()
-		if err != nil || absent { // absent: held with nothing to fetch
+		if err != nil {
 			return r.GetAppId(), outcome, reason, err
+		}
+		if absent {
+			// Held with nothing to fetch: the app's releases go, as on removal.
+			if err := p.removeReleases(ctx, r.GetAppId()); err != nil {
+				return r.GetAppId(), cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
+			}
+			return r.GetAppId(), outcome, reason, nil
 		}
 		// The pull runs beside the queue; its outcome replaces this one.
 		p.startPull(ctx, id, r, entryID, correlation)

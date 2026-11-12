@@ -51,18 +51,31 @@ func (c *Client) ImportRelease(ctx context.Context, img services.ReleaseImage) e
 
 	ctx = c.withNamespace(ctx)
 	cleanupCtx := c.withNamespace(context.Background())
-	cs := c.client.ContentStore()
-	// Blobs are unreferenced until the image record roots the manifest.
-	ctx, doneLease, err := c.client.WithLease(ctx, leases.WithExpiration(assembleLeaseExpiration))
+	return withImportLease(ctx, cleanupCtx, c.client.LeasesService(), c.logger, func(ctx context.Context) error {
+		return c.importRelease(ctx, img, manifest, manifestDigest)
+	})
+}
+
+// withImportLease runs fn under a lease that roots what it writes, then
+// deletes the lease with a synchronous garbage collection: whatever no image
+// record took over (a cancelled or failed import) is collected before it
+// returns, so no decrypted layer stays in the content store. A kill leaves
+// the lease to its expiration (assembleLeaseExpiration).
+func withImportLease(ctx, cleanupCtx context.Context, lm leaseGCer, logger *zap.Logger, fn func(context.Context) error) error {
+	l, err := lm.Create(ctx, leases.WithRandomID(), leases.WithExpiration(assembleLeaseExpiration))
 	if err != nil {
 		return fmt.Errorf("creating import lease: %w", err)
 	}
 	defer func() {
-		if err := doneLease(cleanupCtx); err != nil {
-			c.logger.Warn("Failed to release import lease; relying on expiration backstop", zap.Error(err))
+		if err := lm.Delete(cleanupCtx, l, leases.SynchronousDelete); err != nil {
+			logger.Warn("Failed to release import lease; relying on expiration backstop", zap.Error(err))
 		}
 	}()
+	return fn(leases.WithLease(ctx, l.ID))
+}
 
+func (c *Client) importRelease(ctx context.Context, img services.ReleaseImage, manifest ocispec.Manifest, manifestDigest digest.Digest) error {
+	cs := c.client.ContentStore()
 	children := append([]ocispec.Descriptor{manifest.Config}, manifest.Layers...)
 	manifestLabels := map[string]string{"containerd.io/gc.ref.content.config": manifest.Config.Digest.String()}
 	for i, d := range children {

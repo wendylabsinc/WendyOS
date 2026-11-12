@@ -8,6 +8,7 @@ import (
 
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/leases"
 	"go.uber.org/zap"
 )
 
@@ -90,5 +91,31 @@ func TestReleaseApps(t *testing.T) {
 	}
 	if got := releaseApps(ctrs, "", nil); !slices.Equal(got, []string{"web", "api"}) {
 		t.Fatalf("every app: %v", got)
+	}
+}
+
+// The import lease is deleted with a synchronous collection whether the
+// import succeeds, fails or is cancelled: what no image record took over is
+// gone before the import returns.
+func TestImportLeaseIsCollectedSynchronously(t *testing.T) {
+	for _, importErr := range []error{nil, errors.New("import failed"), context.Canceled} {
+		lm := &fakeLeaseGCer{}
+		var leased string
+		err := withImportLease(context.Background(), context.Background(), lm, zap.NewNop(), func(ctx context.Context) error {
+			leased, _ = leases.FromContext(ctx)
+			return importErr
+		})
+		if !errors.Is(err, importErr) || leased == "" || leased != lm.created.ID || lm.deletedID != lm.created.ID {
+			t.Fatalf("import err %v: got %v, leased %q, created %q, deleted %q", importErr, err, leased, lm.created.ID, lm.deletedID)
+		}
+		var opts leases.DeleteOptions
+		for _, opt := range lm.deleteOpts {
+			if err := opt(context.Background(), &opts); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !opts.Synchronous {
+			t.Fatalf("import err %v: lease not deleted synchronously", importErr)
+		}
 	}
 }

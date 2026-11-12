@@ -309,8 +309,8 @@ func TestRegistryPullImportsAVerifiedReleaseAndResumesACutBlob(t *testing.T) {
 	if got := arts.offsets[big.GetCiphertextDigest()]; !slices.Equal(got, []uint64{0, 5000}) {
 		t.Fatalf("GetBlob offsets = %v, want a resume at the cut [0 5000]", got)
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, registryPullDir)); !os.IsNotExist(err) {
-		t.Fatalf("staging directory left behind: %v", err)
+	if left, _ := os.ReadDir(filepath.Join(f.dir, registryPullDir)); len(left) != 0 {
+		t.Fatalf("staging left behind: %v", left)
 	}
 }
 

@@ -346,6 +346,9 @@ func main() {
 	containerSvc := services.NewContainerService(logger, containerdClient,
 		containerSvcOpts...,
 	)
+	removeAllReleases := func(ctx context.Context) error {
+		return services.NewPostboxControl(containerSvc).RemoveReleases(ctx, "", nil)
+	}
 	shellSvc := services.NewShellService(logger, hostexec.New())
 	audioSvc := services.NewAudioService(logger)
 
@@ -425,8 +428,13 @@ func main() {
 	// must not require mesh firewall tools just to begin enrollment.
 	if resetStatus, err := provisioningSvcV2.IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}); err == nil {
 		completed := len(resetStatus.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 || provisioningSvc.LocalResetCompleted()
+		// The recovery also removes every registry release: a reset whose
+		// removal failed is confirmed only once they are gone.
+		releaseCleanup := resetReleaseCleanup(runtime.GOOS, ctrdErr, nil, removeAllReleases)
 		recoverCompletedResetMesh(ctx, completed, 5*time.Second,
-			cleanupResetMesh, provisioningSvc.SetResetCleanupError, func(err error) {
+			func(ctx context.Context) error {
+				return errors.Join(cleanupResetMesh(ctx), releaseCleanup(ctx))
+			}, provisioningSvc.SetResetCleanupError, func(err error) {
 				logger.Error("Reset net cleanup incomplete; completion and enrollment remain unavailable", zap.Error(err))
 			})
 	}
@@ -1614,17 +1622,20 @@ func main() {
 		if err := unitreeSvc.Rebind(unitree.PairingOwner{}); err != nil {
 			logger.Error("Clearing Unitree pairings during unprovisioning failed", zap.Error(err))
 		}
-		if stopErr != nil {
-			// Do not reclaim kernel objects while an undrained worker may still
-			// use them. Reset stays unconfirmed; the scheduled restart retries.
-			return fmt.Errorf("waiting for net shutdown: %w", stopErr)
-		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		// No decrypted registry release outlives the enrollment it was for.
-		var releasesErr error
+		// It runs before the net check below returns; a failure keeps the
+		// reset unconfirmed and the restart recovery retries it.
+		var pb releaseResetter
 		if postbox != nil {
-			releasesErr = postbox.RemoveAllReleases(cleanupCtx)
+			pb = postbox
+		}
+		releasesErr := resetReleaseCleanup(runtime.GOOS, ctrdErr, pb, removeAllReleases)(cleanupCtx)
+		if stopErr != nil {
+			// Do not reclaim kernel objects while an undrained worker may still
+			// use them. Reset stays unconfirmed; the scheduled restart retries.
+			return errors.Join(fmt.Errorf("waiting for net shutdown: %w", stopErr), releasesErr)
 		}
 		return errors.Join(meshSharing.Deactivate(), cleanupResetMesh(cleanupCtx), releasesErr)
 	}
