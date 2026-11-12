@@ -825,13 +825,6 @@ func dragonwingTargetLabel(dev qdl.DeviceInfo) string {
 	return dev.String()
 }
 
-// edlUdevRule grants access to a Qualcomm SoC in EDL mode. The vendor-wide
-// match mirrors the Jetson rule: 05c6 devices expose this interface only while
-// in EDL, so the grant is bounded.
-const edlUdevRule = `SUBSYSTEM=="usb", ATTRS{idVendor}=="05c6", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
-
-const edlUdevRulePath = "/etc/udev/rules.d/70-wendy-qualcomm.rules"
-
 // isEDLAccessErr reports whether the OS refused access to the device rather
 // than there being none attached.
 func isEDLAccessErr(err error) bool {
@@ -847,16 +840,7 @@ func dragonwingUSBAccessHint() string {
 		"The board is in EDL mode, but the OS refused wendy access to its USB device.",
 	}
 	if runtime.GOOS == "linux" {
-		lines = append(lines,
-			"Grant access with a udev rule (one-time):",
-			"",
-			briefDim.Render("  echo '"+edlUdevRule+"' \\"),
-			briefDim.Render("    | sudo tee "+edlUdevRulePath),
-			briefDim.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
-			"",
-			"Add your user to the "+briefKey.Render("plugdev")+" group, replug the cable and retry,",
-			"or re-run the flash with sudo.",
-		)
+		lines = []string{lines[0], "", linuxUSBAccessStep("board", wendyPackagedRule("70-wendy-qualcomm.rules"))}
 	} else if runtime.GOOS == "windows" {
 		lines = append(lines, "Run the install command again to install or repair the Qualcomm EDL WinUSB binding.",
 			"Accept the administrator prompt, and close other flashing tools that may have the board open.")

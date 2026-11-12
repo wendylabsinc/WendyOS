@@ -24,6 +24,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashengine"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/flashpack"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
 )
@@ -487,13 +488,37 @@ func printThorGadgetUnreachableHint(w io.Writer) {
 	fmt.Fprintln(w, tui.Dim("  Unplug/replug the USB-C cable (the port next to HDMI), re-enter recovery mode, and flash again."))
 }
 
-const (
-	usbUdevRulePath = "/etc/udev/rules.d/70-wendy-jetson.rules"
-	usbUdevRule     = `SUBSYSTEM=="usb", ATTRS{idVendor}=="0955", MODE="0660", GROUP="plugdev", TAG+="uaccess"`
-)
+// wendyPackagedRuleDirs are where the deb, rpm and AUR packages install the
+// wendy udev rules; a hand-made copy goes to /etc instead.
+var wendyPackagedRuleDirs = []string{"/usr/lib/udev/rules.d", "/lib/udev/rules.d"}
+
+// wendyPackagedRule reports whether a wendy package installed the udev rule
+// file name. The packages also create the plugdev group the rule names.
+func wendyPackagedRule(name string) bool {
+	for _, dir := range wendyPackagedRuleDirs {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// linuxUSBAccessStep is the one sentence a Linux user sees when the OS refuses
+// wendy the board over USB. With the package, the rules already cover the user
+// at this computer's desktop, so what is left is plugdev for other logins
+// (SSH, headless). Without it there are no rules, and the package is the fix.
+func linuxUSBAccessStep(device string, packaged bool) string {
+	if packaged {
+		return "Your user can't open the " + device + " over USB from this login; run " +
+			"sudo usermod -aG plugdev $USER and log in again, or run the same command with sudo."
+	}
+	return "This wendy was installed without its package, so it can't open the " + device +
+		" over USB; install the package with " + cliupdate.InstallCommand("linux") +
+		", or run the same command with sudo."
+}
 
 // usbAccessHintBox explains how to regain USB access to the Jetson when the OS
-// refuses to open it: on Linux, udev permissions; on macOS, its own kernel driver
+// refuses to open it: on Linux, the packaged rules or plugdev; on macOS, its own kernel driver
 // bound to the recovery device (root needed to seize it).
 func usbAccessHintBox() string {
 	return thorHintBorder.Render(strings.Join(usbAccessHintLines(runtime.GOOS), "\n"))
@@ -509,17 +534,11 @@ func usbAccessHintLines(goos string) []string {
 		"A Jetson is in recovery mode, but the OS refused wendy access to its USB device.",
 	}
 	if goos == "linux" {
-		return append(lines,
-			"Grant access with a udev rule (one-time; the wendy deb/rpm packages install it):",
+		return []string{
+			thorHintTitle.Render("⚠  USB access denied"),
 			"",
-			thorHintCmd.Render("  echo '"+usbUdevRule+"' \\"),
-			thorHintCmd.Render("    | sudo tee "+usbUdevRulePath),
-			thorHintCmd.Render("  sudo udevadm control --reload-rules && sudo udevadm trigger"),
-			"",
-			"Add your user to the "+thorHintEmph.Render("plugdev")+" group — if your distro has none, create it",
-			"("+thorHintCmd.Render("sudo groupadd plugdev && sudo usermod -aG plugdev $USER")+", then log in",
-			"again) — replug the USB-C cable and rescan. Or re-run the flash with sudo.",
-		)
+			linuxUSBAccessStep("Jetson", wendyPackagedRule("70-wendy-jetson.rules")),
+		}
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own
 	// driver to the recovery device (often re-matched after a failed RCM boot), so
