@@ -224,15 +224,19 @@ func TestInstallCommandRunsInOneSession(t *testing.T) {
 	fetchInstallMainManifest = func(context.Context, int) (*mainManifest, error) {
 		sawInteractive = isInteractiveTerminal()
 		sawOutput = tui.PromptWriter()
-		return &mainManifest{}, nil
+		// Stop at alias validation after observing the live session. ESP32
+		// targets now correctly fail before any manifest lookup.
+		return &mainManifest{Devices: map[string]manifestDevice{
+			"session-fixture": {AliasOf: "raspberry-pi-5", AliasStorage: "sd"},
+		}}, nil
 	}
 
 	cmd := newOSInstallCmd()
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--device-type", "esp32-c6", "--no-wifi"})
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("ESP32 --device-type unexpectedly accepted")
+	cmd.SetArgs([]string{"--device-type", "session-fixture", "--storage", "nvme", "--no-wifi"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "always installs to sd") {
+		t.Fatalf("expected fixture alias storage rejection, got %v", err)
 	}
 	if !sawInteractive || sawOutput != terminal {
 		t.Fatalf("during the run: interactive=%v output=%v; want true and the terminal", sawInteractive, sawOutput)
