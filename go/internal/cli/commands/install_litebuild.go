@@ -65,7 +65,7 @@ var (
 //  6. run tools/configure.py with the answers, then idf.py build
 //  7. idf.py merge-bin, and write wendy_conf into the merged image
 //  8. flash it as the catalog firmware is flashed, then enroll
-func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) (err error) {
 	if jsonOutput || !isInteractiveTerminal() {
 		return usageErrorf("the Wendy Lite build asks questions: run it in an interactive terminal, without --json")
 	}
@@ -82,15 +82,17 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	if err != nil {
 		return err
 	}
-	// The folder is kept once the build starts: its output and logs help
-	// when a step fails, and it holds the two sdkconfig files to compare.
+	// The folder, large once built, is removed at the end, except when the
+	// run fails after the build started: its output and logs then help, and
+	// it holds the two sdkconfig files to compare. A Ctrl-C is such a
+	// failure, so it does not wait for the deletion.
 	keep := false
 	defer func() {
-		if keep {
-			fmt.Printf("\nBuild folder: %s\n", dir)
-		} else {
-			os.RemoveAll(dir)
+		if keep && err != nil {
+			fmt.Printf("\nThe build folder is kept: %s\n", dir)
+			return
 		}
+		removeLiteBuildDir(dir)
 	}()
 
 	// Questions, from the master configuration of the clone: the code that
@@ -133,8 +135,8 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	if err != nil {
 		return err
 	}
-	// Not used by the build: kept to compare with configure.py's
-	// sdkconfig.wendy.
+	// Not used by the build: written to compare with configure.py's
+	// sdkconfig.wendy when the folder is kept.
 	sdkconfigText := model.SdkconfigText(model.Header(result.Inputs), result.Inputs, result.Solution)
 	if err := os.WriteFile(filepath.Join(dir, "sdkconfig.wendy.go"), []byte(sdkconfigText), 0o644); err != nil {
 		return err
@@ -159,6 +161,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 		return err
 	}
 
+	fmt.Printf("\nBuild folder: %s\n", dir)
 	keep = true
 	configureArgs := append([]string{"tools/configure.py"}, build.configure...)
 	if err := runLiteBuildCommand(ctx, dir, build.eimVersion, "python", configureArgs...); err != nil {
@@ -178,11 +181,7 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	if err := img.SetPartition("wendy_conf", payload); err != nil {
 		return fmt.Errorf("writing config to firmware image: %w", err)
 	}
-	imagePath := filepath.Join(dir, "wendy-lite.bin")
-	if err := os.WriteFile(imagePath, img.Bytes(), 0o600); err != nil {
-		return err
-	}
-	fmt.Printf("\nBuilt Wendy Lite %s (%s) for the %s: %s\n", ref, commit, chipModelName(chip), imagePath)
+	fmt.Printf("\nBuilt Wendy Lite %s (%s) for the %s.\n", ref, commit, chipModelName(chip))
 
 	port, autoDiscover, err := detectLiteInstallPort(discovery.SerialPortInfo{}, prov, true)
 	if err != nil {
@@ -190,6 +189,14 @@ func runLiteBuild(ctx context.Context, nightly bool, version string, wifi wifiCL
 	}
 	// No version: the device reports the version it was built with.
 	return flashLiteImage(ctx, img, chip, port, autoDiscover, prov, "")
+}
+
+// removeLiteBuildDir removes the build folder, and warns when it cannot, so
+// that the user can delete it.
+func removeLiteBuildDir(dir string) {
+	if err := os.RemoveAll(dir); err != nil {
+		fmt.Fprintln(os.Stderr, tui.WarningMessage(fmt.Sprintf("The build folder %s is not removed: %v", dir, err)))
+	}
 }
 
 // ensureLiteBuildEIM checks that EIM is installed, and offers to install it
