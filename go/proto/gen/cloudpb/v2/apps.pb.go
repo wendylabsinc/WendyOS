@@ -329,64 +329,116 @@ type DeleteAppRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	OrganizationId string                 `protobuf:"bytes,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	// Operator-signed UnassignDeviceRequests, one per device in the removal
-	// set: every device in any live deployment's current set of the app, or
-	// with any Assign for the app relayed to it, not only devices known to hold
-	// one. Each is a TERMINAL removal: it carries the maximum revision,
-	// 2147483647 (UnassignDeviceRequest.revision).
-	// - Authorized by the caller's right to delete the app, not by access to
-	//   each device: a removal only takes the app away, the app is the
-	//   deleter's to delete, and otherwise an interrupted delete has no way out.
-	// - Each passes the full request-signing gate as an UnassignDevice call
-	//   would: the `operation` claim of DeploymentService.UnassignDevice or its
-	//   deprecated ArtifactRegistryService twin, the deployment's resource
-	//   binding, `x5c` only, its own nonce claimed, iat/expiry checked at
-	//   receipt. It must name a deployment of the app being deleted.
-	// - DeleteApp may be repeated with batches (clients send about 200 per
-	//   call; the whole request stays under the server's message limit). Each
-	//   call's removals are verified, queued and relayed verbatim.
+	// Deleting an app tells every device that was sent it (sem 2026-11-12
+	// 21:19, 21:38, 21:40). Each device in the removal set is covered by ONE
+	// operator-signed statement for that device: a removal (device_removals),
+	// or a detach (device_detachments).
+	// - Removal set: every device whose last relayed statement for one of the
+	//   app's deployments leaves it holding that deployment: an Assign under
+	//   either name, or a legacy relayed CreateDeployment, not followed by a
+	//   received removal of it (a non-terminal Unassign, a move out, or a
+	//   RemoveDeployment terminal removal, which counts as coverage). That
+	//   deployment is "the device's deployment" below. A device that is only
+	//   in a deployment's selection (by tag or by "every device") and was never
+	//   sent anything holds nothing and needs no statement.
+	// - Nothing can be missed: cloud serializes, on the app (one lock),
+	//   accepting a relayed statement for it (AssignDevice under either name,
+	//   the legacy CreateDeployment) and every DeleteApp call for it, and the
+	//   call that completes the delete re-reads the set under that lock. So an
+	//   Assign is either recorded before a call reads the set, or refused
+	//   because the delete has started; a statement cloud never received is on
+	//   no device.
+	// - Removal: a TERMINAL UnassignDeviceRequest at the maximum revision,
+	//   2147483647 (UnassignDeviceRequest.revision). Authorized by the caller's
+	//   right on that device, the right UnassignDevice requires. It passes the
+	//   full request-signing gate as an UnassignDevice call would: the
+	//   `operation` claim of DeploymentService.UnassignDevice or its deprecated
+	//   ArtifactRegistryService twin, the deployment's resource binding, `x5c`
+	//   only, its own nonce claimed, iat/expiry checked at receipt.
+	// - Detach: a DetachDeviceRequest (registry.proto). The app stays on that
+	//   device and becomes a direct run. Authorized by the caller's right to
+	//   delete the app alone, for any device in the removal set, reachable or
+	//   not: a detach removes nothing and grants nothing. It passes the same
+	//   gate as a DetachDevice call (`operation`
+	//   DeploymentService.DetachDevice).
+	// - Remove is the default. For a device the caller can reach, the client
+	//   offers removal and signs a detach only when the operator chooses it for
+	//   that device. For a device the caller cannot reach, detach is the only
+	//   option (ListPendingDeviceStatements by app_id tells which is which).
+	// - Each entry must name a device in the removal set and that device's
+	//   deployment (the one its row in the by-app read names); otherwise it
+	//   fails the gate.
+	// - DeleteApp may be repeated with batches (clients send about 200 entries
+	//   per call; the whole request stays under the server's message limit).
+	//   Each call's entries are verified, queued and relayed verbatim.
 	// - There is no cancel: a device that received a terminal removal cannot
-	//   be put back. The delete is resumable and idempotent. A removal for a
-	//   device already covered is skipped and not relayed, also when it is a
-	//   retried copy whose nonce was claimed by the accepted one. Any operator
-	//   who may delete the app can finish it, from any of their keys. The
-	//   devices still lacking a removal: ListPendingDeviceStatements by app_id,
-	//   which answers before the first batch too.
-	// - A valid removal passes the full gate above and names a device in the
-	//   removal set that still lacks one. A removal for a device already
-	//   covered, or no longer in the removal set (unenrolled or deleted after
-	//   the pending read, or moved out earlier), is skipped and does not count;
-	//   it never refuses the call. One removal that fails the gate refuses the
-	//   whole call, nothing in that call is queued, and the refusal names the
-	//   first failing removal (its index, its device and the reason) so the
-	//   client re-signs that one.
-	// - Retries are idempotent. Skipped removals are set aside before any other
+	//   be put back. The delete is resumable and idempotent. Any operator who
+	//   may delete the app can finish it, from any of their keys. The devices
+	//   still uncovered: ListPendingDeviceStatements by app_id, which answers
+	//   before the first batch too.
+	// - A valid entry passes its gate and names a device in the removal set
+	//   that is not yet covered. An entry for a device already covered, or no
+	//   longer in the removal set (unenrolled or deleted after the pending
+	//   read, or moved out earlier), is skipped and does not count; it never
+	//   refuses the call. An entry whose payload cannot be parsed fails the
+	//   gate rather than being skipped, and a skipped entry is not recorded in
+	//   the audit trail as the operator's statement.
+	// - One entry per device per call: two entries for the same device in one
+	//   call (a removal and a detach, or two of either) refuse the call, naming
+	//   the second entry.
+	// - One entry that fails its gate refuses the whole call. Nothing in that
+	//   call is queued, and the refusal names the first failing entry (its
+	//   list, index, device and the reason) so the client re-signs that one.
+	//   A stale entry (past its signing expiry) means the batch is stale: the
+	//   client re-signs the batch from the pending list.
+	//   For a removal the caller has no device access for, the reason reads
+	//   "You can't reach this device. Ask someone who can to remove it, or
+	//   detach it (the app keeps running there)", and the client asks the
+	//   operator again.
+	// - Retries are idempotent. Skipped entries are set aside before any other
 	//   check, the nonce check included, and the nonces of a call are claimed
 	//   in the same transaction that queues its batch, so a refused call claims
 	//   none. A client that resends its signed copies of a refused or half-seen
 	//   batch never fails on a nonce its own earlier attempt claimed, and gets
-	//   the same answer. A copy past its signing expiry fails at receipt like
+	//   the same answer, unless that call completed the delete: a resend then
+	//   gets NOT_FOUND, which the client treats as done. A copy past its signing expiry fails at receipt like
 	//   any stale request and is named for re-signing.
 	// - Every count below is given only after the caller's right to delete the
 	//   app is checked.
-	// - A call that carries no valid removal while the app still has devices
-	//   to tell is refused with FAILED_PRECONDITION saying how many devices
-	//   need one, and does NOT start the delete: an older client that sends no
-	//   removals cannot lock an app by accident. With no devices to tell, the
+	// - A call that carries no valid entry while the app still has devices to
+	//   tell is refused with FAILED_PRECONDITION saying "N devices still need a
+	//   removal or a detach", and does NOT start the delete: an older client that sends
+	//   nothing cannot lock an app by accident. With no devices to tell, the
 	//   call deletes the app at once.
 	// - From the first accepted call (one that carries at least one valid
-	//   removal) until the delete completes, the app is
-	//   being deleted (App.deletion_started_at). Creating or changing a
-	//   deployment of it, AssignDevice under either name, and publishing a
-	//   release for it, are refused with FAILED_PRECONDITION saying the app is
-	//   being deleted.
-	// - The call after which no device lacks a removal deletes the app, its
+	//   entry) until the delete completes, the app is being deleted
+	//   (App.deletion_started_at). Creating or changing a deployment of it,
+	//   AssignDevice under either name, and publishing a release for it, are
+	//   refused with FAILED_PRECONDITION saying the app is being deleted.
+	// - The call after which no device is uncovered deletes the app, its
 	//   releases and its deployments, without waiting for the devices. Until
-	//   then each call ends with FAILED_PRECONDITION saying how many devices
-	//   still need one.
+	//   then each call ends with FAILED_PRECONDITION saying "N devices still
+	//   need a removal or a detach".
+	// - Desired state (the unsigned legacy stream): cloud drops the app from a
+	//   removal-covered device's desired state only once its removal has been
+	//   received. For a detach-covered device it keeps the app at the device's
+	//   last reported state until the device reports it as a direct run or
+	//   reports it gone, so deleting the app never removes it from that device
+	//   through DesiredStateResponse. A new deployment of an app with the same
+	//   id replaces that kept row for the device; on a device whose detach is
+	//   still WAITING_FOR_AGENT, REFUSED or EXPIRED (AssetApp.detach_state), the
+	//   device then refuses the Assign (one instance per app), and that refusal
+	//   is what the operator sees.
+	// - Named limits (compromised cloud): it can mark a device the caller can
+	//   reach as KIND_DETACH, so the operator signs a detach for that named
+	//   device, a statement the operator chose to make; and when a removal and
+	//   a detach were both signed for one device (from stale reads), it picks
+	//   which arrives first. Both were authorized; the first applied wins.
 	DeviceRemovals []*SignedRequest `protobuf:"bytes,3,rep,name=device_removals,json=deviceRemovals,proto3" json:"device_removals,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Signed DetachDeviceRequests, one per device the operator chose to detach.
+	DeviceDetachments []*SignedRequest `protobuf:"bytes,4,rep,name=device_detachments,json=deviceDetachments,proto3" json:"device_detachments,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DeleteAppRequest) Reset() {
@@ -436,6 +488,13 @@ func (x *DeleteAppRequest) GetOrganizationId() string {
 func (x *DeleteAppRequest) GetDeviceRemovals() []*SignedRequest {
 	if x != nil {
 		return x.DeviceRemovals
+	}
+	return nil
+}
+
+func (x *DeleteAppRequest) GetDeviceDetachments() []*SignedRequest {
+	if x != nil {
+		return x.DeviceDetachments
 	}
 	return nil
 }
@@ -641,11 +700,12 @@ const file_wendycloud_v2_apps_proto_rawDesc = "" +
 	"\x05_nameB\n" +
 	"\n" +
 	"\b_detailsB\x19\n" +
-	"\x17_can_send_notifications\"\x92\x01\n" +
+	"\x17_can_send_notifications\"\xdf\x01\n" +
 	"\x10DeleteAppRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12E\n" +
-	"\x0fdevice_removals\x18\x03 \x03(\v2\x1c.wendycloud.v2.SignedRequestR\x0edeviceRemovals\"-\n" +
+	"\x0fdevice_removals\x18\x03 \x03(\v2\x1c.wendycloud.v2.SignedRequestR\x0edeviceRemovals\x12K\n" +
+	"\x12device_detachments\x18\x04 \x03(\v2\x1c.wendycloud.v2.SignedRequestR\x11deviceDetachments\"-\n" +
 	"\x11DeleteAppResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\"\xaf\x01\n" +
 	"\x0fListAppsRequest\x12'\n" +
@@ -697,22 +757,23 @@ var file_wendycloud_v2_apps_proto_depIdxs = []int32{
 	8,  // 1: wendycloud.v2.App.updated_at:type_name -> google.protobuf.Timestamp
 	8,  // 2: wendycloud.v2.App.deletion_started_at:type_name -> google.protobuf.Timestamp
 	9,  // 3: wendycloud.v2.DeleteAppRequest.device_removals:type_name -> wendycloud.v2.SignedRequest
-	0,  // 4: wendycloud.v2.ListAppsResponse.apps:type_name -> wendycloud.v2.App
-	9,  // 5: wendycloud.v2.AppService.UpsertApp:input_type -> wendycloud.v2.SignedRequest
-	2,  // 6: wendycloud.v2.AppService.GetApp:input_type -> wendycloud.v2.GetAppRequest
-	9,  // 7: wendycloud.v2.AppService.UpdateApp:input_type -> wendycloud.v2.SignedRequest
-	9,  // 8: wendycloud.v2.AppService.DeleteApp:input_type -> wendycloud.v2.SignedRequest
-	6,  // 9: wendycloud.v2.AppService.ListApps:input_type -> wendycloud.v2.ListAppsRequest
-	0,  // 10: wendycloud.v2.AppService.UpsertApp:output_type -> wendycloud.v2.App
-	0,  // 11: wendycloud.v2.AppService.GetApp:output_type -> wendycloud.v2.App
-	0,  // 12: wendycloud.v2.AppService.UpdateApp:output_type -> wendycloud.v2.App
-	5,  // 13: wendycloud.v2.AppService.DeleteApp:output_type -> wendycloud.v2.DeleteAppResponse
-	7,  // 14: wendycloud.v2.AppService.ListApps:output_type -> wendycloud.v2.ListAppsResponse
-	10, // [10:15] is the sub-list for method output_type
-	5,  // [5:10] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	9,  // 4: wendycloud.v2.DeleteAppRequest.device_detachments:type_name -> wendycloud.v2.SignedRequest
+	0,  // 5: wendycloud.v2.ListAppsResponse.apps:type_name -> wendycloud.v2.App
+	9,  // 6: wendycloud.v2.AppService.UpsertApp:input_type -> wendycloud.v2.SignedRequest
+	2,  // 7: wendycloud.v2.AppService.GetApp:input_type -> wendycloud.v2.GetAppRequest
+	9,  // 8: wendycloud.v2.AppService.UpdateApp:input_type -> wendycloud.v2.SignedRequest
+	9,  // 9: wendycloud.v2.AppService.DeleteApp:input_type -> wendycloud.v2.SignedRequest
+	6,  // 10: wendycloud.v2.AppService.ListApps:input_type -> wendycloud.v2.ListAppsRequest
+	0,  // 11: wendycloud.v2.AppService.UpsertApp:output_type -> wendycloud.v2.App
+	0,  // 12: wendycloud.v2.AppService.GetApp:output_type -> wendycloud.v2.App
+	0,  // 13: wendycloud.v2.AppService.UpdateApp:output_type -> wendycloud.v2.App
+	5,  // 14: wendycloud.v2.AppService.DeleteApp:output_type -> wendycloud.v2.DeleteAppResponse
+	7,  // 15: wendycloud.v2.AppService.ListApps:output_type -> wendycloud.v2.ListAppsResponse
+	11, // [11:16] is the sub-list for method output_type
+	6,  // [6:11] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_apps_proto_init() }
