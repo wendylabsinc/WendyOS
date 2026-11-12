@@ -22,6 +22,9 @@ helpers = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helpers)
 ROOT = helpers.ROOT
 MODEL_REVISION = "9c5acfdd74aaff2d0f47c51b878506361039a51f"
+# Keep aligned with accelerator.go's tensorRTLibraryDirs. The worker's mappings
+# also identify libraries resolved by the dynamic loader outside these paths.
+LIBRARY_DIRS = ["/usr/lib", "/usr/lib/aarch64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/local/lib"]
 
 
 def generate(inventory, output):
@@ -98,14 +101,18 @@ inference:
     }}
     capture = out / "capture-cache.py"
     helpers.write(capture, CACHE_CAPTURE)
+    libraries = out / "capture-libraries.py"
+    helpers.write(libraries, LIBRARY_CAPTURE.replace("LIBRARY_DIRECTORIES", repr(LIBRARY_DIRS)))
     console = ["#!/bin/sh", "set -eu", "date -u", "cat /proc/sys/kernel/random/boot_id",
                "cat /etc/os-release", "nvpmodel -q", "free -m",
                "systemctl show wendy-agent --property=MainPID --property=ExecMainStartTimestamp --property=ExecStart",
-               "dpkg-query -W 'libnvinfer*' 'libcudart*'",
+               'python3 "$(dirname "$0")/capture-libraries.py" "$@"',
+               # WendyOS is Yocto-based and normally has no Debian package tools.
+               "if command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W 'libnvinfer*' 'libcudart*' || true; fi",
                "ps -eo pid,ppid,lstart,args | grep -E '[w]endy-agent|[i]nference/.*/worker.py|[a]ccelerator.py'",
                "journalctl -u wendy-agent -b --no-pager -o short-iso"]
     helpers.write(out / "console-capture.sh", "\n".join(console) + "\n")
-    artifacts.extend([info_artifact, helpers.artifact(str(campaign)), helpers.artifact(str(capture)),
+    artifacts.extend([info_artifact, helpers.artifact(str(campaign)), helpers.artifact(str(capture)), helpers.artifact(str(libraries)),
                       helpers.artifact(str(out / "console-capture.sh"))])
     cases = [{"id": phase, "status": "not_run", "inspect_samples": [], "cache_capture": None,
               "console_capture": None, "boot_id": None, "agent_pid": None, "worker_pid": None,
@@ -163,9 +170,12 @@ Establish a working cached engine
    engine.state ready, and no degraded/error status. Observe at least six inspect
    samples ten seconds apart with sources detecting and frames_scored increasing.
    A successful deploy, ready flag or advertised provider alone is insufficient.
-5. Transfer capture-cache.py and console-capture.sh to a private evidence directory
+5. Transfer capture-cache.py, capture-libraries.py and console-capture.sh together
+   to a private evidence directory
    at the local maintenance console through the owner's approved process. Inspect
-   them first; they only read device state. Run `sudo sh console-capture.sh` and:
+   them first; they only read device state. Identify the current worker.py PID in
+   the Agent's process tree, then run
+   `sudo sh console-capture.sh --worker-pid CURRENT_WORKER_PID` and:
      {capture_command} --key-prefix ENGINE_KEY_FROM_INSPECT
    Use the exact engine.key prefix from inspect. Preserve stdout/stderr with UTC
    stage labels. The cache helper requires exactly one matching engine directory,
@@ -173,6 +183,13 @@ Establish a working cached engine
    Capture the actual loaded TensorRT binding files too with `sha256sum` and
    `stat -c '%n %s %Y'`, using the verified image or cache path from step 3.
    Match the stored record's model hash, GPU, CUDA and TensorRT fields to this board.
+   The library capture searches the Agent's actual TensorRT library directories
+   and hashes the libnvinfer/parser/plugin/CUDA libraries mapped by this worker.
+   Record the worker-reported accelerator.runtime and cache record fields as the
+   TensorRT/CUDA version evidence; package names alone are not authoritative.
+   Require mappings and hashes for the loaded TensorRT and CUDA libraries, with
+   no capture errors. WendyOS does not require dpkg-query; package information is
+   supplemental and collected only when that command is available.
 6. Demonstrate healthy output with a new person appearance after an empty view
    lasting at least clear_after and cooldown. Record the resulting episode ID for
    this exact campaign/revision using `{run} board episodes baseline`.
@@ -237,6 +254,56 @@ Failure handling and cleanup
     a different Jetson/TensorRT version or the separate engine-invalidation cases.
 ''')
     return evidence
+
+
+LIBRARY_CAPTURE = '''#!/usr/bin/env python3
+"""Read actual TensorRT/CUDA libraries and optional live worker mappings."""
+import argparse, hashlib, json
+from pathlib import Path
+LIBRARY_DIRS = LIBRARY_DIRECTORIES
+PREFIXES = ("libnvinfer.so.", "libnvonnxparser.so.", "libnvinfer_plugin.so.", "libcudart.so.")
+
+def capture(worker_pid=None):
+    paths, mapped, errors = set(), [], []
+    for directory in LIBRARY_DIRS:
+        root = Path(directory)
+        if not root.is_dir():
+            continue
+        for path in root.iterdir():
+            if path.name.startswith(PREFIXES) and path.is_file():
+                paths.add(path)
+    if worker_pid is not None:
+        try:
+            for line in Path(f"/proc/{worker_pid}/maps").read_text().splitlines():
+                fields = line.split(None, 5)
+                if len(fields) == 6 and Path(fields[5]).name.startswith(PREFIXES):
+                    mapped.append(line)
+                    paths.add(Path(fields[5]))
+        except OSError as error:
+            errors.append(str(error))
+    files = []
+    for path in sorted(paths):
+        try:
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+            files.append({"path": str(path), "resolved": str(path.resolve()),
+                          "sha256": digest.hexdigest(), "bytes": path.stat().st_size,
+                          "mtime_ns": path.stat().st_mtime_ns})
+        except OSError as error:
+            errors.append(str(error))
+    return {"library_dirs": LIBRARY_DIRS, "worker_pid": worker_pid,
+            "worker_mappings": mapped, "files": files, "errors": errors}
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--worker-pid", type=int)
+    args = parser.parse_args()
+    if args.worker_pid is not None and args.worker_pid <= 0:
+        parser.error("worker PID must be positive")
+    print(json.dumps(capture(args.worker_pid), indent=2))
+'''
 
 
 CACHE_CAPTURE = '''#!/usr/bin/env python3
