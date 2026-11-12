@@ -1164,10 +1164,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2278",
       "title": "feat(mcp): tool titles, relay manifest and wendy cloud mcp (WDY-3675, WDY-3660)",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "MCP manifest, authorization and compatibility tests cover published catalogue handling. The pairing UI and connected relay approval path are not covered by unit tests alone.",
       "required_follow_up": "Add a client/relay fixture for old/new catalogues, denied approval and a completed pairing session.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": "go/internal/cli/commands/cloud_mcp_journey_test.go:TestCloudMCPPairingJourneyCatalogues",
+          "runner": "local macOS",
+          "result": "A real gRPC relay stream and production MCP server exercise denial followed by accepted pairing, initialization, exact catalogue/title/schema output and a successful status call for current and supported older catalogues. Denied-binding frames are ignored both before and after acceptance; response IDs, binding and sequence numbers are checked. Removing the binding guard fails the test. All CloudMCP tests pass under -race."
+        }
+      ],
+      "resolution": "The complete pairing journey is implemented and locally verified alongside existing catalogue-mismatch and per-call approval tests. Required CI remains pending."
     },
     {
       "key": "2134",
