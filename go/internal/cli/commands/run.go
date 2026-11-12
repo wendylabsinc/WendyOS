@@ -130,7 +130,7 @@ func openContainerStream(ctx context.Context, svc agentpb.WendyContainerServiceC
 			AppName: appName,
 		})
 		if startErr != nil {
-			return nil, false, fmt.Errorf("starting container: %w", startErr)
+			return nil, false, startContainerError(startErr)
 		}
 		return startStream, false, nil
 	}
@@ -1458,7 +1458,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return startContainerError(err)
 		}
 		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
@@ -1477,7 +1477,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return startContainerError(err)
 		}
 		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
@@ -1499,7 +1499,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		AppName: appCfg.ContainerName(),
 	})
 	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
+		return startContainerError(err)
 	}
 
 	cliLogln("Application %s started.", containerDisplayName(appCfg))
@@ -2254,6 +2254,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			return err
 		}
 	}
+	if err := preflightHostPorts(ctx, conn, appCfg); err != nil {
+		return err
+	}
 	mcu, err := preflightMCU(ctx, conn, cwd, appCfg, opts)
 	if err != nil {
 		return err
@@ -2931,7 +2934,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return startContainerError(err)
 		}
 		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
@@ -2960,7 +2963,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			AppName: appCfg.ContainerName(),
 		})
 		if err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return startContainerError(err)
 		}
 		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
@@ -3019,7 +3022,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 					AppName: appCfg.ContainerName(),
 				})
 				if startErr != nil {
-					return fmt.Errorf("starting container: %w", startErr)
+					return startContainerError(startErr)
 				}
 				outStream = startStream
 				stdinAttempted = false
