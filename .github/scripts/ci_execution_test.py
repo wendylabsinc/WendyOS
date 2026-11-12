@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -27,6 +28,34 @@ def workflow(name):
 
 
 class CIExecutionTests(unittest.TestCase):
+    def test_integration_matrix_requires_platforms_except_explicit_target_or_discovery(self):
+        step = next(s for s in workflow("integration-tests.yml")["jobs"]["discover"]["steps"]
+                    if s.get("id") == "scan")
+        for hostname, jobs, required in [("", "all", True), ("", "integration", True),
+                                         ("", "discover", False), ("selected.local", "all", False)]:
+            with self.subTest(hostname=hostname, jobs=jobs), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                ssh = root / "ssh"
+                ssh.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+Path(os.environ["SSH_CALL"]).write_text(json.dumps(sys.argv[1:]))
+print('["selected.local"]')
+''')
+                ssh.chmod(0o755)
+                call = root / "ssh.json"
+                output = root / "output"
+                result = subprocess.run(["bash", "-euo", "pipefail", "-c", step["run"]], cwd=ROOT,
+                                        env=dict(os.environ, PATH=f"{root}{os.pathsep}{os.environ['PATH']}",
+                                                 SSH_CALL=str(call), INPUT_HOSTNAME=hostname, INPUT_JOBS=jobs,
+                                                 GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=""),
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                command = shlex.split(json.loads(call.read_text())[-1])
+                self.assertIn(str(ROOT / ".github/scripts/integration-discover.py"), command)
+                self.assertEqual("--require-platforms" in command, required, command)
+                self.assertEqual(output.read_text().strip(), 'matrix=["selected.local"]')
+
     def test_main_e2e_runs_do_not_cancel_each_other_but_pr_pushes_do(self):
         policy = workflow("swift-e2e-tests.yml")["concurrency"]
         # Evaluate the actual expressions; do not duplicate their implementation.

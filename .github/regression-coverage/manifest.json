@@ -1807,10 +1807,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1691",
       "title": "fix(ci): allow current Thor integration host",
       "package": "07",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The integration host allowlist was updated. Later integration-discover tests improve platform selection, but this historical host fix has no standalone assertion.",
-      "required_follow_up": "Use platform-based discovery tests and fail when required hardware families are absent.",
-      "evidence": []
+      "required_follow_up": "Reconcile the required offline automation job for both discovery and actual workflow argument propagation.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/integration-discover_test.py",
+            ".github/scripts/ci_execution_test.py"
+          ],
+          "result": "Existing platform-family tests are now in the unconditional offline suite. New process-level discovery uses renamed Thor/Pi/Dragonwing devices, fails a missing or unauthorized Jetson family, and distinguishes optional discovery from required coverage. The actual workflow scan shell is executed with a local SSH fixture to require --require-platforms for automatic integration and preserve explicit-target/discovery-only exceptions. Hosted CI pending."
+        }
+      ]
     },
     {
       "key": "1666",
