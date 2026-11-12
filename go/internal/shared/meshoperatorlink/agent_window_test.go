@@ -236,8 +236,8 @@ func TestAgentWindowNegotiationAndTransfer(t *testing.T) {
 			if mode == "tcp" {
 				want = agentTCPWindow
 			}
-			if client.receiveWindow() != want || server.receiveWindow() != want {
-				t.Fatalf("negotiated %d/%d want %d", client.receiveWindow(), server.receiveWindow(), want)
+			if client.agentWindow != want || server.agentWindow != want {
+				t.Fatalf("negotiated %d/%d want %d", client.agentWindow, server.agentWindow, want)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

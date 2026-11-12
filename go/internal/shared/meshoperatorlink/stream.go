@@ -81,7 +81,7 @@ type control struct {
 type Link struct {
 	writeMu frameWriteMutex
 
-	agentWindow  uint32 // Immutable negotiated maximum; zero retains the legacy limit.
+	agentWindow  uint32 // Immutable negotiated window; readyWithAgentWindow admits only 32–256 KiB.
 	agentMu      sync.Mutex
 	agent        *agentStream
 	agentID      uint32

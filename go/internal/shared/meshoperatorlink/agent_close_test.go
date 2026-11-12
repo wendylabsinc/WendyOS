@@ -89,7 +89,7 @@ func testAgentCloseUnblocksTransportWrite(t *testing.T, mode string) {
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
 	}
-	l := &Link{conn: client, expires: now.Add(time.Hour), done: make(chan struct{}), outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
+	l := &Link{agentWindow: agentWindow, conn: client, expires: now.Add(time.Hour), done: make(chan struct{}), outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
 	c := newAgentStream(l, 1, agentWindow)
 	l.agent = c
 	paused.mu.Lock()
@@ -146,7 +146,7 @@ func testAgentCloseUnblocksTransportWrite(t *testing.T, mode string) {
 
 // Releasing a completed management session must preserve the router lifetime.
 func TestIdleAgentCloseKeepsRouterLive(t *testing.T) {
-	l := &Link{expires: time.Now().Add(time.Hour), done: make(chan struct{}), outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
+	l := &Link{agentWindow: agentWindow, expires: time.Now().Add(time.Hour), done: make(chan struct{}), outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
 	c := newAgentStream(l, 1, agentWindow)
 	l.agent = c
 	if err := c.Close(); err != nil {

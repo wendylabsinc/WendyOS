@@ -55,13 +55,6 @@ func acceptAgentWindow(offered, selected uint32) (uint32, error) {
 	return selected, nil
 }
 
-func (l *Link) receiveWindow() uint32 {
-	if l.agentWindow == 0 {
-		return agentWindow
-	}
-	return l.agentWindow
-}
-
 const agentFramePayload = 1100 - 4 // Stream ID shares the existing1100-byte frame budget.
 
 var ErrAgentUnavailable = errors.New("adjacent operator peer has no management stream")
@@ -91,7 +84,7 @@ type agentStream struct {
 }
 
 func newAgentStream(l *Link, id, sendCredit uint32) *agentStream {
-	return &agentStream{link: l, id: id, buffer: make([]byte, l.receiveWindow()), receiveCredit: l.receiveWindow(), sendCredit: sendCredit, sendWindow: sendCredit, admitted: sendCredit != 0,
+	return &agentStream{link: l, id: id, buffer: make([]byte, l.agentWindow), receiveCredit: l.agentWindow, sendCredit: sendCredit, sendWindow: sendCredit, admitted: sendCredit != 0,
 		ready: make(chan error, 1), done: make(chan struct{}), readWake: make(chan struct{}, 1), writeWake: make(chan struct{}, 1)}
 }
 func wake(ch chan struct{}) {
@@ -128,7 +121,7 @@ func (l *Link) OpenAgent(ctx context.Context) (net.Conn, error) {
 	c := newAgentStream(l, l.agentID, 0)
 	l.agent = c
 	l.agentMu.Unlock()
-	if err := l.queueControl(control{Kind: "operator-agent-open", Stream: c.id, Credit: l.receiveWindow()}); err != nil {
+	if err := l.queueControl(control{Kind: "operator-agent-open", Stream: c.id, Credit: l.agentWindow}); err != nil {
 		c.close(false)
 		return nil, err
 	}
@@ -169,7 +162,7 @@ func (l *Link) currentAgent(id uint32) *agentStream {
 func (l *Link) agentControl(m control) (bool, error) {
 	switch m.Kind {
 	case "operator-agent-open":
-		if !l.server || m.Stream == 0 || m.Credit == 0 || m.Credit > l.receiveWindow() {
+		if !l.server || m.Stream == 0 || m.Credit == 0 || m.Credit > l.agentWindow {
 			return true, errors.New("invalid operator agent open")
 		}
 		l.agentMu.Lock()
@@ -200,7 +193,7 @@ func (l *Link) agentControl(m control) (bool, error) {
 		// Close marks agentClosing under this same mutex before Wait can run.
 		l.workers.Add(1)
 		l.agentMu.Unlock()
-		if err := l.queueControl(control{Kind: "operator-agent-ready", Stream: c.id, Credit: l.receiveWindow()}); err != nil {
+		if err := l.queueControl(control{Kind: "operator-agent-ready", Stream: c.id, Credit: l.agentWindow}); err != nil {
 			c.close(false)
 			l.agentMu.Lock()
 			l.agentServing = false
@@ -229,7 +222,7 @@ func (l *Link) agentControl(m control) (bool, error) {
 			}
 			return true, nil
 		}
-		if m.Credit == 0 || m.Credit > l.receiveWindow() {
+		if m.Credit == 0 || m.Credit > l.agentWindow {
 			return true, errors.New("invalid operator agent window")
 		}
 		c.mu.Lock()
