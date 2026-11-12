@@ -275,6 +275,8 @@ jobs:
         run: |
           sudo apt-get update --error-on=any
           sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Verify native Make VERSION in the built CLI
+        run: python3 .github/scripts/test-native-make-version.py
       - name: Compile host fixtures
         run: |
           go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
@@ -309,6 +311,8 @@ jobs:
           grep -q '^--- PASS: TestParseUMSDisksDirect ' "$RUNNER_TEMP/disk-discovery.log"
       - name: Install CLI native dependencies
         run: brew install libusb pkg-config
+      - name: Verify native Make VERSION in the built CLI
+        run: python3 .github/scripts/test-native-make-version.py
       - name: Compile raw-device and target-scoped preparation tests
         run: go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
       - name: Require disposable disk image regressions
@@ -489,6 +493,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: Install GNU Make for the native Windows recipe
+        shell: pwsh
+        run: choco install make --yes --no-progress
+      - name: Verify native Make VERSION in the built CLI
+        run: python .github/scripts/test-native-make-version.py
 
       # Native execution covers Windows identity files and process shutdown,
       # including CLI/MCP identity sharing across WENDY_CONFIG_DIR overrides.

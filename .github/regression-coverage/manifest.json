@@ -2197,10 +2197,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2483",
       "title": "fix(cli): honor VERSION in native make builds",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The Makefile now respects VERSION, but no build-and-version regression was found.",
       "required_follow_up": "Build with a sentinel VERSION and assert the resulting CLI reports that exact value.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/test-native-make-version.py",
+          "runner": "local macOS arm64; required Linux, macOS and Windows native jobs added",
+          "result": "The real make build-cli target builds two successive sentinel VERSION values; each resulting native executable reports the exact value. Removing the native ldflags reproduces wendy version dev and fails the check. The script refuses cross-compilation and existing output binaries, uses an isolated configuration and removes only its generated executable. Native Linux/Windows CI remains pending."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43231090224/job/131226573972",
+          "result": "Native Windows CI exposed Make/sh expansion of PowerShell LASTEXITCODE, producing an invalid if expression after the build. The native recipe now invokes a .ps1 file so PowerShell receives its own variables intact. Added a real linker-failure case to require nonzero Make exit on all three hosts. Final Windows execution pending."
+        }
+      ]
     },
     {
       "key": "2424",
