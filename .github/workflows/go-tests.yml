@@ -550,6 +550,16 @@ jobs:
           path: ${{ runner.temp }}/service-packet-recovery
           if-no-files-found: ignore
           retention-days: 7
+      - name: Require publication-loss recovery through an alternate supplier
+        run: bash .github/scripts/test-publication-loss-packets.sh "$RUNNER_TEMP/publication-loss-packets"
+      - name: Preserve alternate publication recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: publication-loss-packets
+          path: ${{ runner.temp }}/publication-loss-packets
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream

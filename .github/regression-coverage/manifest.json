@@ -1576,10 +1576,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2420",
       "title": "Request signed Wendy Net announcements from one neighbour",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The mesh PR contains many codec, lease and gossip tests, but coverage is spread across kernel, transport and recovery suites with different runtime requirements.",
-      "required_follow_up": "Run a multi-node renewal/publication-loss scenario and verify current-leaf binding and bounded recovery.",
-      "evidence": []
+      "required_follow_up": "Require the four-node current-leaf publication-loss recovery gate and both controls in the existing Linux network job. No kernel-TUN, radio or GUI claim.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/publication_loss_packet_test.go",
+            "go/internal/agent/localmesh/publication_loss_fixture_test.go",
+            ".github/scripts/test-publication-loss-packets.sh"
+          ],
+          "result": "Four real TLS/gVisor runtimes form a diamond. The durable publisher restarts with a new signing key while primary DATA is dropped. The receiver withdraws old-key publication authority, keeps unrelated TCP working, and retrieves the exact signed envelope from the alternate supplier after the full production 30-second idle deadline. Local race gate and native Linux capability-free execution pass. Retained timed-out claim and obsolete-leaf-authority controls fail at their intended assertions. Required hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "2524",
@@ -3168,7 +3177,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2406",
       "title": "Support Mosaico with wendy run and wendy install",
       "package": "12",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "ESP-IDF/toolchain tests cover preparation and target selection. The rootful Linux ownership fix needs a real root-to-user build-output check.",
       "required_follow_up": "Require real ESP-IDF rootful Linux compilation and ownership after success, configuration failure and cancellation, plus an omitted-ownership-restoration control. Reuse the containerd job with a bounded step; no device flash or Mosaico application acceptance is claimed.",
       "evidence": [
@@ -3180,8 +3189,20 @@
             ".github/scripts/fixtures/esp-idf-ownership-2406.md"
           ],
           "result": "Actual pinned ESP-IDF image built the minimal ESP32-C6 app on native arm64: CMake observed UID0, 404 build steps produced a real RISC-V ELF and ESP binary. Intentional configure failure, package tests, Linux normal/control compilation and three cleanup-scope checks pass. The actual non-root Linux caller/rootful Docker ownership assertions and omitted-restore control require hosted execution; macOS Docker execution is not host-ownership proof."
+        },
+        {
+          "tests": [
+            "go/internal/cli/espidftoolchain/project_docker_linux_test.go",
+            ".github/scripts/test-esp-idf-ownership.py",
+            ".github/scripts/esp_idf_ownership_test.py",
+            ".github/scripts/fixtures/esp-idf-ownership-2406.md"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43321581941/job/131543311283",
+          "runner": "Hosted native Linux/amd64, caller 1001:1001 and rootful Docker",
+          "result": "Artifact 13991840361 proves actual pinned ESP-IDF ESP32-C6 compilation and ownership restoration after success, intentional configure failure and cancellation. Normal cases passed in 50.45 seconds, with 404 build steps producing RISC-V ELF and ESP binary. Assertions preserve foreign UID 65534 files, source ownership and outside symlink targets. Omitting ownership restoration failed with generated files left at 0:0 instead of 1001:1001. All owned resources cleaned without errors. No hardware flash claim."
         }
-      ]
+      ],
+      "resolution": "Required hosted firmware build, all three ownership outcomes and the omitted-restoration control executed successfully."
     },
     {
       "key": "1764",
