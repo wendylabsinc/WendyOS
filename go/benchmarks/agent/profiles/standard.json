@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "repetitions": 5,
+  "sample_seconds": 1,
+  "settle_seconds": 120,
+  "cooldown_seconds": 30,
+  "scenarios": [
+    {"name": "idle", "kind": "idle", "seconds": 600},
+    {
+      "name": "telemetry",
+      "kind": "telemetry",
+      "requests": 6000,
+      "requests_per_second": 10,
+      "batch": 100,
+      "payload_bytes": 256,
+      "max_lag_seconds": 1
+    }
+  ]
+}
