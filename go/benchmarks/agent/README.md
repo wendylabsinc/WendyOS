@@ -70,7 +70,9 @@ space for raw samples. Copy artifacts off tmpfs afterward. The collector and
 workload generator must run outside the measured service cgroup. Their CPU and
 memory can still influence a small device; check collector overhead before
 choosing a faster sample interval. `--pid PID` supports process-only measurement
-without systemd and deliberately excludes cgroup totals.
+without systemd and deliberately excludes cgroup totals. Service measurement
+needs the cgroup v2 unified hierarchy and stops with an error without it; on
+cgroup v1 or hybrid hosts, use `--pid`.
 
 The standard profile takes about 125 minutes. It repeats ten-minute idle and
 telemetry workloads five times, with a two-minute settling period before each
@@ -167,7 +169,7 @@ read/write-rate charts. Comparison produces `comparison.md` and
   operation use those cooldown-inclusive totals.
 - Cgroup I/O and host disks remain separate per device to avoid double counting
   partitions and stacked devices. Host samples include pressure, disk timing,
-  temperature and CPU frequency where exposed. Whole-device totals include the
+  temperature and CPU frequency where exposed and readable. Whole-device totals include the
   generator, collector and background services; do not attribute them to the agent.
 - Unsupported or inaccessible counters are absent and displayed as unavailable,
   never zero. A change in available metrics invalidates a comparison. Cgroup

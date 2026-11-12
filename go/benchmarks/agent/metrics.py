@@ -57,6 +57,9 @@ class Process:
         self.ticks = os.sysconf("SC_CLK_TCK")
         self.start = None
         self.cgroup = cgroup_path(pid) if include_cgroup else None
+        if include_cgroup and self.cgroup is None:
+            raise ValueError(f"PID {pid} has no cgroup v2 path under /sys/fs/cgroup; service accounting "
+                             "needs the unified hierarchy. Use --pid for process-only measurement")
         if self.cgroup:
             own = cgroup_path(os.getpid())
             if own and (own == self.cgroup or self.cgroup in own.parents):
@@ -116,7 +119,7 @@ class Process:
         return data
 
 
-def host_sample():
+def host_sample(sysfs=Path("/sys")):
     data = {}
     # Keep devices separate: summing partitions, device-mapper and physical disks
     # would count the same I/O multiple times. diskstats sectors are 512 bytes.
@@ -133,15 +136,24 @@ def host_sample():
             kind, *values = line.split()
             values = dict(v.split("=") for v in values)
             data[f"pressure.{resource}.{kind}_seconds"] = int(values["total"]) / 1e6
-    for path in Path("/sys/class/thermal").glob("thermal_zone*/temp"):
-        value = read_text(path)
-        if value:
-            data[f"temperature.{path.parent.name}_c"] = int(value) / 1000
-    for path in Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"):
-        value = read_text(path)
-        if value:
-            data[f"frequency.{path.parent.parent.name}_khz"] = int(value)
+    for path in (sysfs / "class/thermal").glob("thermal_zone*/temp"):
+        value = read_sensor(path)
+        if value is not None:
+            data[f"temperature.{path.parent.name}_c"] = value / 1000
+    for path in (sysfs / "devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"):
+        value = read_sensor(path)
+        if value is not None:
+            data[f"frequency.{path.parent.parent.name}_khz"] = value
     return data
+
+
+def read_sensor(path):
+    """Optional host sensor. Drivers can fail reads (EIO, ENODATA, EAGAIN) or
+    report non-numeric text; skip those rather than abort every snapshot."""
+    try:
+        return int(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def percentile(values, fraction):

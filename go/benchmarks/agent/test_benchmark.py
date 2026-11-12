@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import benchmark
 from compare import compare, markdown
-from metrics import Process, summarize
+from metrics import Process, host_sample, summarize
 import workloads
 from pair import merge
 
@@ -183,6 +183,13 @@ class MetricsTests(unittest.TestCase):
         self.assertGreaterEqual(after["process.cpu_seconds"] - before["process.cpu_seconds"], .25)
         self.assertGreaterEqual(after["process.children_cpu_seconds"] - before["process.children_cpu_seconds"], .25)
 
+    @unittest.skipUnless(sys.platform == "linux", "reads /proc")
+    def test_service_mode_without_cgroup_v2_path_fails_clearly(self):
+        # cgroup v1 or hybrid host: /proc/PID/cgroup has no usable 0:: path.
+        with patch("metrics.cgroup_path", return_value=None):
+            with self.assertRaisesRegex(ValueError, "--pid"):
+                Process(os.getpid(), include_cgroup=True)
+
     def test_proc_stat_with_spaces_parentheses_and_pid_reuse(self):
         with tempfile.TemporaryDirectory() as directory:
             process = Process.__new__(Process)
@@ -231,6 +238,21 @@ class MetricsTests(unittest.TestCase):
             self.assertEqual(data["service.io.8:0.wbytes"], 2048)
             self.assertEqual(data["service.io.8:16.wbytes"], 8192)
             self.assertNotIn("service.swap_bytes", data)
+
+    def test_unreadable_sensors_are_skipped(self):
+        # A thermal zone can fail with EIO/ENODATA (e.g. iwlwifi with the radio
+        # off); reading a directory raises a real OSError the same way.
+        with tempfile.TemporaryDirectory() as directory:
+            sysfs = Path(directory)
+            (sysfs / "class/thermal/thermal_zone0/temp").mkdir(parents=True)
+            (sysfs / "class/thermal/thermal_zone1").mkdir()
+            (sysfs / "class/thermal/thermal_zone1/temp").write_text("42500\n")
+            (sysfs / "devices/system/cpu/cpu0/cpufreq").mkdir(parents=True)
+            (sysfs / "devices/system/cpu/cpu0/cpufreq/scaling_cur_freq").write_text("<unsupported>\n")
+            data = host_sample(sysfs)
+        self.assertEqual(data["temperature.thermal_zone1_c"], 42.5)
+        self.assertNotIn("temperature.thermal_zone0_c", data)
+        self.assertFalse(any(key.startswith("frequency.") for key in data))
 
     def test_gauge_mean_weights_irregular_samples(self):
         result = summarize([{"time": t, "values": {"rss_bytes": v}} for t, v in ((0, 0), (1, 10), (10, 10))])
