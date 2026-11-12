@@ -217,6 +217,43 @@ jobs:
             grep -F -- "--- PASS: $test (" "$RUNNER_TEMP/rtps-results"
           done
 
+  camera-node-regression:
+    name: Camera node removal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: camera-node
+      - name: Install a real loopback control device
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential
+      # Match the WendyOS 0.15.4 ABI; Ubuntu's older package has different ioctls.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: v4l2loopback/v4l2loopback
+          ref: 0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4
+          path: .ci-v4l2loopback
+          persist-credentials: false
+      - name: Build and load WendyOS loopback ABI
+        run: |
+          make -C .ci-v4l2loopback
+          sudo modprobe videodev
+          sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
+          sudo udevadm settle
+          test -c /dev/v4l2loopback
+      - name: Exercise the remove ioctl and require execution
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          trap 'sudo rmmod v4l2loopback' EXIT
+          go test -c -o "$RUNNER_TEMP/ipcam.test" ./go/internal/agent/ipcam
+          sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
+          grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
+
   windows:
     name: Windows CLI
     runs-on: runs-on,runner=2cpu-linux-x64
@@ -361,7 +398,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -374,6 +411,7 @@ jobs:
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
+          CAMERA_NODE_RESULT: ${{ needs.camera-node-regression.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -387,6 +425,7 @@ jobs:
           test "$STARTUP_RESULT" = success
           test "$INFERENCE_WORKER_RESULT" = success
           test "$CONTAINERD_RESULT" = success
+          test "$CAMERA_NODE_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
