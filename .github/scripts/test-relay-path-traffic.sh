@@ -50,3 +50,11 @@ mutation() {
 mutation session-context pending-renewal 'same session after path move:'
 mutation discard-lease acknowledged-renewal 'replacement presence did not prove the retained lease'
 mutation blocking-renewal pending-renewal 'path move did not reconnect presence while renewal was pending'
+
+# Real production 30s keepalive, 35s idle path expiry, 40s application silence.
+# Its disabled-keepalive child runs concurrently, so both controls cost ~40s.
+WENDY_E2E_RELAY_IDLE=1 go test -race "$package" -run '^TestRelayIdleKeepalive$' -count=1 -v -timeout=70s 2>&1 | tee "$output/idle-keepalive.log"
+grep -q '^--- PASS: TestRelayIdleKeepalive ' "$output/idle-keepalive.log"
+grep -q 'IDLE_KEEPALIVE_PRESERVED' "$output/idle-keepalive.log"
+grep -q 'IDLE_CONTROL_TRANSPORT_EXPIRED' "$output/idle-keepalive.log"
+if grep -q -- '--- SKIP:' "$output/idle-keepalive.log"; then exit 1; fi

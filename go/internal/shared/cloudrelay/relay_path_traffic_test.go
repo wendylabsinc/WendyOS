@@ -216,7 +216,7 @@ func (w relayCountWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func startRelayTCPPath(t *testing.T, target string) *relayTCPPath {
+func startRelayTCPPath(t *testing.T, target string, wrap ...func(net.Conn) net.Conn) *relayTCPPath {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -233,6 +233,9 @@ func startRelayTCPPath(t *testing.T, target string) *relayTCPPath {
 			client, err := listener.Accept()
 			if err != nil {
 				return
+			}
+			if len(wrap) != 0 {
+				client = wrap[0](client)
 			}
 			path.accepted.Add(1)
 			connections.Add(1)
