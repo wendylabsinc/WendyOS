@@ -1687,6 +1687,10 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		return err
 	}
 	specDuration = time.Since(phaseStarted)
+	// Before the old version is removed: a refused deploy leaves it running.
+	if err := c.checkHostPorts(ctx, appID, entCfg.Entitlements); err != nil {
+		return err
+	}
 	if validateOnly {
 		return nil
 	}
@@ -2399,6 +2403,9 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// network-operation lock above still serializes this container's lifecycle.
 	muHeld = false
 	c.mu.Unlock()
+	if err := c.checkHostPorts(ctx, appID, parseEntitlementsFromAnnotations(containerLabels)); err != nil {
+		return nil, err
+	}
 	if hasNANEntitlement(parseEntitlementsFromAnnotations(containerLabels)) {
 		unlockNAN := c.lockNANOperation(appID)
 		defer unlockNAN()

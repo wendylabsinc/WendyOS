@@ -758,7 +758,7 @@ func (s *ContainerService) streamContainerOutput(
 	startCtx := context.WithoutCancel(ctx)
 	outputCh, err := s.containerd.StartContainer(startCtx, appName, postStartAgentCommand, restartPolicy)
 	if err != nil {
-		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+		return startContainerStatus(err)
 	}
 
 	// Attach the task-lifetime drainer before any early return below can
@@ -862,7 +862,7 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 	outputCh, err := s.containerd.StartContainerWithStdin(startCtx, appName, stdinR, postStartAgentCommand, nil)
 	if err != nil {
 		stdinR.Close()
-		return status.Errorf(codes.Internal, "failed to start container: %v", err)
+		return startContainerStatus(err)
 	}
 
 	// Attach the task-lifetime drainer before any early return below can
@@ -1642,4 +1642,13 @@ func parseAppConfig(data []byte) (*appconfig.AppConfig, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+// startContainerStatus keeps a refusal the user can act on (a port held by
+// another app) as it is; anything else is an internal start failure.
+func startContainerStatus(err error) error {
+	if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition {
+		return err
+	}
+	return status.Errorf(codes.Internal, "failed to start container: %v", err)
 }
