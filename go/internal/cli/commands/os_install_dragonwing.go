@@ -666,7 +666,10 @@ func flashDragonwing(ctx context.Context, flash *qdl.FlashPlan, dev qdl.DeviceIn
 	if err := session.Configure(board.storage); err != nil {
 		return errors.Join(err, errDragonwingNothingWritten)
 	}
+	return programDragonwingPartitions(ctx, flash, session, out, detail)
+}
 
+func programDragonwingPartitions(ctx context.Context, flash *qdl.FlashPlan, session *qdl.Session, out io.Writer, detail func(string)) error {
 	for _, e := range flash.Programs {
 		label := e.Label
 		err := session.Program(ctx, flash.Dir, e, throttledDetail(detail,
