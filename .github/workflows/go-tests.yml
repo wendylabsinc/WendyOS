@@ -217,6 +217,37 @@ jobs:
             grep -F -- "--- PASS: $test (" "$RUNNER_TEMP/rtps-results"
           done
 
+  native-app-regressions:
+    name: Native app regressions (${{ matrix.platform }})
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos, ios]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: '26.5'
+      - name: Install native build dependencies
+        run: brew install xcodegen pkg-config libusb cmake ninja
+      - name: Build and test native app
+        env:
+          APP_PLATFORM: ${{ matrix.platform }}
+        run: bash .github/scripts/test-native-app.sh "$APP_PLATFORM"
+      - name: Upload native test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-app-results-${{ matrix.platform }}
+          path: go/macos/Build/RegressionResults.xcresult
+          if-no-files-found: warn
+
   camera-node-regression:
     name: Camera node removal
     runs-on: ubuntu-24.04
@@ -449,7 +480,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -465,6 +496,7 @@ jobs:
           CAMERA_NODE_RESULT: ${{ needs.camera-node-regression.result }}
           GSTREAMER_RESULT: ${{ needs.gstreamer-regressions.result }}
           SIMULATOR_PYTHON_RESULT: ${{ needs.simulator-python310.result }}
+          NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -481,6 +513,7 @@ jobs:
           test "$CAMERA_NODE_RESULT" = success
           test "$GSTREAMER_RESULT" = success
           test "$SIMULATOR_PYTHON_RESULT" = success
+          test "$NATIVE_APP_RESULT" = success
 
   agent-startup:
     name: Agent setup startup

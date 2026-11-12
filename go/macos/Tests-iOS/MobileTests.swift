@@ -2,10 +2,35 @@ import XCTest
 import ARKit
 import RoomPlan
 import AVFoundation
+import SwiftUI
 
 @testable import WendyMobile
 
 final class MobileTests: XCTestCase {
+    @MainActor
+    func testOverflowMenuKeepsFullHitArea() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: OverflowMenu { Button("Inspect") {} })
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previousWindow?.makeKeyAndVisible() }
+        try await Task.sleep(for: .milliseconds(100))
+        host.view.layoutIfNeeded()
+        func buttons(_ view: UIView) -> [UIButton] {
+            (view as? UIButton).map { [$0] } ?? view.subviews.flatMap(buttons)
+        }
+        let button = try XCTUnwrap(buttons(host.view).first)
+        XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
+        XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+        for x in [CGFloat(1), button.bounds.width - 1] {
+            for y in [CGFloat(1), button.bounds.height - 1] {
+                XCTAssertTrue(button.point(inside: CGPoint(x: x, y: y), with: nil))
+            }
+        }
+    }
+
     func testEmbeddedSignInProducesBrowserURL() async throws {
         let client = GoClient.shared
         try await initializeIsolatedSandbox()
