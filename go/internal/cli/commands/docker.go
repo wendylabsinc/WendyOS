@@ -1718,6 +1718,12 @@ func buildxMissingError(ctx context.Context) error {
 	if imageBuilderCommandContext(ctx, "docker", "buildx", "version").Run() == nil {
 		return nil
 	}
+	return buildxNotInstalledError()
+}
+
+// buildxNotInstalledError is the refusal for a Docker install without the
+// Buildx plugin, shared by the pre-build check and buildxMissingError.
+func buildxNotInstalledError() error {
 	return withNextSteps(commandErrorf(errBuilderUnavailable, "%w; wendy builds images with it", errBuildxMissing),
 		"Install the Docker Buildx plugin: https://docs.docker.com/go/buildx/ (Docker Desktop, OrbStack and Rancher Desktop include it).",
 		"Check it with `docker buildx version`, then run again.")

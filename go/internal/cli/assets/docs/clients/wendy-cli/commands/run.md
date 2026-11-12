@@ -698,21 +698,28 @@ remain running. Host hooks and browser opening wait for readiness.
 
 ## Diagnosing a failed run
 
-Failures identify the current run phase when available. Before a local image
-build, Wendy reports independent host disk, device disk, and applicable Docker
-Buildx problems together. Existing project, target, and builder-specific checks
-still apply. The no-build path does not require build tools.
+Failures identify the run phase they belong to when it is known. Before a
+local image build, including Compose and multi-service projects, Wendy reports
+independent host disk, device disk, and applicable Docker Buildx problems
+together. Swift and Xcode builds use no image builder and report the two disks
+together. A Buildx check that times out does not block the build. Existing
+project, target, and builder-specific checks still apply. The no-build path
+does not require build tools.
 
 If the device returns an error before it confirms app start, Wendy reports
 that error and its gRPC code as the failure. Only a lost connection is reported
 as one, with the app state unknown.
 
-If an attached output stream fails after the device confirmed app start, Wendy
-makes a bounded, read-only app-state check. It distinguishes a running app, a
+If an attached output stream of a single app fails after the device confirmed
+app start, Wendy makes a bounded, read-only app-state check. It distinguishes a running app, a
 confirmed crash, a clean exit, and an unknown or replaced app. A running app is
 left running; use the suggested `wendy device logs --app <app>` command with the
 same device to reconnect. The stream failure still exits nonzero and preserves
 its typed cause. A failed state check is not evidence of a crash.
+
+Compose and multi-service runs stream each service separately. A failed
+service stream is reported as a warning for that service, without this check
+or the saved output below, and the other services keep streaming.
 
 On an attached run failure, Wendy saves up to the last 32 KiB of stdout and
 32 KiB of stderr in a private local file and prints its path. The human view

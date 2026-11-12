@@ -107,12 +107,14 @@ func ErrorClass(err error) string {
 		return "registry_auth"
 	case isRegistryUnavailable(err):
 		return "registry_unavailable"
-	case errors.Is(err, errBuilderUnavailable):
-		return "builder_unavailable"
 	// Refused before a build for lack of space: the same class as the OS
-	// error the build would otherwise have ended with.
+	// error the build would otherwise have ended with. Ahead of
+	// builder_unavailable because a pre-build refusal can name both, and
+	// disk_full is how callers know nothing was deployed.
 	case errors.Is(err, errDiskSpaceLow):
 		return "disk_full"
+	case errors.Is(err, errBuilderUnavailable):
+		return "builder_unavailable"
 	// A missing executable during a build is a missing tool, not a failed
 	// compilation. exec.ErrNotFound survives the build failure wrapper.
 	case errors.Is(err, exec.ErrNotFound):

@@ -1413,10 +1413,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if len(jobs) > 0 {
 		// Only a service left to build needs room here or on the device. Compose
 		// projects cannot use --build-host, so it is not offered.
-		if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, false)); err != nil {
-			return err
-		}
-		if err := checkDeviceDiskSpace(versionResp); err != nil {
+		if err := checkRunBuildPrerequisites(ctx, opts.builder, false, versionResp, defaultDoctorDeps()); err != nil {
 			return err
 		}
 		ctx = withDeviceStorage(ctx, versionResp)

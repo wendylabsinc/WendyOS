@@ -1414,7 +1414,7 @@ func resolveRunWorkingDir(opts runOptions) (string, error) {
 // runMacOSNativeContainer creates, optionally starts, and optionally streams
 // from a container that was deployed via file sync (not an OCI image pull).
 // It is shared by both the SwiftPM and Xcode macOS run paths.
-func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
+func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) (retErr error) {
 	appConfigData, err := json.Marshal(appCfg)
 	if err != nil {
 		return fmt.Errorf("marshaling app config: %w", err)
@@ -1488,6 +1488,9 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		return nil
 	}
 
+	var recent recentRunOutput
+	defer func() { retErr = recent.failure(retErr) }()
+
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	logSub := startRunLogSubscription(runCtx, conn, appCfg.AppID, os.Stdout, runLogStreamWarning)
@@ -1530,7 +1533,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if runCtx.Err() != nil {
 				break
 			}
-			return fmt.Errorf("receiving container output: %w", recvErr)
+			return diagnoseRunStreamFailure(ctx, conn, appCfg, hookFired, recvErr)
 		}
 		if resp.GetStarted() != nil && !hookFired {
 			hookFired = true
@@ -1538,9 +1541,11 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			runner.startAsync(runCtx, appCfg)
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
+			recent.stdout = appendRunTail(recent.stdout, out.GetData())
 			_, _ = os.Stdout.Write(out.GetData())
 		}
 		if out := resp.GetStderrOutput(); out != nil {
+			recent.stderr = appendRunTail(recent.stderr, out.GetData())
 			_, _ = os.Stderr.Write(out.GetData())
 		}
 	}
@@ -1580,10 +1585,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	regPort := registryPort(agentOS)
 
-	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
-		return err
-	}
-	if err := checkDeviceDiskSpace(versionResp); err != nil {
+	if err := checkToolchainBuildPrerequisites(ctx, cwd, versionResp); err != nil {
 		return err
 	}
 	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
@@ -1690,10 +1692,7 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
 	}
-	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
-		return err
-	}
-	if err := checkDeviceDiskSpace(versionResp); err != nil {
+	if err := checkToolchainBuildPrerequisites(ctx, cwd, versionResp); err != nil {
 		return err
 	}
 
@@ -2521,7 +2520,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 
 	// A build will run below (the no-build fast path returned above). Refuse it
 	// now if this computer's disk, or the device's, is too full to hold it.
-	if err := checkRunBuildPrerequisites(ctx, opts.builder, versionResp, defaultDoctorDeps()); err != nil {
+	if err := checkRunBuildPrerequisites(ctx, opts.builder, true, versionResp, defaultDoctorDeps()); err != nil {
 		return err
 	}
 	ctx = withDeviceStorage(ctx, versionResp)

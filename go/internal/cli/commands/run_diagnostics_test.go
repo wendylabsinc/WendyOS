@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -71,7 +72,7 @@ func TestRunStreamFailureDoesNotMisattributeAReplacement(t *testing.T) {
 }
 
 func TestAttachedRunPathsPreserveRunningAppAfterConnectionLoss(t *testing.T) {
-	for _, path := range []string{"new", "existing"} {
+	for _, path := range []string{"new", "existing", "macos"} {
 		t.Run(path, func(t *testing.T) {
 			cause := status.Error(codes.Unavailable, "lost stream")
 			client := &scriptedContainerClient{
@@ -81,10 +82,14 @@ func TestAttachedRunPathsPreserveRunningAppAfterConnectionLoss(t *testing.T) {
 			conn := &grpcclient.AgentConnection{ContainerService: client}
 			cfg := &appconfig.AppConfig{AppID: "app"}
 			var err error
-			if path == "new" {
+			switch path {
+			case "new":
 				err = streamRunContainerWithStarted(context.Background(), conn, client.stream, cfg, runOptions{}, nil)
-			} else {
+			case "existing":
 				err = startExistingContainer(context.Background(), conn, cfg, runOptions{})
+			case "macos":
+				conn.ContainerService = macOSScriptedClient{client}
+				err = runMacOSNativeContainer(context.Background(), conn, cfg, &agentpb.CreateContainerRequest{AppName: cfg.AppID}, runOptions{})
 			}
 			if !errors.Is(err, cause) || ExecutionErrorClass(err) != "grpc_unavailable" || !strings.Contains(err.Error(), "still running") {
 				t.Fatalf("wrong diagnosis: %v", err)
@@ -234,4 +239,11 @@ func TestComposeBuildRefusalIsNotNamedConnect(t *testing.T) {
 	if got := runPhaseFailure(ctx, err).Error(); !strings.HasPrefix(got, "run failed during build: ") {
 		t.Fatalf("wrong phase: %s", got)
 	}
+}
+
+// macOSScriptedClient adds the CreateContainer call the native macOS path makes.
+type macOSScriptedClient struct{ *scriptedContainerClient }
+
+func (macOSScriptedClient) CreateContainer(context.Context, *agentpb.CreateContainerRequest, ...grpc.CallOption) (*agentpb.CreateContainerResponse, error) {
+	return &agentpb.CreateContainerResponse{}, nil
 }

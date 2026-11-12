@@ -514,8 +514,14 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 
 	// Images that will be sent need room on the device, whichever machine
 	// builds them.
+	// A local build also needs room and a working builder on this computer;
+	// report those with the device's disk rather than one at a time.
 	if len(skip) < len(services) {
-		if err := checkDeviceDiskSpace(versionResp); err != nil {
+		if opts.buildHost != "" {
+			if err := checkDeviceDiskSpace(versionResp); err != nil {
+				return err
+			}
+		} else if err := checkRunBuildPrerequisites(ctx, opts.builder, true, versionResp, defaultDoctorDeps()); err != nil {
 			return err
 		}
 		ctx = withDeviceStorage(ctx, versionResp)
@@ -538,9 +544,6 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		invalidateRemoteServiceDeployFingerprints(appCfg.AppID, deviceKey, services, skip)
 	} else {
 		if len(skip) < len(services) {
-			if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
-				return err
-			}
 			noteEmulatedBuild(platform, true)
 		}
 		failed, preparedContent, buildErr = buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
