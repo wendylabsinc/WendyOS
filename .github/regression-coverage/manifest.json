@@ -1502,13 +1502,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2579",
       "title": "[WN5] Authenticate operators as ordinary mesh routers",
       "package": "05",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests cover operator policies, lease binding and isolated namespaces. Several kernel namespace cases are privileged and not explicitly selected by the dedicated containerd job.",
       "required_follow_up": "Execute operator-policy namespace/rollback tests in a privileged Linux job and reject skips.",
       "evidence": [
         {
           "path": ".github/scripts/test-operator-policy.sh",
           "result": "Added a required Ubuntu VM job that compiles current localmesh tests and both unchanged pre-operator main revisions: documented baseline 581bff3a8aeb368680f346a9785934eef14848d7 and the final pre-merge main ceef5cfa15f6739b04559a365a617e1dd287ae47. The launcher checks fresh mount/network/PID namespaces before mounts or routing changes, isolates /run and /sys, and bounds execution. It explicitly selects operator table migration/withdrawal, warm rollback after SIGKILL, and DNS rollback/cleanup tests. CI requires all three parent PASS markers and rejects any SKIP. Bash syntax, ShellCheck and actionlint pass. Actual kernel execution remains pending CI; no privileged Docker run is used."
+        },
+        {
+          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2852",
+          "head": "0f38d74cd3b90b09ef417b72d631d9caabfa71e8",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43268520988",
+          "result": "Required operator policy job 131358477619 and Go Tests aggregate passed at the final network PR head. Both unchanged pre-operator baselines exercised actual kernel table migration/withdrawal, warm rollback after SIGKILL and DNS cleanup. All selected parent tests had required PASS markers and no skips. Go/test-launcher source is unchanged from the earlier inspected passing b12ed124c kernel job."
         }
       ],
       "resolution": "Previously opt-in kernel operator and rollback tests become required CI checks with a real pre-fix agent binary and fail-on-skip assertions."
@@ -1534,13 +1540,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2661",
       "title": "Show which interface carries internet traffic in wendy device info",
       "package": "05",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Uplink parsing and formatting tests exist, but no direct regression was found for cancellation while D-Bus connection setup is blocked.",
       "required_follow_up": "Add a blocked connection fixture and assert probe cancellation closes it within the context deadline.",
       "evidence": [
         {
           "path": "go/internal/agent/services/network_uplink_cancellation_linux_test.go",
           "result": "Four real TCP D-Bus setup cases cover caller cancellation and the production two-second uplink timeout during authentication and Hello. They require an unknown connectivity result and peer-observed socket closure. All cases and existing uplink parsing/annotation tests pass under the Linux race detector. Removing WithContext via a Go overlay causes the authentication cancellation assertion to fail. Linux-only because NetworkManager runs on Linux and macOS godbus chooses a different system-bus address mechanism. Required PR CI remains pending."
+        },
+        {
+          "pr": "https://github.com/wendylabsinc/WendyOS/pull/2852",
+          "head": "0f38d74cd3b90b09ef417b72d631d9caabfa71e8",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43268520988",
+          "result": "Required Go Tests aggregate and Race tests passed at the final network PR head. The four real D-Bus authentication/Hello cancellation and timeout cases execute on Linux and assert socket closure; the local removed-context mutation failed as required. The separate Swift tests and Linux E2E workflow also passed."
         }
       ],
       "resolution": "The regression exercises addUplinkInfo through the real D-Bus transport and startup handshake, without mocking the connection or using a live NetworkManager service."
@@ -1596,10 +1608,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1833",
       "title": "Keep host-network container DNS live across outages",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover generated resolver content and stable-file updates. They do not query DNS from a running host-network container across an outage.",
-      "required_follow_up": "Run a container DNS lookup before, during and after resolver changes.",
-      "evidence": []
+      "required_follow_up": "Require the real host-network container DNS fixture on both supported containerd versions. The same task must resolve before an upstream outage, fail during it, recover through a replacement upstream, and survive managed resolver-file replacement. The old-upstream mutation must fail recovery. Linux compilation and existing resolver tests passed; isolated integration execution remains pending.",
+      "evidence": [
+        {
+          "files": [
+            "go/internal/agent/containerd/host_dns_integration_test.go",
+            ".github/scripts/test-host-network-dns.sh",
+            ".github/workflows/go-tests.yml"
+          ],
+          "result": "Added real systemd-resolved and containerd DNS recovery coverage plus a pinned-upstream negative control in isolated mount/network/PID namespaces. Linux compilation and portable resolver tests passed; no integration pass is claimed before CI executes."
+        }
+      ]
     },
     {
       "key": "1663",
