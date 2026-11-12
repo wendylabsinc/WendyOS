@@ -55,6 +55,13 @@ def prompt_variables(variables, target):
     return variables
 
 
+def graded_target(item, device):
+    """The selector an attempt's calls must name, when the task or scenario prompt names a device.
+    The live run and --rescore both use this."""
+    prompt = item.get("prompt") or ""
+    return device if device and ("{device}" in prompt or "{vm_name}" in prompt) else None
+
+
 def expand(value, variables):
     if isinstance(value, str):
         for name, replacement in variables.items():
@@ -335,7 +342,7 @@ def rescore(results_dir, tasks, scenarios):
         row["tool_choice"] = (grade(trace, item["expect"], live["final_text"], live["agent_completed"],
                                     group=row.get("group") if scenario else None, adapter=adapter,
                                     went_around=sc.is_local(row.get("target_config") or {}),
-                                    target=row.get("device_selector") if "{device}" in item.get("prompt", "") else None)
+                                    target=graded_target(item, row.get("device_selector")))
                               if item.get("expect") else None)
         agent = row.get("stages", {}).get("agent")
         # A setup_error attempt never reached a verdict (it may have aborted after the agent ran), and an
@@ -994,7 +1001,7 @@ def trial(config, agent_name, target_name, task, output, wendy, treatment_root=R
                 row["task_seconds"] = result["seconds"]
                 row["tool_choice"] = (grade(row["metrics"]["tool_trace"], task["expect"], row["metrics"]["final_text"],
                                             row["metrics"]["agent_completed"], adapter=agent["adapter"],
-                                            went_around=local, target=variables["device"])
+                                            went_around=local, target=graded_target(task, variables["device"]))
                                       if task.get("expect") else None)
                 row["status"] = mcp_status(agent["adapter"], row["metrics"]) or attempt_status(result)
                 infra = infra_status(events, config) if disposable(config) else None

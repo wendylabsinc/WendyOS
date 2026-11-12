@@ -150,6 +150,12 @@ class ScenarioQuality(unittest.TestCase):
         other = [{'channel': 'cli', 'name': 'device info', 'arguments': ['device', 'info', '--device', 'lab-pi-7']}]
         self.assertEqual(g.grade(other, expect, '', True, target='cloud://host:443/org/1/asset/2')['rule'], 'target')
 
+    def test_live_and_rescored_attempts_check_the_same_target(self):
+        self.assertEqual(b.graded_target({'prompt': 'Deploy to {device}.'}, 'vm:sim'), 'vm:sim')
+        self.assertEqual(b.graded_target({'prompt': 'Create a simulator named {vm_name}.'}, 'vm:new'), 'vm:new')
+        self.assertIsNone(b.graded_target({'prompt': 'Install WendyOS on the supplied board.'}, 'pi.local:50051'))
+        self.assertIsNone(b.graded_target({'prompt': 'Deploy to {device}.'}, None))
+
     def test_failed_or_unobserved_tool_result_is_not_success(self):
         expect = {'right': [{'tool': 'run'}], 'require_result': True}
         for error in (True, None):
