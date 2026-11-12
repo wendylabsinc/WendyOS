@@ -6,7 +6,7 @@ if [[ "${GITHUB_ACTIONS:-}" != true || "${RUNNER_ENVIRONMENT:-}" != github-hoste
   exit 2
 fi
 cd "$(git rev-parse --show-toplevel)"
-for command in go python3 sudo modprobe pipewire pw-dump aplay arecord; do
+for command in go python3 sudo modprobe pipewire pw-dump aplay arecord timeout; do
   command -v "$command" >/dev/null
 done
 if getent passwd wendy >/dev/null || getent group wendy >/dev/null || [[ -d /sys/module/snd_aloop ]]; then
@@ -16,7 +16,17 @@ fi
 output="$(mktemp -d "${RUNNER_TEMP:?}/wendy-sensorlink-audio.XXXXXX")"
 test_name=TestSensorLinkMicrophonesRecordKernelLoopbackWithLivePipeWire
 
+# sudo must fail without prompting. GNU timeout owns its command group and
+# escalates even when a query ignores TERM. Never leave a startup/cleanup
+# command waiting for the outer job's 25-minute timeout.
+run_root_bounded() {
+  local duration="$1"
+  shift
+  sudo -n timeout --kill-after=1s "$duration" "$@"
+}
+
 # Compile before allocating any host resources. No production source is edited.
+echo "Compiling SensorLink audio normal and regression binaries: $output"
 go test -race -c -o "$output/services.test" ./go/internal/agent/services
 python3 - "$output" <<'PY'
 import json
@@ -51,18 +61,20 @@ wendy_uid=
 wendy_gid=
 cleanup() {
   result=$?
-  trap - EXIT INT TERM
+  trap - EXIT
+  trap '' INT TERM
   set +e
+  echo "Draining owned SensorLink audio resources"
   if [[ -n "$wendy_uid" ]]; then
     # This fresh account owns only fixture processes. Bound graceful shutdown
     # before escalating by this owned UID, never by a reusable launcher PID.
-    sudo pkill -TERM -u "$wendy_uid"
+    run_root_bounded 3s pkill -TERM -u "$wendy_uid"
     for _ in $(seq 1 30); do
-      if ! sudo pgrep -u "$wendy_uid" >/dev/null; then break; fi
+      if ! run_root_bounded 3s pgrep -u "$wendy_uid" >/dev/null; then break; fi
       sleep 0.1
     done
-    if sudo pgrep -u "$wendy_uid" >/dev/null; then
-      sudo pkill -KILL -u "$wendy_uid"
+    if run_root_bounded 3s pgrep -u "$wendy_uid" >/dev/null; then
+      run_root_bounded 3s pkill -KILL -u "$wendy_uid"
     fi
   fi
   if [[ -n "$daemon_launcher" ]]; then
@@ -81,19 +93,19 @@ cleanup() {
   fi
   if [[ -n "$daemon_directory" ]]; then
     # mktemp reserved this exact private subtree; logs remain in $output.
-    sudo rm -rf -- "$daemon_directory" || result=1
+    run_root_bounded 5s rm -rf -- "$daemon_directory" || result=1
   fi
   if [[ "$loaded_module" == 1 ]]; then
-    sudo modprobe -r snd-aloop || result=1
+    run_root_bounded 5s modprobe -r snd-aloop || result=1
     test ! -d /sys/module/snd_aloop || result=1
   fi
   if [[ "$created_user" == 1 ]]; then
-    sudo userdel wendy || result=1
+    run_root_bounded 5s userdel wendy || result=1
     # userdel may already have removed its private group. If present, require
     # the exact GID created by this fixture before deleting it.
     if current_group=$(getent group wendy); then
       if [[ $(cut -d: -f3 <<< "$current_group") == "$wendy_gid" ]]; then
-        sudo groupdel wendy || result=1
+        run_root_bounded 5s groupdel wendy || result=1
       else
         echo 'Refusing to remove a replacement wendy group.' >&2
         result=1
@@ -107,17 +119,17 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-sudo useradd --system --no-create-home --user-group --groups audio --shell /usr/sbin/nologin wendy
+run_root_bounded 5s useradd --system --no-create-home --user-group --groups audio --shell /usr/sbin/nologin wendy
 created_user=1
 wendy_uid="$(id -u wendy)"
 wendy_gid="$(id -g wendy)"
-sudo modprobe snd-aloop id=Loopback pcm_substreams=8
+run_root_bounded 5s modprobe snd-aloop id=Loopback pcm_substreams=8
 loaded_module=1
-sudo udevadm settle
+run_root_bounded 5s udevadm settle
 # The fresh daemon UID cannot traverse private RUNNER_TEMP ancestors. Reserve
 # only its runtime/config under /tmp; never relax runner-directory permissions.
 daemon_directory="$(mktemp -d /tmp/wendy-sensorlink-pipewire.XXXXXX)"
-sudo install -d -m 700 -o "$wendy_uid" -g "$wendy_gid" "$daemon_directory/runtime"
+run_root_bounded 5s install -d -m 700 -o "$wendy_uid" -g "$wendy_gid" "$daemon_directory/runtime"
 mkdir -p "$daemon_directory/config/pipewire/pipewire.conf.d"
 # A real ALSA source on the opposite cable is present in the private graph.
 # It is deliberately not one of the device-1/subdevice-0,1 mounted microphones.
@@ -142,18 +154,20 @@ context.objects = [
   }
 ]
 CONF
-sudo chown -R "$wendy_uid:$wendy_gid" "$daemon_directory"
+run_root_bounded 5s chown -R "$wendy_uid:$wendy_gid" "$daemon_directory"
 # The runner owns the log file; sudo applies only to the daemon.
 # shellcheck disable=SC2024
-sudo -u wendy env XDG_CONFIG_HOME="$daemon_directory/config" XDG_RUNTIME_DIR="$daemon_directory/runtime" PIPEWIRE_RUNTIME_DIR="$daemon_directory/runtime" \
+sudo -n -u wendy env XDG_CONFIG_HOME="$daemon_directory/config" XDG_RUNTIME_DIR="$daemon_directory/runtime" PIPEWIRE_RUNTIME_DIR="$daemon_directory/runtime" \
   pipewire > "$output/pipewire.log" 2>&1 &
 daemon_launcher=$!
+echo "Waiting for the private PipeWire graph (15-second startup deadline)"
 ready=0
-for _ in $(seq 1 50); do
+startup_deadline=$((SECONDS + 15))
+while (( SECONDS < startup_deadline )); do
   # The runner owns this captured JSON; only pw-dump needs daemon access.
   # shellcheck disable=SC2024
-  if sudo test -S "$daemon_directory/runtime/pipewire-0" && \
-    sudo env PIPEWIRE_RUNTIME_DIR="$daemon_directory/runtime" XDG_RUNTIME_DIR="$daemon_directory/runtime" timeout 2 pw-dump > "$output/pw-dump.json"; then
+  if run_root_bounded 2s test -S "$daemon_directory/runtime/pipewire-0" && \
+    run_root_bounded 2s env PIPEWIRE_RUNTIME_DIR="$daemon_directory/runtime" XDG_RUNTIME_DIR="$daemon_directory/runtime" pw-dump > "$output/pw-dump.json" 2>> "$output/pw-dump.log"; then
     ready=1
     break
   fi
@@ -168,16 +182,19 @@ for _ in $(seq 1 50); do
 done
 if [[ "$ready" != 1 ]]; then
   cat "$output/pipewire.log"
-  echo 'Private PipeWire session did not become ready.' >&2
+  cat "$output/pw-dump.log" >&2 2>/dev/null || true
+  echo 'Private PipeWire session did not become ready within its bounded startup window.' >&2
   exit 1
 fi
+echo "Private PipeWire graph is ready; enumerating kernel ALSA devices"
 # These inventory files are runner-owned artifacts.
 # shellcheck disable=SC2024
-sudo arecord -l > "$output/arecord-list.txt"
+run_root_bounded 3s arecord -l > "$output/arecord-list.log" 2>&1
 # shellcheck disable=SC2024
-sudo aplay -l > "$output/aplay-list.txt"
+run_root_bounded 3s aplay -l > "$output/aplay-list.log" 2>&1
 run_fixture() {
-  sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+  echo "Running owned audio fixture: $(basename "$1")" >&2
+  sudo -n env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
     WENDY_SENSORLINK_AUDIO_LOOPBACK=1 WENDY_TEST_PIPEWIRE_RUNTIME="$daemon_directory/runtime" \
     python3 .github/scripts/run-owned-media-test.py --timeout 60 -- "$1" \
       -test.run "^${test_name}$" -test.v -test.count=1 -test.timeout=0
