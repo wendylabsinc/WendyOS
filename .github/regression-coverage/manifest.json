@@ -1502,10 +1502,16 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2579",
       "title": "[WN5] Authenticate operators as ordinary mesh routers",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover operator policies, lease binding and isolated namespaces. Several kernel namespace cases are privileged and not explicitly selected by the dedicated containerd job.",
       "required_follow_up": "Execute operator-policy namespace/rollback tests in a privileged Linux job and reject skips.",
-      "evidence": []
+      "evidence": [
+        {
+          "path": ".github/scripts/test-operator-policy.sh",
+          "result": "Added a required Ubuntu VM job that compiles current localmesh tests and both unchanged pre-operator main revisions: documented baseline 581bff3a8aeb368680f346a9785934eef14848d7 and the final pre-merge main ceef5cfa15f6739b04559a365a617e1dd287ae47. The launcher checks fresh mount/network/PID namespaces before mounts or routing changes, isolates /run and /sys, and bounds execution. It explicitly selects operator table migration/withdrawal, warm rollback after SIGKILL, and DNS rollback/cleanup tests. CI requires all three parent PASS markers and rejects any SKIP. Bash syntax, ShellCheck and actionlint pass. Actual kernel execution remains pending CI; no privileged Docker run is used."
+        }
+      ],
+      "resolution": "Previously opt-in kernel operator and rollback tests become required CI checks with a real pre-fix agent binary and fail-on-skip assertions."
     },
     {
       "key": "2578",
