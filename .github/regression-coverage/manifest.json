@@ -1100,10 +1100,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2596",
       "title": "[WN12] Avoid retransmitting known TLS certificate authorities",
       "package": "03",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Handshake tests cover omitted issuers, mixed versions and role checks. The broader multi-transport certificate-completion limits need explicit cross-version execution.",
       "required_follow_up": "Run the issuer-budget and role-refusal matrix across LAN, QUIC and BLE implementations.",
-      "evidence": []
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/localmesh/tls_issuers_roles_test.go",
+            "go/internal/agent/bleprovider/tls_issuers_roles_linux_test.go",
+            "go/internal/agent/bleprovider/tls_issuers_linux_test.go"
+          ],
+          "runner": "macOS LAN/QUIC and unprivileged Linux container for BLE",
+          "result": "48 wire-level admission cases cover client/server certificates on LAN TCP, QUIC, first-contact BLE and pinned BLE reconnect. Known-issuer leaf-only exchanges admit the intended device and reject operator, user, service, wrong-tenant and self identities. Existing ECDSA/ML-DSA slow-BLE budget, mixed-version, missing-issuer and real operator-admission suites also pass under -race. Disabling the LAN or BLE self-device guard fails the new matrix. The BLE transport is a deterministic throttled stream, not a physical radio; physical interoperability stays separate under 2534."
+        }
+      ],
+      "resolution": "The issuer-budget and role-refusal matrix runs through production TLS configurations and real handshakes. Local checks pass; required CI remains pending."
     },
     {
       "key": "2534",

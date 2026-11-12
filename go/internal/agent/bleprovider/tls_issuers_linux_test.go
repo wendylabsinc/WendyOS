@@ -51,6 +51,11 @@ func issuerCredentials(t *testing.T, shared bool, leafKey deviceKey) (high, low 
 }
 
 func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey deviceKey) (high, low *localmesh.Credentials) {
+	high, low, _ = issuerCredentialsWithLeaves(t, shared, sharedParents, leafKey)
+	return high, low
+}
+
+func issuerCredentialsWithLeaves(t *testing.T, shared, sharedParents bool, leafKey deviceKey) (high, low *localmesh.Credentials, issue func(string) tls.Certificate) {
 	t.Helper()
 	type issued struct {
 		cert *x509.Certificate
@@ -58,19 +63,19 @@ func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey de
 		pem  string
 	}
 	var serial int64
-	mint := func(name string, device meshid.Device, parent *issued, size int, key crypto.Signer) issued {
+	mint := func(name, principal string, parent *issued, size int, key crypto.Signer) issued {
 		t.Helper()
 		serial++
 		template := &x509.Certificate{
 			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name},
 			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-			BasicConstraintsValid: true, IsCA: device == meshid.Device{}, KeyUsage: x509.KeyUsageDigitalSignature,
+			BasicConstraintsValid: true, IsCA: principal == "", KeyUsage: x509.KeyUsageDigitalSignature,
 			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		}
 		if template.IsCA {
 			template.KeyUsage |= x509.KeyUsageCertSign
 		} else {
-			uri, err := url.Parse(device.Principal())
+			uri, err := url.Parse(principal)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -104,12 +109,12 @@ func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey de
 		}
 		return key
 	}
-	root := mint("root", meshid.Device{}, nil, 0, ecdsaKey())
+	root := mint("root", "", nil, 0, ecdsaKey())
 	sizes := []int{7050, 6350, 5050}
 	common, commonChain := root, root.pem
 	if sharedParents {
 		for i := 0; i < 2; i++ {
-			common = mint("common-parent-"+string(rune('a'+i)), meshid.Device{}, &common, sizes[i], ecdsaKey())
+			common = mint("common-parent-"+string(rune('a'+i)), "", &common, sizes[i], ecdsaKey())
 			commonChain = common.pem + commonChain
 		}
 	}
@@ -119,7 +124,7 @@ func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey de
 			if sharedParents && i < 2 {
 				continue
 			}
-			issuer = mint(name+"-issuer-"+string(rune('a'+i)), meshid.Device{}, &issuer, size, ecdsaKey())
+			issuer = mint(name+"-issuer-"+string(rune('a'+i)), "", &issuer, size, ecdsaKey())
 			chain = issuer.pem + chain
 		}
 		return issuer, chain
@@ -141,7 +146,7 @@ func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey de
 			}
 			key, size = mldsaKey, 3500
 		}
-		leaf := mint(name, id, &issuer, size, key)
+		leaf := mint(name, id.Principal(), &issuer, size, key)
 		der, err := x509.MarshalPKCS8PrivateKey(leaf.key)
 		if err != nil {
 			t.Fatal(err)
@@ -158,7 +163,10 @@ func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey de
 	}
 	lowID := selfFixture.UUID()
 	lowID[15]--
-	return device("high", selfFixture), device("low", meshid.NewDevice(testTenant, lowID))
+	return device("high", selfFixture), device("low", meshid.NewDevice(testTenant, lowID)), func(principal string) tls.Certificate {
+		leaf := mint("admission", principal, &sharedIssuer, 3400, ecdsaKey())
+		return tls.Certificate{Certificate: [][]byte{leaf.cert.Raw}, PrivateKey: leaf.key}
+	}
 }
 
 // airPath is one CoC on a virtual clock. Each direction carries
