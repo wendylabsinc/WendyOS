@@ -9,8 +9,8 @@ cd "$(git rev-parse --show-toplevel)"
 for command in go python3 sudo modprobe pipewire pw-dump aplay arecord; do
   command -v "$command" >/dev/null
 done
-if getent passwd wendy >/dev/null || [[ -d /sys/module/snd_aloop ]]; then
-  echo 'Refusing to reuse an existing wendy account or snd-aloop module.' >&2
+if getent passwd wendy >/dev/null || getent group wendy >/dev/null || [[ -d /sys/module/snd_aloop ]]; then
+  echo 'Refusing to reuse an existing wendy account/group or snd-aloop module.' >&2
   exit 2
 fi
 output="$(mktemp -d "${RUNNER_TEMP:?}/wendy-sensorlink-audio.XXXXXX")"
@@ -48,22 +48,53 @@ created_user=0
 loaded_module=0
 daemon_launcher=
 wendy_uid=
+wendy_gid=
 cleanup() {
   result=$?
   trap - EXIT INT TERM
   set +e
   if [[ -n "$wendy_uid" ]]; then
-    # This account did not exist before this fixture; it owns only our daemon.
-    sudo pkill -TERM -u "$wendy_uid" -x pipewire
+    # This fresh account owns only fixture processes. Bound graceful shutdown
+    # before escalating by this owned UID, never by a reusable launcher PID.
+    sudo pkill -TERM -u "$wendy_uid"
+    for _ in $(seq 1 30); do
+      if ! sudo pgrep -u "$wendy_uid" >/dev/null; then break; fi
+      sleep 0.1
+    done
+    if sudo pgrep -u "$wendy_uid" >/dev/null; then
+      sudo pkill -KILL -u "$wendy_uid"
+    fi
   fi
-  if [[ -n "$daemon_launcher" ]]; then wait "$daemon_launcher"; fi
+  if [[ -n "$daemon_launcher" ]]; then
+    # jobs consults bash's own child table. Do not blindly signal this numeric
+    # PID or wait indefinitely for a stuck sudo/daemon launcher.
+    for _ in $(seq 1 30); do
+      if ! { jobs -pr; jobs -ps; } | grep -Fxq "$daemon_launcher"; then break; fi
+      sleep 0.1
+    done
+    if { jobs -pr; jobs -ps; } | grep -Fxq "$daemon_launcher"; then
+      echo 'Owned PipeWire launcher did not finish bounded cleanup.' >&2
+      result=1
+    else
+      wait "$daemon_launcher"
+    fi
+  fi
   if [[ "$loaded_module" == 1 ]]; then
     sudo modprobe -r snd-aloop || result=1
     test ! -d /sys/module/snd_aloop || result=1
   fi
   if [[ "$created_user" == 1 ]]; then
     sudo userdel wendy || result=1
-    if getent group wendy >/dev/null; then sudo groupdel wendy || result=1; fi
+    # userdel may already have removed its private group. If present, require
+    # the exact GID created by this fixture before deleting it.
+    if current_group=$(getent group wendy); then
+      if [[ $(cut -d: -f3 <<< "$current_group") == "$wendy_gid" ]]; then
+        sudo groupdel wendy || result=1
+      else
+        echo 'Refusing to remove a replacement wendy group.' >&2
+        result=1
+      fi
+    fi
   fi
   rm -f "$output/"*.test
   echo "SensorLink audio fixture logs: $output"
@@ -75,6 +106,7 @@ trap 'exit 143' TERM
 sudo useradd --system --no-create-home --user-group --groups audio --shell /usr/sbin/nologin wendy
 created_user=1
 wendy_uid="$(id -u wendy)"
+wendy_gid="$(id -g wendy)"
 sudo modprobe snd-aloop id=Loopback pcm_substreams=8
 loaded_module=1
 sudo udevadm settle
@@ -103,11 +135,15 @@ context.objects = [
   }
 ]
 CONF
+# The runner owns the log file; sudo applies only to the daemon.
+# shellcheck disable=SC2024
 sudo -u wendy env XDG_CONFIG_HOME="$output/config" XDG_RUNTIME_DIR="$output/runtime" PIPEWIRE_RUNTIME_DIR="$output/runtime" \
   pipewire > "$output/pipewire.log" 2>&1 &
 daemon_launcher=$!
 ready=0
-for attempt in $(seq 1 50); do
+for _ in $(seq 1 50); do
+  # The runner owns this captured JSON; only pw-dump needs daemon access.
+  # shellcheck disable=SC2024
   if sudo test -S "$output/runtime/pipewire-0" && \
     sudo env PIPEWIRE_RUNTIME_DIR="$output/runtime" XDG_RUNTIME_DIR="$output/runtime" timeout 2 pw-dump > "$output/pw-dump.json"; then
     ready=1
@@ -121,49 +157,16 @@ if [[ "$ready" != 1 ]]; then
   echo 'Private PipeWire session did not become ready.' >&2
   exit 1
 fi
+# These inventory files are runner-owned artifacts.
+# shellcheck disable=SC2024
 sudo arecord -l > "$output/arecord-list.txt"
+# shellcheck disable=SC2024
 sudo aplay -l > "$output/aplay-list.txt"
 run_fixture() {
   sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
     WENDY_SENSORLINK_AUDIO_LOOPBACK=1 WENDY_TEST_PIPEWIRE_RUNTIME="$output/runtime" \
-    python3 - "$1" "$test_name" <<'PY_CAPTURE'
-import os
-import signal
-import subprocess
-import sys
-import time
-
-# Each invocation owns a fresh process group, including aplay/arecord children.
-# Even a Go panic before defers must not leave those processes holding snd-aloop.
-process = subprocess.Popen([sys.argv[1], '-test.run', '^' + sys.argv[2] + '$',
-                            '-test.v', '-test.count=1', '-test.timeout=0'], start_new_session=True)
-result = 1
-try:
-    result = process.wait(timeout=60)
-except subprocess.TimeoutExpired:
-    print('SensorLink audio test exceeded its 60-second wall deadline', file=sys.stderr)
-    result = 124
-finally:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.05)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    process.wait(timeout=3)
-sys.exit(result)
-PY_CAPTURE
+    python3 .github/scripts/run-owned-media-test.py --timeout 60 -- "$1" \
+      -test.run "^${test_name}$" -test.v -test.count=1 -test.timeout=0
 }
 run_fixture "$output/services.test" | tee "$output/normal.log"
 grep -q "^--- PASS: $test_name " "$output/normal.log"
