@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/containers"
@@ -139,5 +140,16 @@ func TestCheckReleaseDigest(t *testing.T) {
 	}
 	if checkReleaseDigest("sha256:bb", "sha256:aa") == nil || checkReleaseDigest("sha256:aa", "") == nil {
 		t.Fatal("another image, or an empty signed digest, accepted")
+	}
+}
+
+// Only ImportRelease writes the release prefix: the direct-run assemble path
+// refuses it before touching the store.
+func TestAssembleImageRefusesTheReleasePrefix(t *testing.T) {
+	c := &Client{}
+	for _, name := range []string{"localhost/wendy-release/web:r1", "localhost/wendy-release/web"} {
+		if err := c.AssembleImage(context.Background(), name, nil, nil); err == nil || !strings.Contains(err.Error(), "reserved for registry releases") {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }

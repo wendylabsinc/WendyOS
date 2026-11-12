@@ -300,10 +300,16 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 		}
 		// The statement this one replaces on the device, started again if
 		// this one cannot start; a rotation copy keeps the one it had.
-		if prev := st.Assignments[replaced]; repeat && prev != nil {
-			held.Previous = prev.Previous
-		} else if prev != nil && prev.Pulled {
+		// The last applied statement, never a failed one; a rotation copy
+		// keeps its predecessor's.
+		switch prev := st.Assignments[replaced]; {
+		case prev == nil:
+		case repeat:
+			held.Previous, held.Applied = prev.Previous, prev.Applied && held.Pulled
+		case prev.Applied:
 			held.Previous = prev.Assignment
+		default:
+			held.Previous = prev.Previous
 		}
 		st.Assignments = maps.Clone(st.Assignments) // copy on write: a pull's commit reads it
 		st.Marks = maps.Clone(st.Marks)

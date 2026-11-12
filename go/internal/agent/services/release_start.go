@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -82,9 +83,18 @@ func configEnv(config string) ([]string, error) {
 		default:
 			return nil, fmt.Errorf("the configuration may hold only named values (text, numbers, true or false); %q holds more", name)
 		}
+		if appconfig.IsAgentEnvName(name) {
+			return nil, fmt.Errorf("configuration name %q is set by the agent itself", name)
+		}
 		env = append(env, name+"="+text)
 	}
 	slices.Sort(env)
+	// At least as strict as the runtime, so a statement is refused when it
+	// arrives rather than failing at start: no NUL, CR or LF, entries of at
+	// most 32 KiB, at most 512 of them.
+	if err := appconfig.ValidateEnvEntries(env); err != nil {
+		return nil, fmt.Errorf("the configuration cannot be applied: %w", err)
+	}
 	return env, nil
 }
 
@@ -135,7 +145,7 @@ func checkAppDefinition(def []byte, app string) error {
 	switch {
 	case cfg.AppID != app:
 		return refuse("app_definition", fmt.Errorf("this release is for app %q, not %q", cfg.AppID, app))
-	case len(cfg.Services) > 0:
+	case len(cfg.Services) > 0 || cfg.ServiceName != "":
 		return refuse("services", errors.New("apps with several services cannot be deployed yet; deploy each service as its own app"))
 	}
 	if err := appconfig.ValidateAppID(cfg.AppID); err != nil {
@@ -144,33 +154,75 @@ func checkAppDefinition(def []byte, app string) error {
 	return nil
 }
 
-// startRelease starts a's app. If it cannot, the statement it replaced is
-// started again, so a failed update leaves the old app running.
+// startRelease starts a's app. If that fails after this attempt replaced the
+// app's container, and what it replaced was the last applied statement's
+// app, that app is put back. Nothing is put back when nothing was replaced,
+// and a directly run app is never replaced by a restore.
 func (p *Postbox) startRelease(ctx context.Context, a *cloudpbv2.DeviceAssignment) error {
+	before, present, _ := p.control.AppState(ctx, a.GetAppId())
 	s, err := p.releaseStart(ctx, a)
-	if err == nil {
-		if err = p.control.StartRelease(ctx, s); err != nil {
-			err = pullFailed("start", err)
-		}
+	if err != nil {
+		return err
 	}
+	replaced, err := p.control.StartRelease(ctx, s)
 	if err == nil {
 		return nil
 	}
+	err = pullFailed("start", err)
+	prev := p.previous(a)
+	if !replaced || prev == nil || !present || before != ReleaseImageName(prev.GetAppId(), prev.GetAppReleaseId()) {
+		return err
+	}
+	if perr := p.restart(ctx, prev); perr != nil {
+		return errors.Join(err, fmt.Errorf("putting back the previous release: %w", perr))
+	}
+	return err
+}
+
+// putBackPrevious puts back the last applied statement's app when a
+// statement that will not be applied (expired) finds the app's container
+// gone or a release container stopped: the state a crash in the middle of a
+// swap leaves, read back from the runtime. The held statement and its
+// Previous are on disk before any swap begins, so this works after any
+// crash. A running app and a directly run container are left alone.
+func (p *Postbox) putBackPrevious(ctx context.Context, a *cloudpbv2.DeviceAssignment) {
+	prev := p.previous(a)
+	if prev == nil {
+		return
+	}
+	image, present, running := p.control.AppState(ctx, a.GetAppId())
+	if present && (running || !strings.HasPrefix(image, ReleaseImagePrefix)) {
+		return
+	}
+	if err := p.restart(ctx, prev); err != nil {
+		p.logger.Warn("putting back the previous release failed", zap.String("audit", "postbox"),
+			zap.String("deployment_id", a.GetDeploymentId()), zap.String("app_id", a.GetAppId()), zap.Error(err))
+	}
+}
+
+// previous is the last applied statement held with a, nil for none.
+func (p *Postbox) previous(a *cloudpbv2.DeviceAssignment) *cloudpbv2.DeviceAssignment {
 	p.mu.Lock()
-	var previous []byte
+	var raw []byte
 	if held := p.state.Assignments[a.GetDeploymentId()]; held != nil {
-		previous = held.Previous
+		raw = held.Previous
 	}
 	p.mu.Unlock()
 	prev := &cloudpbv2.DeviceAssignment{}
-	if len(previous) == 0 || proto.Unmarshal(previous, prev) != nil {
+	if len(raw) == 0 || proto.Unmarshal(raw, prev) != nil {
+		return nil
+	}
+	return prev
+}
+
+// restart starts an earlier, verified statement's app again (its definition
+// re-read under its own signed digest).
+func (p *Postbox) restart(ctx context.Context, prev *cloudpbv2.DeviceAssignment) error {
+	s, err := p.releaseStart(ctx, prev)
+	if err != nil {
 		return err
 	}
-	if ps, perr := p.releaseStart(ctx, prev); perr != nil {
-		err = errors.Join(err, fmt.Errorf("restoring the previous release: %w", perr))
-	} else if perr := p.control.StartRelease(ctx, ps); perr != nil {
-		err = errors.Join(err, fmt.Errorf("restoring the previous release: %w", perr))
-	}
+	_, err = p.control.StartRelease(ctx, s)
 	return err
 }
 
@@ -207,25 +259,41 @@ func (c containerControl) ReleaseAppConfig(ctx context.Context, app, release, ma
 type releaseReader interface {
 	HasRelease(ctx context.Context, app, release, manifestDigest string) bool
 	ReleaseLabels(ctx context.Context, app, release, manifestDigest string) (map[string]string, error)
+	AppState(ctx context.Context, app string) (image string, present, running bool, err error)
 }
 
 // StartRelease validates the create while the old app still runs, creates
 // the container (replacing the app's previous one), then starts it, or for
-// install only records an explicit stop so boot does not start it.
-func (c containerControl) StartRelease(ctx context.Context, s ReleaseStart) error {
+// install only records an explicit stop so boot does not start it. replaced
+// is true once the create was attempted: from then on the old container may
+// be gone.
+func (c containerControl) StartRelease(ctx context.Context, s ReleaseStart) (bool, error) {
 	release := s.ReleaseID
 	req := &agentpb.CreateContainerRequest{
 		ImageName: ReleaseImageName(s.AppID, s.ReleaseID), AppName: s.AppID, AppConfig: s.AppConfig, Env: s.Env,
 		RestartPolicy: &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED}, ReleaseId: &release,
 	}
 	if _, err := c.svc.ValidateContainer(ctx, req); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := c.svc.CreateContainer(ctx, req); err != nil {
-		return err
+		return true, err
 	}
 	if !s.Run {
-		return c.StopApp(ctx, s.AppID)
+		return true, c.StopApp(ctx, s.AppID)
 	}
-	return c.StartApp(ctx, s.AppID)
+	return true, c.StartApp(ctx, s.AppID)
+}
+
+// AppState asks the containerd client; an unknown state reads as absent.
+func (c containerControl) AppState(ctx context.Context, app string) (string, bool, bool) {
+	r, ok := c.svc.containerd.(releaseReader)
+	if !ok {
+		return "", false, false
+	}
+	image, present, running, err := r.AppState(ctx, app)
+	if err != nil {
+		return "", true, true // unreadable: treat as present and running, so nothing is replaced
+	}
+	return image, present, running
 }

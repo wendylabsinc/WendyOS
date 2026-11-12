@@ -106,8 +106,11 @@ type postboxControl interface {
 	// verified release image carries; ErrNoAppDefinition when it carries none.
 	ReleaseAppConfig(ctx context.Context, app, release, manifestDigest string) ([]byte, error)
 	// StartRelease creates the app's container from a release through the
-	// path `wendy run` takes, then starts it or leaves it stopped.
-	StartRelease(ctx context.Context, s ReleaseStart) error
+	// path `wendy run` takes, then starts it or leaves it stopped. replaced
+	// reports whether it got as far as replacing the app's container.
+	StartRelease(ctx context.Context, s ReleaseStart) (replaced bool, err error)
+	// AppState is the image of the app's container and whether it runs.
+	AppState(ctx context.Context, app string) (image string, present, running bool)
 	// RemoveReleases deletes app's registry releases except the release ids
 	// in keep, and the containers running one; every app's when app is "".
 	RemoveReleases(ctx context.Context, app string, keep []string) error
@@ -176,9 +179,12 @@ type postboxAssignment struct {
 	EntryID       int64  `json:"entryId,omitempty"`
 	CorrelationID string `json:"correlationId,omitempty"`
 	Pulled        bool   `json:"pulled,omitempty"`
-	// Previous is the statement this one replaced on the device (the same
-	// deployment's earlier revision, or a move's old deployment), kept so
-	// its app can be started again if this one cannot start.
+	// Applied: this statement's app was started (or installed) and reported
+	// applied. Previous is the last applied statement before this one (the
+	// same deployment's earlier revision, or a move's old deployment): what
+	// actually ran, never a statement that failed, so its app can be put
+	// back if this one cannot start.
+	Applied  bool   `json:"applied,omitempty"`
 	Previous []byte `json:"previous,omitempty"`
 }
 

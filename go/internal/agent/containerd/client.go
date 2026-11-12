@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -898,6 +897,11 @@ const maxImageConfigBytes = 1 << 20
 const assembleLeaseExpiration = 30 * time.Minute
 
 func (c *Client) AssembleImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader, imageConfig []byte) error {
+	// The release prefix belongs to verified registry releases
+	// (ImportRelease): a direct run may not write an image under it.
+	if strings.HasPrefix(normalizeImageName(imageName), services.ReleaseImagePrefix) || strings.HasPrefix(imageName, services.ReleaseImagePrefix) {
+		return fmt.Errorf("image name %q is reserved for registry releases", imageName)
+	}
 	ctx = c.withNamespace(ctx)
 	cleanupCtx := c.withNamespace(context.Background())
 	cs := c.client.ContentStore()
@@ -1327,6 +1331,11 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	phaseStarted := time.Now()
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_UNPACKING})
 	image, err = c.client.GetImage(ctx, imageName)
+	if err != nil && strings.HasPrefix(imageName, services.ReleaseImagePrefix) {
+		// A registry release is only ever written by ImportRelease after its
+		// digests verified; it is never pulled by name.
+		return fmt.Errorf("release image %q is not on the device: %w", imageName, err)
+	}
 	if err != nil {
 		c.logger.Info("Image not in local store, attempting pull from registry",
 			zap.String("image", imageName),
@@ -1416,6 +1425,16 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	}
 	if err := validateUserEnv(req.GetEnv()); err != nil {
 		return fmt.Errorf("invalid env var in request (SOC2-CC6, NIST-SI-10): %w", err)
+	}
+	// A deployed release's configuration may not set what the agent sets in
+	// the container itself (appconfig.AgentEnvPrefixes, AgentEnvNames); the
+	// postbox refuses the statement first, this keeps the rule at the source.
+	if strings.HasPrefix(imageName, services.ReleaseImagePrefix) {
+		for _, kv := range req.GetEnv() {
+			if key, _, _ := strings.Cut(kv, "="); appconfig.IsAgentEnvName(key) {
+				return fmt.Errorf("env key %q is set by the agent and cannot be configured", key)
+			}
+		}
 	}
 	var env []string
 	env = append(env, imageSpec.Config.Env...)
@@ -3252,57 +3271,10 @@ func buildContainerBaseEnv(appID, serviceName string) ([]string, error) {
 // which could break the OCI env format or enable injection attacks.
 // Mirrors the defence-in-depth checks in buildContainerBaseEnv (SOC2-CC6, NIST-SI-10).
 
-// posixEnvKeyPattern is an allowlist for POSIX-compliant environment variable
-// names. It accepts only ASCII letters, digits, and underscores, with an
-// underscore or letter as the first character. This allowlist prevents leading-
-// whitespace bypass (e.g. " LD_PRELOAD") and eliminates Unicode case-folding
-// ambiguity before the denylist check below (SOC2-CC6, NIST-SI-10).
-var posixEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// blockedEnvPrefixes is the set of key prefixes that user-supplied env vars
-// must not use. These keys affect dynamic linker behavior (LD_*) or are
-// reserved by Wendy (WENDY_*); a compromised or malicious caller could use
-// them to preload arbitrary code or override Wendy internals
-// (SOC2-CC6, ISO27001-A.8, NIST-SI-10).
-var blockedEnvPrefixes = appconfig.ReservedEnvPrefixes // LD_*, DYLD_* (linker injection), WENDY_* (agent-set)
-
-// maxUserEnvEntries is the maximum number of caller-supplied env entries accepted.
-// Prevents OCI spec bloat / DoS via unbounded env injection (SOC2-CC6, NIST-SI-10).
-const maxUserEnvEntries = 512
-
-// maxUserEnvEntryLen is the maximum byte length of a single KEY=VALUE entry.
-// 32 KB covers all practical use cases while bounding spec-JSON size (SOC2-CC6, NIST-SI-10).
-const maxUserEnvEntryLen = 32 * 1024
-
+// validateUserEnv checks caller-supplied env entries (SOC2-CC6,
+// NIST-SI-10): the shared rules, also applied to a deployment's configuration.
 func validateUserEnv(entries []string) error {
-	if len(entries) > maxUserEnvEntries {
-		return fmt.Errorf("too many env entries: %d exceeds limit of %d (SOC2-CC6, NIST-SI-10)", len(entries), maxUserEnvEntries)
-	}
-	for _, kv := range entries {
-		if len(kv) > maxUserEnvEntryLen {
-			return fmt.Errorf("env entry exceeds maximum length of %d bytes (SOC2-CC6, NIST-SI-10)", maxUserEnvEntryLen)
-		}
-		if strings.ContainsAny(kv, "\x00\n\r") {
-			return fmt.Errorf("env entry contains forbidden control character: %q", sanitizeForLog(kv, 80))
-		}
-		key, _, ok := strings.Cut(kv, "=")
-		if !ok {
-			return fmt.Errorf("env entry missing '=' separator: %q", sanitizeForLog(kv, 80))
-		}
-		// Reject keys that do not conform to the POSIX env key format. This also
-		// closes the leading-whitespace bypass (" LD_PRELOAD") and the Unicode
-		// case-folding bypass that strings.ToUpper alone cannot prevent.
-		if !posixEnvKeyPattern.MatchString(key) {
-			return fmt.Errorf("env key %q is not a valid POSIX environment variable name (SOC2-CC6, NIST-SI-10)", sanitizeForLog(key, 80))
-		}
-		upper := strings.ToUpper(key) // safe: key is ASCII-only after pattern check
-		for _, prefix := range blockedEnvPrefixes {
-			if strings.HasPrefix(upper, prefix) {
-				return fmt.Errorf("env key %q is reserved and cannot be set by callers (SOC2-CC6, NIST-SI-10)", key)
-			}
-		}
-	}
-	return nil
+	return appconfig.ValidateEnvEntries(entries)
 }
 
 // cycloneDDSInlineConfig is the CycloneDDS configuration passed inline via

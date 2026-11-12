@@ -196,6 +196,7 @@ func TestRegistryPullRefusesABadAppDefinition(t *testing.T) {
 		"unknown entitlement key": `{"appId":"web","entitlements":[{"type":"network","modee":"host"}]}`,
 		"other app":               `{"appId":"db"}`,
 		"several services":        `{"appId":"web","services":{"api":{"context":"."}}}`,
+		"a service name":          `{"appId":"web","serviceName":"api"}`,
 		"oversized":               `{"appId":"web","platform":"` + strings.Repeat("x", maxAppDefinitionSize) + `"}`,
 		"malformed":               `{"appId":`,
 	} {
@@ -233,6 +234,10 @@ type releaseReaderMock struct {
 }
 
 func (m *releaseReaderMock) HasRelease(context.Context, string, string, string) bool { return true }
+
+func (m *releaseReaderMock) AppState(context.Context, string) (string, bool, bool, error) {
+	return "", false, false, nil
+}
 
 func (m *releaseReaderMock) ReleaseLabels(_ context.Context, _, _, digest string) (map[string]string, error) {
 	m.digest = digest
@@ -600,7 +605,7 @@ func TestPostboxControlStartReleaseUsesTheRunPath(t *testing.T) {
 	for _, run := range []bool{true, false} {
 		m := &mockContainerdClient{resolvedIDs: map[string][]string{"web": {"web"}}}
 		s := ReleaseStart{AppID: "web", ReleaseID: "r1", AppConfig: []byte(`{"appId":"web"}`), Env: []string{"A=1"}, Run: run}
-		err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).StartRelease(context.Background(), s)
+		_, err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).StartRelease(context.Background(), s)
 		if err != nil {
 			t.Fatalf("run %v: %v", run, err)
 		}
@@ -619,7 +624,158 @@ func TestPostboxControlStartReleaseUsesTheRunPath(t *testing.T) {
 	}
 	// A create the run path would refuse never replaces the running app.
 	m := &mockContainerdClient{validateErr: errors.New("unknown entitlement")}
-	if err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).StartRelease(context.Background(), ReleaseStart{AppID: "web", ReleaseID: "r1", Run: true}); err == nil || len(m.createReqs) != 0 {
+	if replaced, err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).StartRelease(context.Background(), ReleaseStart{AppID: "web", ReleaseID: "r1", Run: true}); err == nil || replaced || len(m.createReqs) != 0 {
 		t.Fatalf("err %v, created %d: want refused before the create", err, len(m.createReqs))
+	}
+}
+
+// runningRelease sets up web running revision 1 (MODE=a) and returns the
+// fixture, the recorder and revision 1.
+func runningRelease(t *testing.T) (*pbFixture, *importRecorder, *cloudpbv2.DeviceAssignment) {
+	f := newPBFixture(t)
+	r := f.release(t)
+	r.assign.DesiredState, r.assign.ConfigJson = cloudpbv2.Running_RUNNING, `{"MODE":"a"}`
+	rec := f.withArtifacts(&fakeArtifacts{r: r})
+	f.assignEntry(r.assign)
+	f.cycle()
+	f.p.waitPulls()
+	rec.present = map[string]bool{r.assign.GetAppReleaseId(): true}
+	return f, rec, r.assign
+}
+
+func (f *pbFixture) revision(rec *importRecorder, base *cloudpbv2.DeviceAssignment, rev int32, mode string) {
+	a := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+	a.Revision, a.ConfigJson = rev, `{"MODE":"`+mode+`"}`
+	f.assignEntry(a)
+	f.cycle()
+	f.p.waitPulls()
+}
+
+func failMode(mode string) func(ReleaseStart) error {
+	return func(s ReleaseStart) error {
+		if slices.Contains(s.Env, "MODE="+mode) {
+			return errors.New("exec format error")
+		}
+		return nil
+	}
+}
+
+func envs(starts []ReleaseStart) []string {
+	var out []string
+	for _, s := range starts {
+		out = append(out, strings.Join(s.Env, ","))
+	}
+	return out
+}
+
+// Fix 1: after one failed revision, the next failure puts back the last
+// applied revision, never the failed one.
+func TestRegistryPullPutsBackTheLastAppliedRevision(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	rec.startErr = func(s ReleaseStart) error {
+		if slices.Contains(s.Env, "MODE=b") || slices.Contains(s.Env, "MODE=c") {
+			return errors.New("exec format error")
+		}
+		return nil
+	}
+	f.revision(rec, base, 2, "b")
+	f.revision(rec, base, 3, "c")
+	if got := envs(rec.starts); !slices.Equal(got, []string{"MODE=a", "MODE=b", "MODE=a", "MODE=c", "MODE=a"}) || !rec.app.running {
+		t.Fatalf("starts %v, running %v: want revision 1 put back both times", got, rec.app.running)
+	}
+}
+
+// Fix 2: a failure before the container was replaced touches nothing; a
+// failure after replacing a directly run app does not put the deployed one
+// back over it.
+func TestRegistryPullRestoresOnlyWhatItReplaced(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	rec.startErr, rec.beforeReplace = failMode("b"), true
+	f.revision(rec, base, 2, "b")
+	if got := envs(rec.starts); !slices.Equal(got, []string{"MODE=a", "MODE=b"}) || !rec.app.running {
+		t.Fatalf("starts %v: want no restart of the running app", got)
+	}
+	// A developer runs the app directly; revision 3 replaces it and fails.
+	rec.app = &fakeApp{image: "docker.io/dev/web:latest", running: true}
+	rec.startErr, rec.beforeReplace = failMode("c"), false
+	f.revision(rec, base, 3, "c")
+	if got := envs(rec.starts); !slices.Equal(got, []string{"MODE=a", "MODE=b", "MODE=c"}) {
+		t.Fatalf("starts %v: want the deployed revision not put back over a direct run", got)
+	}
+	// A refused pull leaves the running app alone: no start, no restore.
+	g, grec, gbase := runningRelease(t)
+	grec.present = nil
+	gbase = proto.Clone(gbase).(*cloudpbv2.DeviceAssignment)
+	gbase.AppReleaseId = uuid.NewString() // not on the device
+	grec.arts.materialErr = func(int) error { return status.Error(codes.NotFound, "no live assignment") }
+	g.revision(grec, gbase, 2, "b")
+	if got := envs(grec.starts); !slices.Equal(got, []string{"MODE=a"}) || !grec.app.running {
+		t.Fatalf("starts %v: want a failed pull to leave the running app alone", got)
+	}
+}
+
+// Fix 3: a crash in the middle of a swap, then a restart after the new
+// statement expired: it is not applied, and the last applied app is put
+// back. A running app or a direct run is left alone.
+func TestRegistryPullPutsBackAfterACrashAndExpiry(t *testing.T) {
+	for _, state := range []string{"absent", "half swapped", "running", "direct run"} {
+		f, rec, base := runningRelease(t)
+		next := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+		next.Revision, next.ConfigJson = 2, `{"MODE":"b"}`
+		next.AppReleaseId = uuid.NewString() // not on the device
+		rec.arts.materialErr = func(int) error { return status.Error(codes.Unavailable, "registry unreachable") }
+		f.assignEntry(next)
+		f.cycleWithin(5 * time.Second)
+		f.p.stopPull(next.GetDeploymentId()) // the agent is killed mid-pull
+		switch state {
+		case "absent":
+			rec.app = nil
+		case "half swapped":
+			rec.app = &fakeApp{image: ReleaseImageName("web", next.GetAppReleaseId())}
+		case "direct run":
+			rec.app = &fakeApp{image: "docker.io/dev/web:latest"}
+		}
+		f.p.now = func() time.Time { return f.now.Add(2 * time.Hour) } // past both expiries
+		starts := len(rec.starts)
+		f.cycle()
+		f.p.waitPulls()
+		restored := len(rec.starts) > starts && slices.Equal(rec.starts[len(rec.starts)-1].Env, []string{"MODE=a"})
+		if want := state == "absent" || state == "half swapped"; restored != want || f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED {
+			t.Errorf("%s: restored %v (want %v), outcome %v", state, restored, want, f.outcome("web"))
+		}
+	}
+}
+
+// Fix 4-7 at the statement: a service name, the agent's own variables and
+// values the runtime would refuse are refused when the statement arrives.
+func TestConfigurationIsAsStrictAsTheRuntime(t *testing.T) {
+	for config, ok := range map[string]bool{
+		`{"ROS_DOMAIN_ID":"7"}`:                          false,
+		`{"otel_service_name":"x"}`:                      false,
+		`{"RMW_IMPLEMENTATION":"x"}`:                     false,
+		`{"CYCLONEDDS_URI":"x"}`:                         false,
+		`{"ld_preload":"x"}`:                             false,
+		`{"PEM":"a\nb"}`:                                 false,
+		`{"BIG":"` + strings.Repeat("x", 33*1024) + `"}`: false,
+		`{"ROSETTA":"ok","OTELX":"ok"}`:                  true,
+	} {
+		if err := checkConfig(config); (err == nil) != ok {
+			t.Errorf("checkConfig(%.30q) = %v, want ok %v", config, err, ok)
+		}
+	}
+}
+
+// A crash after a rotation copy's commit, end to end: the restart settles
+// the copy with the outcome the applied pull recorded and starts nothing.
+func TestPostboxRotationCrashKeepsTheTrueOutcome(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	rot := proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+	rot.ExpiresAt = timestamppb.New(f.now.Add(2 * time.Hour))
+	f.assignEntry(rot)
+	snap := f.committedWrite()
+	starts := len(rec.starts)
+	f.restartFrom(snap)
+	if o := f.outcome("web"); o.EntryID != 2 || o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || len(rec.starts) != starts {
+		t.Fatalf("outcome %+v, starts %d->%d: want entry 2 settled as the recorded APPLIED, nothing started", o, starts, len(rec.starts))
 	}
 }

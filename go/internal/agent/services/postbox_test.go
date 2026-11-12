@@ -677,7 +677,12 @@ func (crashingControl) HasRelease(context.Context, string, string, string) bool 
 func (crashingControl) ReleaseAppConfig(context.Context, string, string, string) ([]byte, error) {
 	panic("agent killed")
 }
-func (crashingControl) StartRelease(context.Context, ReleaseStart) error      { panic("agent killed") }
+func (crashingControl) StartRelease(context.Context, ReleaseStart) (bool, error) {
+	panic("agent killed")
+}
+func (crashingControl) AppState(context.Context, string) (string, bool, bool) {
+	return "", false, false
+}
 func (crashingControl) PruneReleases(context.Context, string, []string) error { panic("agent killed") }
 func (crashingControl) RemoveReleases(context.Context, string, []string) error {
 	panic("agent killed")

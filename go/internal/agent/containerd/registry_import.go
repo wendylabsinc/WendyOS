@@ -148,6 +148,7 @@ var _ interface {
 	DeleteReleaseImages(ctx context.Context, app string, keep []string) error
 	HasRelease(ctx context.Context, app, release, manifestDigest string) bool
 	ReleaseLabels(ctx context.Context, app, release, manifestDigest string) (map[string]string, error)
+	AppState(ctx context.Context, app string) (image string, present, running bool, err error)
 } = (*Client)(nil)
 
 // releaseImagePrefix starts every ReleaseImageName.
@@ -204,8 +205,12 @@ func checkReleaseDigest(got, signed string) error {
 }
 
 // ReleaseLabels are the labels of the verified release image's config, where
-// publish puts the app definition (services.AppConfigLabel). containerd
-// checks the config blob against its digest as it reads it.
+// publish puts the app definition (services.AppConfigLabel). The image is
+// bound to the signed digest by releaseImage; its config blob was checked
+// against its digest when ImportRelease wrote it (reads are not re-verified,
+// so tampering with the content store needs root on the device). Only
+// ImportRelease writes names under the release prefix: AssembleImage refuses
+// them and createContainer never pulls them.
 func (c *Client) ReleaseLabels(ctx context.Context, app, release, manifestDigest string) (map[string]string, error) {
 	ctx = c.withNamespace(ctx)
 	img, err := c.releaseImage(ctx, app, release, manifestDigest)
@@ -217,6 +222,28 @@ func (c *Client) ReleaseLabels(ctx context.Context, app, release, manifestDigest
 		return nil, fmt.Errorf("release image config: %w", err)
 	}
 	return spec.Config.Labels, nil
+}
+
+// AppState is the image of app's container (the container is named by the
+// app id) and whether its task runs; present is false when there is none.
+func (c *Client) AppState(ctx context.Context, app string) (image string, present, running bool, err error) {
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, app)
+	if errdefs.IsNotFound(err) {
+		return "", false, false, nil
+	}
+	if err != nil {
+		return "", false, false, fmt.Errorf("loading container %q: %w", app, err)
+	}
+	info, err := ctr.Info(ctx)
+	if err != nil {
+		return "", false, false, fmt.Errorf("reading container %q: %w", app, err)
+	}
+	if task, err := ctr.Task(ctx, nil); err == nil {
+		st, err := task.Status(ctx)
+		running = err == nil && st.Status == containerd.Running
+	}
+	return info.Image, true, running, nil
 }
 
 // ReleasesInUse lists the release ids of app's releases that a container
