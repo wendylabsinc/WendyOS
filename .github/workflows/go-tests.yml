@@ -332,7 +332,7 @@ jobs:
       - name: Install disposable block-device tools
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config musl-tools ruby ruby-dev build-essential rpm cpio libarchive-tools systemd-container curl bzip2
+          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config musl-tools ruby ruby-dev build-essential rpm cpio libarchive-tools systemd-container curl bzip2 python3-yaml
           sudo gem install fpm -v 1.18.0 --no-document
       - name: Verify native Make VERSION in the built CLI
         run: python3 .github/scripts/test-native-make-version.py --retain-binary "$RUNNER_TEMP/wendy-stagefile-cli"
@@ -369,6 +369,16 @@ jobs:
         run: |
           python3 .github/scripts/installed_linux_packages_test.py
           python3 .github/scripts/installed_linux_package_guests_test.py
+      - name: Require a clean native runtime guest build and executable tools
+        run: python3 .github/scripts/test-runtime-guest-bootstrap.py --output "$RUNNER_TEMP/runtime-bootstrap"
+      - name: Preserve runtime bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: runtime-bootstrap-pr
+          path: ${{ runner.temp }}/runtime-bootstrap
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require native Agent package upgrades on Ubuntu and Fedora
         run: bash .github/scripts/test-linux-packages-pr.sh "$RUNNER_TEMP/package-regressions"
       - name: Preserve package upgrade evidence
@@ -504,6 +514,8 @@ jobs:
         run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
       - name: Require explicit disconnect intent across native process restarts
         run: bash .github/scripts/test-operator-native-restart.sh "$RUNNER_TEMP/operator-native-restart"
+      - name: Require cold broker recovery and retained spare carrier traffic
+        run: bash .github/scripts/test-operator-spare-recovery.sh "$RUNNER_TEMP/operator-spare-recovery"
       - name: Require persisted clock trust and packet expiry across restarts
         run: bash .github/scripts/test-clock-packet-restart.sh "$RUNNER_TEMP/clock-packet-restart"
       - name: Require wired-only automatic ROS discovery
@@ -702,6 +714,7 @@ jobs:
           fi
           sudo modprobe videodev
           sudo insmod .ci-v4l2loopback/v4l2loopback.ko devices=0 exclusive_caps=1
+          echo 'loaded=true' >> "$GITHUB_OUTPUT"
           sudo udevadm settle
           test -c /dev/v4l2loopback
       - name: Decode authenticated Lite camera frames through the kernel node
@@ -711,7 +724,6 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: |
-          trap 'sudo rmmod v4l2loopback' EXIT
           go test -c -o "$RUNNER_TEMP/ipcam.test" ./go/internal/agent/ipcam
           sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
           grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
@@ -737,6 +749,7 @@ jobs:
           path: |
             ${{ runner.temp }}/wendy-sensorlink-audio.*/*.log
             ${{ runner.temp }}/wendy-lite-camera.*/*.log
+            ${{ runner.temp }}/wendy-source-restart.*/*.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -747,8 +760,8 @@ jobs:
           grep -q '^--- PASS: TestGStreamerInProcessRunner ' "$RUNNER_TEMP/gstreamer.log"
           grep -q '^--- PASS: TestGStreamerInProcessRunner_Cancellation ' "$RUNNER_TEMP/gstreamer.log"
 
-      - name: Remove the fixture loopback module after early failure
-        if: always() && steps.loopback-module.outcome == 'success'
+      - name: Remove the owned fixture loopback module
+        if: always() && steps.loopback-module.outputs.loaded == 'true'
         run: |
           if test -d /sys/module/v4l2loopback; then
             sudo rmmod v4l2loopback

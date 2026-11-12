@@ -361,15 +361,33 @@ jobs:
       - name: Build runtime guest
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cpio
-          bash swift/WendyAgentMac/RuntimeGuest/build.sh
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y cpio libarchive-tools python3-yaml
+          python3 .github/scripts/test-runtime-guest-bootstrap.py \
+            --output "$RUNNER_TEMP/runtime-bootstrap" \
+            --retain-artifacts "$RUNNER_TEMP/runtime-artifacts"
 
           VERSION="${{ needs.determine-version.outputs.version }}"
           ARCHIVE="wendy-macos-runtime-guest-arm64-${VERSION}.tar.gz"
-          tar -C swift/WendyAgentMac/Resources/runtime -czf "$ARCHIVE" \
+          tar -C "$RUNNER_TEMP/runtime-artifacts" -czf "$ARCHIVE" \
             vmlinuz-arm64 initramfs-arm64.img
           echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Print bounded runtime bootstrap diagnostics
+        if: always()
+        run: |
+          python3 - <<'PY_RUNTIME_EVIDENCE'
+          from pathlib import Path
+          import os
+          root = Path(os.environ['RUNNER_TEMP']) / 'runtime-bootstrap'
+          for path in sorted(root.glob('*')):
+              if path.is_file() and path.suffix in ('.json', '.jsonl', '.log'):
+                  print(f'::group::{path.name}')
+                  with path.open('rb') as stream:
+                      stream.seek(max(0, path.stat().st_size - 32768))
+                      print(stream.read().decode('utf-8', errors='replace'))
+                  print('::endgroup::')
+          PY_RUNTIME_EVIDENCE
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
