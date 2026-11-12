@@ -1457,15 +1457,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2569",
       "title": "[WN1] Add compact binary encoding for Wendy Net records",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Binary codec and line-ending tests are broad; a presence path-watcher race is included in the PR but is not established by codec coverage.",
-      "required_follow_up": "Execute the registered required CI gate and reconcile the exact behavior assertions; hosted execution remains pending.",
+      "required_follow_up": "Retain the dedicated real-RPC captured-lease race gate in the required network job.",
       "evidence": [
         {
           "tests": [
             ".github/scripts/test-presence-watcher-race.sh"
           ],
           "result": "Five normal real-RPC renewal race runs passed locally. Three independent exact pre-fix closure mutations reported a data race at both the captured lease read and acknowledged lease replacement. Existing relay traffic script invokes the dedicated gate; hosted execution pending."
+        },
+        {
+          "head": "761bf6bcdab8c9cb1c4bf2a016fb4280156c0b12",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43308724908/job/131498781622",
+          "result": "Required Linux network job passed5normal real-RPC renewal runs under race and rejected3independent exact pre-fix closure mutations. Each negative control required DATA RACE at both the captured lease read and acknowledged lease replacement source lines; traffic/path tests remain separate."
         }
       ]
     },
