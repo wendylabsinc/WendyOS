@@ -34,7 +34,7 @@ var (
 // thorRecoveryBriefingBox renders the cabling and recovery-mode steps the user
 // must complete before a Thor will appear in the USB recovery scan, as a colored,
 // scannable box.
-func thorRecoveryBriefingBox() string {
+func thorRecoveryBriefingBox(recoveryDetected bool) string {
 	section := func(title string) string {
 		return briefMarker.Render("●") + " " + briefTitle.Render(title)
 	}
@@ -46,22 +46,31 @@ func thorRecoveryBriefingBox() string {
 		"  WendyOS installs to the Thor's internal flash + NVMe — it uses no",
 		"  external USB drive. " + briefKey.Render("Disconnect any USB drive now") + " and leave it out.",
 		"",
-		section("USB-C cabling"),
-		"  Connect this computer to the " + briefPort.Render("USB-C port next to the HDMI port") + ".",
-		"  The other USB-C port is power-only.",
-		"",
-		section("Entering recovery mode"),
-		"  Front buttons, left → right:  " +
-			briefKey.Render("Power") + briefDim.Render(" · ") +
-			briefKey.Render("Force Recovery") + briefDim.Render(" · ") +
-			briefKey.Render("Reset"),
-		"",
-		step(1, "Start with the Thor "+briefDim.Render("unplugged and powered off")+"."),
-		step(2, "Plug in power."),
-		step(3, "Briefly press "+briefKey.Render("Power")+" (left)."),
-		step(4, "Hold "+briefKey.Render("Force Recovery")+" (middle); briefly tap "+briefKey.Render("Reset")+" (right),"),
-		"       then release " + briefKey.Render("Force Recovery") + ".",
-		step(5, "Connect the "+briefPort.Render("USB-C port next to HDMI")+" to this computer."),
+	}
+	if recoveryDetected {
+		lines = append(lines,
+			section("USB recovery detected"),
+			"  A Jetson AGX Thor is already in recovery mode. Keep its USB-C cable attached.",
+		)
+	} else {
+		lines = append(lines,
+			section("USB-C cabling"),
+			"  Connect this computer to the "+briefPort.Render("USB-C port next to the HDMI port")+".",
+			"  The other USB-C port is power-only.",
+			"",
+			section("Entering recovery mode"),
+			"  Front buttons, left → right:  "+
+				briefKey.Render("Power")+briefDim.Render(" · ")+
+				briefKey.Render("Force Recovery")+briefDim.Render(" · ")+
+				briefKey.Render("Reset"),
+			"",
+			step(1, "Start with the Thor "+briefDim.Render("unplugged and powered off")+"."),
+			step(2, "Plug in power."),
+			step(3, "Briefly press "+briefKey.Render("Power")+" (left)."),
+			step(4, "Hold "+briefKey.Render("Force Recovery")+" (middle); briefly tap "+briefKey.Render("Reset")+" (right),"),
+			"       then release "+briefKey.Render("Force Recovery")+".",
+			step(5, "Connect the "+briefPort.Render("USB-C port next to HDMI")+" to this computer."),
+		)
 	}
 	return briefBorder.Render(strings.Join(lines, "\n"))
 }
@@ -83,17 +92,18 @@ func thorWindowsDriverNote() string {
 	return briefBorder.Render(strings.Join(lines, "\n"))
 }
 
-// confirmThorReady prints a titled recovery-mode briefing and asks the user to
-// confirm the target Thor is connected and in recovery mode before scanning.
+// confirmThorReady prints a titled briefing, asking the user to enter recovery
+// mode only when a fresh descriptor scan has not already detected that family.
 // Returns ErrUserCancelled if the user declines or cancels.
 func confirmThorReady(version string, force bool) error {
 	fmt.Println()
 	fmt.Println(tui.Header("Flashing WendyOS " + version))
-	fmt.Println(thorRecoveryBriefingBox())
+	recoveryDetected := installRecoveryDetected(thorDeviceType)
+	fmt.Println(thorRecoveryBriefingBox(recoveryDetected))
 	if note := thorWindowsDriverNote(); note != "" {
 		fmt.Println(note)
 	}
-	if force {
+	if recoveryDetected || force {
 		return nil
 	}
 	fmt.Println()
