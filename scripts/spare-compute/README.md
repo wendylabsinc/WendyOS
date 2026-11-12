@@ -19,6 +19,25 @@ to fetch a new revision; completed review sweeps check again after an hour. Chan
 repository or pin a commit. No GitHub token is needed. Only run trusted code;
 tests execute inside the worker container.
 
+## Always-on operation
+
+To run continuously without CPU/GPU idle checks or ownership detection:
+
+```sh
+wendy run --device <device-selector> --detach --yes --env ADMISSION_MODE=always
+```
+
+Add `--service worker` for CPU fuzzing, mutation and race testing only. `auto`
+is the default; set `--env ADMISSION_MODE=auto` to restore admission checks.
+An invalid mode fails startup. The override reaches all services, so the
+supervisor skips Agent queries and workloads start without permission files.
+This mode does not require the GPU-ownership Agent/protocol changes.
+
+Always-on work does not yield to other host workloads or host memory pressure.
+Container CPU/RAM/PID limits, nice priority, bounded job durations, session
+recycling and report retention still apply. The model must fit the machine;
+always-on mode does not make the full FP8 checkpoint fit on Thor.
+
 ## How spare capacity is measured
 
 The supervisor polls `WendyContainerService.GetResourceStats` through the local

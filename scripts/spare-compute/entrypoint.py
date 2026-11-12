@@ -4,9 +4,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "model"))
 
+from lease_runner import admission_mode
+
 if os.environ.get("ROLE") == "supervisor":
-    from governor import main
-    main()
+    if admission_mode() == "always":
+        import json
+        import signal
+        print(json.dumps({"event": "admission_mode", "mode": "always", "monitoring": False}), flush=True)
+        while True:
+            signal.pause()
+    else:
+        from governor import main
+        main()
 else:
     from lease_runner import main
     review = os.environ.get("ROLE") == "review"

@@ -1,4 +1,4 @@
-"""Keep heavyweight children alive only while the supervisor grants permission."""
+"""Run bounded children with automatic admission or explicit always-on mode."""
 import json
 import os
 from pathlib import Path
@@ -8,6 +8,21 @@ import time
 
 STOP = False
 UID = 10001
+
+
+def admission_mode():
+    mode = os.environ.get("ADMISSION_MODE", "auto")
+    if mode not in ("auto", "always"):
+        raise ValueError("ADMISSION_MODE must be auto or always")
+    return mode
+
+
+def permitted(path, lane, mode):
+    if mode == "always":
+        return True
+    if mode != "auto":
+        raise ValueError("unknown admission mode")
+    return lease_valid(path, lane)
 
 
 def lease_valid(path, lane, now=None, boot_id=None):
@@ -54,6 +69,8 @@ def stop_children(process):
 def main(command, lane, state="/state"):
     if os.getuid() != 0:
         raise RuntimeError("lease monitor must start as root to isolate and reap workload UID")
+    mode = admission_mode()
+    print(json.dumps({"event": "admission_mode", "mode": mode, "lane": lane}), flush=True)
     def stop(_signum, _frame):
         global STOP
         STOP = True
@@ -71,7 +88,7 @@ def main(command, lane, state="/state"):
     session_seconds = float(os.environ.get("SESSION_SECONDS", 21600))
     try:
         while not STOP:
-            granted = lease_valid("/control/lease.json", lane)
+            granted = permitted("/control/lease.json", lane, mode)
             if process is not None and (not granted or process.poll() is not None or time.monotonic() - started > session_seconds):
                 completed = process.poll() == 0
                 stop_children(process)

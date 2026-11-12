@@ -8,7 +8,24 @@ from unittest.mock import patch
 
 import governor
 sys.path.insert(0, str(Path(__file__).parent / "model"))
-from lease_runner import lease_valid
+from lease_runner import lease_valid, admission_mode, permitted
+
+
+class AlwaysOnTests(unittest.TestCase):
+    def test_always_mode_runs_both_lanes_without_a_supervisor(self):
+        with patch("lease_runner.lease_valid", side_effect=AssertionError("must not read permissions")):
+            self.assertTrue(permitted("/missing", "cpu", "always"))
+            self.assertTrue(permitted("/missing", "gpu", "always"))
+
+    def test_default_stays_automatic_and_typo_does_not_bypass(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(admission_mode(), "auto")
+            self.assertFalse(permitted("/missing", "cpu", admission_mode()))
+        with patch.dict("os.environ", {"ADMISSION_MODE": "alway"}):
+            with self.assertRaises(ValueError):
+                admission_mode()
+        with self.assertRaises(ValueError):
+            permitted("/missing", "cpu", "alway")
 
 
 class AdmissionTests(unittest.TestCase):
