@@ -486,3 +486,19 @@ func TestStderrPromptWriterFollowsPromptOutput(t *testing.T) {
 		t.Fatalf("with a prompt output: %v; want it", got)
 	}
 }
+
+// The access-denied line is one plain sentence with one step that works on
+// every distro: no udev or group vocabulary, which would be wrong on Arch.
+func TestUSBAccessDeniedLine(t *testing.T) {
+	got := usbAccessDeniedLine("Jetson")
+	for _, want := range []string{"Jetson", "over USB", "again with sudo"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q: %q", want, got)
+		}
+	}
+	for _, jargon := range []string{"udev", "plugdev", "libusb", "\n"} {
+		if strings.Contains(got, jargon) {
+			t.Errorf("must not contain %q: %q", jargon, got)
+		}
+	}
+}

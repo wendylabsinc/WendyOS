@@ -107,6 +107,14 @@ func requireRecoveryChoice(count int, label string) error {
 	return fmt.Errorf("%d %s boards are in recovery mode: connect only the one to flash, or run this in a terminal to choose", count, label)
 }
 
+// usbAccessDeniedLine is what a person sees when the board is attached but
+// this login may not open it (macOS, or Linux without a udev grant for this
+// user). sudo is the one step that works on every distro; the device names
+// what the briefing called it.
+func usbAccessDeniedLine(device string) string {
+	return tui.WarningMessage("Your user account can't open the " + device + " over USB; run the same command again with sudo.")
+}
+
 // promptRescan asks to rescan after a fix the user makes outside wendy and
 // reports whether they chose to quit. Without a person to answer it quits.
 func promptRescan(question string) (quit bool) {

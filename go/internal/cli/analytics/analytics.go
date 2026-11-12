@@ -163,6 +163,7 @@ func Track(event string, properties map[string]string) {
 // result, but callers such as one-time milestones can defer local acknowledgement
 // until the receiver has persisted the event.
 func track(event string, properties map[string]string, onDelivered func()) {
+	properties = nonFailureProperties(event, properties)
 	stateMu.Lock()
 	hook := trackHook
 	stateMu.Unlock()
@@ -234,11 +235,8 @@ func outcomeProperties(event string, properties map[string]string) map[string]st
 		if parseBool(props["success"]) {
 			props["outcome"] = "completed"
 		}
-		switch props["error_class"] {
-		case "context_canceled", "user_cancelled", "cancelled":
-			if !parseBool(props["success"]) {
-				props["outcome"] = "cancelled"
-			}
+		if cancellationClass(props["error_class"]) && !parseBool(props["success"]) {
+			props["outcome"] = "cancelled"
 		}
 	}
 	if props["outcome"] == "failed" {
@@ -251,6 +249,37 @@ func outcomeProperties(event string, properties map[string]string) map[string]st
 		}
 	}
 	return extraProperties(props)
+}
+
+// nonFailureProperties keeps progress and cancellation out of legacy
+// success=false error queries. The outcome still distinguishes these events
+// from completed work; callers must not use success alone as a completion signal.
+// Clone only when changing fields, since callers can reuse their properties.
+func nonFailureProperties(event string, properties map[string]string) map[string]string {
+	outcome := properties["outcome"]
+	if outcome == "" && properties["success"] == "false" &&
+		(event == "command_executed" || event == "deploy_completed") {
+		if cancellationClass(properties["error_class"]) {
+			outcome = "cancelled"
+		}
+	}
+	switch outcome {
+	case "started", "cancelled":
+		properties = maps.Clone(properties)
+		properties["outcome"] = outcome
+		properties["success"] = "true"
+	}
+	return properties
+}
+
+// cancellationClass reports whether an error class records an explicit
+// cancellation rather than a failure.
+func cancellationClass(class string) bool {
+	switch class {
+	case "context_canceled", "user_cancelled", "cancelled":
+		return true
+	}
+	return false
 }
 
 func finishDelivery(done chan struct{}) {

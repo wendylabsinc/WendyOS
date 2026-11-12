@@ -58,6 +58,7 @@ func TestCachedLinuxInterfaceLinkSpeedEmptyName(t *testing.T) {
 // instead of being left with only the bare interface name
 // lanDeviceFromService set.
 func TestLinuxLANAnnotatorAppliesLinkSpeedAndUSB(t *testing.T) {
+	useUSBNICFixture(t, map[string]usbNIC{"usb0": wendyGadget})
 	orig := linuxInterfaceLinkSpeedFn
 	t.Cleanup(func() { linuxInterfaceLinkSpeedFn = orig })
 	linuxInterfaceLinkSpeedFn = func(name string) string {
