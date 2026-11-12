@@ -1713,6 +1713,9 @@ jobs:
           echo "Updated PKGBUILD:"
           cat "$PKGBUILD"
 
+      # Dependabot does not update docker:// digests; refresh this one by hand.
+      # The pinned image ages, so -Syu upgrades it in full: a partial -Sy
+      # upgrade fails once Arch splits or renames a base package.
       - name: Generate .SRCINFO
         uses: docker://archlinux@sha256:fcee73ea1b96e236248f53a213f71276cc9072d9025b58bce9915e32f19963ae # latest, 2026-11-09
         with:
@@ -1720,7 +1723,7 @@ jobs:
           args: |
             -c "
             set -euo pipefail
-            pacman -Sy --noconfirm base-devel shadow
+            pacman -Syu --noconfirm base-devel shadow
             PKGDIR=$(dirname '${{ matrix.pkgbuild_path }}')
             if ! id -u builder >/dev/null 2>&1; then
               useradd -m builder

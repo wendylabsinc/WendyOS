@@ -11,9 +11,12 @@ output as data, without checking out the PR. The E2E analyzer builds its review
 scripts from the PR base commit and fetches the proposed commit only for a diff.
 Artifact identifiers must be a single bounded path component.
 
-Actions use full commit SHAs. Dependabot proposes updates. The Arch Linux release
-container is pinned by digest. Version tags were resolved through their upstream
-repositories; this change does not upgrade action major versions.
+Actions use full commit SHAs, and Dependabot proposes their updates. The Arch
+Linux release container is pinned by digest. Dependabot does not update
+`docker://` references, so refresh that digest by hand. The AUR job runs a full
+`pacman -Syu` so the aging image cannot fail as a partial upgrade. Version tags
+were resolved through their upstream repositories; this change does not upgrade
+action major versions.
 
 The required `Local: Ubuntu 24` check audits all workflows and composite actions
 with zizmor 1.32.0, blocking high-severity, high-confidence findings. The Go test
