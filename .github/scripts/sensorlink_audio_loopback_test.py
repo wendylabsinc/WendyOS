@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("test-sensorlink-audio-loopback.sh")
+BOUNDED_ROOT = "run_root_bounded() {\n" + SCRIPT.read_text().split("run_root_bounded() {\n", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
 LAUNCHER = SCRIPT.with_name("run-owned-media-test.py")
 spec = importlib.util.spec_from_file_location("owned_media", LAUNCHER)
 owned_media = importlib.util.module_from_spec(spec)
@@ -42,15 +43,15 @@ wendy_uid="$(id -u)"
 wendy_gid="$(id -g)"
 daemon_directory=
 trap '[ -z "$daemon_directory" ] || rm -rf -- "$daemon_directory"' EXIT
-sudo() { if [[ "${1:-}" == -u ]]; then shift 2; fi; "$@"; }
-''' + allocation + '''
+sudo() { if [[ "${1:-}" == -n ]]; then shift; fi; if [[ "${1:-}" == -u ]]; then shift 2; fi; "$@"; }
+''' + BOUNDED_ROOT + allocation + '''
 printf 'private-runtime=%s\\n' "$daemon_directory"
 ''' + startup
             result = subprocess.run(['bash', '-c', shell, 'private-runtime-test', str(output)],
                                     env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH']),
                                     capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 1, result.stderr)
-            runtime = Path(result.stdout.strip().split('private-runtime=', 1)[1])
+            runtime = Path(result.stdout.strip().split('private-runtime=', 1)[1].splitlines()[0])
             self.assertEqual(runtime.parent, Path('/tmp'))
             self.assertTrue(runtime.name.startswith('wendy-sensorlink-pipewire.'))
             self.assertFalse(runtime.exists(), 'owned runtime was not removed')
@@ -59,6 +60,27 @@ printf 'private-runtime=%s\\n' "$daemon_directory"
             self.assertIn('fixture daemon startup detail', result.stderr)
             self.assertIn('Owned PipeWire launcher exited during startup (status 17).', result.stderr)
             self.assertIn('fixture daemon startup detail', (output / 'pipewire.log').read_text())
+
+    def test_startup_query_kills_term_resistant_owned_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "ticks"
+            command = root / "query.py"
+            command.write_text("import signal,time\n"
+                               "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                               "deadline=time.monotonic()+8\n"
+                               f"with open({str(marker)!r}, 'w', buffering=1) as out:\n"
+                               " while time.monotonic()<deadline:\n"
+                               "  out.write('tick\\n'); time.sleep(.05)\n")
+            shell = 'sudo() { [[ "$1" != -n ]] || shift; "$@"; }\n' + BOUNDED_ROOT + 'run_root_bounded .2s "$@"\n'
+            start = time.monotonic()
+            result = subprocess.run(['bash', '-c', shell, 'bounded-query', sys.executable, str(command)],
+                                    capture_output=True, text=True, timeout=4)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertLess(time.monotonic() - start, 3)
+            first = marker.read_bytes()
+            time.sleep(.15)
+            self.assertEqual(first, marker.read_bytes(), 'query survived the hard deadline')
 
     def test_non_hosted_invocation_refuses_before_setup(self):
         env = dict(os.environ, GITHUB_ACTIONS="", RUNNER_ENVIRONMENT="")
@@ -91,14 +113,14 @@ printf 'private-runtime=%s\\n' "$daemon_directory"
                 root = Path(directory)
                 commands = root / "commands.log"
                 sudo = root / "sudo"
-                sudo.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{commands}"\n[ "$1" != pgrep ]\n')
+                sudo.write_text(f'#!/bin/sh\n[ \"$1\" != -n ] || shift\n[ \"$1\" != timeout ] || shift 3\nprintf "%s\\n" "$*" >> "{commands}"\n[ "$1" != pgrep ]\n')
                 sudo.chmod(0o700)
                 getent = root / "getent"
                 getent.write_text(f'#!/bin/sh\necho "wendy:x:{gid}:"\n')
                 getent.chmod(0o700)
                 shell = ('created_user=1; loaded_module=0; daemon_launcher=; daemon_directory=; '
                          'wendy_uid=12345; wendy_gid=12345; output="$1"\n'
-                         + "cleanup() {\n" + cleanup + "\n}\ntrue\ncleanup\n")
+                         + BOUNDED_ROOT + "cleanup() {\n" + cleanup + "\n}\ntrue\ncleanup\n")
                 result = subprocess.run(["bash", "-c", shell, "cleanup-test", str(root)],
                                         env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"]),
                                         capture_output=True, text=True, timeout=5)
