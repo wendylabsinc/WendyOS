@@ -26,6 +26,7 @@ SUITES = (
     "janitor_report_test.py",
     "runner_cleanup_test.py",
     "gpu_fixture_selection_test.py",
+    "integration-discover_test.py",
 )
 
 
