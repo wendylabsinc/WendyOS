@@ -8,6 +8,7 @@ No Go compilation, devices, deployment, shared-builder pruning or default change
 import argparse
 import base64
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -27,11 +28,14 @@ BASE_DIGEST = 'sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f
 MODULE = 'usr/local/lib/python3.11/site-packages/stagefixture/__init__.py'
 
 
-def wheel(directory, version):
+def wheel(directory, version, nonce=None):
     name = f'stagefixture-{version}-py3-none-any.whl'
     dist = f'stagefixture-{version}.dist-info'
+    module = f'VERSION = {version!r}\n'
+    if nonce is not None:
+        module += f'BUILD_NONCE = {nonce!r}\n'
     files = {
-        'stagefixture/__init__.py': f'VERSION = {version!r}\n'.encode(),
+        'stagefixture/__init__.py': module.encode(),
         dist+'/METADATA': f'Metadata-Version: 2.1\nName: stagefixture\nVersion: {version}\n'.encode(),
         dist+'/WHEEL': b'Wheel-Version: 1.0\nGenerator: wendy-regression\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
     }
@@ -48,12 +52,31 @@ def wheel(directory, version):
     return name
 
 
-def stagefile(version, override='child', source='app.txt', copy_from='local', inherited_wheel=True):
+def package(directory, version):
+    """A PEP 517 backend with no dependencies, generating a nonce at build time.
+
+    A nonce in the installed package proves whether the pip build actually ran;
+    direct LLB's successful CLI output does not expose raw cache events.
+    """
+    source = directory/'stagefixture-package'
+    source.mkdir(exist_ok=True)
+    (source/'version.txt').write_text(version)
+    (source/'pyproject.toml').write_text('[build-system]\nrequires = []\nbuild-backend = "backend"\nbackend-path = ["."]\n')
+    (source/'backend.py').write_text(
+        'import base64, hashlib, uuid, zipfile\nfrom pathlib import Path\n\n'
+        +inspect.getsource(wheel)
+        +'\ndef build_wheel(wheel_directory, config_settings=None, metadata_directory=None):\n'
+        +'    version = Path(__file__).with_name("version.txt").read_text().strip()\n'
+        +'    return wheel(Path(wheel_directory), version, uuid.uuid4().hex)\n')
+    return source
+
+
+def stagefile(override='child', source='app.txt', copy_from='local', inherited_package=True):
     # JSON strings are valid YAML scalars. Everything else is fixed fixture data.
-    wheel_copy = f'''      - from: local
-        paths: [stagefixture-{version}-py3-none-any.whl]
-        dest: /wheels/
-''' if inherited_wheel else ''
+    package_copy = '''      - from: local
+        paths: [stagefixture-package/]
+        dest: /stagefixture-package/
+''' if inherited_package else ''
     return f'''version: 1
 stages:
   - name: native
@@ -68,13 +91,13 @@ stages:
       - from: local
         paths: [marker.txt]
         dest: /inherited/
-{wheel_copy}  - name: app
+{package_copy}  - name: app
     from: native
     env:
       OVERRIDE: {json.dumps(override)}
     install:
       pip:
-        - packages: [/wheels/stagefixture-{version}-py3-none-any.whl]
+        - packages: [/stagefixture-package]
     copy:
       - from: {copy_from}
         paths: [{json.dumps(source)}]
@@ -83,7 +106,7 @@ stages:
 '''
 
 
-def installed_layer(archive_path, diff_ids, version):
+def installed_layer(archive_path, diff_ids, version, nonce=None):
     """Inspect docker-save members in memory; never extract untrusted tar paths."""
     matches = []
     with tarfile.open(archive_path) as archive:
@@ -95,7 +118,10 @@ def installed_layer(archive_path, diff_ids, version):
                 for member in layer:
                     if member.name.removeprefix('./') == MODULE:
                         data = layer.extractfile(member).read()
-                        if data != f'VERSION = {version!r}\n'.encode():
+                        expected = f'VERSION = {version!r}\n'
+                        if nonce is not None:
+                            expected += f'BUILD_NONCE = {nonce!r}\n'
+                        if data != expected.encode():
                             raise AssertionError('installed wheel has unexpected contents')
                         matches.append(digest)
     if len(matches) != 1:
@@ -114,6 +140,23 @@ def assert_cached_pip(output):
     vertices = re.findall(r'(?m)^#(\d+) .*pip install[^\n]*stagefixture', output)
     if not any(re.search(r'(?m)^#'+vertex+r' CACHED\s*$', output) for vertex in vertices):
         raise AssertionError('source-only edit did not report a cached pip-install vertex')
+
+
+def guard_docker_call(argv, builder):
+    """The CLI may use our existing daemon, never change builder ownership."""
+    if argv[:1] == ['buildx']:
+        if len(argv) > 1 and argv[1] in ('create', 'use', 'rm', 'stop', 'prune'):
+            raise RuntimeError('CLI attempted to mutate a builder: '+repr(argv))
+        if argv[:2] == ['buildx', 'build']:
+            if os.environ.get('BUILDX_BUILDER') != builder:
+                raise RuntimeError('CLI changed the selected buildx builder')
+            for i, arg in enumerate(argv):
+                if arg == '--builder' and (i+1 == len(argv) or argv[i+1] != builder):
+                    raise RuntimeError('CLI selected another buildx builder')
+                if arg.startswith('--builder=') and arg != '--builder='+builder:
+                    raise RuntimeError('CLI selected another buildx builder')
+    if argv[:1] == ['exec'] and 'buildx_buildkit_'+builder+'0' not in argv:
+        raise RuntimeError('CLI attempted to execute in an unowned container')
 
 
 class Harness:
@@ -183,20 +226,24 @@ class Harness:
         self.images.append(saved_tag)
         expected = {'version': version, 'text': text, 'marker': 'from-native',
                     'cwd': '/inherited', 'inherited': 'parent', 'override': override}
-        program = "import json,os,pathlib,stagefixture; print(json.dumps(dict(version=stagefixture.VERSION,text=pathlib.Path('app.txt').read_text().strip(),marker=pathlib.Path('marker.txt').read_text().strip(),cwd=os.getcwd(),inherited=os.environ.get('INHERITED'),override=os.environ.get('OVERRIDE'))))"
+        program = "import json,os,pathlib,stagefixture; print(json.dumps(dict(version=stagefixture.VERSION,nonce=stagefixture.BUILD_NONCE,text=pathlib.Path('app.txt').read_text().strip(),marker=pathlib.Path('marker.txt').read_text().strip(),cwd=os.getcwd(),inherited=os.environ.get('INHERITED'),override=os.environ.get('OVERRIDE'))))"
         name = self.fixture_id+'-'+label
         self.containers.append(name)
         _, actual = self.run([self.docker, 'run', '--rm', '--name', name, '--network', 'none',
                              '--read-only', image, 'python', '-c', program], label+'-runtime', timeout=60)
-        if json.loads(actual) != expected:
+        actual = json.loads(actual)
+        nonce = actual.pop('nonce', '')
+        if not re.fullmatch('[0-9a-f]{32}', nonce):
+            raise AssertionError(label+' has no package-build nonce')
+        if actual != expected:
             raise AssertionError(f'{label} runtime mismatch: {actual}; expected {expected}')
         archive = self.output/(label+'.tar')
         try:
             self.run([self.docker, 'save', '--output', archive, image], label+'-save')
-            pip_layer = installed_layer(archive, info['RootFS']['Layers'], version)
+            pip_layer = installed_layer(archive, info['RootFS']['Layers'], version, nonce)
         finally:
             archive.unlink(missing_ok=True)
-        result = {'case': label, 'image': info['Id'], 'pip_layer': pip_layer,
+        result = {'case': label, 'image': info['Id'], 'pip_layer': pip_layer, 'build_nonce': nonce,
                   'layers': info['RootFS']['Layers'], 'runtime': expected}
         self.evidence['cases'].append(result)
         return result
@@ -208,14 +255,23 @@ class Harness:
         if info['OSType'] != 'linux' or not arch:
             raise RuntimeError('fixture needs a native Linux amd64/arm64 Docker daemon')
         self.run([self.docker, 'buildx', 'version'], 'buildx-version')
+        exists, _ = self.run([self.docker, 'buildx', 'inspect', self.builder], 'check-builder-absent', check=False)
+        if exists == 0:
+            raise RuntimeError('refusing to reuse an existing builder with the fixture name')
+        # Also clean our reserved name when create partially succeeds then
+        # errors or times out, before returning a successful CLI status.
+        self.builder_created = True
         self.run([self.docker, 'buildx', 'create', '--name', self.builder,
                   '--driver', 'docker-container'], 'create-builder')
-        self.builder_created = True
         self.run([self.docker, 'buildx', 'inspect', '--bootstrap', self.builder], 'bootstrap-builder')
         # Audit actual Docker subprocesses while forwarding every call unchanged.
         bindir = self.output/'bin'; bindir.mkdir()
         wrapper = bindir/'docker'
-        wrapper.write_text('#!'+sys.executable+'\nimport json,os,sys\nwith open('+repr(str(self.output/'docker-calls.jsonl'))+', "a") as out: out.write(json.dumps(sys.argv[1:])+"\\n")\nos.execv('+repr(self.docker)+', ["docker", *sys.argv[1:]])\n')
+        wrapper.write_text('#!'+sys.executable+'\nimport json,os,sys\n'
+                           +inspect.getsource(guard_docker_call)
+                           +'\nwith open('+repr(str(self.output/'docker-calls.jsonl'))+', "a") as out: out.write(json.dumps(sys.argv[1:])+"\\n")\n'
+                           +'guard_docker_call(sys.argv[1:], '+repr(self.builder)+')\n'
+                           +'os.execv('+repr(self.docker)+', ["docker", *sys.argv[1:]])\n')
         wrapper.chmod(0o755)
         self.env['PATH'] = str(bindir)+os.pathsep+self.env['PATH']
         for backend in ('dockerfile', 'llb'):
@@ -226,32 +282,37 @@ class Harness:
             # the compiler appends the locked digest when generating each FROM.
             (project/'build.stagefile.lock.yaml').write_text(json.dumps({'version': 1, 'images': {BASE_REF: BASE_DIGEST}}))
             (project/'marker.txt').write_text('from-native\n')
-            wheel(project, '1.0')
+            package(project, '1.0')
             (project/'app.txt').write_text('first\n')
             source = project/'build.stagefile.yaml'
-            source.write_text(stagefile('1.0'))
+            source.write_text(stagefile())
             self.build(project, backend, 'initial')
             first = self.observe(image, backend, 'initial', '1.0', 'first', 'child')
             (project/'app.txt').write_text('edited\n')
             output = self.build(project, backend, 'source-edit')
-            assert_cached_pip(output)
+            if backend == 'dockerfile':
+                assert_cached_pip(output)
             edited = self.observe(image, backend, 'source-edit', '1.0', 'edited', 'child')
             if edited['pip_layer'] != first['pip_layer']:
                 raise AssertionError(backend+' source-only edit changed installed pip layer')
-            source.write_text(stagefile('1.0', override='changed'))
+            if edited['build_nonce'] != first['build_nonce']:
+                raise AssertionError(backend+' source-only edit executed the package build again')
+            source.write_text(stagefile(override='changed'))
             self.build(project, backend, 'env-edit')
             self.observe(image, backend, 'env-edit', '1.0', 'edited', 'changed')
-            wheel(project, '2.0')
-            source.write_text(stagefile('2.0', override='changed'))
+            package(project, '2.0')
+            source.write_text(stagefile(override='changed'))
             self.build(project, backend, 'wheel-edit')
             changed = self.observe(image, backend, 'wheel-edit', '2.0', 'edited', 'changed')
             if changed['pip_layer'] == first['pip_layer']:
                 raise AssertionError(backend+' changed wheel reused stale installed layer')
+            if changed['build_nonce'] == first['build_nonce']:
+                raise AssertionError(backend+' package edit did not execute a new package build')
             # Fixtures remove required input or name an invalid stage. A failed
             # command must not replace the last successfully loaded image.
-            negatives = [('missing-copy', stagefile('2.0', source='absent.txt'), 'absent.txt'),
-                         ('unknown-stage', stagefile('2.0', copy_from='unknown_stage'), 'unknown_stage'),
-                         ('lost-inheritance', stagefile('2.0', inherited_wheel=False), 'stagefixture-2.0')]
+            negatives = [('missing-copy', stagefile(source='absent.txt'), 'absent.txt'),
+                         ('unknown-stage', stagefile(copy_from='unknown_stage'), 'unknown_stage'),
+                         ('lost-inheritance', stagefile(inherited_package=False), 'stagefixture-package')]
             for phase, content, diagnostic in negatives:
                 source.write_text(content)
                 output = self.build(project, backend, phase, success=False)
@@ -264,23 +325,25 @@ class Harness:
 
     def cleanup(self):
         errors = []
-        def clean(argv, label, required=False, timeout=30):
+        def clean(argv, label, missing=(), timeout=30):
             try:
                 code, output = self.run(argv, label, check=False, timeout=timeout)
-                if required and code:
+                if code and not any(message in output for message in missing):
                     errors.append(label+': '+output)
             except Exception as error:
                 errors.append(label+': '+str(error))
         for name in self.containers:
-            clean([self.docker, 'rm', '--force', name], 'cleanup-'+name)
+            clean([self.docker, 'rm', '--force', name], 'cleanup-'+name, missing=('No such container',))
         for image in self.images:
-            clean([self.docker, 'image', 'rm', image], 'cleanup-'+image.replace(':', '-'))
+            clean([self.docker, 'image', 'rm', image], 'cleanup-'+image.replace(':', '-'), missing=('No such image',))
         if self.builder_created:
-            clean([self.docker, 'buildx', 'rm', '--force', self.builder], 'cleanup-builder', required=True, timeout=120)
+            clean([self.docker, 'buildx', 'rm', '--force', self.builder], 'cleanup-builder', missing=('no builder "'+self.builder+'" found',), timeout=120)
         self.evidence['cleanup_errors'] = errors
+        if errors:
+            self.evidence['status'] = 'failed'
         (self.output/'evidence.json').write_text(json.dumps(self.evidence, indent=2)+'\n')
         if errors:
-            raise RuntimeError('owned builder cleanup failed: '+str(errors))
+            raise RuntimeError('owned fixture cleanup failed: '+str(errors))
 
 
 def main():
