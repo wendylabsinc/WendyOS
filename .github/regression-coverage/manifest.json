@@ -1618,9 +1618,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1833",
       "title": "Keep host-network container DNS live across outages",
       "package": "05",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests cover generated resolver content and stable-file updates. They do not query DNS from a running host-network container across an outage.",
-      "required_follow_up": "Require the real host-network container DNS fixture on both supported containerd versions. The same task must resolve before an upstream outage, fail during it, recover through a replacement upstream, and survive managed resolver-file replacement. The old-upstream mutation must fail recovery. Linux compilation and existing resolver tests passed; isolated integration execution remains pending.",
+      "required_follow_up": "Retain both-runtime DNS recovery and the pinned-upstream negative control in the required shared containerd job.",
       "evidence": [
         {
           "files": [
@@ -1629,8 +1629,14 @@
             ".github/workflows/go-tests.yml"
           ],
           "result": "Added real systemd-resolved and containerd DNS recovery coverage plus a pinned-upstream negative control in isolated mount/network/PID namespaces. Linux compilation and portable resolver tests passed; no integration pass is claimed before CI executes."
+        },
+        {
+          "head": "71b902289aa6be64d536b74aefcc27787d9d8230",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43280339195/job/131399639426",
+          "result": "Both containerd 1.7 and current passed TestHostNetworkDNSOutage and rejected the pinned-upstream mutation specifically after upstream replacement. The DNS test, launcher and production client are unchanged from PR #2858. All PR #2862 checks passed at this descendant head. The older Darwin BLE failure remains recorded separately."
         }
-      ]
+      ],
+      "resolution": "Actual running containers recover DNS through systemd-resolved after outage and upstream replacement; the required mutation fails on both runtime versions in passing descendant CI."
     },
     {
       "key": "1663",
@@ -1748,10 +1754,15 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2828",
       "title": "fix(agent): keep GPU apps starting after an OS update renames driver files",
       "package": "07",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests cover renamed CDI mounts, moved device numbers and startup refresh. They exercise specification repair; an OS-update/restart cycle with the vendor driver stack is not demonstrated.",
-      "required_follow_up": "Add a gated GPU app restart after a driver-file rename and assert the app actually uses the GPU.",
-      "evidence": []
+      "required_follow_up": "Reconcile the real containerd rename/restart and skip-refresh mutation, then provide an actual vendor-driver OS-update/restart procedure and verify GPU output. The physical portion remains open.",
+      "evidence": [
+        {
+          "test": "go/internal/agent/containerd/cdi_mounts_integration_test.go",
+          "result": "Added a production StartContainer regression that replaces a CDI file source/destination and environment, removes the old source, and reads the new mounted file inside the restarted task while retaining the container/snapshot identity. The old source is genuinely absent. Normal and skip-refresh binaries compile; hosted runtime execution remains pending. This uses a vendor-document/file fixture, not an actual GPU driver or OS update."
+        }
+      ]
     },
     {
       "key": "2549",
@@ -1873,10 +1884,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1666",
       "title": "fix(agent): apply NVIDIA CDI mounts for a display-only entitlement, not just gpu",
       "package": "07",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests exercise the needs-NVIDIA-CDI predicate for display-only grants. They do not inspect the full resulting mounts or start a display-only app.",
-      "required_follow_up": "Add an OCI-spec assertion for CDI mounts plus a display-only app smoke test.",
-      "evidence": []
+      "required_follow_up": "Require the new real-container CDI creation/restart test and both mutations on containerd 1.7/current. Retain the prepared physical EGL procedure; its hardware execution remains not_run.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/containerd/cdi_mounts_integration_test.go",
+            ".github/scripts/gpu_hardware_test.py"
+          ],
+          "script": ".github/regression-coverage/manual/jetson-display-rehearsal.py",
+          "result": "Real-container test compiles with display-only, no-entitlement and non-Jetson controls, followed by a renamed driver-file fixture restart of the same container/snapshot. Both remove-injection and remove-refresh mutants compile. A four-case physical NVIDIA EGL procedure was generated and inspected. The actual EGL image built and rejected CPU/Mesa fallback; 327 offline tests passed. Containerd runtime execution and hosted CI remain pending.",
+          "hardware_execution": "not_run"
+        }
+      ]
     },
     {
       "key": "1988",

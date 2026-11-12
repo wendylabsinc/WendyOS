@@ -29,6 +29,19 @@ mkdir -p "$logs"
 
 sudo env PATH="$runtime_path" bash .github/scripts/test-containerd-regressions.sh "$RUNNER_TEMP/containerd.test"
 
+for mutation in cdi-display-omitted cdi-refresh-omitted; do
+  if sudo env PATH="$runtime_path" bash .github/scripts/test-containerd-regressions.sh \
+    "$RUNNER_TEMP/$mutation.test" '^TestIntegrationDisplayCDIMountsAndRestart$' 2>&1 | tee "$logs/$mutation.log"; then
+    echo "CDI mutation unexpectedly passed: $mutation" >&2
+    exit 1
+  fi
+  if [[ "$mutation" == cdi-display-omitted ]]; then
+    grep -q 'display CDI mounts missing or duplicated' "$logs/$mutation.log"
+  else
+    grep -q 'starting CDI fixture:.*libfixture.so.1' "$logs/$mutation.log"
+  fi
+done
+
 tests='TestHostNetworkContainersAndBatteryShareTwoParticipants|TestIsolatedNamespaceUsesSeparateParticipant|TestAutomaticHostInterfaceResolvesBeforePoolLookup'
 sudo "$RUNNER_TEMP/rtps.test" -test.run "^($tests)$" -test.v -test.count=1 -test.timeout=60s | tee "$logs/rtps.log"
 for test in ${tests//|/ }; do
