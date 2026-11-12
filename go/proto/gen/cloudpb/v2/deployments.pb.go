@@ -2132,8 +2132,9 @@ func (x *ListDeploymentRevisionDevicesResponse) GetNextPageToken() string {
 
 type ListPendingDeviceStatementsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Exactly one of deployment_id and app_id. app_id only while the app is
-	// being deleted: the terminal removals still lacking across its deployments.
+	// Exactly one of deployment_id and app_id. app_id: the terminal removals an
+	// app delete still lacks across the app's deployments, before the delete
+	// starts and while it runs.
 	DeploymentId string `protobuf:"bytes,1,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
 	// 0 = 500. The server caps it at 500.
 	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
@@ -2991,8 +2992,22 @@ type AssetApp struct {
 	// The release the device reported running, when it named a release of this
 	// app; app_release_id (3) stays the desired release.
 	ReportedReleaseId *string `protobuf:"bytes,18,opt,name=reported_release_id,json=reportedReleaseId,proto3,oneof" json:"reported_release_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// True exactly when cloud still needs any statement for this device for
+	// deployment_id (9): it is in that deployment's pending list (same content
+	// rule as ListPendingDeviceStatements, including a removal it is owed), or
+	// it still lacks the terminal removal an app delete owes it (the by-app
+	// list). Computed from the same record, so this list and both pending
+	// reads never disagree.
+	// Shown as "waiting for its instruction". Cloud-asserted display
+	// information: nothing a device or client acts on, no authority, and never
+	// a to-do list (what to sign comes only from ListPendingDeviceStatements and
+	// the change the operator confirmed). Also returned per deployment, through
+	// ListAppDeviceStates (AppDeviceState.state). False for an app the device
+	// runs without a deployment (run directly, or only reported: unassigned
+	// (17)), and from a cloud that predates it.
+	StatementPending bool `protobuf:"varint,19,opt,name=statement_pending,json=statementPending,proto3" json:"statement_pending,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AssetApp) Reset() {
@@ -3149,6 +3164,13 @@ func (x *AssetApp) GetReportedReleaseId() string {
 		return *x.ReportedReleaseId
 	}
 	return ""
+}
+
+func (x *AssetApp) GetStatementPending() bool {
+	if x != nil {
+		return x.StatementPending
+	}
+	return false
 }
 
 type ListAssetAppsResponse struct {
@@ -3943,7 +3965,7 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\r_image_digest\"Z\n" +
 	"\x14ListAssetAppsRequest\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12'\n" +
-	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\"\xcd\b\n" +
+	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\"\xfa\b\n" +
 	"\bAssetApp\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x19\n" +
 	"\bapp_name\x18\x02 \x01(\tR\aappName\x12)\n" +
@@ -3966,7 +3988,8 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\n" +
 	"unassigned\x18\x11 \x01(\bR\n" +
 	"unassigned\x123\n" +
-	"\x13reported_release_id\x18\x12 \x01(\tH\bR\x11reportedReleaseId\x88\x01\x01B\x11\n" +
+	"\x13reported_release_id\x18\x12 \x01(\tH\bR\x11reportedReleaseId\x88\x01\x01\x12+\n" +
+	"\x11statement_pending\x18\x13 \x01(\bR\x10statementPendingB\x11\n" +
 	"\x0f_app_release_idB\x13\n" +
 	"\x11_app_release_nameB\x11\n" +
 	"\x0f_reported_stateB\x0e\n" +
