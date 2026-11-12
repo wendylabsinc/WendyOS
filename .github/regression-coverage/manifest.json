@@ -583,20 +583,34 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2248",
       "title": "fix: point Dependabot's gomod updates at the repository root",
       "package": "01",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Dependabot now points at the root module; no configuration test verifies that every Go module is included.",
       "required_follow_up": "Check configured update directories against discovered go.mod files.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/ci_execution_test.py",
+          "command": "python .github/scripts/ci_execution_test.py -v",
+          "runner": "local macOS",
+          "result": "5 tests passed. Dependabot directories equal all tracked Go modules, including Babel. Race tests retain a 2-CPU runner, per-package timeout and compiler concurrency guard, with a new 30-minute job deadline. A failed package index refresh prevents installation."
+        }
+      ]
     },
     {
       "key": "2829",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2829",
       "title": "ci: repair Ubuntu dependency mirrors and bound race test headroom",
       "package": "01",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Workflow changes repair package mirrors and adjust test resources; no failure fixture proves mirror retry behavior or prevents unbounded race-test resource use.",
       "required_follow_up": "Exercise the setup step against an unavailable mirror and keep explicit per-job/per-package resource and timeout assertions.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/ci_execution_test.py",
+          "command": "python .github/scripts/ci_execution_test.py -v",
+          "runner": "local macOS",
+          "result": "5 tests passed. Dependabot directories equal all tracked Go modules, including Babel. Race tests retain a 2-CPU runner, per-package timeout and compiler concurrency guard, with a new 30-minute job deadline. A failed package index refresh prevents installation."
+        }
+      ]
     },
     {
       "key": "2679",
