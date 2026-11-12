@@ -3526,10 +3526,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2242",
       "title": "Stream Go2 data and commands through the agent, with a ROS 2 bridge",
       "package": "13",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Command acknowledgement, movement expiry and input-validation tests exist. ROS executor responsiveness and physical posture acknowledgements remain device integration concerns.",
-      "required_follow_up": "Run delayed-ack and concurrent ROS callbacks against the simulator transport and verify stop/move deadlines.",
-      "evidence": []
+      "required_follow_up": "Require the real ROS/Unix gRPC/Agent/WebRTC command deadline journey and synchronous-callback/missing-lease controls in the existing go2 simulator row. Hosted execution remains pending; physical posture and stopping distance are separate.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-go2-bridge-deadlines.py",
+            ".github/scripts/fixtures/go2-bridge-deadlines.md",
+            "go/internal/agent/services/unitree_ros_runtime_test.go",
+            "go/ros2/go2-bridge/tests/command_deadlines_test.py"
+          ],
+          "result": "Source-hashed ordinary native Linux container evidence passed the unchanged ROS Humble bridge through real Unix gRPC, production UnitreeRobotService and unitree.Connect to a Pion protocol robot. A 1.2-second posture acknowledgement left ROS callbacks, fresh odometry and Stop responsive; Stop completed in0.083s, actual wire move expiry in0.501s and unacknowledged Stop returned failure in0.207s. A late Stop acknowledgement could not complete another pending posture command. Synchronous-posture and disabled-lease controls failed their exact assertions. Owned container/network/image cleanup reported no errors. Root verified evidence source hashes against the integrated files. Registered in the existing go2 matrix row with no new runner; hosted execution pending. No MuJoCo or physical motion claim."
+        }
+      ]
     },
     {
       "key": "2306",
