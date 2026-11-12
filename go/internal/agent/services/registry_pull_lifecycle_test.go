@@ -846,3 +846,40 @@ func TestPutBackKeepsAStoppedAppStopped(t *testing.T) {
 		t.Fatalf("last start %+v: want revision 1 put back stopped", last)
 	}
 }
+
+// R2 leftover: a revision that removes a configured value, cut off by a
+// crash before its start, then expired: the old configuration still runs,
+// so it is not reported as the new revision.
+func TestExpiredResumeNoticesARemovedValue(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	// Revision 1 runs MODE=a,EXTRA=1 (set up below); revision 2 drops EXTRA.
+	base = proto.Clone(base).(*cloudpbv2.DeviceAssignment)
+	base.ConfigJson = `{"MODE":"a","EXTRA":"1"}`
+	f.p.mu.Lock()
+	raw, _ := proto.Marshal(base)
+	for _, h := range f.p.state.Assignments {
+		h.Assignment = raw
+	}
+	f.p.mu.Unlock()
+	rec.present = nil // the crash comes while revision 2 still downloads
+	_, starts := crashedResume(t, f, rec, base, func(a *cloudpbv2.DeviceAssignment) {
+		a.ConfigJson, a.AppReleaseId = `{"MODE":"a"}`, base.GetAppReleaseId()
+	}, func(*cloudpbv2.DeviceAssignment) *fakeApp {
+		return &fakeApp{image: ReleaseImageName("web", base.GetAppReleaseId()), env: []string{"EXTRA=1", "MODE=a"}, running: true}
+	})
+	if o := f.outcome("web"); len(starts) != 0 || o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatalf("starts %+v, outcome %+v: want the old configuration not taken for revision 2", starts, o)
+	}
+}
+
+// R3 leftover: an app only briefly down (not stopped by the user) is put
+// back running after a failed start.
+func TestPutBackRunsAnAppThatWasOnlyDown(t *testing.T) {
+	f, rec, base := runningRelease(t)
+	rec.app.running = false // down between restarts, not stopped by the user
+	rec.startErr = failMode("b")
+	f.revision(rec, base, 2, "b")
+	if last := rec.starts[len(rec.starts)-1]; !slices.Equal(last.Env, []string{"MODE=a"}) || !last.Run {
+		t.Fatalf("last start %+v: want revision 1 put back running", last)
+	}
+}
