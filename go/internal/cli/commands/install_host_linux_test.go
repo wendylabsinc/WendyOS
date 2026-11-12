@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -178,13 +179,13 @@ func TestInstallLoopReconnectNeverWritesReplacementDisk(t *testing.T) {
 		}
 		return writeConfigPartition(d, agent, c, name, j)
 	}, true, []bool{true})
-	rescanPartitionTableFn, readDriveIdentityFn, drivePresentFn = rescanPartitionTable, readDriveIdentity, drivePresent
+	rescanPartitionTableFn, readDriveIdentityFn, drivePresentFn = rescanPartitionTable, installLoopIdentity, drivePresent
 	reconnectTimeout = 5 * time.Second
 	listIdentifiedDrivesFn = func() ([]identifiedDrive, error) {
 		var found []identifiedDrive
 		for _, f := range []*installLoopFixture{replacement, original} {
 			d := drive{DevicePath: f.disk}
-			id, err := readDriveIdentity(d)
+			id, err := installLoopIdentity(d)
 			if err != nil {
 				return nil, err
 			}
@@ -201,6 +202,32 @@ func TestInstallLoopReconnectNeverWritesReplacementDisk(t *testing.T) {
 		t.Fatalf("replacement disk changed: %v", err)
 	}
 	verifyInstallLoopContents(t, original.disk, agent)
+}
+
+func installLoopIdentity(d drive) (driveIdentity, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsblk", "--json", "--bytes", "-o", "NAME,SIZE,TYPE,PTUUID,PARTUUID,LABEL,SERIAL,MODEL", d.DevicePath).Output()
+	if err != nil {
+		return driveIdentity{}, err
+	}
+	var snapshot struct {
+		Blockdevices []lsblkIdentityDevice `json:"blockdevices"`
+	}
+	if err := json.Unmarshal(out, &snapshot); err != nil {
+		return driveIdentity{}, err
+	}
+	if len(snapshot.Blockdevices) != 1 || snapshot.Blockdevices[0].Type != "loop" {
+		return driveIdentity{}, fmt.Errorf("fixture target is not exactly one loop device: %s", out)
+	}
+	// Production deliberately filters loop devices from physical install choices.
+	// Adapt only that class; size, GUIDs and partition identity stay kernel-derived.
+	snapshot.Blockdevices[0].Type = "disk"
+	out, err = json.Marshal(snapshot)
+	if err != nil {
+		return driveIdentity{}, err
+	}
+	return parseLsblkIdentity(out)
 }
 
 func TestSudoHandBackRealOwnership(t *testing.T) {
