@@ -63,7 +63,8 @@ func BenchmarkCarrierIPAdmission(b *testing.B) {
 	}
 }
 
-// Concurrent streams share one per-link sender, as they do on the forwarding path.
+// Production sends from a single readTUN goroutine per link. This measures the
+// sendMu safeguard if several goroutines ever share one sender.
 func BenchmarkCarrierIPConcurrentAdmission(b *testing.B) {
 	for _, full := range []bool{false, true} {
 		name := "fragmented"
