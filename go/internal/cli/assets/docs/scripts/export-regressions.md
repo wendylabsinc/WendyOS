@@ -138,3 +138,45 @@ The script never mutates remote state. Passing local tests is not live-hosting
 evidence; only a successful report from the deployed exact preview establishes
 that result. It does not test browser navigation, JavaScript redirects, root GCS
 shortlinks, every site page, or deployment rollback.
+
+# PAIR invitation and membership transcript
+
+The PAIR semantic check uses the exact upstream revision in the example's
+Dockerfile, applies the example's production source patch through a Go overlay,
+and compiles only the cluster manager. Its sole test-only source change binds
+that listener to `127.0.0.1`. It starts no discovery broker, mDNS browser, engine,
+container, GPU workload, or physical device connection.
+
+Fetch the pinned source into the same disposable fixture area used above:
+
+```sh
+git init -q "$fixtures/pair"
+git -C "$fixtures/pair" fetch -q --depth=1 \
+  https://github.com/NVIDIA/Personal-AI-Router.git \
+  13b68115fa2c9c1d94f1ead1358f8d5a527cfecf
+git -C "$fixtures/pair" checkout -q --detach FETCH_HEAD
+```
+
+From the repository root, use the existing owned-process launcher. This also
+drains compiler descendants if a build is interrupted:
+
+```sh
+python3 .github/scripts/run-owned-media-test.py --timeout 300 -- \
+  python3 go/internal/cli/assets/docs/scripts/test-pair-docs.py \
+  --pair-source "$fixtures/pair"
+```
+
+The fixture parses the README's invitation RPC parameters, substituting only
+owned loopback ports, the generated invitation ID and PIN. Two real processes
+complete the PIN protocol and persist fresh identities in temporary directories.
+The transcript distinguishes `cluster:invite-status` state `paired` from
+`nodes:get-initial` entries with state `member`, then verifies identity and
+membership after a process restart. Both the original ambiguous explanation and
+a mistaken membership-state explanation must fail against that observed result.
+It reports the exact upstream revision and production-patch checksum without
+printing PINs or private keys. Only PIDs created by the fixture are signaled.
+
+This proves the documented PAIR response semantics and persistence. It does not
+prove mesh discovery, app deployment, GPU inference, Wendy's attach transport,
+or the `pairctl` wrapper's Unix-socket hop. The CLI argument check and separate
+mesh/runtime fixtures cover their own portions of that path.
