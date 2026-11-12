@@ -151,11 +151,21 @@ def _wendy_work(entry):
     return False
 
 
+# On these commands --device is a Wendy Cloud device name, not a selector.
+CLOUD_NAME_COMMANDS = (["cloud", "ping"], ["cloud", "tunnel"], ["cloud", "run"])
+LOCAL_SELECTORS = frozenset({"local", "localhost", "127.0.0.1"})  # what the MCP server accepts on the device
+
+
 def explicit_target(entry):
+    """The device selector a call names, or None. Arguments that hold a Cloud device name (`device_name`,
+    --device on CLOUD_NAME_COMMANDS) are not selectors and cannot be compared with one."""
     args = entry.get("arguments")
     if entry.get("channel") == "mcp" and isinstance(args, dict):
-        return args.get("device") or (args.get("selector") if entry.get("name") == "device_connect" else None)
+        # device_connect still accepts its legacy `address`.
+        return args.get("device") or (args.get("address") if entry.get("name") == "device_connect" else None)
     if entry.get("channel") == "cli" and isinstance(args, list):
+        if cli_path([word for word in args if isinstance(word, str)])[:2] in CLOUD_NAME_COMMANDS:
+            return None
         for i, value in enumerate(args):
             if value == "--":
                 break
@@ -164,6 +174,18 @@ def explicit_target(entry):
             if isinstance(value, str) and value.startswith("--device="):
                 return value.split("=", 1)[1]
     return None
+
+
+def same_target(selected, target):
+    """Whether two selectors name one device: the same text, two names for the local device, or one
+    host with the port left out on either side (--device takes a hostname, IP or host:port)."""
+    a, b = str(selected).strip().lower(), str(target).strip().lower()
+    if a == b or {a, b} <= LOCAL_SELECTORS:
+        return True
+    if any("://" in s or s.startswith("vm:") or s in LOCAL_SELECTORS for s in (a, b)):
+        return False
+    (host_a, port_a), (host_b, port_b) = (re.fullmatch(r"(.*?)(?::(\d+))?", s).groups() for s in (a, b))
+    return host_a == host_b and (port_a is None or port_b is None)
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])[\"'`*_)\]]*\s+|\n+")
@@ -193,7 +215,7 @@ def grade(trace, expect, final_text, agent_completed, group=None, adapter=None, 
     if target:
         for i, entry in enumerate(trace):
             selected = explicit_target(entry)
-            if selected is not None and selected != target:
+            if selected is not None and not same_target(selected, target):
                 result.update(outcome="wrong", rule="target", entry=i)
                 return result
     for side in ("wrong", "right"):

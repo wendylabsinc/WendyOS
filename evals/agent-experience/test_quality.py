@@ -125,6 +125,31 @@ class ScenarioQuality(unittest.TestCase):
                       [self.entry('run'), self.entry('device_connect', device='vm:other')]):
             self.assertEqual(g.grade(trace, expect, 'Done', True, target='vm:expected')['outcome'], 'wrong')
 
+    def test_other_spellings_of_the_target_are_not_a_wrong_target(self):
+        expect = {'right': [{'tool': 'run'}, {'cli': 'run'}]}
+        def cli(device):
+            return [{'channel': 'cli', 'name': 'run', 'arguments': ['run', '--device', device]}]
+        for target, trace in (('local', [self.entry('run', device='localhost')]),
+                              ('local', [self.entry('run', device='127.0.0.1')]),
+                              ('wendy-pi.local:50051', cli('wendy-pi.local')),
+                              ('wendy-pi.local', cli('Wendy-Pi.local:50051')),
+                              ('vm:expected', [self.entry('device_connect', address='vm:expected'), self.entry('run')])):
+            self.assertEqual(g.grade(trace, expect, '', True, target=target)['outcome'], 'right', (target, trace))
+        for target, trace in (('local', [self.entry('run', device='192.168.1.20')]),
+                              ('wendy-pi.local:50051', cli('other.local')),
+                              ('wendy-pi.local:50051', cli('wendy-pi.local:6000')),
+                              ('vm:expected', cli('expected')),
+                              ('vm:expected', [self.entry('device_connect', address='vm:other'), self.entry('run')])):
+            self.assertEqual(g.grade(trace, expect, '', True, target=target)['rule'], 'target', (target, trace))
+
+    def test_cloud_device_name_flag_is_not_compared_with_a_selector(self):
+        # `wendy cloud ping|tunnel|run --device` takes a Cloud device name, which a selector cannot be checked against.
+        expect = {'right': [{'cli': 'cloud ping'}]}
+        trace = [{'channel': 'cli', 'name': 'cloud ping', 'arguments': ['cloud', 'ping', '--device', 'lab-pi-7', '-c', '3']}]
+        self.assertEqual(g.grade(trace, expect, '', True, target='cloud://host:443/org/1/asset/2')['outcome'], 'right')
+        other = [{'channel': 'cli', 'name': 'device info', 'arguments': ['device', 'info', '--device', 'lab-pi-7']}]
+        self.assertEqual(g.grade(other, expect, '', True, target='cloud://host:443/org/1/asset/2')['rule'], 'target')
+
     def test_failed_or_unobserved_tool_result_is_not_success(self):
         expect = {'right': [{'tool': 'run'}], 'require_result': True}
         for error in (True, None):
