@@ -1522,10 +1522,16 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2661",
       "title": "Show which interface carries internet traffic in wendy device info",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Uplink parsing and formatting tests exist, but no direct regression was found for cancellation while D-Bus connection setup is blocked.",
       "required_follow_up": "Add a blocked connection fixture and assert probe cancellation closes it within the context deadline.",
-      "evidence": []
+      "evidence": [
+        {
+          "path": "go/internal/agent/services/network_uplink_cancellation_linux_test.go",
+          "result": "Four real TCP D-Bus setup cases cover caller cancellation and the production two-second uplink timeout during authentication and Hello. They require an unknown connectivity result and peer-observed socket closure. All cases and existing uplink parsing/annotation tests pass under the Linux race detector. Removing WithContext via a Go overlay causes the authentication cancellation assertion to fail. Linux-only because NetworkManager runs on Linux and macOS godbus chooses a different system-bus address mechanism. Required PR CI remains pending."
+        }
+      ],
+      "resolution": "The regression exercises addUplinkInfo through the real D-Bus transport and startup handshake, without mocking the connection or using a live NetworkManager service."
     },
     {
       "key": "2261",
