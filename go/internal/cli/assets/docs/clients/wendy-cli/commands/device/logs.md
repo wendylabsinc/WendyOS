@@ -9,7 +9,9 @@ To inspect the device's kernel ring buffer (`dmesg`) instead of container/agent 
 ## Connection recovery
 
 While following logs, a temporary gRPC `Unavailable` error retries the log
-subscription twice, after one and two seconds. Each attempt uses the existing
+subscription twice, after one and two seconds. The two retries apply to each
+interruption: the count starts over once a reopened subscription delivers
+output or stays open for 30 seconds. Each attempt uses the existing
 authenticated device connection. Wendy does not rediscover a target or restart
 an app. Authentication, identity, and permission failures are not retried.
 
