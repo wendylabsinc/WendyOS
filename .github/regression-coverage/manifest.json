@@ -1679,6 +1679,11 @@
             ".github/scripts/test-containerd-versions.sh"
           ],
           "result": "Added actual anonymous-page allocation through a production-created container with a 64 MiB memory budget. The real cgroup must permit a 16 MiB workload and OOM-kill a 96 MiB workload. A 128 MiB combined-limit control must complete and use actual swap. Removing production Swap must let the over-budget workload complete and fail the regression assertion. Linux compilation and uncapped fixture execution passed; real kernel enforcement remains pending on both containerd versions in the existing shared job."
+        },
+        {
+          "head": "89ff97ea1df6e41892dffbb51503da89a9483716",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43278587930/job/131393525711",
+          "result": "Both containerd 1.7 and 2.2.1 passed the real budget fixture. In each, the 16 MiB workload exited zero; the 96 MiB workload exited 137 with one cgroup OOM kill and zero swap. Explicit swap controls exited zero and used 37-38 MB of swap. Removing Swap let the 96 MiB workload exit zero with 94-97 MB of swap, failing the targeted enforcement assertion. Complete PR checks are still pending."
         }
       ]
     },
@@ -1787,10 +1792,15 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1692",
       "title": "fix(ci): gate GPU fixtures by architecture",
       "package": "07",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The shell gate skips fixtures by architecture, but no table test was found for the architecture/fixture selection matrix.",
-      "required_follow_up": "Test supported and unsupported GPU/CPU combinations and distinguish skip from pass.",
-      "evidence": []
+      "required_follow_up": "Reconcile the required offline automation job. These are selection/verdict tests, not CUDA hardware evidence.",
+      "evidence": [
+        {
+          "test": ".github/scripts/gpu_fixture_selection_test.py",
+          "result": "Actual test-ci.sh runs against a strict local CLI fixture. Seven supported/legacy NVIDIA device cases require the exact CUDA Dockerfile for both GPU apps. Six unsupported CPU/GPU combinations require zero deploys and two explicit skips. An app exit 17 must produce two failures despite successful deploy commands. Mutating vendor detection to generic hasGpu fails four assertions; selecting CUDA 12 for Thor/Spark fails two. Included in the required offline automation job; hosted CI pending."
+        }
+      ]
     },
     {
       "key": "1691",
