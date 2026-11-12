@@ -2616,10 +2616,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2321",
       "title": "Serve the Mac camera before enrollment, matching Linux",
       "package": "08",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "CLI tests allow the plaintext Swift camera before enrollment. They mock the agent and do not prove a real unauthenticated camera stream can start.",
-      "required_follow_up": "Add a Swift service-level pre-enrollment stream test while preserving post-enrollment authentication requirements.",
-      "evidence": []
+      "required_follow_up": "Require the production startup camera cases in the existing Swift core job: real plaintext streaming before enrollment and authenticated streaming with unauthenticated refusal after enrollment. Physical capture is separately tracked by1924/2011.",
+      "evidence": [
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTransportTests.swift"
+          ],
+          "result": "New parameterized productionStartupRegistersCamera starts the actual WendyAgent and its production service list using private state, persisted software-PEM provisioning and controlled capture. Unenrolled plaintext and enrolled mTLS clients list and receive exact frame bytes; a client without its certificate cannot reach camera discovery, and cancellation drains capture before agent stop. Both cases passed. Isolated enrolled-only registration control fails the unenrolled RPC with unimplemented; forced plaintext control fails enrolled authenticated streaming with TLS WRONG_VERSION_NUMBER. Restored transport/adapter suites pass13tests; adjacent startup selection passes7tests in3suites. Internal state/capture seams retain public construction defaults. Registered through existing Swift test discovery; hosted execution pending. No physical AVFoundation pass is claimed."
+        }
+      ]
     },
     {
       "key": "2315",
