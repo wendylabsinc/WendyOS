@@ -126,7 +126,9 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
                              ".github/regression-coverage/manual/jetson-display-rehearsal.py",
                              ".github/regression-coverage/manual/fixtures/jetson-display/main.c",
                              "swift/Scripts/SetupSigningCI.sh", "swift/Scripts/Build.sh",
-                             "Examples/SO101Reader/reader.py", "Examples/SO101Reader/test_reader.py"):
+                             "Examples/SO101Reader/reader.py", "Examples/SO101Reader/test_reader.py",
+                             "Examples/WendyNotify/Sources/WendyNotify/Router.swift",
+                             "Examples/WendyNotify/Tests/WendyNotifyTests/RequestPathTests.swift"):
                 self.assertTrue(any(fnmatch.fnmatchcase(filename, pattern) for pattern in config["on"][event]["paths"]),
                                 f"{event} omits regression source {filename}")
         self.assertTrue(any("api-snapshot-smoke.py" in s.get("run", "")
