@@ -111,6 +111,19 @@ func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry 
 }
 
 // accept decodes a signed request into msg and records it.
+// fakeDeployments serves DeploymentService from the same fake. Its moved
+// AssignDevice and UnassignDevice return DeviceStatementResponse; this CLI
+// still calls the deprecated ArtifactRegistryService pair.
+type fakeDeployments struct{ *fakeRegistry }
+
+func (fakeDeployments) AssignDevice(context.Context, *cloudpb.SignedRequest) (*cloudpb.DeviceStatementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not served by this fake")
+}
+
+func (fakeDeployments) UnassignDevice(context.Context, *cloudpb.SignedRequest) (*cloudpb.DeviceStatementResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not served by this fake")
+}
+
 func (f *fakeRegistry) accept(method string, in *cloudpb.SignedRequest, msg proto.Message) error {
 	if in.GetPayloadType() != string(msg.ProtoReflect().Descriptor().FullName()) {
 		return status.Errorf(codes.InvalidArgument, "payload_type %q", in.GetPayloadType())
@@ -362,7 +375,7 @@ func registryFixture(t *testing.T, keys ...*cloudpb.RecipientKey) (*registryOp, 
 	}
 	srv := grpc.NewServer()
 	cloudpb.RegisterArtifactRegistryServiceServer(srv, fake)
-	cloudpb.RegisterDeploymentServiceServer(srv, fake)
+	cloudpb.RegisterDeploymentServiceServer(srv, fakeDeployments{fake})
 	cloudpb.RegisterKeyDirectoryServiceServer(srv, fake)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
