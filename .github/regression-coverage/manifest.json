@@ -1518,10 +1518,16 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2578",
       "title": "[WN4] Run the shared mesh router with a userspace IP stack",
       "package": "05",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Userspace packet tests cover tenant and protocol validation. The mixed routing change spans kernel and userspace backends, whose execution requirements differ.",
       "required_follow_up": "Run identical wrong-tenant and route-withdrawal cases through both packet backends.",
-      "evidence": []
+      "evidence": [
+        {
+          "path": "go/internal/cli/netmesh/backend_contract_linux_test.go",
+          "result": "Added one identical packet scenario for userspace and real kernel TUN backends. It uses cross-tenant identities with the same IPv6 address, rejects invalid principals, reuses the refused link ID, and checks exact IPv6 transit bytes and hop limits. Absent, withdrawn and explicitly unreachable routes must drop packets while a control route on the same carrier remains usable; both restorations must forward again. Userspace passes locally under the Linux race detector. A required isolated Linux CI job runs both backends without skips and requires removal of the kernel tenant guard and retention of a withdrawn userspace route to fail their respective assertions. Kernel execution and mutation checks remain pending CI."
+        }
+      ],
+      "resolution": "Kernel AddPeer now enforces the same tenant boundary as userspace before allocating a TUN. A shared real-packet contract covers admission and route lifecycle for both implementations; final verification awaits required CI."
     },
     {
       "key": "2661",
