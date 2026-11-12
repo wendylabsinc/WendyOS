@@ -1352,9 +1352,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2582",
       "title": "[WN8] Join CLI mesh peers automatically over LAN and BLE",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Registry-proxy and carrier tests exist, but full lock/lifetime behavior across cached proxy reuse and cancellation needs a direct deadlock regression.",
-      "required_follow_up": "Reconcile the registered required Linux job and targeted regression controls at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain the required Linux network assertions and their targeted regression controls.",
       "evidence": [
         {
           "tests": [
@@ -1362,6 +1362,12 @@
             ".github/scripts/test-management-lifetime.sh"
           ],
           "result": "Live HTTP registry and Agent RPC traffic reproduced an active transfer surviving owning connection closure. The proxy now cancels both owned sockets and joins its relays. Forced late closer registration tests the cache-lock boundary; fresh connections recover. Twenty native race runs passed and restoring lock order or removing relay cancellation failed the intended assertions."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666998",
+          "runner": "required Linux network regressions",
+          "result": "Twenty live registry race runs and three broker reconnection race runs passed. Restoring the cache lock order, omitting owned socket cancellation, or retaining the retired management client each failed its required assertion."
         }
       ]
     },
@@ -1370,9 +1376,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2581",
       "title": "[WN7] Keep a full CLI mesh router running behind the broker",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Management-client retirement, broker identities and bounds have unit tests. End-to-end native broker transit and lifecycle behavior is not fully established by the portable suite.",
-      "required_follow_up": "Reconcile the registered required Linux job and targeted regression controls at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain the required Linux network assertions and their targeted regression controls.",
       "evidence": [
         {
           "tests": [
@@ -1380,6 +1386,12 @@
             ".github/scripts/test-management-lifetime.sh"
           ],
           "result": "Real TLS management RPC is held across carrier loss. The request and remote handler must cancel, retired gRPC connection must reach Shutdown, and the same IPC client recovers with a fresh management client. Final broker teardown closes the replacement too. Three native race runs passed; omitting retired-client Close fails its Shutdown assertion."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666998",
+          "runner": "required Linux network regressions",
+          "result": "Twenty live registry race runs and three broker reconnection race runs passed. Restoring the cache lock order, omitting owned socket cancellation, or retaining the retired management client each failed its required assertion."
         }
       ]
     },
@@ -1673,9 +1685,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1663",
       "title": "fix(agent): never run ROS 2 discovery over WiFi",
       "package": "05",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests check interface eligibility and wireless detection. Later DDS namespace tests help, but the absence of actual Wi-Fi discovery traffic is not directly asserted.",
-      "required_follow_up": "Reconcile the registered required CI job and targeted behavior assertions at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain the required Linux network assertions and their targeted regression controls.",
       "evidence": [
         {
           "tests": [
@@ -1683,6 +1695,12 @@
             ".github/scripts/test-ros-discovery-policy.sh"
           ],
           "result": "Real battery monitor and RTPS participant capture parsed SPDP packets across private veth paths with fixture wireless metadata. Explicit wireless discovery is a positive control; automatic discovery must use wired paths and emit no packets on a wireless-only host. Normal and omitted-filter Linux binaries compile; required namespace execution and mutation result await CI. No physical radio coverage is claimed."
+        },
+        {
+          "head": "b1a15e5e1b177c77c50f7c245389a0d7a7aedb2e",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299146924/job/131465666998",
+          "runner": "required Linux network regressions",
+          "result": "All three packet phases passed: explicit wireless control, automatic wired discovery, and wireless-only silence. Omitting the wireless filter produced a captured RTPS packet and failed the required assertion."
         }
       ]
     },
@@ -2013,6 +2031,13 @@
           "head": "2c801458ba134aadd9bed001b151651d1bdf0282",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498192",
           "result": "Three authenticated QUIC duplicates were rejected while the original kernel TUN and route kept forwarding UDP. Delaying arbitration failed specifically on transient routing-link publication. The live mesh half is verified; physical NPU renumbering remains separate."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/accelerator-renumbering.py",
+            ".github/scripts/accelerator_renumbering_test.py"
+          ],
+          "result": "Preparation supports exact-board qualified OS transitions with changed vendor device numbers, retained containers/snapshots, stale-before/repaired-after grants and fresh Qwen HTP or CUDA ONNX output. Offline tests reject unchanged/missing qualification and changed artifacts. No reproducible vendor artifact pair is available here; actual target qualification and hardware execution remain pending. This generator alone does not close the vendor gap."
         }
       ]
     },
@@ -2054,6 +2079,13 @@
           "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430930927",
           "result": "Both containerd 1.7 and current passed real-kernel device-node restart and missing-node refusal. The restarted unchanged container opened the moved node and reported a:ed instead of a:c8. Omitting device refresh failed specifically on stale a:c8 access. This proves portable device/cgroup repair, not vendor model execution."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/accelerator-renumbering.py",
+            ".github/scripts/accelerator_renumbering_test.py"
+          ],
+          "result": "Preparation supports exact-board qualified OS transitions with changed vendor device numbers, retained containers/snapshots, stale-before/repaired-after grants and fresh Qwen HTP or CUDA ONNX output. Offline tests reject unchanged/missing qualification and changed artifacts. No reproducible vendor artifact pair is available here; actual target qualification and hardware execution remain pending. This generator alone does not close the vendor gap."
         }
       ]
     },
@@ -2074,6 +2106,13 @@
           "head": "745b0a46197fb6c4b4fe293819ba86b673296e5f",
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430930927",
           "result": "Both containerd 1.7 and current passed real-kernel device-node restart and missing-node refusal. The restarted unchanged container opened the moved node and reported a:ed instead of a:c8. Omitting device refresh failed specifically on stale a:c8 access. This proves portable device/cgroup repair, not vendor model execution."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/accelerator-renumbering.py",
+            ".github/scripts/accelerator_renumbering_test.py"
+          ],
+          "result": "Preparation supports exact-board qualified OS transitions with changed vendor device numbers, retained containers/snapshots, stale-before/repaired-after grants and fresh Qwen HTP or CUDA ONNX output. Offline tests reject unchanged/missing qualification and changed artifacts. No reproducible vendor artifact pair is available here; actual target qualification and hardware execution remain pending. This generator alone does not close the vendor gap."
         }
       ]
     },
@@ -2116,9 +2155,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2650",
       "title": "feat(camera): list network cameras only once they are paired",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests check unpaired camera filtering, credentials and cleanup. They do not prove all hardware cameras stop being probed before pairing.",
-      "required_follow_up": "Reconcile the registered required Linux job and targeted regression controls at the final PR head; hosted execution remains pending.",
+      "required_follow_up": "Retain actual GStreamer measurements/capture and rejected regression controls in the required media job.",
       "evidence": [
         {
           "tests": [
@@ -2127,6 +2166,12 @@
             ".github/scripts/test-camera-pairing-admission.sh"
           ],
           "result": "Real discovery/ONVIF/RTSP endpoints count connections before pairing and after forgetting/restart, and actual authenticated RTP/H264 capture decodes expected pixels after pairing and persisted-state restart. Three native race runs passed; removing either ONVIF or liveness admission opens unexpected connections. Host discovery/ports and physical loopback are fixture boundaries. A regression-only build tag exposes discovery seams without adding shipped API."
+        },
+        {
+          "head": "0e3ec727a365647f09117a3d0e252adab840d6f3",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299143815/job/131465612075",
+          "runner": "required Linux media job",
+          "result": "Actual raw thermal subscriber samples and ONVIF/RTSP pairing lifecycle passed under the race detector. Preview-selection/raw-conversion and missing admission-guard controls failed at the intended sample or unexpected-network assertions."
         }
       ]
     },
@@ -2189,9 +2234,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1987",
       "title": "agent: offer a thermal camera's 16-bit data to raw subscribers, not its preview",
       "package": "08",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "A test checks that deeper raw formats win over preview formats. It does not verify the actual bytes delivered to raw subscribers.",
-      "required_follow_up": "Reconcile required Linux media execution of the actual 16-bit raw tap and both preview/depth-reduction controls at the final PR head.",
+      "required_follow_up": "Retain actual GStreamer measurements/capture and rejected regression controls in the required media job.",
       "evidence": [
         {
           "tests": [
@@ -2199,6 +2244,12 @@
             ".github/scripts/test-thermal-raw-capture.sh"
           ],
           "result": "Real GStreamer raw branch, fd3 pump and hub deliver all 19,200 16-bit samples unchanged to two subscribers with Y16 metadata, 160x120 dimensions and 320-byte stride. Later frames cannot overwrite a retained frame. Three local race runs and the full script passed; first-advertised UYVY preference and actual GRAY8 conversion fail targeted assertions. Hardware discovery/source bytes are fixtures; hosted Linux execution remains pending."
+        },
+        {
+          "head": "0e3ec727a365647f09117a3d0e252adab840d6f3",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43299143815/job/131465612075",
+          "runner": "required Linux media job",
+          "result": "Actual raw thermal subscriber samples and ONVIF/RTSP pairing lifecycle passed under the race detector. Preview-selection/raw-conversion and missing admission-guard controls failed at the intended sample or unexpected-network assertions."
         }
       ]
     },
@@ -2780,10 +2831,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1726",
       "title": "Check the Docker daemon before the build progress UI starts",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Later Docker-daemon tests cover hangs, timeouts and noninteractive behavior. They do not establish that every build entry point performs preflight before starting the progress UI.",
-      "required_follow_up": "Add a run/build test asserting failed daemon preflight prevents the progress UI and build launch.",
-      "evidence": []
+      "required_follow_up": "Verify new direct command/connection assertions in the existing required commands and MCP race suites at the final PR head.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/docker_preflight_pipeline_test.go"
+          ],
+          "result": "Eight actual runWithAgent/local Agent-version/subprocess cases cover directory/tar Docker builds, automatic/forced chunking and stopped/hung daemon probes. Each refuses before progress output, image build or deployment; removing the preflight fails at premature progress. Local tests pass, hosted CI pending."
+        }
+      ]
     },
     {
       "key": "1698",
@@ -2800,10 +2858,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1918",
       "title": "Integrate the optional BuildKit service with the CLI",
       "package": "12",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Legacy address/Cloud identity tests accompany BuildKit integration. Compatibility across old directory clients and live relay endpoints needs an explicit version matrix.",
-      "required_follow_up": "Run old/new client-contract fixtures and assert numeric addresses are never assigned to v2 UUID assets.",
-      "evidence": []
+      "required_follow_up": "Verify new direct command/connection assertions in the existing required commands and MCP race suites at the final PR head.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/cloud_mesh_host_constructor_test.go",
+            "go/internal/cli/mcp/cloud_mesh_host_constructor_test.go"
+          ],
+          "result": "Full merge ancestry confirms this BuildKit change also included legacy/v2 Cloud identity fixes. Existing BuildKit/relay/TLS suites cover their own behavior; six new real lazy-connection constructor cases assert legacy numeric MeshHost versus empty MeshHost for UUID v2 assets, including MCP reconnect. Numeric-v2 mutations fail in both constructors. These are constructor/address checks, not a new relay-handshake claim. Local tests pass, hosted CI pending."
+        }
+      ]
     },
     {
       "key": "2247",
@@ -2948,10 +3014,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2066",
       "title": "Forward app Notifications through Cloud v2",
       "package": "14",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Notification tests validate trusted app/audience identities and avoid legacy proof headers. They do not establish a complete production Cloud v2 notification delivery.",
-      "required_follow_up": "Add a local Cloud contract fixture that validates the signed envelope, error redaction and delivery retry behavior.",
-      "evidence": []
+      "required_follow_up": "Verify required real-mTLS identity, retry and diagnostic-redaction checks with all mutation controls at the final PR head.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/notification_cloud_contract_test.go",
+            ".github/scripts/test-cloud-notification-contract.sh"
+          ],
+          "result": "Actual app Unix RPC forwarding and campaign delivery reach a local Cloud server requiring verified client certificates. Legacy signatures are checked against received bytes; v2 uses certificate identity. Explicit retries preserve IDs/payloads, transient campaign errors retry and AlreadyExists is terminal. Live tests reproduced private Cloud error text in campaign status/warnings; the fix preserves status codes and retry decisions while replacing the final description. Native race suite and four negative controls pass; hosted CI pending."
+        }
+      ]
     },
     {
       "key": "2258",
@@ -2985,10 +3059,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1894",
       "title": "Register apps with existing Cloud APIs and send campaign events (WDY-2939)",
       "package": "14",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The PR includes a Windows filesystem-query build correction and app/campaign notification changes. Windows compilation covers the former; Cloud notification behavior has separate contract tests.",
-      "required_follow_up": "Keep the Windows build and verify notification failures/retries with a Cloud contract fixture.",
-      "evidence": []
+      "required_follow_up": "Verify required real-mTLS identity, retry and diagnostic-redaction checks with all mutation controls at the final PR head.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/notification_cloud_contract_test.go",
+            ".github/scripts/test-cloud-notification-contract.sh"
+          ],
+          "result": "Actual app Unix RPC forwarding and campaign delivery reach a local Cloud server requiring verified client certificates. Legacy signatures are checked against received bytes; v2 uses certificate identity. Explicit retries preserve IDs/payloads, transient campaign errors retry and AlreadyExists is terminal. Live tests reproduced private Cloud error text in campaign status/warnings; the fix preserves status codes and retry decisions while replacing the final description. Native race suite and four negative controls pass; hosted CI pending."
+        }
+      ]
     },
     {
       "key": "1890",

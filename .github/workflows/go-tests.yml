@@ -36,6 +36,7 @@ on:
       - 'packaging/linux/fpm/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
+      - 'Examples/SO101Reader/**'
   pull_request:
     paths:
       - '.gitattributes'
@@ -69,6 +70,7 @@ on:
       - 'packaging/linux/fpm/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
+      - 'Examples/SO101Reader/**'
 
 concurrency:
   group: go-tests-${{ github.event.pull_request.number || github.ref }}
@@ -360,7 +362,9 @@ jobs:
       - name: Install network fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config
+          sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
+      - name: Require native Linux SO-101 reader regressions
+        run: python3 .github/scripts/run-so101-reader-regressions.py
       - name: Compile both packet backends with the race detector
         run: go test -race -c -o "$RUNNER_TEMP/packet-backends.test" ./go/internal/cli/netmesh
       - name: Require identical tenant and route behavior
@@ -464,6 +468,8 @@ jobs:
           done
       - name: Require live registry and management connection lifetimes
         run: bash .github/scripts/test-management-lifetime.sh "$RUNNER_TEMP/management-lifetime"
+      - name: Require Cloud notification identity, retry and redaction contracts
+        run: bash .github/scripts/test-cloud-notification-contract.sh
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
@@ -535,6 +541,11 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Require native macOS SO-101 reader regressions
+        run: python3 .github/scripts/run-so101-reader-regressions.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
