@@ -2604,9 +2604,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1924",
       "title": "WDY-3009: stream Mac cameras to Companion Live",
       "package": "08",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Swift video service tests cover authorization/rate bounds. Real AVFoundation streaming and packaged-app listener behavior remain outside those fixtures.",
-      "required_follow_up": "Reconcile the live VideoService plaintext/mTLS suite in required Swift CI. The physical packaged-camera procedure is prepared; its real capture, authorization boundary and teardown observations remain not_run.",
+      "required_follow_up": "Execute the prepared physical packaged-Mac camera procedure for actual capture, listener identity, authentication boundary, sibling continuity and independent AVFoundation teardown. Required real-wire software CI has passed.",
       "evidence": [
         {
           "tests": [
@@ -2621,8 +2621,18 @@
             ".github/scripts/mac_camera_rehearsal_test.py"
           ],
           "result": "Physical Mac acceptance generator and 11 offline checks pass. The plan pins the signed packaged app, source, CLI/decoder, camera identity, listener and disposable authentication profiles. It provides bounded headless capture/decode commands, repeated startup/stop under recorded actor instrumentation, overlapping streams, cancellation/reuse and independent physical release observations. All ten cases and cleanup remain not_run; generation and offline tests perform no native inventory, permission change or hardware access."
+        },
+        {
+          "tests": [
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTransportTests.swift",
+            "swift/WendyAgentCore/Tests/WendyAgentTests/VideoServiceTests.swift"
+          ],
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43321581504/job/131543307957",
+          "runner": "Hosted Swift core tests",
+          "result": "Both VideoService adapter and production transport suites passed at c633d31b81a9d971fbe4ac9eb0c42a2295899bb2. Real plaintext and mTLS HTTP/2 exercise authority refusal, cancellation before/after frames, two-session capacity, sibling continuity, producer failure races and capacity reuse. Physical AVFoundation capture and exact packaged listener observations are covered by the prepared Mac procedure, with all physical cases not_run."
         }
-      ]
+      ],
+      "resolution": "Software transport regression passed required hosted CI. The remaining physical observations have a detailed executable procedure; no hardware pass is claimed."
     },
     {
       "key": "2192",
