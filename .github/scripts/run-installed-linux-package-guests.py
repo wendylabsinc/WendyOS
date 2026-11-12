@@ -231,8 +231,10 @@ class Guests:
             policy.chmod(0o755)
         unit = "wendy-pkg-" + self.nonce[:16] + "-provision-" + spec["name"]
         try:
+            # tzdata must replace the guest's /etc/localtime during install;
+            # nspawn's automatic host timezone mount can make that rename EBUSY.
             self.start_unit(unit, ["systemd-nspawn", "--quiet", "--keep-unit", "--register=no", "--directory=" + str(root),
-                                  "--resolv-conf=copy-host", "--bind-ro=" + str(script) + ":/provision.sh",
+                                  "--timezone=off", "--resolv-conf=copy-host", "--bind-ro=" + str(script) + ":/provision.sh",
                                   "--bind=" + str(evidence) + ":/fixture-evidence", "/bin/bash", "/provision.sh"],
                             seconds=900, wait=True, log=evidence / "provision.log")
         finally:
@@ -260,7 +262,7 @@ class Guests:
         manifest = CHECKS.load_bundle(bundle)
         command = ["systemd-nspawn", "--quiet", "--keep-unit", "--register=yes", "--boot", "--directory=" + str(root),
                    "--machine=" + name, "--uuid=" + uuid.uuid4().hex, "--private-network", "--resolv-conf=off",
-                   "--link-journal=no", "--bind-ro=" + str(bundle) + ":/fixture",
+                   "--timezone=off", "--link-journal=no", "--bind-ro=" + str(bundle) + ":/fixture",
                    "--bind=" + str(evidence) + ":/evidence"]
         unit = name + ".service"
         try:
