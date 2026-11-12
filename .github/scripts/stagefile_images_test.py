@@ -5,11 +5,14 @@ import importlib.util
 import io
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -31,6 +34,61 @@ def add(archive, path, content):
 
 
 class StagefileImagesTests(unittest.TestCase):
+    def test_guardian_bounds_timeout_and_interrupted_command(self):
+        if os.name == 'nt':
+            self.skipTest('owned process groups require POSIX')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); cli = root/'cli'; cli.write_bytes(b'fixture')
+            with patch.object(images.shutil, 'which', return_value='/unused/docker'):
+                harness = images.Harness(cli, root)
+            # A TERM-resistant real subprocess must stop writing after the
+            # helper deadline. No Docker process or real build is involved.
+            activity = root/'activity'
+            harness.env['STAGEFILE_GUARDIAN_FIXTURE'] = 'child-env'
+            child = ('import os,pathlib,signal,sys,time; '
+                     'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                     'print(os.getcwd(), os.environ["STAGEFILE_GUARDIAN_FIXTURE"], flush=True); '
+                     'print("child-stderr", file=sys.stderr, flush=True); '
+                     'p=pathlib.Path('+repr(str(activity))+'); '
+                     '\nwhile True:\n p.write_text(str(time.monotonic())); time.sleep(.02)\n')
+            started = time.monotonic()
+            code, output = harness.run([sys.executable, '-c', child], 'timeout', cwd=root, timeout=2, check=False)
+            self.assertEqual(code, 124, output)
+            self.assertIn(str(root.resolve())+' child-env', output)
+            self.assertIn('child-stderr', output)
+            self.assertLess(time.monotonic()-started, 10)
+            before = activity.read_text(); time.sleep(.1)
+            self.assertEqual(activity.read_text(), before)
+            # Interrupt only after the command has started. The in-process
+            # guardian handler consumes TERM and performs its own final kill.
+            interrupted_activity = root/'interrupted-activity'
+            child = child.replace(repr(str(activity)), repr(str(interrupted_activity)))
+            ready = threading.Event()
+            cancelled = threading.Event()
+            def interrupt():
+                deadline = time.monotonic()+3
+                while not cancelled.is_set() and not interrupted_activity.exists() and time.monotonic() < deadline:
+                    time.sleep(.02)
+                if interrupted_activity.exists():
+                    ready.set()
+                if not cancelled.is_set():
+                    os.kill(os.getpid(), signal.SIGTERM)
+            # A broken runner returning before readiness must fail this test,
+            # not let a delayed test signal terminate the test runner itself.
+            previous = signal.signal(signal.SIGTERM, lambda signum, frame: None)
+            interrupter = threading.Thread(target=interrupt)
+            interrupter.start()
+            try:
+                with self.assertRaises(InterruptedError):
+                    harness.run([sys.executable, '-c', child], 'interrupted', timeout=8)
+            finally:
+                cancelled.set()
+                interrupter.join(timeout=4)
+                signal.signal(signal.SIGTERM, previous)
+            self.assertTrue(ready.is_set(), 'command must start before interrupting it')
+            before = interrupted_activity.read_text(); time.sleep(.1)
+            self.assertEqual(interrupted_activity.read_text(), before)
+
     def test_local_package_build_creates_fresh_installed_nonce(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

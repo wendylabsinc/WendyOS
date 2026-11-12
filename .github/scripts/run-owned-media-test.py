@@ -33,7 +33,7 @@ while True:
 '''
 
 
-def run(command, timeout):
+def run(command, timeout, *, cwd=None, env=None, stdout=None):
     stopped = 0
 
     def stop(signum, frame):
@@ -49,7 +49,9 @@ def run(command, timeout):
         if stopped:
             return stopped
         guardian = subprocess.Popen([sys.executable, "-c", GUARDIAN, str(write_fd), *command],
-                                    start_new_session=True, pass_fds=(write_fd,))
+                                    start_new_session=True, pass_fds=(write_fd,),
+                                    cwd=cwd, env=env, stdout=stdout,
+                                    stderr=subprocess.STDOUT if stdout is not None else None)
         os.close(write_fd)
         write_fd = None
         os.set_blocking(read_fd, False)
