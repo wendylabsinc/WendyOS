@@ -108,8 +108,14 @@ type DeploymentServiceClient interface {
 	//   revision);
 	// - never a device whose move out of this deployment has been recorded:
 	//   the move statement is its removal;
-	// - by app_id while the app is being deleted: every device that still
-	//   lacks its terminal removal, across the app's deployments.
+	// By app_id it is a different list: before an app delete starts and while
+	// it runs, every device in the app's removal set that still lacks its
+	// terminal removal, across the app's deployments
+	// (DeleteAppRequest.device_removals). A client reads this before it sends
+	// its first DeleteApp batch. By app_id the read requires the right to
+	// delete the app, because the removal set can include devices the caller
+	// cannot otherwise see (removals inside an app delete are authorized by
+	// that right, not by device access).
 	ListPendingDeviceStatements(ctx context.Context, in *ListPendingDeviceStatementsRequest, opts ...grpc.CallOption) (*ListPendingDeviceStatementsResponse, error)
 	// ==================== Per-device statements ====================
 	// Moved here from ArtifactRegistryService (orchestrator ruling D2): same
@@ -462,8 +468,14 @@ type DeploymentServiceServer interface {
 	//   revision);
 	// - never a device whose move out of this deployment has been recorded:
 	//   the move statement is its removal;
-	// - by app_id while the app is being deleted: every device that still
-	//   lacks its terminal removal, across the app's deployments.
+	// By app_id it is a different list: before an app delete starts and while
+	// it runs, every device in the app's removal set that still lacks its
+	// terminal removal, across the app's deployments
+	// (DeleteAppRequest.device_removals). A client reads this before it sends
+	// its first DeleteApp batch. By app_id the read requires the right to
+	// delete the app, because the removal set can include devices the caller
+	// cannot otherwise see (removals inside an app delete are authorized by
+	// that right, not by device access).
 	ListPendingDeviceStatements(context.Context, *ListPendingDeviceStatementsRequest) (*ListPendingDeviceStatementsResponse, error)
 	// ==================== Per-device statements ====================
 	// Moved here from ArtifactRegistryService (orchestrator ruling D2): same

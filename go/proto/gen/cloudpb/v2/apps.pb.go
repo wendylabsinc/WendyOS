@@ -350,8 +350,32 @@ type DeleteAppRequest struct {
 	//   device already covered is skipped and not relayed, also when it is a
 	//   retried copy whose nonce was claimed by the accepted one. Any operator
 	//   who may delete the app can finish it, from any of their keys. The
-	//   devices still lacking a removal: ListPendingDeviceStatements by app_id.
-	// - From the first accepted call until the delete completes, the app is
+	//   devices still lacking a removal: ListPendingDeviceStatements by app_id,
+	//   which answers before the first batch too.
+	// - A valid removal passes the full gate above and names a device in the
+	//   removal set that still lacks one. A removal for a device already
+	//   covered, or no longer in the removal set (unenrolled or deleted after
+	//   the pending read, or moved out earlier), is skipped and does not count;
+	//   it never refuses the call. One removal that fails the gate refuses the
+	//   whole call, nothing in that call is queued, and the refusal names the
+	//   first failing removal (its index, its device and the reason) so the
+	//   client re-signs that one.
+	// - Retries are idempotent. Skipped removals are set aside before any other
+	//   check, the nonce check included, and the nonces of a call are claimed
+	//   in the same transaction that queues its batch, so a refused call claims
+	//   none. A client that resends its signed copies of a refused or half-seen
+	//   batch never fails on a nonce its own earlier attempt claimed, and gets
+	//   the same answer. A copy past its signing expiry fails at receipt like
+	//   any stale request and is named for re-signing.
+	// - Every count below is given only after the caller's right to delete the
+	//   app is checked.
+	// - A call that carries no valid removal while the app still has devices
+	//   to tell is refused with FAILED_PRECONDITION saying how many devices
+	//   need one, and does NOT start the delete: an older client that sends no
+	//   removals cannot lock an app by accident. With no devices to tell, the
+	//   call deletes the app at once.
+	// - From the first accepted call (one that carries at least one valid
+	//   removal) until the delete completes, the app is
 	//   being deleted (App.deletion_started_at). Creating or changing a
 	//   deployment of it, AssignDevice under either name, and publishing a
 	//   release for it, are refused with FAILED_PRECONDITION saying the app is
