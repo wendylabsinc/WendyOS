@@ -39,6 +39,7 @@ on:
       - 'packaging/linux/fpm/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
+      - 'swift/WendyAgentMac/RuntimeGuest/**'
       - 'Examples/SO101Reader/**'
       - 'Examples/WendyNotify/**'
   pull_request:
@@ -77,6 +78,7 @@ on:
       - 'packaging/linux/fpm/**'
       - 'swift/Scripts/SetupSigningCI.sh'
       - 'swift/Scripts/Build.sh'
+      - 'swift/WendyAgentMac/RuntimeGuest/**'
       - 'Examples/SO101Reader/**'
       - 'Examples/WendyNotify/**'
 
