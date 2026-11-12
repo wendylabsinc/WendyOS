@@ -1254,21 +1254,15 @@ func main() {
 		if address.Transport == localmesh.AppTLS {
 			return appClient.DialTLS(dialCtx, peer, address.Address, port)
 		}
-		return appClient.DialWithRetryCheck(dialCtx, peer, address.Address, port, func() error {
+		return appClient.DialWithRouteSnapshot(dialCtx, peer, address.Address, port, func() localmesh.NodeSnapshot {
 			localMeshMu.RLock()
 			currentSnapshot := localMeshSnapshot
+			sameClient := localMeshAppClient == appClient
 			localMeshMu.RUnlock()
-			if currentSnapshot == nil {
-				return meshsession.ErrNoRoute
+			if currentSnapshot == nil || !sameClient {
+				return localmesh.NodeSnapshot{}
 			}
-			currentAddress, err := meshsession.ResolveApp(currentSnapshot(), peer)
-			if err != nil {
-				return err
-			}
-			if currentAddress != address {
-				return meshsession.ErrNoRoute
-			}
-			return nil
+			return currentSnapshot()
 		})
 	})
 	meshDialer.SetLocalServiceDialer(func(dialCtx context.Context, peer meshid.Device, port uint16) (net.Conn, error) {
@@ -1322,7 +1316,16 @@ func main() {
 		if address.Transport != localmesh.AppQUIC {
 			return nil, meshsession.ErrUDPUnsupported
 		}
-		return appClient.DialUDP(dialCtx, peer, address.Address, port, options)
+		return appClient.DialUDPWithRouteSnapshot(dialCtx, peer, address.Address, port, func() localmesh.NodeSnapshot {
+			localMeshMu.RLock()
+			currentSnapshot := localMeshSnapshot
+			sameClient := localMeshAppClient == appClient
+			localMeshMu.RUnlock()
+			if currentSnapshot == nil || !sameClient {
+				return localmesh.NodeSnapshot{}
+			}
+			return currentSnapshot()
+		}, options)
 	}), meshIngress, meshVIPs, appUDPMessages)
 	if udpErr == nil {
 		udpErr = udpProxy.Start(fmt.Sprintf(":%d", mesh.UDPProxyPort))

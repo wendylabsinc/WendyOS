@@ -380,11 +380,28 @@ func (c *Client) Dial(ctx context.Context, peer meshid.Device, address netip.Add
 // target principal has been withdrawn while the old stream was waiting for an
 // ACK.
 func (c *Client) DialWithRetryCheck(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, retryCheck func() error) (net.Conn, error) {
+	return c.dialWithConfig(ctx, peer, address, port, retryCheck, nil)
+}
+
+// DialWithRouteSnapshot checks a current authenticated snapshot before opening
+// a flow, and again before each cold handshake or stale-session retry. Only a
+// selected direct LAN carrier qualifies for faster QUIC startup. The callback
+// must return the current node snapshot, not a saved discovery result.
+func (c *Client) DialWithRouteSnapshot(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, snapshot func() localmesh.NodeSnapshot) (net.Conn, error) {
+	config := routeQUICConfig(peer, address, snapshot)
+	check := func() error { _, err := config(); return err }
+	if err := check(); err != nil {
+		return nil, err
+	}
+	return c.dialWithConfig(ctx, peer, address, port, check, config)
+}
+
+func (c *Client) dialWithConfig(ctx context.Context, peer meshid.Device, address netip.AddrPort, port uint16, retryCheck func() error, config func() (*quic.Config, error)) (net.Conn, error) {
 	if c == nil || port == 0 || !address.IsValid() || address.Port() == 0 {
 		return nil, errors.New("invalid pooled wendy net app dial")
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		entry, reused, err := c.acquire(ctx, peer, address)
+		entry, reused, err := c.acquireWithConfig(ctx, peer, address, config)
 		if err != nil {
 			return nil, err
 		}
@@ -425,7 +442,7 @@ func (c *Client) DialWithRetryCheck(ctx context.Context, peer meshid.Device, add
 	return nil, ErrNoRoute
 }
 
-func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.AddrPort) (*pooledSession, bool, error) {
+func (c *Client) acquireWithConfig(ctx context.Context, peer meshid.Device, address netip.AddrPort, config func() (*quic.Config, error)) (*pooledSession, bool, error) {
 	// This device's own apps are served by the ingress registry, not by a
 	// session to itself: there is no Babel route to one's own address.
 	if peer == c.credentials.Device {
@@ -490,7 +507,13 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 		var conn *quic.Conn
 		if err == nil {
 			c.credentials.ConfigureTLSClient(cfg, multiplexALPN, ALPN)
-			conn, err = c.dial(dialCtx, address, cfg, quicConfig())
+			qc := quicConfig()
+			if config != nil {
+				qc, err = config()
+			}
+			if err == nil {
+				conn, err = c.dial(dialCtx, address, cfg, qc)
+			}
 		}
 		if err == nil {
 			newEntry.lifetime, err = limitSessionLifetime(c.credentials, conn)

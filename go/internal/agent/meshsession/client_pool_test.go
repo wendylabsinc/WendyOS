@@ -211,6 +211,12 @@ func TestPooledAppFlowsReauthorizeAndRouteCut(t *testing.T) {
 }
 
 func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
+	for _, routeAware := range []bool{false, true} {
+		t.Run(map[bool]string{false: "retry check", true: "current route profile"}[routeAware], func(t *testing.T) { testPooledPortACKTimeout(t, routeAware) })
+	}
+}
+
+func testPooledPortACKTimeout(t *testing.T, routeAware bool) {
 	a, b := fixtureCredentials(t)
 	app, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -227,6 +233,7 @@ func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
 		}
 	}()
 	port := uint16(app.Addr().(*net.TCPAddr).Port)
+	var routeState atomic.Int32
 	var calls atomic.Int32
 	var stallAt atomic.Int32
 	stallAt.Store(2)
@@ -240,6 +247,11 @@ func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
 			// A cold BLE setup gets the caller's full budget.
 			time.Sleep(120 * time.Millisecond)
 		case call == stallAt.Load():
+			if call == 2 {
+				routeState.Store(1)
+			} else {
+				routeState.Store(2)
+			}
 			// Simulate a peer process that accepted an old QUIC session but
 			// cannot answer its next app-port request before the bound.
 			time.Sleep(250 * time.Millisecond)
@@ -271,7 +283,31 @@ func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
 	}
 	defer client.Close()
 	client.portACKLimit = 60 * time.Millisecond
-	warm, err := client.Dial(ctx, b.Device, endpoint, port)
+	var retryChecks atomic.Int32
+	snapshot := func() localmesh.NodeSnapshot {
+		retryChecks.Add(1)
+		view := directLANView(b.Device)
+		view.Devices[0].AppEndpoints[0].Port = endpoint.Port()
+		if routeState.Load() == 1 {
+			view.Links[0].Transport = "ble"
+		}
+		if routeState.Load() == 2 {
+			view.ForwardingRoutes = nil
+		}
+		return view
+	}
+	var warm net.Conn
+	if routeAware {
+		actual := endpoint
+		base := client.dial
+		client.dial = func(ctx context.Context, _ netip.AddrPort, tls *tls.Config, qc *quic.Config) (*quic.Conn, error) {
+			return base(ctx, actual, tls, qc)
+		}
+		endpoint = netip.AddrPortFrom(b.Device.MeshAddress(), actual.Port())
+		warm, err = client.DialWithRouteSnapshot(ctx, b.Device, endpoint, port, snapshot)
+	} else {
+		warm, err = client.Dial(ctx, b.Device, endpoint, port)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,14 +320,22 @@ func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
 		if old.Context().Err() == nil {
 			t.Error("replacement handshake overlapped old active TCP session")
 		}
+		if routeAware && (qc.InitialRTT != time.Second || qc.InitialCongestionWindowPackets != 4) {
+			t.Error("retry retained prior direct-LAN startup profile")
+		}
 		return baseDial(ctx, address, cfg, qc)
 	}
 	start := time.Now()
-	var retryChecks atomic.Int32
-	recovered, err := client.DialWithRetryCheck(ctx, b.Device, endpoint, port, func() error {
-		retryChecks.Add(1)
-		return nil
-	})
+	retryChecks.Store(0)
+	var recovered net.Conn
+	if routeAware {
+		recovered, err = client.DialWithRouteSnapshot(ctx, b.Device, endpoint, port, snapshot)
+	} else {
+		recovered, err = client.DialWithRetryCheck(ctx, b.Device, endpoint, port, func() error {
+			retryChecks.Add(1)
+			return nil
+		})
+	}
 	if err != nil {
 		t.Fatalf("stalled pooled ACK did not retry fresh session: %v", err)
 	}
@@ -302,7 +346,11 @@ func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
 	client.mu.Lock()
 	replacement := client.peers[b.Device].conn
 	client.mu.Unlock()
-	if replacement == old || calls.Load() != 3 || retryChecks.Load() != 1 {
+	expectedChecks := int32(1)
+	if routeAware {
+		expectedChecks = 3
+	}
+	if replacement == old || calls.Load() != 3 || retryChecks.Load() != expectedChecks {
 		t.Fatalf("did not authenticate a fresh session: replacement=%t requests=%d route_checks=%d", replacement != old, calls.Load(), retryChecks.Load())
 	}
 	select {
@@ -323,11 +371,19 @@ func TestPooledPortACKTimeoutRetiresAndRetriesFreshSession(t *testing.T) {
 	// recovery attempt must not create a fresh QUIC session using the old
 	// caller-side route check.
 	stallAt.Store(4)
-	_, err = client.DialWithRetryCheck(ctx, b.Device, endpoint, port, func() error {
-		retryChecks.Add(1)
-		return ErrNoRoute
-	})
-	if !errors.Is(err, ErrNoRoute) || calls.Load() != 4 || retryChecks.Load() != 2 {
+	if routeAware {
+		_, err = client.DialWithRouteSnapshot(ctx, b.Device, endpoint, port, snapshot)
+	} else {
+		_, err = client.DialWithRetryCheck(ctx, b.Device, endpoint, port, func() error {
+			retryChecks.Add(1)
+			return ErrNoRoute
+		})
+	}
+	expectedChecks++
+	if routeAware {
+		expectedChecks++
+	}
+	if !errors.Is(err, ErrNoRoute) || calls.Load() != 4 || retryChecks.Load() != expectedChecks {
 		t.Fatalf("withdrawn route retried: err=%v requests=%d route_checks=%d", err, calls.Load(), retryChecks.Load())
 	}
 	cancel()
