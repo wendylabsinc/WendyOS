@@ -1141,7 +1141,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2596",
       "title": "[WN12] Avoid retransmitting known TLS certificate authorities",
       "package": "03",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Handshake tests cover omitted issuers, mixed versions and role checks. The broader multi-transport certificate-completion limits need explicit cross-version execution.",
       "required_follow_up": "Run the issuer-budget and role-refusal matrix across LAN, QUIC and BLE implementations.",
       "evidence": [
@@ -1153,9 +1153,14 @@
           ],
           "runner": "macOS LAN/QUIC and unprivileged Linux container for BLE",
           "result": "48 wire-level admission cases cover client/server certificates on LAN TCP, QUIC, first-contact BLE and pinned BLE reconnect. Known-issuer leaf-only exchanges admit the intended device and reject operator, user, service, wrong-tenant and self identities. Existing ECDSA/ML-DSA slow-BLE budget, mixed-version, missing-issuer and real operator-admission suites also pass under -race. Disabling the LAN or BLE self-device guard fails the new matrix. The BLE transport is a deterministic throttled stream, not a physical radio; physical interoperability stays separate under 2534."
+        },
+        {
+          "head": "711a2d5a1e177c1c25f64303153a8532f7b41164",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875",
+          "result": "Required full Linux race suite passed: BLE provider 53.369s and localmesh 150.448s. Both new matrix entry points execute without environment skips. The 48 leaf-only role/tenant/self admission cases and retained slow/mixed-version handshake tests are verified in the stack. Physical radio interoperability remains separately script-ready under 2534."
         }
       ],
-      "resolution": "The issuer-budget and role-refusal matrix runs through production TLS configurations and real handshakes. Local checks pass; required CI remains pending."
+      "resolution": "Local matrix/mutation evidence reconciled with required CI at 711a2d5a1. PR #2846 is ready for review; merge and physical BLE execution remain separate."
     },
     {
       "key": "2534",
