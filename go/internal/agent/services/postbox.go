@@ -505,6 +505,12 @@ func (p *Postbox) process(ctx context.Context, client cloudpbv2.DevicePostboxSer
 		return err
 	}
 	if verr != nil {
+		// A refused removal (stale, expired, replayed) is audit only: it must
+		// not overwrite the outcome of the deployment the device holds. The
+		// app named above serves only to report an interrupted removal.
+		if _, removal := req.(*cloudpbv2.UnassignDeviceRequest); removal {
+			app = ""
+		}
 		return p.decide(ctx, e, desc.Correlation, app, outcome, reason, verr)
 	}
 	app, outcome, reason, aerr := p.apply(ctx, id, e.GetEntryId(), desc.Correlation, req)
@@ -1071,10 +1077,22 @@ func (p *Postbox) settleCommitted(ctx context.Context, pend *postboxPending) (cl
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 	}
 	for _, a := range st.Assignments {
-		if a.EntryID == pend.EntryID && !a.Pulled {
+		switch {
+		case a.EntryID != pend.EntryID:
+		case !a.Pulled:
 			return outcomePulling, "", nil // resumed by resumePulls
+		case a.DesiredState == cloudpbv2.Running_ABSENT.String():
+			return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil // its removal already ran
+		default:
+			// A rotation copy of a pull that ended: the outcome that pull
+			// recorded, never "applied" for an app that was not started.
+			if o := st.Outcomes[a.AppID]; o != nil {
+				return o.Outcome, "", nil
+			}
+			return outcomeNotStarted, "", nil
 		}
 	}
+	// Nothing held for the entry: a removal that already ran.
 	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 }
 

@@ -606,3 +606,102 @@ func TestPostboxRemovalCrashPoints(t *testing.T) {
 		}
 	}
 }
+
+// committedWrite runs one cycle for the queued entry and returns the state
+// write that carries its committed change (Pending.Committed).
+func (f *pbFixture) committedWrite() []byte {
+	f.t.Helper()
+	var writes [][]byte
+	write := f.p.write
+	f.p.write = func(dir, name string, data []byte) error {
+		writes = append(writes, slices.Clone(data))
+		return write(dir, name, data)
+	}
+	f.cycle()
+	f.p.waitPulls()
+	f.p.write = write
+	for _, w := range writes {
+		var st postboxState
+		if json.Unmarshal(w, &st) == nil && st.Pending != nil && st.Pending.Committed {
+			return w
+		}
+	}
+	f.t.Fatal("no committed write")
+	return nil
+}
+
+// restartFrom puts snap on disk as the state a crash left and runs a cycle.
+func (f *pbFixture) restartFrom(snap []byte) {
+	f.t.Helper()
+	if err := os.WriteFile(filepath.Join(f.dir, postboxStateFile), snap, 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	f.p.mu.Lock()
+	f.p.state = nil
+	f.p.mu.Unlock()
+	f.cycle()
+	f.p.waitPulls()
+}
+
+// A refused removal does not overwrite the outcome of the deployment the
+// device holds; it is counted and audited only.
+func TestPostboxRefusedRemovalKeepsTheHeldOutcome(t *testing.T) {
+	f := newPBFixture(t)
+	r := f.release(t)
+	r.assign.Revision, r.assign.ConfigJson = 1, "{}"
+	f.withArtifacts(&fakeArtifacts{r: r})
+	f.assignEntry(r.assign)
+	f.cycle()
+	f.p.waitPulls()
+	before := f.outcome("web")
+	dep := r.assign.GetDeploymentId()
+	expired := &cloudpbv2.UnassignDeviceRequest{OrganizationId: f.tenant, DeploymentId: dep, Device: f.uri,
+		ValidUntil: timestamppb.New(f.now.Add(-time.Second)), Revision: 2}
+	jws, payload, typ := f.sign(unassignNew, expired, "org/"+f.tenant+"/deployment/"+dep+"/device/"+f.uuid, []*x509.Certificate{f.opLeaf, f.opCA}, f.opKey, nil)
+	f.cloud.add(jws, payload, typ)
+	f.cycle()
+	if o := f.outcome("web"); o != before || before.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED || f.held(dep) == nil {
+		t.Fatalf("outcome %+v (before %+v): want the held deployment's outcome kept", o, before)
+	}
+}
+
+// A crash after a rotation copy's commit never reports "applied" for an
+// app that was not started.
+func TestPostboxRotationCrashKeepsTheTrueOutcome(t *testing.T) {
+	f := newPBFixture(t)
+	r := f.release(t)
+	r.assign.Revision, r.assign.ConfigJson, r.assign.DesiredState = 1, "{}", cloudpbv2.Running_RUNNING
+	f.withArtifacts(&fakeArtifacts{r: r})
+	f.assignEntry(r.assign)
+	f.cycle()
+	f.p.waitPulls()
+	if f.outcome("web").Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatal("setup: a running release reported applied")
+	}
+	rot := proto.Clone(r.assign).(*cloudpbv2.DeviceAssignment)
+	rot.ExpiresAt = timestamppb.New(f.now.Add(2 * time.Hour))
+	f.assignEntry(rot)
+	f.restartFrom(f.committedWrite())
+	if o := f.outcome("web"); o.EntryID != 2 || o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatalf("outcome %+v: want entry 2 settled without claiming applied", o)
+	}
+}
+
+// A committed removal whose delete fails at restart is reported failed and
+// stays queued.
+func TestPostboxCommittedRemovalFailingAtRestart(t *testing.T) {
+	f := newPBFixture(t)
+	r := f.release(t)
+	r.assign.Revision, r.assign.ConfigJson = 1, "{}"
+	rec := f.withArtifacts(&fakeArtifacts{r: r})
+	f.assignEntry(r.assign)
+	f.cycle()
+	f.p.waitPulls()
+	f.statement(unassignNew, r.assign.GetDeploymentId(), nil, 2)
+	snap := f.committedWrite()
+	rec.removeErr = errors.New("containerd down")
+	f.restartFrom(snap)
+	if o := f.outcome("web"); o.EntryID != 2 || o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED || !slices.Contains(f.p.snapshot().Removals, "web") {
+		t.Fatalf("outcome %+v, removals %v: want the failed removal reported and kept queued", o, f.p.snapshot().Removals)
+	}
+}
