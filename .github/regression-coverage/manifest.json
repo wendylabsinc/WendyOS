@@ -1355,9 +1355,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2670",
       "title": "Persist explicit operator mesh connection intent",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests cover disconnect persistence, startup races and explicit resume. They use broker fixtures; native app-to-broker reconnection across app/OS restart remains unverified.",
-      "required_follow_up": "Run the required Linux network gate through five native embedded-host processes and the restored missing-disconnect control. Local native Go client coverage does not claim GUI, detached desktop helper, radio or OS reboot execution.",
+      "required_follow_up": "Retain the required native embedded-host process restart gate. This proves persisted disconnect intent and authenticated client/broker routing across fresh OS processes, without claiming GUI, detached desktop helper, radio or physical OS reboot execution.",
       "evidence": [
         {
           "tests": [
@@ -1365,6 +1365,11 @@
             ".github/scripts/test-operator-native-restart.sh"
           ],
           "result": "Five independent native processes preserve profile identity and explicit disconnect intent through actual broker IPC, authenticated loopback routing and management RPC. The normal journey and omission control pass locally under the race detector; required hosted execution remains pending."
+        },
+        {
+          "head": "0dc3d710241b753fa908ae99081faac8a9fbddf1",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43313429618/job/131515134444",
+          "result": "Required Linux network job passed. Five fresh native processes completed enable/exit, passive reconnect/disconnect, passive refusal without traffic, explicit resume and passive cleanup. The race-enabled normal journey passed in 46.93 seconds with four real authenticated attachments and withdrawals. Restoring the missing durable-disconnect bit failed at the exact fresh passive automatic-join assertion in 30.95 seconds."
         }
       ]
     },
