@@ -1,0 +1,11 @@
+{
+  "fuzz_seconds": 120,
+  "job_seconds": 900,
+  "fuzz": [
+    {"package": "go/internal/episodeexport", "target": "FuzzH264ChunkBoundaries"},
+    {"package": "go/internal/cli/tegraflash/t234", "target": "FuzzStaleExtentsPreserveWrittenBytes"}
+  ],
+  "mutation": ["go/internal/cli/tegraflash/t234", "go/internal/agent/udpmessage"],
+  "race": ["go/internal/agent/udpmessage"],
+  "review_roots": ["go/internal/agent", "go/internal/cli", "go/internal/episodeexport"]
+}

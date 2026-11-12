@@ -1,0 +1,43 @@
+name: wendy-spare
+services:
+  worker:
+    image: wendy-spare-compute:local
+    build: .
+    init: true
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: ${WORKER_CPUS:-2}
+    cpu_shares: 128
+    mem_limit: ${WORKER_MEMORY:-4g}
+    memswap_limit: ${WORKER_MEMORY:-4g}
+    pids_limit: 512
+    stop_grace_period: 15s
+    environment:
+      WORKER_CPUS: ${WORKER_CPUS:-2}
+      WORKER_INDEX: ${WORKER_INDEX:-0}
+      WORKER_COUNT: ${WORKER_COUNT:-1}
+      MODES: ${MODES:-fuzz,mutation,race}
+      MIN_FREE_GIB: ${MIN_FREE_GIB:-10}
+      MAX_REPORTS: ${MAX_REPORTS:-200}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-http://model:8000/v1}
+      MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-600}
+      MODEL_NAME: ${MODEL_NAME:-Qwen/Qwen3.8-Flash-Next}
+    volumes:
+      - type: bind
+        source: ${SOURCE_ARCHIVE:?Set SOURCE_ARCHIVE to an absolute git archive tar path}
+        target: /input/source.tar
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config.json
+        target: /opt/worker/config.json
+        read_only: true
+      - state:/state
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  state:
