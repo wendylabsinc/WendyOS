@@ -2288,7 +2288,7 @@
       "package": "08",
       "status": "partial",
       "audit_finding": "Protocol and host-module checks exist. The host-sensor support fixture is hardware-gated, and module presence alone does not verify video/audio delivery.",
-      "required_follow_up": "Verify actual Lite camera and microphone delivery through kernel loopback. Audio fixture awaits hosted execution; full video delivery fixture remains in progress.",
+      "required_follow_up": "Verify hosted video and microphone kernel gates. Check whether the original Lite microphone transport scope needs additional authenticated stream coverage before closing the whole entry.",
       "evidence": [
         {
           "tests": [
@@ -2296,6 +2296,14 @@
             ".github/scripts/test-sensorlink-audio-loopback.sh"
           ],
           "result": "Microphone portion adds real kernel ALSA/PipeWire identity and sample checks; hosted execution is pending. Does not establish the video portion."
+        },
+        {
+          "tests": [
+            "go/internal/agent/mcusource/lite_camera_fixture_test.go",
+            "go/internal/agent/mcusource/lite_camera_loopback_linux_test.go",
+            ".github/scripts/test-lite-camera-loopback.sh"
+          ],
+          "result": "Real mTLS/WendyCom fixture passes locally under race with delayed TLS and changing JPEG pixels. Hosted test connects the production Supervisor and frame writer to a real v4l2loopback node, decodes ten frames in two phases, verifies identity and node cleanup; two mutation variants cross-compile. Full Linux kernel/decoder execution remains pending. Microphone fixture currently injects PCM at the real audioloop Manager boundary, not over WendyCom."
         }
       ]
     },
@@ -2888,6 +2896,13 @@
             ".github/scripts/stagefile_images_test.py"
           ],
           "result": "Both real CLI backends build and run inherited images, verify Docker subprocess backend selection, pip cache reuse and invalidation, and failed COPY behavior. Five offline cases pass. Hosted actual image execution remains pending."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-stagefile-images.py",
+            ".github/scripts/stagefile_images_test.py"
+          ],
+          "result": "Review replaced direct-LLB raw-log assumptions with actual installed package build nonces and image-layer digests. Source-only changes must preserve both; package edits must replace both. Eight offline tests pass, including real local pip builds producing distinct nonces, builder ownership refusal and cleanup error propagation. No live container image execution is claimed."
         }
       ]
     },
@@ -2967,6 +2982,13 @@
             ".github/scripts/stagefile_images_test.py"
           ],
           "result": "Packaged Dockerfile and direct LLB fixture builds inherited wheel layers, executes imports and environment/workdir assertions, changes source/environment/wheel inputs and rejects missing COPY, unknown stage and lost inheritance without replacing the last image. Five offline cases pass. Required native Make CLI and release CLI jobs are wired; hosted actual builds remain pending."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-stagefile-images.py",
+            ".github/scripts/stagefile_images_test.py"
+          ],
+          "result": "Review replaced direct-LLB raw-log assumptions with actual installed package build nonces and image-layer digests. Source-only changes must preserve both; package edits must replace both. Eight offline tests pass, including real local pip builds producing distinct nonces, builder ownership refusal and cleanup error propagation. No live container image execution is claimed."
         }
       ]
     },
