@@ -168,7 +168,9 @@ read/write-rate charts. Comparison produces `comparison.md` and
   temperature and CPU frequency where exposed. Whole-device totals include the
   generator, collector and background services; do not attribute them to the agent.
 - Unsupported or inaccessible counters are absent and displayed as unavailable,
-  never zero. A change in available metrics invalidates a comparison.
+  never zero. A change in available metrics invalidates a comparison. Cgroup
+  `io.stat` is the exception: the kernel lists a device only after the cgroup's
+  first I/O to it, so an unlisted device counts as zero.
 
 The default policy requires both a 10% change and a metric-specific absolute
 floor, such as 0.5 CPU percentage points or 5 MiB RSS. These are starting values,

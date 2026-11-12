@@ -3,9 +3,19 @@
 import math
 import os
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import time
+
+
+# A cgroup's io.stat lists a device only after the cgroup's first I/O to it, so a
+# missing per-device counter (raw or summarized) is zero, not unavailable.
+_CGROUP_IO_COUNTER = re.compile(r"\.service\.io\.\d+:\d+\.(?:rbytes|wbytes|rios|wios)(?:\.(?:total|per_second))?$")
+
+
+def zero_when_absent(key):
+    return _CGROUP_IO_COUNTER.search(key) is not None
 
 
 def read_text(path):
@@ -136,18 +146,20 @@ def percentile(values, fraction):
 
 
 def summarize(samples):
-    """Summarize one phase. Never replace absent counters with zero."""
+    """Summarize one phase. Never replace absent counters with zero, except
+    cgroup io.stat devices, which are absent until the cgroup's first I/O."""
     if len(samples) < 2:
         raise ValueError("need at least two resource samples")
     elapsed = samples[-1]["time"] - samples[0]["time"]
     if elapsed <= 0:
         raise ValueError("sample times must increase")
     result = {"elapsed_seconds": elapsed}
-    keys = set(samples[0]["values"])
-    if any(set(s["values"]) != keys for s in samples):
+    keys = set().union(*(s["values"] for s in samples))
+    required = {key for key in keys if not zero_when_absent(key)}
+    if any({key for key in s["values"] if not zero_when_absent(key)} != required for s in samples):
         raise ValueError("available metrics changed during the run")
     for key in sorted(keys):
-        values = [s["values"][key] for s in samples]
+        values = [s["values"].get(key, 0) for s in samples]
         gauge = (key.endswith("_bytes") and not any(x in key for x in ("read_bytes", "write_bytes")))
         gauge = gauge or "temperature." in key or "frequency." in key
         if gauge:

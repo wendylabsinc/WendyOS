@@ -3,6 +3,8 @@
 import math
 import statistics
 
+from metrics import zero_when_absent
+
 
 DEFAULT_POLICY = {
     "agent.process.cpu_seconds.percent_mean": {"relative": .10, "absolute": .5},
@@ -33,9 +35,19 @@ def validate(report):
     for name, runs in grouped.items():
         if len(runs) != repetitions or len({r["repeat"] for r in runs}) != repetitions:
             raise ValueError(f"incomplete repetitions for {name}")
-        if len({tuple(sorted(r["metrics"])) for r in runs}) != 1:
+        if len({required_metrics(r) for r in runs}) != 1:
             raise ValueError(f"metric availability changed across repetitions of {name}")
     return grouped
+
+
+def required_metrics(run):
+    return frozenset(key for key in run["metrics"] if not zero_when_absent(key))
+
+
+def metric_values(runs, metric):
+    if zero_when_absent(metric):
+        return [r["metrics"].get(metric, 0) for r in runs]
+    return [r["metrics"][metric] for r in runs]
 
 
 def compare(baseline, candidate, policy=None):
@@ -54,14 +66,14 @@ def compare(baseline, candidate, policy=None):
                 raise ValueError(f"invalid {key} threshold for {metric}")
     rows = []
     for name in old:
-        if set(old[name][0]["metrics"]) != set(new[name][0]["metrics"]):
+        if required_metrics(old[name][0]) != required_metrics(new[name][0]):
             raise ValueError(f"metric availability changed for {name}")
         for metric, rule in policy.items():
-            if metric not in old[name][0]["metrics"]:
+            if not any(metric in r["metrics"] for r in old[name] + new[name]):
                 rows.append({"scenario": name, "metric": metric, "status": "unavailable"})
                 continue
-            a = [r["metrics"][metric] for r in old[name]]
-            b = [r["metrics"][metric] for r in new[name]]
+            a = metric_values(old[name], metric)
+            b = metric_values(new[name], metric)
             before, after = statistics.median(a), statistics.median(b)
             delta = after - before
             tolerance = max(abs(before) * rule["relative"], rule["absolute"])

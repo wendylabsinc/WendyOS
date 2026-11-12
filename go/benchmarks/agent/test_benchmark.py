@@ -59,6 +59,16 @@ class CompareTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 compare(report(), candidate)
 
+    def test_cgroup_io_device_without_io_counts_as_zero(self):
+        # io.stat omits a device until the cgroup's first I/O to it.
+        key = "agent.service.io.8:0.wbytes.total"
+        candidate = report((10, 10, 10))
+        for run in candidate["runs"][1:]:
+            run["metrics"][key] = 8 * 1024**2
+        result = compare(report((10, 10, 10)), candidate, {key: {"relative": .1, "absolute": 1024**2}})
+        row = result["rows"][0]
+        self.assertEqual((row["baseline"], row["candidate"], row["status"]), (0, 8 * 1024**2, "regression"))
+
     def test_invalid_policy(self):
         for policy in ({}, {"missing": {"relative": .1, "absolute": 1}},
                        {"cpu": {"relative": -1, "absolute": 1}}):
@@ -110,6 +120,18 @@ class MetricsTests(unittest.TestCase):
             summarize(samples)
         samples[1]["values"] = {}
         with self.assertRaisesRegex(ValueError, "available"):
+            summarize(samples)
+
+    def test_cgroup_io_device_counts_from_zero_when_it_first_appears(self):
+        key = "agent.service.io.8:0.wbytes"
+        samples = [{"time": 0, "values": {"agent.process.rss_bytes": 1}},
+                   {"time": 1, "values": {"agent.process.rss_bytes": 1, key: 4096}},
+                   {"time": 2, "values": {"agent.process.rss_bytes": 1, key: 8192}}]
+        result = summarize(samples)
+        self.assertEqual(result[key + ".total"], 8192)
+        self.assertEqual(result[key + ".per_second"], 4096)
+        del samples[2]["values"][key]
+        with self.assertRaisesRegex(ValueError, "reset"):
             summarize(samples)
 
     def test_proc_stat_with_spaces_parentheses_and_pid_reuse(self):
