@@ -37,22 +37,32 @@ public actor WendyAgent {
     private let runningExecutableSHA256: String
     private let reportedVersion: @Sendable () -> String
     private let probesLinuxContainerRuntime: Bool
+    private let stateDirectoryOverride: URL?
+    private let makeVideoService: @Sendable () -> VideoService
+
+    private var stateDirectory: URL {
+        self.stateDirectoryOverride ?? WendyAgentPaths.stateDirectory
+    }
 
     public init(configuration: WendyAgentConfiguration = .init()) {
         self.init(configuration: configuration, probesLinuxContainerRuntime: true)
     }
 
     /// Test-only seams for listener fixtures outside the signed app bundle.
-    /// They can supply a version and avoid starting container runtimes/registries.
+    /// They isolate state and capture while retaining production service registration.
     init(
         configuration: WendyAgentConfiguration,
         probesLinuxContainerRuntime: Bool,
-        reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version }
+        reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version },
+        stateDirectory: URL? = nil,
+        makeVideoService: @escaping @Sendable () -> VideoService = { VideoService() }
     ) {
         self.configuration = configuration
         self.reportedVersion = reportedVersion
         self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
         self.probesLinuxContainerRuntime = probesLinuxContainerRuntime
+        self.stateDirectoryOverride = stateDirectory
+        self.makeVideoService = makeVideoService
     }
 
     public func start() async throws {
@@ -342,7 +352,7 @@ public actor WendyAgent {
         linuxBackend: (any LinuxContainerBackend)?,
         broadcaster: TelemetryBroadcaster
     ) async throws {
-        let stateDirectory = WendyAgentPaths.stateDirectory
+        let stateDirectory = self.stateDirectory
         let appsBase = stateDirectory.appendingPathComponent("apps")
 
         let containerService = ContainerService(
@@ -390,7 +400,7 @@ public actor WendyAgent {
         // authentication by anyone who can reach the plaintext setup listener.
         // A way to provision devices locally, so unenrolled devices can
         // require a credential, is planned to replace this.
-        let videoService = VideoService()
+        let videoService = self.makeVideoService()
         let services: [any RegistrableRPCService] = [
             AgentService(
                 reportedVersion: self.reportedVersion,
@@ -909,7 +919,7 @@ public actor WendyAgent {
     private func startPullRegistryIfNeeded() {
         guard self.pullRegistryTask == nil else { return }
         let registry = AgentImageRegistry(
-            store: BlobStore(root: WendyAgentPaths.stateDirectory),
+            store: BlobStore(root: self.stateDirectory),
             configuration: .init(
                 host: LocalRegistryRef.pullHost,
                 port: LocalRegistryRef.pullPort,
@@ -951,7 +961,7 @@ public actor WendyAgent {
             tls = RegistryTLS.makeConfiguration(certs: certs, logger: self.logger)
         }
         let registry = AgentImageRegistry(
-            store: BlobStore(root: WendyAgentPaths.stateDirectory),
+            store: BlobStore(root: self.stateDirectory),
             configuration: .init(
                 host: self.configuration.host,
                 port: LocalRegistryRef.pushPort,
