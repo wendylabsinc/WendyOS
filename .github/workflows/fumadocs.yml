@@ -85,6 +85,9 @@ jobs:
       - name: Test documentation generators
         run: npm run test:docs
 
+      - name: Exercise HTTP crawl failure controls
+        run: python3 scripts/crawl-export.test.py
+
       - name: Verify public npm package versions
         run: |
           set -euo pipefail
@@ -232,6 +235,19 @@ jobs:
             fi
           }
 
+          fixtures="$(mktemp -d "${RUNNER_TEMP}/docs-example-trees.XXXXXX")"
+          trap 'rm -rf "$fixtures"' EXIT
+          git init -q "$fixtures/templates"
+          timeout 120 git -C "$fixtures/templates" fetch -q --depth=1 \
+            https://github.com/wendylabsinc/templates.git \
+            44d5d1ba804c332c1b6787b9812bbcdd4e005aee
+          git init -q "$fixtures/native"
+          timeout 120 git -C "$fixtures/native" fetch -q --depth=1 \
+            https://github.com/wendylabsinc/wendy-lite-native-apps.git \
+            73271d49c1c6872ca46e63a36e94012c6fd68f2f
+          examples_checked=0
+          preview_checked=0
+
           while IFS= read -r DEPLOY_PATH; do
             [[ -n "${DEPLOY_PATH}" ]] || continue
             validate_deploy_path "${DEPLOY_PATH}"
@@ -239,6 +255,17 @@ jobs:
             echo "::group::Build ${DEPLOY_PATH}"
             rm -rf out
             NEXT_PUBLIC_BASE_PATH="/${DEPLOY_PATH}" npm run build
+            python3 scripts/crawl-export.py --root out --base "/${DEPLOY_PATH}" \
+              --analytics-id "$NEXT_PUBLIC_GA_MEASUREMENT_ID" \
+              --source-markdown ../../../../../README.md \
+              --source-markdown ../../../../../Examples/NvidiaPAIR/README.md \
+              --report "$RUNNER_TEMP/docs-${DEPLOY_PATH}-crawl.json"
+            if [[ "$examples_checked" == 0 ]]; then
+              python3 scripts/test-example-contract.py --root out \
+                --templates "$fixtures/templates" --native-examples "$fixtures/native"
+              examples_checked=1
+            fi
+            if [[ "$DEPLOY_PATH" == branch-* ]]; then preview_checked=1; fi
             mkdir -p "export/${DEPLOY_PATH}"
             cp -R out/. "export/${DEPLOY_PATH}/"
             (
@@ -248,12 +275,36 @@ jobs:
             echo "::endgroup::"
           done <<< "${DEPLOY_PATHS}"
 
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            test "$preview_checked" = 1
+            # The deployable branch tree is already copied and hashed above.
+            # Validate production routing without copying this proof-only
+            # /latest export into the artifact consumed by the deploy job.
+            rm -rf out
+            NEXT_PUBLIC_BASE_PATH=/latest npm run build
+            python3 scripts/crawl-export.py --root out --base /latest \
+              --analytics-id "$NEXT_PUBLIC_GA_MEASUREMENT_ID" \
+              --source-markdown ../../../../../README.md \
+              --source-markdown ../../../../../Examples/NvidiaPAIR/README.md \
+              --report "$RUNNER_TEMP/docs-latest-crawl.json"
+          fi
+
+
       - name: Upload static site artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: fumadocs-static-site
           path: docs/export
           if-no-files-found: error
+
+      - name: Preserve documentation crawl evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-regression-evidence
+          path: ${{ runner.temp }}/docs-*-crawl.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   deploy:
     name: Deploy docs
