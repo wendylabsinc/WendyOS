@@ -181,7 +181,8 @@ class Guests:
     def remove_container(self, name):
         result = self.captured(["docker", "inspect", name], check=False, cleanup=True)
         if result.returncode:
-            CHECKS.require("No such" in result.stderr, f"cannot inspect owned Docker export: {result.stderr}")
+            CHECKS.require(re.search(r"\bno such (?:object|container)\b", result.stderr, re.I),
+                           f"cannot inspect owned Docker export: {result.stderr}")
         else:
             record = json.loads(result.stdout)[0]
             CHECKS.require(record["Config"]["Labels"].get("wendy.package-fixture") == self.nonce,
