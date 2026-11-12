@@ -168,6 +168,37 @@ failure data.
 
 The CLI stores a private, timestamp-only `activation-state.json` in the active config directory after a successful install operation. A later `run_started` clears the waiting window. On a subsequent CLI launch, it emits `next_launch_no_run_24h` and `next_launch_no_run_7d` when each threshold has elapsed. Each threshold is acknowledged only after successful HTTP delivery, so failed sends can retry on later launches. These are observations of returning installations; they do not classify absent users as abandoned. The check follows analytics opt-out and creates no state when disabled. Delivery remains best-effort, and concurrent CLI processes can duplicate a threshold observation.
 
+## Outcomes and recovery reporting
+
+`command_executed` and `deploy_completed` include an explicit `outcome` of
+`completed`, `failed`, or `cancelled`. Activation events retain their existing
+outcomes. Failed outcomes include allowlisted diagnostic codes and fixed
+explanations. The CLI also sends that fixed explanation as top-level
+`error_detail` for receivers that do not yet persist properties. Arbitrary error
+messages, runtime output, paths, and credentials are not included. Versions
+beginning with `dev-` count as development builds in telemetry.
+
+The repository's `go/scripts/analytics/recovery.sql` reports observed run
+attempts, verified readiness, failures, cancellation, missing terminal events,
+and later readiness on the same installation. It requires the v2 storage schema
+in [Cloud PR #798](https://github.com/wendylabsinc/cloud/pull/798).
+
+Run it against a database with that schema using an explicit observation window
+and ingestion cutoff:
+
+```sh
+psql "$DATABASE_URL" -v start=2026-11-09 -v end=2026-11-16 \
+  -v as_of=2026-11-17 -f go/scripts/analytics/recovery.sql
+```
+
+The query separates installations with an observed development build during the
+window. It cannot identify every internal installation. Missing readiness stays
+unknown, and an app-start acknowledgement does not count as readiness. The
+first observed attempt in the window is not necessarily the installation's
+first-ever attempt. Later readiness on the same installation is an observation,
+not proof that the same app recovered. Legacy events without attempt IDs cannot
+support these measurements. Event delivery remains best-effort.
+
 ## Opting out
 
 Analytics can be disabled in several ways:

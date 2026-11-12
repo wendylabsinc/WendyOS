@@ -1008,6 +1008,7 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 		ctx, finish = startActivationOperation(ctx, "run", "wendy run")
 		defer func() { finish(retErr) }()
 	}
+	defer func() { retErr = runPhaseFailure(ctx, retErr) }()
 	ctx = withDevicePickerPurpose(ctx, mainDevicePicker)
 	mark := phaseTimer()
 	activationStep(ctx, "project", nil)
@@ -2520,10 +2521,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 
 	// A build will run below (the no-build fast path returned above). Refuse it
 	// now if this computer's disk, or the device's, is too full to hold it.
-	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
-		return err
-	}
-	if err := checkDeviceDiskSpace(versionResp); err != nil {
+	if err := checkRunBuildPrerequisites(ctx, opts.builder, versionResp, defaultDoctorDeps()); err != nil {
 		return err
 	}
 	ctx = withDeviceStorage(ctx, versionResp)
@@ -2912,7 +2910,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 
 // startExistingContainer starts a previously created container without building
 // or recreating it, preserving the usual readiness, hook, and output lifecycle.
-func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) error {
+func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) (retErr error) {
 	if opts.detach {
 		stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 			AppName: appCfg.ContainerName(),
@@ -2959,6 +2957,9 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		opts.watchState.reapCommand(cmd)
 		return nil
 	}
+
+	var recent recentRunOutput
+	defer func() { retErr = recent.failure(retErr) }()
 
 	// Start and stream output using AttachContainer so stdin is forwarded.
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -3018,9 +3019,9 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			// drop, auth). A clean container exit arrives as io.EOF above, so
 			// reaching here always means the run did not succeed. Record it, run
 			// the normal cleanup, then return it so `wendy run` exits non-zero
-			// instead of reporting a false success. Use the status message so the
-			// output reads as a container failure, not a CLI crash.
-			runErr = fmt.Errorf("container run failed: %s", status.Convert(recvErr).Message())
+			// instead of reporting a false success. Inspect the app before
+			// attributing a broken output connection to an application failure.
+			runErr = diagnoseRunStreamFailure(ctx, conn, appCfg, hookFired, recvErr)
 			break
 		}
 		gotFirstResponse = true
@@ -3034,9 +3035,11 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			}
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
+			recent.stdout = appendRunTail(recent.stdout, out.GetData())
 			_, _ = os.Stdout.Write(out.GetData())
 		}
 		if out := resp.GetStderrOutput(); out != nil {
+			recent.stderr = appendRunTail(recent.stderr, out.GetData())
 			_, _ = os.Stderr.Write(out.GetData())
 		}
 	}
@@ -3771,7 +3774,9 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 
 // onStarted commits deployment state before readiness or long-lived logs. It
 // runs once, only after the agent confirms that the container has started.
-func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentConnection, stream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], appCfg *appconfig.AppConfig, opts runOptions, onStarted func()) error {
+func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentConnection, stream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], appCfg *appconfig.AppConfig, opts runOptions, onStarted func()) (retErr error) {
+	var recent recentRunOutput
+	defer func() { retErr = recent.failure(retErr) }()
 	// The attached-mode postStart hook is tied to hookCtx so it is terminated
 	// when the stream ends (matching startAndStreamContainer's runCtx handling).
 	// Cleanup runs in a defer so the hook is killed and reaped on every exit
@@ -3803,7 +3808,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 				stopInterruptedApp(ctx, conn, appCfg)
 				return ErrUserCancelled
 			}
-			return fmt.Errorf("receiving container output: %w", err)
+			return diagnoseRunStreamFailure(ctx, conn, appCfg, started, err)
 		}
 		if resp.GetStarted() != nil {
 			if !started {
@@ -3854,6 +3859,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 			continue
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
+			recent.stdout = appendRunTail(recent.stdout, out.GetData())
 			if opts.detach && opts.detachedOutput && jsonOutput {
 				// Keep pre-start application logs out of the JSON result.
 				_, _ = os.Stderr.Write(out.GetData())
@@ -3862,6 +3868,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 			}
 		}
 		if out := resp.GetStderrOutput(); out != nil {
+			recent.stderr = appendRunTail(recent.stderr, out.GetData())
 			_, _ = os.Stderr.Write(out.GetData())
 		}
 	}

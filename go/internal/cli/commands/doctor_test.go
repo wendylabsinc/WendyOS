@@ -447,7 +447,7 @@ func TestDoctorRegisteredAndHumanOutputByDefault(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(output.String(), "Wendy setup checks.") {
+	if !strings.HasPrefix(output.String(), "Wendy setup\n") {
 		t.Fatalf("default output must be human-readable: %q", output.String())
 	}
 }

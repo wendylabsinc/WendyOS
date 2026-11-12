@@ -8,12 +8,62 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // logStreamReceiver is the part of a StreamLogs client stream that
 // consumeLogStream reads. Tests substitute a scripted fake.
 type logStreamReceiver interface {
 	Recv() (*agentpb.StreamLogsResponse, error)
+}
+
+// Reopen only the log subscription on the caller's existing connection. Never
+// rediscover a device or replay a mutating operation. A resumed stream has no
+// reliable cursor, so skip replay frames and explicitly report the possible gap.
+func consumeLogStreamWithRetry(ctx context.Context, open func(context.Context) (logStreamReceiver, error), follow bool, handle func(*agentpb.StreamLogsResponse), notify func(string), delays []time.Duration) (logReplayResult, error) {
+	received := false
+	for attempt := 0; ; attempt++ {
+		streamCtx, cancel := context.WithCancel(ctx)
+		stream, err := open(streamCtx)
+		var result logReplayResult
+		if err == nil {
+			skipHistory, restored := received, false
+			result, err = consumeLogStream(streamCtx, stream, follow, func(frame *agentpb.StreamLogsResponse) {
+				received = true
+				if attempt > 0 && !restored {
+					restored = true
+					if notify != nil {
+						notify("Log connection restored.")
+					}
+				}
+				if skipHistory && frame.GetIsHistory() {
+					return
+				}
+				handle(frame)
+			})
+		}
+		cancel()
+		if ctx.Err() != nil {
+			return result, nil
+		}
+		if err == nil || !follow || status.Code(err) != codes.Unavailable {
+			return result, err
+		}
+		if attempt >= len(delays) {
+			return result, withNextSteps(err, "The log connection is still unavailable. Check the same device's connection before retrying; app state is unknown.")
+		}
+		if notify != nil {
+			notify(fmt.Sprintf("Log connection lost. Reconnecting to the same device (%d/%d); some logs may be missing.", attempt+1, len(delays)))
+		}
+		timer := time.NewTimer(delays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return result, nil
+		case <-timer.C:
+		}
+	}
 }
 
 // How `wendy device logs --no-follow` decides the agent's history replay is

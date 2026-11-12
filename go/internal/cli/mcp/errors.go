@@ -40,12 +40,49 @@ var rewriteCLIHints = pluginmode.RewriteCLIHints
 // does not reach (see pluginmode.CLIInvocation).
 func errResult(code errorCode, msg string) *mcpgo.CallToolResult {
 	msg = rewriteCLIHints(msg)
+	steps := errorRecoverySteps(code)
 	r := mcpgo.NewToolResultStructured(
-		map[string]any{"error_code": string(code), "message": msg},
+		map[string]any{"error_code": string(code), "message": msg, "retryable": false, "next_steps": steps},
 		fmt.Sprintf("[%s] %s", code, msg),
 	)
 	r.IsError = true
 	return r
+}
+
+// A generic failure may follow a mutation that reached the device. Only
+// explicitly read-only callers may recommend automatically repeating a call.
+func readOnlyErrResult(code errorCode, msg string) *mcpgo.CallToolResult {
+	r := errResult(code, msg)
+	if code == errCodeDeviceUnreachable || code == errCodeTimeout {
+		fields := r.StructuredContent.(map[string]any)
+		fields["retryable"] = true
+		fields["retry_after_ms"] = 1000
+		fields["max_retries"] = 2
+	}
+	return r
+}
+
+func errorRecoverySteps(code errorCode) []string {
+	switch code {
+	case errCodeNotConnected:
+		return []string{"Call device_list, then device_connect with the intended device selector."}
+	case errCodeDeviceUnreachable, errCodeTimeout:
+		return []string{"Check the connection to the same device. Inspect the operation's state before repeating a command that changes it."}
+	case errCodeAuthRequired, errCodeRPCIdentityDenied:
+		return []string{"Check the active account and device organization. Sign in with the authorized account before retrying."}
+	case errCodeEntitlementDenied, errCodeDenied, errCodeConfirmationRequired:
+		return []string{"Resolve the reported permission or confirmation requirement before retrying. Do not weaken device identity checks."}
+	case errCodeInvalidArgument:
+		return []string{"Correct the arguments using this tool's schema before retrying."}
+	case errCodeMultipleSessions:
+		return []string{"Select the intended account or session explicitly before retrying."}
+	case errCodeUnsupported:
+		return []string{"Check the device capabilities and CLI/Agent versions before choosing a supported operation."}
+	case errCodeCancelled:
+		return []string{"The operation was cancelled. Resume only when requested."}
+	default:
+		return []string{"Inspect the reported error and current device/app state before retrying."}
+	}
 }
 
 func errResultf(code errorCode, format string, a ...any) *mcpgo.CallToolResult {
@@ -59,8 +96,12 @@ func codeFromGRPC(err error) errorCode {
 		return errCodeInternal
 	}
 	switch st.Code() {
-	case codes.Unavailable, codes.DeadlineExceeded:
+	case codes.Unavailable:
 		return errCodeDeviceUnreachable
+	case codes.DeadlineExceeded:
+		return errCodeTimeout
+	case codes.Canceled:
+		return errCodeCancelled
 	case codes.PermissionDenied:
 		if rpcauth.IsIdentityDenied(err) {
 			return errCodeRPCIdentityDenied

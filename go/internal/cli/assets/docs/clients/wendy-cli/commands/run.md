@@ -696,6 +696,27 @@ environment, files, configuration, and restart policy. Unchanged running command
 remain running. Host hooks and browser opening wait for readiness.
 
 
+## Diagnosing a failed run
+
+Failures identify the current run phase when available. Before a local image
+build, Wendy reports independent host disk, device disk, and applicable Docker
+Buildx problems together. Existing project, target, and builder-specific checks
+still apply. The no-build path does not require build tools.
+
+If an attached output stream fails after the device confirmed app start, Wendy
+makes a bounded, read-only app-state check. It distinguishes a running app, a
+confirmed crash, a clean exit, and an unknown or replaced app. A running app is
+left running; use the suggested `wendy device logs --app <app>` command with the
+same device to reconnect. The stream failure still exits nonzero and preserves
+its typed cause. A failed state check is not evidence of a crash.
+
+On an attached run failure, Wendy saves up to the last 32 KiB of stdout and
+32 KiB of stderr in a private local file and prints its path. The human view
+also repeats up to eight recent stderr lines. This is a bounded tail, not a
+complete recording. Cancellation does not create this file. Build failures
+continue to use the existing build summary and full build log. Runtime output
+is not uploaded as analytics.
+
 ## Diagnosing an interrupted log stream
 
 Quiet log subscriptions receive an empty transport heartbeat every 15 seconds.
