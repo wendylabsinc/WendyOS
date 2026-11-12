@@ -3207,7 +3207,7 @@
       "package": "priority",
       "status": "partial",
       "audit_finding": "The change adjusts SwiftUI menu hit areas without a regression test. The inspected workflows do not build or test this go/macos app target.",
-      "required_follow_up": "Shared menu geometry is covered. Add edge activation at the affected call sites, including the macOS menu action, before claiming every menu regression is closed.",
+      "required_follow_up": "Shared geometry is covered. Coordinate-driven macOS app-table and simulator-header tests plus an icon-only negative control are added but not yet executed. Verify those checks, then cover the remaining actual iOS/macOS call sites before closing this entry.",
       "evidence": [
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
@@ -3217,6 +3217,13 @@
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
+        },
+        {
+          "files": [
+            "go/macos/MenuUITests/Tests/MenuActivationTests.swift",
+            ".github/scripts/test-native-menu.sh"
+          ],
+          "result": "Added six macOS UI cases for production table/header layouts, exact action outcomes, long-name narrow layouts and busy states. The test source type-checks with Swift 6. UI execution and the required mutation check remain pending; no entry closure is claimed."
         }
       ]
     },

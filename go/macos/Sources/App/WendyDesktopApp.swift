@@ -1,7 +1,9 @@
 import SwiftUI
 import AppKit
 
+#if !WENDY_MENU_UI_TESTS
 @main
+#endif
 struct WendyDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()

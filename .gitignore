@@ -80,5 +80,8 @@ web-client/release/
 # Agent-generated design specs; keep out of git
 /specs/
 
+# Generated native UI regression project.
+/go/macos/WendyMenuUI.xcodeproj/
+
 # On-device benchmark build inputs (stage-on-device.sh)
 evals/agent-experience/.stage/

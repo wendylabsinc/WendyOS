@@ -153,13 +153,17 @@ final class SimulatorClient: Sendable {
     @Published var recovery: WDSimulatorRecovery = WDSimRecoveryNone
     @Published var recoveryTarget: LocalSimulator?
     private let client = SimulatorClient.shared
+    private let listSimulators: () async throws -> [LocalSimulator]
+    init(listSimulators: @escaping () async throws -> [LocalSimulator] = { try await SimulatorClient.shared.list() }) {
+        self.listSimulators = listSimulators
+    }
     var selected: LocalSimulator? { items.first { $0.id == selection } }
     func refresh() async {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
         do {
-            items = try await client.list()
+            items = try await listSimulators()
             if !items.contains(where: { $0.id == selection }) { selection = items.first?.id }
         } catch { self.error = error.localizedDescription }
     }
