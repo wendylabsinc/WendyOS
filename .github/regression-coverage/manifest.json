@@ -3263,7 +3263,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1859",
       "title": "agent: clear the explicit hostname on a config-partition rename",
       "package": "priority",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The implementation deletes the explicit hostname override when applying a config-partition name. Current apply tests check name validity and stub the name application, without asserting removal of the old override.",
       "required_follow_up": "Persistence is covered. Restart the agent/name-advertising path and verify the effective hostname and mDNS name, including a stale override that could not be removed.",
       "evidence": [
@@ -3275,6 +3275,10 @@
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43206058751",
           "result": "Priority PR required CI passed. The explicit remaining behavior described in required_follow_up still needs coverage."
+        },
+        {
+          "path": "go/internal/agent/configpartition/device_name_restart_linux_test.go",
+          "result": "Added real hostname/Avahi wire assertions across a fresh boot-path process using pinned WendyOS-Builder scripts, isolated mount/UTS/network/PID namespaces and a separate DNS-probe network namespace. Covers successful removal, EBUSY removal failure, retained config request and successful retry. Product fix returns the removal error before publishing a mismatched name. Portable assertion failed before fix; full configpartition tests passed on macOS and unprivileged Linux. Required namespace integration remains pending CI."
         }
       ]
     },

@@ -283,6 +283,34 @@ jobs:
           sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
           grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
 
+  hostname-restart:
+    name: Hostname and mDNS restart
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: wendylabsinc/WendyOS-Builder
+          ref: 954d4e8680c3e5ef6c5fc7b6179902149cebd830
+          path: .ci/hostname-builder
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: hostname-restart
+      - name: Install namespace and advertisement tools
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y avahi-daemon iproute2 util-linux libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Compile the actual rename and startup paths
+        run: go test -c -o "$RUNNER_TEMP/hostname.test" ./go/internal/agent/configpartition
+      - name: Require hostname and wire advertisement after process restart
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo .github/scripts/test-hostname-restart.sh "$RUNNER_TEMP/hostname.test" "$PWD/.ci/hostname-builder" | tee "$RUNNER_TEMP/hostname-restart.log"
+          grep -q '^--- PASS: TestDeviceNameRestartIntegration ' "$RUNNER_TEMP/hostname-restart.log"
+
   darwin-install-host:
     name: macOS install safety
     runs-on: macos-15
@@ -603,7 +631,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, plugin-launcher]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, hostname-restart, plugin-launcher]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -622,6 +650,7 @@ jobs:
           NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
           AUTOMATION_RESULT: ${{ needs.automation-regressions.result }}
           DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
+          HOSTNAME_RESTART_RESULT: ${{ needs.hostname-restart.result }}
           LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
           DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
           PLUGIN_LAUNCHER_RESULT: ${{ needs.plugin-launcher.result }}
@@ -644,6 +673,7 @@ jobs:
           test "$NATIVE_APP_RESULT" = success
           test "$AUTOMATION_RESULT" = success
           test "$DEPENDENCY_SECURITY_RESULT" = success
+          test "$HOSTNAME_RESTART_RESULT" = success
           test "$LINUX_INSTALL_RESULT" = success
           test "$DARWIN_INSTALL_RESULT" = success
           test "$PLUGIN_LAUNCHER_RESULT" = success

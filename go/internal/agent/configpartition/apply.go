@@ -481,6 +481,9 @@ func persistDeviceName(logger *zap.Logger, root, name string) error {
 	} else if !os.IsNotExist(err) {
 		logger.Warn("Could not clear explicit hostname; it will keep overriding the device name",
 			zap.String("path", explicitHostnamePath), zap.Error(err))
+		// Do not publish the new device name while hostname generation still
+		// selects the old explicit value. A retry can finish once it is removable.
+		return fmt.Errorf("clearing explicit hostname before applying device name: %w", err)
 	}
 
 	return nil
