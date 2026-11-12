@@ -155,7 +155,9 @@ read/write-rate charts. Comparison produces `comparison.md` and
 `comparison.json`, using medians and showing min/max across repetitions.
 
 - CPU uses 100% for one occupied core and includes user/system breakdowns.
-  Completed workloads also report CPU seconds per operation.
+  Completed workloads also report CPU seconds per operation. Process CPU, like
+  process I/O, includes child processes the agent has waited for; a child counts
+  when it exits, and `children_cpu_seconds` shows that share.
 - Process RSS is separate from service memory, which includes charged file cache
   and kernel memory. Sampled peaks may miss brief spikes. The lifetime RSS
   high-water mark is retained but may predate the measurement window.
@@ -174,7 +176,9 @@ read/write-rate charts. Comparison produces `comparison.md` and
 
 The default policy requires both a 10% change and a metric-specific absolute
 floor, such as 0.5 CPU percentage points or 5 MiB RSS. These are starting values,
-not established Wendy performance budgets. Changes within tolerance are not
+not established Wendy performance budgets. A change smaller than one counter
+step, such as one CPU clock tick over the measured phase, is always within
+tolerance, so short profiles do not report tick noise. Changes within tolerance are not
 proof of equivalence; review repetition ranges and repeat noisy comparisons.
 
 Use `--policy policy.json` to replace the default metrics and thresholds:

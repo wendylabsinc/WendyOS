@@ -76,10 +76,14 @@ class Process:
         if self.cgroup and cgroup_path(self.pid) != self.cgroup:
             raise ValueError(f"PID {self.pid} changed cgroup")
         status = key_values((self.root / "status").read_text())
+        # Include reaped children (cutime/cstime), matching /proc/PID/io, so work
+        # moved into helper commands still counts. A child counts once reaped.
+        user, system = int(fields[11]) + int(fields[13]), int(fields[12]) + int(fields[14])
         data = {
-            "process.cpu_seconds": (int(fields[11]) + int(fields[12])) / self.ticks,
-            "process.user_seconds": int(fields[11]) / self.ticks,
-            "process.system_seconds": int(fields[12]) / self.ticks,
+            "process.cpu_seconds": (user + system) / self.ticks,
+            "process.children_cpu_seconds": (int(fields[13]) + int(fields[14])) / self.ticks,
+            "process.user_seconds": user / self.ticks,
+            "process.system_seconds": system / self.ticks,
         }
         for key, name in (("VmRSS", "rss_bytes"), ("VmHWM", "lifetime_peak_rss_bytes"),
                           ("VmSwap", "swap_bytes")):

@@ -234,6 +234,15 @@ def collect(args):
                         operations = workload_result.get("workload.completed_operations")
                         if operations:
                             run["metrics"]["agent.process.cpu_seconds_per_operation"] = run["metrics"]["agent.process.cpu_seconds.total"] / operations
+                        # Process CPU moves in whole clock ticks; comparison treats
+                        # a smaller change as noise.
+                        tick = 1 / os.sysconf("SC_CLK_TCK")
+                        run["resolution"] = {}
+                        for name in processes:
+                            run["resolution"][f"{name}.process.cpu_seconds.total"] = tick
+                            run["resolution"][f"{name}.process.cpu_seconds.percent_mean"] = 100 * tick / run["metrics"]["elapsed_seconds"]
+                        if operations:
+                            run["resolution"]["agent.process.cpu_seconds_per_operation"] = tick / operations
                         cooldown = wait_phase(profile["cooldown_seconds"], "cooldown")
                         if len(cooldown) > 1:
                             run["cooldown_metrics"] = summarize(cooldown)

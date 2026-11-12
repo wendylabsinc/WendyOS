@@ -1,5 +1,6 @@
 import http.server
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -68,6 +69,16 @@ class CompareTests(unittest.TestCase):
         result = compare(report((10, 10, 10)), candidate, {key: {"relative": .1, "absolute": 1024**2}})
         row = result["rows"][0]
         self.assertEqual((row["baseline"], row["candidate"], row["status"]), (0, 8 * 1024**2, "regression"))
+
+    def test_change_within_one_counter_step_is_noise(self):
+        # One 10 ms tick over 0.9 s is 1.11 CPU percentage points.
+        def ticks(values):
+            result = report(values)
+            for run in result["runs"]:
+                run["resolution"] = {"agent.process.cpu_seconds.percent_mean": 1.11}
+            return result
+        self.assertEqual(compare(ticks((0, 0)), ticks((0, 1.11)))["rows"][0]["status"], "within tolerance")
+        self.assertEqual(compare(ticks((0, 0)), ticks((2.22, 2.22)))["rows"][0]["status"], "regression")
 
     def test_invalid_policy(self):
         for policy in ({}, {"missing": {"relative": .1, "absolute": 1}},
@@ -161,6 +172,17 @@ class MetricsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reset"):
             summarize(samples)
 
+    @unittest.skipUnless(sys.platform == "linux", "reads /proc")
+    def test_process_cpu_includes_reaped_children(self):
+        # /proc/PID/io already includes reaped children; CPU must match it.
+        process = Process(os.getpid())
+        before = process.sample()
+        subprocess.run([sys.executable, "-c", "import time\nt = time.process_time()\nwhile time.process_time() - t < .3: pass"],
+                       check=True)
+        after = process.sample()
+        self.assertGreaterEqual(after["process.cpu_seconds"] - before["process.cpu_seconds"], .25)
+        self.assertGreaterEqual(after["process.children_cpu_seconds"] - before["process.children_cpu_seconds"], .25)
+
     def test_proc_stat_with_spaces_parentheses_and_pid_reuse(self):
         with tempfile.TemporaryDirectory() as directory:
             process = Process.__new__(Process)
@@ -213,6 +235,30 @@ class MetricsTests(unittest.TestCase):
     def test_gauge_mean_weights_irregular_samples(self):
         result = summarize([{"time": t, "values": {"rss_bytes": v}} for t, v in ((0, 0), (1, 10), (10, 10))])
         self.assertEqual(result["rss_bytes.mean"], 9.5)
+
+
+@unittest.skipUnless(sys.platform == "linux", "collection requires Linux")
+class CollectTests(unittest.TestCase):
+    def test_run_records_cpu_counter_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = {"schema": 1, "repetitions": 1, "sample_seconds": .1, "settle_seconds": 0,
+                       "cooldown_seconds": 0, "scenarios": [{"name": "idle", "kind": "idle", "seconds": .3}]}
+            (root / "profile.json").write_text(json.dumps(profile))
+            target = subprocess.Popen(["sleep", "30"])
+            try:
+                result = subprocess.run([sys.executable, str(HERE / "benchmark.py"), "run", "--pid", str(target.pid),
+                                         "--profile", str(root / "profile.json"), "--environment", "test",
+                                         "--revision", "test", "--output", str(root / "out")],
+                                        capture_output=True, text=True, timeout=30)
+            finally:
+                target.kill()
+                target.wait()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            run = json.loads((root / "out/report.json").read_text())["runs"][0]
+            tick = 1 / os.sysconf("SC_CLK_TCK")
+            self.assertAlmostEqual(run["resolution"]["agent.process.cpu_seconds.percent_mean"],
+                                   100 * tick / run["metrics"]["elapsed_seconds"])
 
 
 class WorkloadTests(unittest.TestCase):
