@@ -12,7 +12,7 @@ COPY worker.py review.py config.json entrypoint.py bootstrap.py governor.py reso
 COPY model/lease_runner.py /opt/worker/model/
 RUN protoc -I/opt/worker --python_out=/opt/worker /opt/worker/resource_stats.proto
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/state/home \
-    GOCACHE=/state/cache/build GOMODCACHE=/state/cache/mod \
-    WORK_ROOT=/work/source WORK_TMP=/work/tmp GOTOOLCHAIN=local
+    GOCACHE=/state/cache/build GOMODCACHE=/work/cache/mod \
+    WORK_ROOT=/work/source WORK_TMP=/work/tmp GOTOOLCHAIN=auto
 WORKDIR /state
 ENTRYPOINT ["/usr/bin/tini", "--", "python3", "/opt/worker/entrypoint.py"]

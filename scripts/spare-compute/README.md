@@ -111,10 +111,14 @@ no admin socket. Their monitors run as root, but launch workloads with UID/GID
 Only the root supervisor writes permission files; workload users cannot renew
 them. The monitors require private PID namespaces and must not use host PID mode.
 
-Wendy persistent volumes store source snapshots, reports, corpus inputs, build
-caches and model weights. Temporary Go executables and mutation work directories
-live in `/work` on the container filesystem, because Wendy persistence mounts
-are `noexec`. Inference JIT caches also use `/work`; only model data stays
+Wendy persistent volumes store source snapshots, reports, corpus inputs, the Go
+build cache and model weights. Temporary Go executables, mutation work directories
+and the Go module cache live in `/work` on the container filesystem, because Wendy
+persistence mounts are `noexec` and Go runs downloaded toolchains from its module
+cache. When `main` requires a newer Go release than the image provides, Go
+downloads that release, verified against the Go checksum database, instead of
+failing every job. Modules download again after the container is recreated.
+Inference JIT caches also use `/work`; only model data stays
 in the persistent model volume. Stopping a process discards its RAM while preserving reports and
 corpora. The next attempt extracts pristine source.
 

@@ -236,8 +236,11 @@ def main():
                                    os.environ.get("MODEL_BASE_URL")], sort_keys=True).encode()).hexdigest()
     checkpoint = state / "checkpoint.json"
     progress = load_progress(checkpoint, key, revision)
+    # The image keeps the module cache on an executable filesystem: Go runs the
+    # toolchains that GOTOOLCHAIN=auto downloads from there.
     env = {**os.environ, "GOMAXPROCS": str(cpus), "GOFLAGS": f"-p={cpus}",
-           "GOCACHE": str(state / "cache/build"), "GOMODCACHE": str(state / "cache/mod"),
+           "GOCACHE": str(state / "cache/build"),
+           "GOMODCACHE": os.environ.get("GOMODCACHE", str(state / "cache/mod")),
            "GOTMPDIR": str(scratch), "TMPDIR": str(scratch),
            "HOME": str(state / "home"), "SOURCE_REVISION": revision}
     print(json.dumps({"event": "started", "revision": revision, "shard": [index, count]}), flush=True)
