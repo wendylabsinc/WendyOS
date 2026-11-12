@@ -630,10 +630,8 @@ jobs:
       - name: Install camera and GStreamer fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev alsa-utils pipewire-bin libspa-0.2-modules
-          if ! modinfo snd-aloop >/dev/null 2>&1; then
-            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-          fi
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools strace libasound2-dev libusb-1.0-0-dev libegl-dev libgles-dev alsa-utils pipewire-bin libspa-0.2-modules patch libelf-dev gcc-13
+          python3 .github/scripts/prepare-hosted-audio-modules.py
           modinfo snd-aloop
           gst-inspect-1.0 fakesrc
           gst-inspect-1.0 fdsink
