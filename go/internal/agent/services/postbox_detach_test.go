@@ -71,9 +71,12 @@ func TestPostboxDetachKeepsTheAppAndEndsTheDeployment(t *testing.T) {
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatal(err)
 	}
-	if len(disk.Assignments) != 0 || !slices.Equal(disk.Detached, []string{"web"}) || len(disk.Removals) != 0 {
-		t.Fatalf("on disk: assignments %v, detached %v, removals %v: want no key material left and the app detached",
-			disk.Assignments, disk.Detached, disk.Removals)
+	kept := &cloudpbv2.DeviceAssignment{}
+	if err := proto.Unmarshal(disk.Detached["web"], kept); err != nil || len(disk.Assignments) != 0 || len(disk.Removals) != 0 {
+		t.Fatalf("on disk: assignments %v, detached %v, removals %v: want the app detached and nothing held", disk.Assignments, disk.Detached, disk.Removals)
+	}
+	if kept.GetDeviceWrap() != nil || kept.GetDeploymentKeyId() != "" || kept.GetAppReleaseId() != a.GetAppReleaseId() || kept.GetConfigJson() != a.GetConfigJson() {
+		t.Fatalf("kept statement %v: want the running release and configuration, and no key material", kept)
 	}
 
 	rec.removed = nil
@@ -260,8 +263,91 @@ func TestPostboxSendsAcceptedOperations(t *testing.T) {
 		t.Fatal("no pull")
 	}
 	for _, ops := range got {
-		if !slices.Equal(ops, postboxAccepted) || !slices.Contains(ops, "wendycloud.v2.DeploymentService/DetachDevice") {
-			t.Fatalf("accepted_operations %v, want %v with DetachDevice", ops, postboxAccepted)
+		if !slices.Equal(ops, postboxAccepted) || !slices.Contains(ops, "wendycloud.v2.DeploymentService/DetachDevice") ||
+			slices.Contains(ops, "wendycloud.v2.DeploymentService/CreateDeployment") || len(ops) != len(postboxOperations)-1 {
+			t.Fatalf("accepted_operations %v: want every applied operation, DetachDevice included, and not CreateDeployment", ops)
 		}
+	}
+}
+
+// Verification defect 1: the detached state ends when a new deployment of
+// the app is accepted. A new deployment whose start fails after replacing
+// the direct run puts the detached app back (its last applied statement);
+// unassigning that deployment then removes the app as any removal does.
+func TestPostboxFailedReplacementAfterDetach(t *testing.T) {
+	f, rec, a := runningRelease(t)
+	dep := a.GetDeploymentId()
+	f.detach(detachOp, f.detachRequest(dep, "web"), dep, "")
+	f.cycle()
+	rec.startErr = failMode("b")
+	next := proto.Clone(a).(*cloudpbv2.DeviceAssignment)
+	next.DeploymentId, next.Revision, next.ConfigJson = uuid.NewString(), 1, `{"MODE":"b"}`
+	f.assignEntry(next)
+	f.cycle()
+	f.p.waitPulls()
+	if len(f.p.snapshot().Detached) != 0 {
+		t.Fatalf("detached %v: want the detached state ended by the accepted statement", f.p.snapshot().Detached)
+	}
+	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED ||
+		!slices.Equal(envs(rec.starts[len(rec.starts)-2:]), []string{"MODE=b", "MODE=a"}) || rec.app == nil || !rec.app.running {
+		t.Fatalf("outcome %+v, starts %v, app %+v: want the failed start reported and the detached app put back running", o, envs(rec.starts), rec.app)
+	}
+	rec.removed = nil
+	f.unassignEntry(next.GetDeploymentId())
+	f.cycle()
+	if !slices.EqualFunc(rec.removed, []removal{{app: "web"}}, removal.equal) {
+		t.Fatalf("removed %v: want the removal to remove the app and its releases", rec.removed)
+	}
+}
+
+// startGate holds the first start until ctx ends or a moment passes, as a
+// create and start in progress does; a start on an ended ctx fails after
+// it replaced the container, as a cut swap does.
+type startGate struct {
+	*importRecorder
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (g *startGate) StartRelease(ctx context.Context, s ReleaseStart) (bool, error) {
+	first := false
+	g.once.Do(func() { first = true; close(g.entered) })
+	if first {
+		select {
+		case <-ctx.Done():
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	if ctx.Err() != nil {
+		g.app = nil
+		return true, ctx.Err()
+	}
+	return g.importRecorder.StartRelease(ctx, s)
+}
+
+// Verification defect 2: a detach that lands while a start is in progress
+// lets the swap end first, then keeps the app that runs.
+func TestPostboxDetachDuringAStartKeepsTheApp(t *testing.T) {
+	f, rec, a := runningRelease(t)
+	gate := &startGate{importRecorder: rec, entered: make(chan struct{})}
+	f.p.control = gate
+	next := proto.Clone(a).(*cloudpbv2.DeviceAssignment)
+	next.Revision, next.ConfigJson = 2, `{"MODE":"b"}`
+	f.assignEntry(next)
+	f.cycleWithin(5 * time.Second)
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the revision's start never began")
+	}
+	dep := a.GetDeploymentId()
+	f.detach(detachOp, f.detachRequest(dep, "web"), dep, "")
+	f.cycle()
+	kept := &cloudpbv2.DeviceAssignment{}
+	if err := proto.Unmarshal(f.p.snapshot().Detached["web"], kept); err != nil || rec.app == nil || !rec.app.running || kept.GetConfigJson() != `{"MODE":"b"}` {
+		t.Fatalf("app %+v, kept %v: want the started revision kept running and recorded", rec.app, kept)
+	}
+	if !slices.EqualFunc(rec.removed[len(rec.removed)-1:], []removal{{app: "web", prune: true}}, removal.equal) {
+		t.Fatalf("removed %v: want only a prune", rec.removed)
 	}
 }

@@ -153,10 +153,11 @@ type postboxState struct {
 	// Marks are the deployment revision marks (deployment_contract.go), by
 	// deployment id.
 	Marks map[string]*postboxMark `json:"marks,omitempty"`
-	// Detached are apps a detach left running as direct runs: a removal of
-	// one only prunes images no container uses, until a new deployment of
-	// the app is applied (applyDetach).
-	Detached []string `json:"detached,omitempty"`
+	// Detached are the apps a detach left running as direct runs, each with
+	// the statement it runs, stripped of every key (applyDetach). A removal
+	// of one only prunes images no container uses, until a new deployment of
+	// the app is accepted.
+	Detached map[string][]byte `json:"detached,omitempty"`
 }
 
 type postboxPending struct {
@@ -231,9 +232,13 @@ var postboxOperations = map[string]string{
 }
 
 // postboxAccepted is sent with every pull (PullChangesRequest.
-// accepted_operations): descriptive only, so cloud can tell an agent that
+// accepted_operations): the operations this agent applies, so not
+// CreateDeployment, which it always refuses (registry material comes per
+// device assignment). Descriptive only, so cloud can tell an agent that
 // predates an operation from one that refused an entry. It grants nothing.
-var postboxAccepted = slices.Sorted(maps.Keys(postboxOperations))
+var postboxAccepted = slices.DeleteFunc(slices.Sorted(maps.Keys(postboxOperations)), func(op string) bool {
+	return op == strings.TrimPrefix(cloudpbv2.DeploymentService_CreateDeployment_FullMethodName, "/")
+})
 
 // NewPostbox builds the client; it pulls nothing until UpdateIdentity supplies
 // an enrolled identity (the agent passes its boot identity straight away).

@@ -315,6 +315,17 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 		default:
 			held.Previous = prev.Previous
 		}
+		if kept, ok := st.Detached[app]; ok {
+			// A new deployment of a detached app replaces the direct run from
+			// here on: removals act as usual, and if its start fails after
+			// replacing the direct run, that app is put back as any last
+			// applied statement is.
+			if held.Previous == nil {
+				held.Previous = kept
+			}
+			st.Detached = maps.Clone(st.Detached)
+			delete(st.Detached, app)
+		}
 		st.Assignments = maps.Clone(st.Assignments) // copy on write: a pull's commit reads it
 		st.Marks = maps.Clone(st.Marks)
 		st.Assignments[dep] = held
@@ -324,7 +335,6 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 			markRemoved(st, from, r.GetReplacesRevision(), now)
 		}
 		if absent {
-			undetach(st, app)
 			queueRemoval(st, app)
 		}
 		markCommitted(st, entryID)
@@ -424,31 +434,43 @@ func (p *Postbox) applyUnassign(ctx context.Context, entryID int64, r *cloudpbv2
 }
 
 // applyDetach ends a deployment on this device without removing its app
-// (DetachDeviceRequest, service-protos #193). As one state change on disk:
-// the maximum revision becomes the deployment's removal mark, held or not,
-// exactly as a terminal removal, so whichever of the two applies first wins
-// and the other is a duplicate that deletes nothing; the held statement goes
-// with its device wrap of the deployment key, which drops the key material
-// and the pull right; and the app is recorded as detached. The container,
-// its release image, its configuration and run state are left as they are,
-// and so is its restart behaviour (the container's own restart policy and
-// stop label). Only release images no container was created from are then
-// pruned: an import the stopped pull never started leaves nothing behind.
-// After a terminal removal or another detach nothing is held, so it only
-// re-records the mark: a duplicate that deletes nothing.
+// (DetachDeviceRequest, service-protos #193). A pull of the deployment stops
+// first; a start it had begun runs to its end (started, or the last applied
+// app put back), so the device holds an app it applied, never neither. Then,
+// as one state change on disk: the maximum revision becomes the deployment's
+// removal mark, held or not, exactly as a terminal removal, so whichever of
+// the two applies first wins and the later one deletes nothing; the held
+// statement goes with its device wrap of the deployment key, which drops the
+// key material and the pull right; and the app is recorded as detached,
+// with the statement it runs stripped of every key (detachedStatement).
+// The container, its image, configuration, run state and restart
+// behaviour (its own restart policy and stop label) are left as they are.
+// Only release images no container was created from are then pruned.
 // From then on the app is a direct run: not held, so a new deployment of
-// the app replaces it.
+// the app replaces it (applyAssignment).
 func (p *Postbox) applyDetach(ctx context.Context, entryID int64, r *cloudpbv2.DetachDeviceRequest) (string, cloudpbv2.ApplyOutcome, string, error) {
 	dep := r.GetDeploymentId()
-	p.mu.Lock()
-	held := p.state.Assignments[dep]
-	p.mu.Unlock()
+	held := p.heldStatement(dep)
 	if held != nil && held.AppID != r.GetAppId() {
 		return refused(held.AppID, notForThisDevice("app", "detach names app %q; deployment %q here is app %q", r.GetAppId(), dep, held.AppID))
 	}
 	app := ""
+	var kept []byte
 	if held != nil {
 		app = held.AppID
+		p.stopPull(dep)
+		held = p.heldStatement(dep) // as the pull left it
+		a := &cloudpbv2.DeviceAssignment{}
+		runs := proto.Unmarshal(held.Assignment, a) == nil && p.runsStatement(p.control.AppState(ctx, app), a)
+		kept = detachedStatement(held, runs)
+		if !held.Pulled && !runs {
+			// The wire carries one outcome per app, and the detach's is the
+			// newer: the interrupted Assign's end is recorded here.
+			p.logger.Info("registry pull superseded by a detach", zap.String("audit", "postbox"),
+				zap.Int64("entry_id", held.EntryID), zap.String("correlation_id", held.CorrelationID),
+				zap.String("deployment_id", dep), zap.String("app_id", app),
+				zap.String("outcome", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_SUPERSEDED.String()))
+		}
 	}
 	now := p.trustedNow()
 	if err := p.commit(func(st *postboxState) {
@@ -459,8 +481,12 @@ func (p *Postbox) applyDetach(ctx context.Context, entryID int64, r *cloudpbv2.D
 		if app != "" {
 			// An applied ABSENT revision is what it last applied: its removal
 			// goes on, nothing is kept.
-			if held.DesiredState != cloudpbv2.Running_ABSENT.String() && !slices.Contains(st.Detached, app) {
-				st.Detached = append(slices.Clone(st.Detached), app)
+			if held.DesiredState != cloudpbv2.Running_ABSENT.String() {
+				st.Detached = maps.Clone(st.Detached)
+				if st.Detached == nil {
+					st.Detached = map[string][]byte{}
+				}
+				st.Detached[app] = kept
 			}
 			queueRemoval(st, app) // the prune below, retried after a crash
 		}
@@ -468,17 +494,8 @@ func (p *Postbox) applyDetach(ctx context.Context, entryID int64, r *cloudpbv2.D
 	}); err != nil {
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "save", err
 	}
-	p.stopPull(dep)
 	if app == "" {
 		return "", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
-	}
-	if !held.Pulled {
-		// The wire carries one outcome per app, and the detach's is the newer:
-		// the interrupted Assign's end is recorded here.
-		p.logger.Info("registry pull superseded by a detach", zap.String("audit", "postbox"),
-			zap.Int64("entry_id", held.EntryID), zap.String("correlation_id", held.CorrelationID),
-			zap.String("deployment_id", dep), zap.String("app_id", app),
-			zap.String("outcome", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_SUPERSEDED.String()))
 	}
 	if err := p.removeReleases(ctx, app); err != nil {
 		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err
@@ -486,10 +503,31 @@ func (p *Postbox) applyDetach(ctx context.Context, entryID int64, r *cloudpbv2.D
 	return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 }
 
-// undetach ends app's direct run from a detach once a new deployment of it
-// is applied: from then on its removals act as usual.
-func undetach(st *postboxState, app string) {
-	if slices.Contains(st.Detached, app) {
-		st.Detached = slices.DeleteFunc(slices.Clone(st.Detached), func(a string) bool { return a == app })
+func (p *Postbox) heldStatement(dep string) *postboxAssignment {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.state.Assignments[dep]
+}
+
+// detachedStatement is what a detached app runs: the held statement when it
+// runs (or was applied), else the last applied one before it; nil for none.
+// Only what a put-back needs is kept (app, release, signed digest,
+// configuration, desired state), never the key id or the device wrap.
+func detachedStatement(held *postboxAssignment, runs bool) []byte {
+	raw := held.Previous
+	if runs || held.Applied {
+		raw = held.Assignment
 	}
+	a := &cloudpbv2.DeviceAssignment{}
+	if len(raw) == 0 || proto.Unmarshal(raw, a) != nil {
+		return nil
+	}
+	out, err := proto.Marshal(&cloudpbv2.DeviceAssignment{
+		DeploymentId: a.GetDeploymentId(), AppId: a.GetAppId(), AppReleaseId: a.GetAppReleaseId(),
+		ManifestDigest: a.GetManifestDigest(), ConfigJson: a.GetConfigJson(), DesiredState: a.GetDesiredState(),
+	})
+	if err != nil {
+		return nil
+	}
+	return out
 }
