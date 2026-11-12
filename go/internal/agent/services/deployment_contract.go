@@ -434,18 +434,17 @@ func (p *Postbox) applyUnassign(ctx context.Context, entryID int64, r *cloudpbv2
 // and so is its restart behaviour (the container's own restart policy and
 // stop label). Only release images no container was created from are then
 // pruned: an import the stopped pull never started leaves nothing behind.
+// After a terminal removal or another detach nothing is held, so it only
+// re-records the mark: a duplicate that deletes nothing.
 // From then on the app is a direct run: not held, so a new deployment of
 // the app replaces it.
 func (p *Postbox) applyDetach(ctx context.Context, entryID int64, r *cloudpbv2.DetachDeviceRequest) (string, cloudpbv2.ApplyOutcome, string, error) {
 	dep := r.GetDeploymentId()
 	p.mu.Lock()
-	held, m := p.state.Assignments[dep], p.state.Marks[dep]
+	held := p.state.Assignments[dep]
 	p.mu.Unlock()
 	if held != nil && held.AppID != r.GetAppId() {
 		return refused(held.AppID, notForThisDevice("app", "detach names app %q; deployment %q here is app %q", r.GetAppId(), dep, held.AppID))
-	}
-	if m != nil && m.Removed && m.Revision == maxRevision {
-		return "", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil // already removed or detached
 	}
 	app := ""
 	if held != nil {
