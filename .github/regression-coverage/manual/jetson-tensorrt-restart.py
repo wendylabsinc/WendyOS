@@ -186,7 +186,8 @@ Agent restart, online reboot, offline reboot
 7. Obtain the owner's approval for the reserved board's Agent restart. At its
    local console run `sudo systemctl restart wendy-agent`. Do not redeploy the
    campaign, change the model, remove cache files or alter the stored plan.
-   Repeat steps 4-6 with labels agent-restart, allowing at most five minutes to
+   Repeat only the inspect, cache/console and episode observations from steps 4-6,
+   with labels agent-restart. Do not repeat deployment. Allow at most five minutes to
    return to TensorRT, then observe healthy output for a full minute. Require a
    new Agent/worker PID or start time but the SAME boot ID, campaign revision,
    engine key, plan/record hashes and mtimes. Require engine.cached true and no
@@ -194,7 +195,8 @@ Agent restart, online reboot, offline reboot
    any worker exit/retry loop or rebuild fails the cached-restart case.
 8. Obtain approval for a reboot with the WAN still connected, then run
    `sudo systemctl reboot` at the console. Wait up to five minutes for this exact
-   serial/selector to return. Repeat steps 4-6 with online-reboot labels, checking
+   serial/selector to return. Repeat only the inspect, cache/console and episode
+   observations from steps 4-6, without deployment, using online-reboot labels. Check
    a NEW boot ID, new Agent/worker start times, unchanged campaign revision,
    engine key, plan/record hashes/mtimes, cached true, successful parity and fresh
    GPU predictions. Inspect every ten seconds for five minutes after reconnect.

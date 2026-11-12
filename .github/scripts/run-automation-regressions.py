@@ -28,6 +28,8 @@ SUITES = (
     "gpu_fixture_selection_test.py",
     "gpu_hardware_test.py",
     "npu_hardware_test.py",
+    "tensorrt_restart_test.py",
+    "oci_retry_test.py",
     "integration-discover_test.py",
 )
 
