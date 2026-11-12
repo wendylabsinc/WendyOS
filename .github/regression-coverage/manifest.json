@@ -1372,10 +1372,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2577",
       "title": "[WN3] Reach Lite services and SensorLink over native mesh connections",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Protocol/mesh tests cover unsupported stream selectors and flow limits. Shared admission locks under sustained TLS UDP backpressure need explicit execution at the transport boundary.",
-      "required_follow_up": "Race a stalled UDP consumer with new admissions and assert unrelated sessions still make progress.",
-      "evidence": []
+      "required_follow_up": "Reconcile the required real TLS/UDP admission test and synchronous-write control at the final PR head. No physical BLE throughput claim is made.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/meshsession/datagram_tls_admission_test.go",
+            ".github/scripts/test-tls-udp-admission.sh"
+          ],
+          "result": "Production TLS client/server, registry, UDP manager and real echo applications prove unrelated/fresh sessions, owner replacement, revocation and recovery progress while one accepted TLS socket write is paused. Twenty race-enabled runs passed in ordinary Linux Docker; direct synchronous TLS writes fail the healthy-flow timeout. Required network-job execution is registered on the existing runner and remains pending."
+        }
+      ]
     },
     {
       "key": "2576",
