@@ -276,7 +276,7 @@ class ScenarioQuality(unittest.TestCase):
 
 
 class LabPairQuality(unittest.TestCase):
-    def run_pair(self, cleanup=True, status='failed'):
+    def run_pair(self, cleanup=True, status='failed', benchmark=1, comparison=1):
         from unittest import mock
         import run_suite
         self.tmp = tempfile.TemporaryDirectory()
@@ -286,9 +286,9 @@ class LabPairQuality(unittest.TestCase):
             destination.mkdir(parents=True)
             (destination / 'manifest.json').write_text('{}')
             (destination / 'results.jsonl').write_text(json.dumps({'cleanup_ok': cleanup, 'status': status})+'\n')
-            return mock.Mock(returncode=1)
+            return mock.Mock(returncode=benchmark)
         with mock.patch.object(run_suite.subprocess, 'run', side_effect=execute) as run, \
-             mock.patch('compare.main', return_value=1) as compare:
+             mock.patch('compare.main', return_value=comparison) as compare:
             code = run_suite.run_pair('smoke', '/config', '/base', '/candidate', self.tmp.name)
         return code, run, compare
 
@@ -302,13 +302,22 @@ class LabPairQuality(unittest.TestCase):
         code, run, compare = self.run_pair(cleanup=False)
         self.assertEqual(run.call_count, 1)
         compare.assert_not_called()
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 4)
 
     def test_unverified_routing_prevents_next_treatment(self):
         code, run, compare = self.run_pair(status='mcp_unverified')
         self.assertEqual(run.call_count, 1)
         compare.assert_not_called()
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 4)
+
+    def test_lab_failure_is_not_reported_as_a_comparison_result(self):
+        # compare.py exits 2 for mismatched runs and 3 for insufficient evidence; a broken run must be neither.
+        for benchmark in (2, 3, -9):
+            code, run, compare = self.run_pair(benchmark=benchmark)
+            self.assertEqual(run.call_count, 1)
+            compare.assert_not_called()
+            self.assertEqual(code, 4)
+        self.assertEqual(self.run_pair(comparison=3)[0], 3)
 
 
 class TokenQuality(unittest.TestCase):

@@ -6,6 +6,9 @@ import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
+# run_pair returns compare.py's result (0 pass, 1 regression, 2 mismatched runs, 3 insufficient evidence)
+# or this, when a treatment could not be measured or the lab must be inspected first.
+LAB_FAILURE = 4
 
 
 def command(suite, config, wendy, treatment, output, repetitions=10, execute=False):
@@ -28,21 +31,23 @@ def run_pair(suite, config, baseline_root, candidate_root, output, repetitions=4
         code = subprocess.run(command(suite, config, root / "go/bin/wendy", root, destination,
                                       repetitions, execute=True), check=False).returncode
         if code not in (0, 1):
-            return code or 3
+            print(f"{side}: the benchmark exited {code}")
+            return LAB_FAILURE
         manifests = list(destination.glob("*/manifest.json"))
         if len(manifests) != 1:
             print(f"{side}: expected exactly one run manifest")
-            return 3
+            return LAB_FAILURE
         run = manifests[0].parent
         try:
             rows = [json.loads(line) for line in (run / "results.jsonl").read_text().splitlines()]
         except (OSError, ValueError):
-            return 3
+            print(f"{side}: results are missing or malformed")
+            return LAB_FAILURE
         if (run / "halt.json").exists() or any(r.get("cleanup_ok") is False or
                 r.get("status") in ("host_state_changed", "mcp_contaminated", "mcp_unverified", "interrupted")
                 for r in rows):
             print(f"{side}: lab state requires inspection; refusing another treatment")
-            return 3
+            return LAB_FAILURE
         runs.append(run)
     return compare.main(["--baseline", str(runs[0]), "--candidate", str(runs[1]),
                          "--output", str(Path(output) / "comparison")])

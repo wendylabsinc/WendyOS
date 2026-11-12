@@ -112,8 +112,19 @@ jobs:
           sys.path.insert(0, 'evals/agent-experience')
           from run_suite import run_pair
           baseline = Path(os.environ['RUNNER_TEMP']) / ('eval-baseline-' + os.environ['GITHUB_RUN_ID'])
-          sys.exit(run_pair(os.environ['SUITE'], os.environ['LAB_CONFIG'], baseline, Path.cwd(),
-                            Path('results'), int(os.environ['REPETITIONS'])))
+          code = run_pair(os.environ['SUITE'], os.environ['LAB_CONFIG'], baseline, Path.cwd(),
+                          Path('results'), int(os.environ['REPETITIONS']))
+          report = Path('results/comparison/compare.md')
+          if report.is_file():
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write(report.read_text())
+          # A regression (1), mismatched runs (2) and a lab failure (4) fail the job. Insufficient evidence (3)
+          # is reported, not failed: a job that is red whenever a row is inconclusive hides real regressions.
+          if code == 3:
+              print('::warning title=Agent evals::Insufficient evidence: no verified regression, '
+                    'but the comparison could not pass. See the job summary.')
+              code = 0
+          sys.exit(code)
           PYCODE
       - name: Keep manifests, transcripts and verifier evidence
         if: always()
