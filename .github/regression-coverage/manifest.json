@@ -2769,20 +2769,38 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2504",
       "title": "fix(ci): build Linux packages on ubuntu-24.04",
       "package": "11",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Release packaging now runs on Ubuntu 24.04. Building packages checks some compatibility, but does not prove clean install and upgrade behavior on the supported target distributions.",
-      "required_follow_up": "Install and upgrade the produced packages in the supported distro matrix.",
-      "evidence": []
+      "required_follow_up": "Retain real native package installation/upgrade coverage and verify Artifact Registry upload plus repository consumption for the exact candidate hashes in an authorized release context. Local package transactions do not prove external repository acceptance.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/build-linux-packages.sh",
+            ".github/scripts/test-installed-linux-packages.py",
+            ".github/scripts/run-installed-linux-package-guests.py"
+          ],
+          "result": "Audit correction: 2504 changed the packaging host to avoid Artifact Registry RPM rejection, not a glibc ABI problem. Fix 2521 already forced RPM format 4 and asserted the six-byte produced-artifact lead. Shared recipe retains that assertion and new artifact tests inspect actual packages. External GCP acceptance remains unverified."
+        }
+      ]
     },
     {
       "key": "2521",
       "url": "https://github.com/wendylabsinc/wendyos/pull/2521",
       "title": "fix(ci): build RPM v4 packages for Artifact Registry",
       "package": "11",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "The packaging workflow requests RPM v4. No artifact-format assertion or Artifact Registry acceptance test was found.",
-      "required_follow_up": "Inspect the resulting RPM format and test repository upload plus install in a disposable release job.",
-      "evidence": []
+      "required_follow_up": "Retain real native package installation/upgrade coverage and verify Artifact Registry upload plus repository consumption for the exact candidate hashes in an authorized release context. Local package transactions do not prove external repository acceptance.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/build-linux-packages.sh",
+            ".github/scripts/test-installed-linux-packages.py",
+            ".github/scripts/run-installed-linux-package-guests.py"
+          ],
+          "result": "Audit correction: 2504 changed the packaging host to avoid Artifact Registry RPM rejection, not a glibc ABI problem. Fix 2521 already forced RPM format 4 and asserted the six-byte produced-artifact lead. Shared recipe retains that assertion and new artifact tests inspect actual packages. External GCP acceptance remains unverified."
+        }
+      ]
     },
     {
       "key": "2353",
@@ -2806,10 +2824,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2352",
       "title": "Keep wendy-agent running after an apt or dnf upgrade",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Package-script tests mock the service manager and cover upgrade script behavior. They do not install and upgrade the actual DEB/RPM in a running service-manager environment.",
-      "required_follow_up": "Run package upgrade tests and assert the agent PID/service returns to healthy state.",
-      "evidence": []
+      "required_follow_up": "Require actual installed Agent health and successful normal/control upgrades in fresh booted Ubuntu 22.04, Ubuntu 24.04 and Fedora 44 guests. Verify the current candidate packages, configuration retention and stopped service after removal. Native arm64 release execution remains separate from the amd64 PR gate.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-installed-linux-packages.py",
+            ".github/scripts/run-installed-linux-package-guests.py",
+            ".github/scripts/test-linux-packages-pr.sh",
+            ".github/scripts/installed_linux_packages_test.py",
+            ".github/scripts/installed_linux_package_guests_test.py"
+          ],
+          "result": "Ten artifact tests and nine guest ownership/deadline checks pass. Exact shared release packaging produced all four packages, and dependency provisioning passed for all three pinned distributions. Actual hosted static CLI compilation and booted systemd Agent transactions remain pending; inert local packaging tests are not runtime proof."
+        }
+      ]
     },
     {
       "key": "2251",
@@ -3222,10 +3251,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2485",
       "title": "Add WendyNotify push notification example",
       "package": "14",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Swift example tests cover notification errors and HTML escaping. Example tests are outside the standard WendyAgentCore suite, and the per-run link/token design changed during the PR.",
-      "required_follow_up": "Run the example tests in CI and assert current access-control behavior without leaking a token in page content or logs.",
-      "evidence": []
+      "required_follow_up": "Run all WendyNotify example tests in the existing macOS job, including live loopback HTTP and private Unix-socket notification RPC, intentional anonymous access, service refusal/history and credential exclusion. No real push delivery is required for this access-control regression.",
+      "evidence": [
+        {
+          "tests": [
+            "Examples/WendyNotify/Tests/WendyNotifyTests/RequestPathTests.swift",
+            ".github/workflows/go-tests.yml"
+          ],
+          "result": "All eight Swift example tests pass locally. The real HTTP/production sender path forwards exactly two intended requests to an inert private gRPC service; random Authorization/query/form and refusal-trailer credentials remain absent from HTML, application logs and forwarded data. URI-logging and form-echo mutations fail. Hosted execution pending."
+        }
+      ]
     },
     {
       "key": "2066",
