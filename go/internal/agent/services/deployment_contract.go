@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,14 +69,58 @@ func checkConfig(config string) error {
 		return fmt.Errorf("the configuration is %d bytes, over the %d byte limit", len(config), maxConfigSize)
 	}
 	dec := json.NewDecoder(strings.NewReader(config))
-	var obj map[string]json.RawMessage
-	if err := dec.Decode(&obj); err != nil || obj == nil {
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return errors.New("the configuration is not a JSON object")
+	}
+	if err := checkJSONObject(dec); err != nil {
+		return fmt.Errorf("the configuration is not valid JSON: %w", err)
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return errors.New("the configuration is more than one JSON object")
 	}
 	return nil
+}
+
+// checkJSONObject reads the rest of an object whose '{' was read, refusing a
+// key that appears twice in it or in any object nested inside it: which of
+// two values counts would depend on the parser.
+func checkJSONObject(dec *json.Decoder) error {
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := tok.(string)
+		if seen[key] {
+			return fmt.Errorf("key %q appears twice", key)
+		}
+		seen[key] = true
+		if err := checkJSONValue(dec); err != nil {
+			return err
+		}
+	}
+	_, err := dec.Token() // '}'
+	return err
+}
+
+func checkJSONValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch tok {
+	case json.Delim('{'):
+		return checkJSONObject(dec)
+	case json.Delim('['):
+		for dec.More() {
+			if err := checkJSONValue(dec); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token() // ']'
+	}
+	return err
 }
 
 // assignOrder applies the ordering rules to an assignment against what the
@@ -152,11 +197,13 @@ func unassignOrder(st *postboxState, r *cloudpbv2.UnassignDeviceRequest) (duplic
 	return false, stale("revision", "removal revision %d is not above the accepted revision %d", rev, m.Revision)
 }
 
-// markRemoved records a removal mark and drops removal marks past
-// removalMarkKeep.
+// markRemoved records a removal mark at now (trusted time) and drops removal
+// marks older than removalMarkKeep. Pruning is measured against the
+// persisted time floor, never the clock: a clock run forward must not drop a
+// mark that still guards a valid statement.
 func markRemoved(st *postboxState, dep string, rev int32, now time.Time) {
 	for d, m := range st.Marks {
-		if m.Removed && time.Unix(m.RemovedAt, 0).Add(removalMarkKeep).Before(now) {
+		if m.Removed && m.RemovedAt+int64(removalMarkKeep/time.Second) < st.TimeFloor {
 			delete(st.Marks, d)
 		}
 	}
@@ -172,10 +219,12 @@ func refused(app string, err error) (string, cloudpbv2.ApplyOutcome, string, err
 	return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", err
 }
 
-// applyAssignment holds a verified assignment the contract accepts, as one
-// state change: the mark moves, the statement is held, and a move's old
-// deployment leaves with its removal mark. Its pull then runs beside the
-// queue. A refused assignment changes nothing held.
+// applyAssignment holds a verified assignment the contract accepts. The
+// state change is on disk before anything acts on it: the mark moves, the
+// statement is held, a move's old deployment leaves with its removal mark,
+// and an ABSENT revision queues the app's removal. Only then are pulls
+// stopped or started and releases removed, so a crash in between never
+// loses a change whose nonce is spent. A refused assignment changes nothing.
 func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entryID int64, correlation string, r *cloudpbv2.DeviceAssignment) (string, cloudpbv2.ApplyOutcome, string, error) {
 	app, dep := r.GetAppId(), r.GetDeploymentId()
 	if outcome, reason, err := checkAssignment(r); err != nil {
@@ -192,45 +241,46 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 	if err != nil {
 		return refused(app, err)
 	}
-	// A newer entry for the deployment replaces its pull, and a move stops
-	// the old deployment's.
-	p.stopPull(dep)
 	from := r.GetReplacesDeploymentId()
-	if from != "" && !repeat {
-		p.stopPull(from)
-	}
-	now := p.trustedNow()
+	move := from != "" && !repeat
 	absent := r.GetDesiredState() == cloudpbv2.Running_ABSENT
-	p.saveMu.Lock() // a pull's commit must not swap this away; decide saves it
-	p.mu.Lock()
-	st := p.state
 	held := &postboxAssignment{
 		AppID: app, AppReleaseID: r.GetAppReleaseId(), ManifestDigest: r.GetManifestDigest(),
 		DeploymentKeyID: r.GetDeploymentKeyId(), DesiredState: r.GetDesiredState().String(),
 		Assignment: raw, EntryID: entryID, CorrelationID: correlation, Pulled: absent,
 	}
 	outcome := outcomePulling
-	if repeat {
-		// Key rotation: the new statement (wrap, key id, expiry) is held and
-		// nothing is applied again. A pull that ended keeps its outcome.
-		prev := st.Assignments[dep]
-		held.Pulled = prev.Pulled
-		if o := st.Outcomes[app]; prev.Pulled && o != nil && o.EntryID == prev.EntryID {
-			outcome = o.Outcome
-		} else if prev.Pulled {
-			outcome = cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED
+	now := p.trustedNow()
+	if err := p.commit(func(st *postboxState) {
+		if repeat {
+			// Key rotation: the new statement (wrap, key id, expiry) is held
+			// and nothing is applied again. Only a pull that succeeded counts
+			// as done; after a refused or failed one the copy is pulled again.
+			prev, o := st.Assignments[dep], st.Outcomes[app]
+			if prev.Pulled && o != nil && o.EntryID == prev.EntryID && pullSucceeded(o.Outcome) {
+				held.Pulled, outcome = true, o.Outcome
+			}
 		}
+		st.Assignments = maps.Clone(st.Assignments) // copy on write: a pull's commit reads it
+		st.Marks = maps.Clone(st.Marks)
+		st.Assignments[dep] = held
+		st.Marks[dep] = &postboxMark{Revision: r.GetRevision()}
+		if move {
+			delete(st.Assignments, from)
+			markRemoved(st, from, r.GetReplacesRevision(), now)
+		}
+		if absent {
+			queueRemoval(st, app)
+		}
+	}); err != nil {
+		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "save", err
 	}
-	st.Assignments = maps.Clone(st.Assignments) // copy on write: a pull's commit reads it
-	st.Marks = maps.Clone(st.Marks)
-	st.Assignments[dep] = held
-	st.Marks[dep] = &postboxMark{Revision: r.GetRevision()}
-	if from != "" && !repeat {
-		delete(st.Assignments, from)
-		markRemoved(st, from, r.GetReplacesRevision(), now)
+	// A newer entry for the deployment replaces its pull, and a move stops
+	// the old deployment's; their outcomes no longer match what is held.
+	p.stopPull(dep)
+	if move {
+		p.stopPull(from)
 	}
-	p.mu.Unlock()
-	p.saveMu.Unlock()
 	switch {
 	case absent:
 		// Held with nothing to fetch: the app's releases go, as on removal.
@@ -246,10 +296,30 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 	return app, outcomePulling, "", nil
 }
 
-// applyUnassign removes a deployment the contract lets go: the mark becomes
-// a removal mark, its pull stops before anything is removed (so nothing it
-// imports outlives the deployment) and the app's releases go. A duplicate
-// removal is consumed without effect.
+// pullSucceeded reports an ended pull's outcome that needs no new pull:
+// applied, or imported and not started (sent as no outcome while the
+// transient values are off).
+func pullSucceeded(o cloudpbv2.ApplyOutcome) bool {
+	switch o {
+	case cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_NOT_STARTED, outcomeNotStarted:
+		return true
+	}
+	return false
+}
+
+// queueRemoval records app for release removal; removeReleases clears it once
+// done, and every cycle retries it until then.
+func queueRemoval(st *postboxState, app string) {
+	if !slices.Contains(st.Removals, app) {
+		st.Removals = append(slices.Clone(st.Removals), app)
+	}
+}
+
+// applyUnassign removes a deployment the contract lets go. The removal is on
+// disk first: the held statement goes, the mark becomes a removal mark and
+// the app is queued for removal. Then its pull stops (so nothing it imports
+// outlives the deployment) and the app's releases go; after a crash the
+// queued removal is retried. A duplicate removal is consumed without effect.
 func (p *Postbox) applyUnassign(ctx context.Context, r *cloudpbv2.UnassignDeviceRequest) (string, cloudpbv2.ApplyOutcome, string, error) {
 	dep := r.GetDeploymentId()
 	p.mu.Lock()
@@ -261,20 +331,23 @@ func (p *Postbox) applyUnassign(ctx context.Context, r *cloudpbv2.UnassignDevice
 	if duplicate {
 		return "", cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 	}
-	p.stopPull(dep)
 	now := p.trustedNow()
-	p.saveMu.Lock()
-	p.mu.Lock()
 	app := ""
-	if a := p.state.Assignments[dep]; a != nil {
-		app = a.AppID
+	if err := p.commit(func(st *postboxState) {
+		if a := st.Assignments[dep]; a != nil {
+			app = a.AppID
+		}
+		st.Assignments = maps.Clone(st.Assignments)
+		st.Marks = maps.Clone(st.Marks)
+		delete(st.Assignments, dep)
+		markRemoved(st, dep, r.GetRevision(), now)
+		if app != "" {
+			queueRemoval(st, app)
+		}
+	}); err != nil {
+		return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "save", err
 	}
-	p.state.Assignments = maps.Clone(p.state.Assignments)
-	p.state.Marks = maps.Clone(p.state.Marks)
-	delete(p.state.Assignments, dep)
-	markRemoved(p.state, dep, r.GetRevision(), now)
-	p.mu.Unlock()
-	p.saveMu.Unlock()
+	p.stopPull(dep)
 	if app != "" {
 		if err := p.removeReleases(ctx, app); err != nil {
 			return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "remove", err

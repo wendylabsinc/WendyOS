@@ -1,7 +1,12 @@
 package services
 
 import (
+	"context"
 	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -141,15 +146,16 @@ func TestPostboxRevisionMarkKeptAcrossRemovalAndRestart(t *testing.T) {
 	}
 }
 
-// Removal marks are kept for at least a year and then dropped.
+// Removal marks are kept for at least a year and then dropped, measured
+// against the persisted time floor: a clock run forward drops nothing.
 func TestRemovalMarksArePrunedAfterTheyCanMatter(t *testing.T) {
-	now := time.Now()
-	st := &postboxState{Marks: map[string]*postboxMark{
-		"recent": {Revision: 2, Removed: true, RemovedAt: now.Add(-366 * 24 * time.Hour).Unix()},
-		"old":    {Revision: 2, Removed: true, RemovedAt: now.Add(-removalMarkKeep - time.Hour).Unix()},
+	floor := time.Now()
+	st := &postboxState{TimeFloor: floor.Unix(), Marks: map[string]*postboxMark{
+		"recent": {Revision: 2, Removed: true, RemovedAt: floor.Add(-366 * 24 * time.Hour).Unix()},
+		"old":    {Revision: 2, Removed: true, RemovedAt: floor.Add(-removalMarkKeep - time.Hour).Unix()},
 		"live":   {Revision: 1},
 	}}
-	markRemoved(st, "new", 3, now)
+	markRemoved(st, "new", 3, floor.Add(10*removalMarkKeep)) // the clock is far ahead
 	if st.Marks["recent"] == nil || st.Marks["old"] != nil || st.Marks["live"] == nil || st.Marks["new"] == nil {
 		t.Fatalf("marks %v", st.Marks)
 	}
@@ -284,6 +290,11 @@ func TestCheckConfig(t *testing.T) {
 		`{} {}`:               false,
 		`{"a":1`:              false,
 		`{"a":"` + strings.Repeat("x", maxConfigSize) + `"}`: false,
+		`{"a":{"a":1},"b":[{"a":1},{"a":2}]}`:                true,
+		`{"a":1,"a":2}`:                                      false,
+		`{"b":{"a":1,"a":2}}`:                                false,
+		`{"c":[{"a":1,"a":2}]}`:                              false,
+		`{"a":}`:                                             false,
 	} {
 		if err := checkConfig(config); (err == nil) != ok {
 			t.Errorf("checkConfig(%.20q) = %v, want ok %v", config, err, ok)
@@ -341,5 +352,181 @@ func TestTransientOutcomesAreOffByDefault(t *testing.T) {
 	}
 	if transientOutcome(cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULLING) != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_UNSPECIFIED {
 		t.Fatal("PULLING mapped while off")
+	}
+}
+
+// Each content field and move rule, alone: every case fails without its
+// rule. The held statement is deployment "d" at revision 2, a move from
+// "x" at 1; "old" is another deployment of the app held at revision 3.
+func TestAssignOrderRules(t *testing.T) {
+	base := func() *cloudpbv2.DeviceAssignment {
+		return &cloudpbv2.DeviceAssignment{
+			DeploymentId: "d", AppId: "web", AppReleaseId: "r1", ManifestDigest: "sha256:aa", ConfigJson: "{}",
+			DesiredState: cloudpbv2.Running_RUNNING, Revision: 2, ReplacesDeploymentId: "x", ReplacesRevision: 1,
+		}
+	}
+	raw, err := proto.Marshal(base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := func() *postboxState {
+		return &postboxState{
+			Assignments: map[string]*postboxAssignment{"d": {AppID: "web", Assignment: raw}},
+			Marks:       map[string]*postboxMark{"d": {Revision: 2}, "x": {Revision: 1, Removed: true}, "old": {Revision: 3}},
+		}
+	}
+	for name, tc := range map[string]struct {
+		change func(*cloudpbv2.DeviceAssignment)
+		reason string // "" = accepted
+	}{
+		"rotation":            {func(a *cloudpbv2.DeviceAssignment) { a.DeploymentKeyId = "k2" }, ""},
+		"desired state":       {func(a *cloudpbv2.DeviceAssignment) { a.DesiredState = cloudpbv2.Running_STOPPED }, "revision_conflict"},
+		"release":             {func(a *cloudpbv2.DeviceAssignment) { a.AppReleaseId = "r2" }, "revision_conflict"},
+		"digest":              {func(a *cloudpbv2.DeviceAssignment) { a.ManifestDigest = "sha256:bb" }, "revision_conflict"},
+		"config":              {func(a *cloudpbv2.DeviceAssignment) { a.ConfigJson = `{"a":1}` }, "revision_conflict"},
+		"replaces deployment": {func(a *cloudpbv2.DeviceAssignment) { a.ReplacesDeploymentId = "y" }, "revision_conflict"},
+		"replaces revision":   {func(a *cloudpbv2.DeviceAssignment) { a.ReplacesRevision = 3 }, "revision_conflict"},
+		"move above the mark": {func(a *cloudpbv2.DeviceAssignment) {
+			a.Revision, a.ReplacesDeploymentId, a.ReplacesRevision = 3, "old", 4
+		}, "one_instance"},
+		"move at its mark": {func(a *cloudpbv2.DeviceAssignment) {
+			a.Revision, a.ReplacesDeploymentId, a.ReplacesRevision = 3, "old", 3
+		}, "move"},
+		"move at the maximum": {func(a *cloudpbv2.DeviceAssignment) {
+			a.Revision, a.ReplacesDeploymentId, a.ReplacesRevision = 3, "old", maxRevision
+		}, "move"},
+		"move done already": {func(a *cloudpbv2.DeviceAssignment) { a.Revision, a.ReplacesRevision = 3, 1 }, ""},
+	} {
+		a := base()
+		tc.change(a)
+		st := state()
+		if name == "move above the mark" {
+			// Accepted as a move once "d" is not also held for the app.
+			delete(st.Assignments, "d")
+			st.Marks["d"] = &postboxMark{Revision: 2}
+			tc.reason = ""
+		}
+		_, err := assignOrder(st, a)
+		var r *contractRefusal
+		switch {
+		case tc.reason == "" && err != nil:
+			t.Errorf("%s: refused: %v", name, err)
+		case tc.reason != "" && (!errors.As(err, &r) || r.reason != tc.reason):
+			t.Errorf("%s: got %v, want refusal %q", name, err, tc.reason)
+		}
+	}
+}
+
+// diskPeek snapshots postbox.json while the irreversible removal runs: a
+// crash at that instant leaves exactly this file (the verifier's probe).
+type diskPeek struct {
+	postboxControl
+	dir  string
+	snap []byte
+}
+
+func (d *diskPeek) RemoveReleases(ctx context.Context, app string, keep []string) error {
+	d.snap, _ = os.ReadFile(filepath.Join(d.dir, postboxStateFile))
+	return d.postboxControl.RemoveReleases(ctx, app, keep)
+}
+
+// A removal is on disk before anything is deleted: a crash during the
+// delete keeps the removal (held statement gone, removal mark, app queued)
+// and the restart finishes it. The same for an ABSENT revision.
+func TestPostboxRemovalIsDurableBeforeItActs(t *testing.T) {
+	for _, absent := range []bool{false, true} {
+		f := newPBFixture(t)
+		peek := &diskPeek{postboxControl: f.p.control, dir: f.dir}
+		f.p.control = peek
+		dep := uuid.NewString()
+		f.statement(assignNew, dep, f.assignment(dep, "web", 1), 0)
+		f.cycle()
+		f.p.waitPulls()
+		peek.snap = nil
+		if absent {
+			a := f.assignment(dep, "web", 2)
+			a.DesiredState = cloudpbv2.Running_ABSENT
+			f.statement(assignNew, dep, a, 0)
+		} else {
+			f.statement(unassignNew, dep, nil, 2)
+		}
+		f.cycle()
+		var st postboxState
+		if err := json.Unmarshal(peek.snap, &st); err != nil {
+			t.Fatalf("absent %v: no state on disk during the removal: %v", absent, err)
+		}
+		held := st.Assignments[dep]
+		removedOnDisk := !absent && held == nil && st.Marks[dep] != nil && st.Marks[dep].Removed && st.Marks[dep].Revision == 2 ||
+			absent && held != nil && held.DesiredState == cloudpbv2.Running_ABSENT.String() && st.Marks[dep].Revision == 2
+		if !removedOnDisk || !slices.Contains(st.Removals, "web") {
+			t.Fatalf("absent %v: on disk during the delete: held %+v, mark %+v, removals %v", absent, held, st.Marks[dep], st.Removals)
+		}
+		// Crash there and restart: the queued removal runs again.
+		if err := os.WriteFile(filepath.Join(f.dir, postboxStateFile), peek.snap, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f.p.mu.Lock()
+		f.p.state = nil
+		f.p.mu.Unlock()
+		peek.snap = nil
+		f.cycle()
+		f.p.waitPulls()
+		if peek.snap == nil || slices.Contains(f.p.snapshot().Removals, "web") {
+			t.Fatalf("absent %v: removal not finished after the restart (removals %v)", absent, f.p.snapshot().Removals)
+		}
+	}
+}
+
+// A same-revision copy after a refused pull is pulled again; after a
+// successful one it is not.
+func TestPostboxRotationAfterARefusedPullPullsAgain(t *testing.T) {
+	f := newPBFixture(t)
+	d := uuid.NewString()
+	first := f.assignment(d, "web", 1)
+	f.statement(assignNew, d, first, 0)
+	f.cycle()
+	f.p.waitPulls()
+	refused := f.p.refusals["pull"]
+	if f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_PULL_REFUSED || refused == 0 {
+		t.Fatalf("first pull: outcome %v, refusals %v", f.outcome("web"), f.p.refusals)
+	}
+	rot := proto.Clone(first).(*cloudpbv2.DeviceAssignment)
+	rot.DeploymentKeyId = "k2"
+	f.statement(assignNew, d, rot, 0)
+	f.cycle()
+	f.p.waitPulls()
+	if f.p.refusals["pull"] != refused+1 {
+		t.Fatalf("refusals %v: want the copy pulled again", f.p.refusals)
+	}
+
+	g := newPBFixture(t)
+	r := g.release(t)
+	r.assign.Revision, r.assign.ConfigJson = 1, "{}"
+	rec := g.withArtifacts(&fakeArtifacts{r: r})
+	g.assignEntry(r.assign)
+	g.cycle()
+	g.p.waitPulls()
+	again := proto.Clone(r.assign).(*cloudpbv2.DeviceAssignment)
+	again.ExpiresAt = timestamppb.New(g.now.Add(2 * time.Hour))
+	g.assignEntry(again)
+	g.cycle()
+	g.p.waitPulls()
+	if len(rec.imported) != 1 || g.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatalf("imports %d, outcome %v: want an applied pull kept, not repeated", len(rec.imported), g.outcome("web"))
+	}
+}
+
+// A null entry in the saved state holds the postbox: nothing is applied.
+func TestPostboxNullStateEntryFailsSafe(t *testing.T) {
+	for _, field := range []string{"marks", "assignments", "outcomes"} {
+		f := newPBFixture(t)
+		data := `{"principal":"` + f.uri + `","` + field + `":{"x":null}}`
+		if err := os.WriteFile(filepath.Join(f.dir, postboxStateFile), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f.control("web", cloudpbv2.ContainerAction_CONTAINER_ACTION_STOP, nil)
+		if err := f.p.cycle(context.Background()); err == nil || len(f.ctr.stopCalls) != 0 {
+			t.Fatalf("%s: err %v, stops %v: want the postbox held", field, err, f.ctr.stopCalls)
+		}
 	}
 }

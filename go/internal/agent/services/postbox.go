@@ -1126,6 +1126,23 @@ func (p *Postbox) load(principal string) error {
 	if st.Principal != principal {
 		st = &postboxState{Principal: principal}
 	}
+	// A null entry (a damaged or hand-edited file) holds the postbox, as an
+	// undecodable file does: nothing is applied on state it cannot read.
+	for dep, a := range st.Assignments {
+		if a == nil {
+			return fmt.Errorf("postbox state: deployment %q has no held statement", dep)
+		}
+	}
+	for dep, m := range st.Marks {
+		if m == nil {
+			return fmt.Errorf("postbox state: deployment %q has no revision mark", dep)
+		}
+	}
+	for app, o := range st.Outcomes {
+		if o == nil {
+			return fmt.Errorf("postbox state: app %q has no outcome", app)
+		}
+	}
 	if st.Nonces == nil {
 		st.Nonces = map[string]int64{}
 	}
