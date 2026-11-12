@@ -1346,10 +1346,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2670",
       "title": "Persist explicit operator mesh connection intent",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover disconnect persistence, startup races and explicit resume. They use broker fixtures; native app-to-broker reconnection across app/OS restart remains unverified.",
-      "required_follow_up": "Add a process restart test through the native client, preserving explicit disconnect intent.",
-      "evidence": []
+      "required_follow_up": "Run the required Linux network gate through five native embedded-host processes and the restored missing-disconnect control. Local native Go client coverage does not claim GUI, detached desktop helper, radio or OS reboot execution.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/sessionbroker/operator_native_restart_test.go",
+            ".github/scripts/test-operator-native-restart.sh"
+          ],
+          "result": "Five independent native processes preserve profile identity and explicit disconnect intent through actual broker IPC, authenticated loopback routing and management RPC. The normal journey and omission control pass locally under the race detector; required hosted execution remains pending."
+        }
+      ]
     },
     {
       "key": "2669",
@@ -3445,9 +3453,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2808",
       "title": "docs: stop preview deploys and moved pages from producing 404s",
       "package": "16",
-      "status": "partial",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Sitemap tests cover generated routes, but deployment hostname/preview behavior also depends on hosting configuration.",
-      "required_follow_up": "Verify both required real export crawls in CI, then check served preview and production alias responses and preview robots/analytics on their actual public host. Local static serving does not prove hosting behavior.",
+      "required_follow_up": "Require actual served preview bytes to match this revision export, plus public latest alias/destination responses, canonical URLs, anchors and preview robots/analytics. The hosted probe is registered in the existing deployment job; public evidence is pending.",
       "evidence": [
         {
           "tests": [
@@ -3456,6 +3464,14 @@
             "go/internal/cli/assets/docs/scripts/legacy-route-contract.json"
           ],
           "result": "Local latest and branch exports each pass full route/anchor and all55 historical alias checks. Removing the preview policy produced1180 robots/analytics failures. Existing deploy HTTP checks cover homepage/Markdown MIME but not all alias/preview headers; public-host evidence remains missing."
+        },
+        {
+          "tests": [
+            "go/internal/cli/assets/docs/scripts/probe-hosted-export.py",
+            "go/internal/cli/assets/docs/scripts/probe-hosted-export.test.py",
+            ".github/workflows/fumadocs.yml"
+          ],
+          "result": "All 11 real HTTP failure controls pass locally. Full exported mirror verifies 210 bounded requests across 55 historical aliases and their destinations for each prefix. Current public /latest is checked independently of the preview revision; no public execution claimed yet."
         }
       ]
     },
