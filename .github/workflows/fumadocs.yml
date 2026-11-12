@@ -86,7 +86,9 @@ jobs:
         run: npm run test:docs
 
       - name: Exercise HTTP crawl failure controls
-        run: python3 scripts/crawl-export.test.py
+        run: |
+          python3 scripts/crawl-export.test.py
+          python3 scripts/probe-hosted-export.test.py
 
       - name: Verify public npm package versions
         run: |
@@ -322,6 +324,14 @@ jobs:
       name: docs
       url: ${{ needs.build.outputs.url }}
     steps:
+      - name: Check out hosted documentation probe
+        if: startsWith(needs.build.outputs.deploy_path, 'branch-')
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          persist-credentials: false
+          path: regression-source
+          sparse-checkout: go/internal/cli/assets/docs/scripts
+
       - name: Download static site artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -417,6 +427,26 @@ jobs:
             headers="$(curl -fsSI --max-time 30 "${DOCS_URL}index.md")"
             grep -qi '^content-type: text/markdown' <<< "${headers}"
           done <<< "${DEPLOY_PATHS}"
+
+      - name: Verify public preview and historical documentation routes
+        if: startsWith(needs.build.outputs.deploy_path, 'branch-')
+        timeout-minutes: 4
+        env:
+          DEPLOY_PATH: ${{ needs.build.outputs.deploy_path }}
+        run: |
+          set -euo pipefail
+          python3 regression-source/go/internal/cli/assets/docs/scripts/probe-hosted-export.py \
+            --preview-root "out/${DEPLOY_PATH}" --preview-base "/${DEPLOY_PATH}" \
+            --analytics-id G-7SMVRRYVW6 --report "$RUNNER_TEMP/docs-hosted-probe.json"
+
+      - name: Preserve hosted documentation evidence
+        if: always() && startsWith(needs.build.outputs.deploy_path, 'branch-')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: docs-hosted-regression-evidence
+          path: ${{ runner.temp }}/docs-hosted-probe.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Publish root discovery files
         # Agents look for llms.txt at the site root (https://llmstxt.org) and
