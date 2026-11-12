@@ -43,21 +43,31 @@ type postboxMark struct {
 }
 
 // contractRefusal is a statement the contract refuses: nothing is applied
-// and nothing held changes.
+// and nothing held changes. old marks a statement that is not news (a copy
+// behind the accepted revision, or a conflicting copy of it): audit only, so
+// the held deployment keeps its reported outcome. A refusal of a newer
+// revision is reported against the app: it answers what the operator just
+// did, and the report's postbox_entry_id names the refused statement.
 type contractRefusal struct {
 	outcome cloudpbv2.ApplyOutcome
 	reason  string
 	err     error
+	old     bool
 }
 
 func (r *contractRefusal) Error() string { return r.err.Error() }
 
 func stale(reason, format string, args ...any) error {
-	return &contractRefusal{cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE, reason, fmt.Errorf(format, args...)}
+	return &contractRefusal{outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE, reason: reason, err: fmt.Errorf(format, args...)}
+}
+
+// outOfOrder is a stale refusal of a statement that is not news.
+func outOfOrder(reason, format string, args ...any) error {
+	return &contractRefusal{outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_STALE, reason: reason, err: fmt.Errorf(format, args...), old: true}
 }
 
 func notForThisDevice(reason, format string, args ...any) error {
-	return &contractRefusal{cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_TARGET, reason, fmt.Errorf(format, args...)}
+	return &contractRefusal{outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_REJECTED_TARGET, reason: reason, err: fmt.Errorf(format, args...)}
 }
 
 // checkConfig is the device's check of a signed configuration: non-empty,
@@ -153,20 +163,20 @@ func assignOrder(st *postboxState, a *cloudpbv2.DeviceAssignment) (repeat bool, 
 	if m := st.Marks[dep]; m != nil {
 		switch {
 		case m.Removed && rev <= m.Revision:
-			return false, stale("revision", "deployment was removed at revision %d; assignment revision %d", m.Revision, rev)
+			return false, outOfOrder("revision", "deployment was removed at revision %d; assignment revision %d", m.Revision, rev)
 		case rev < m.Revision:
-			return false, stale("revision", "assignment revision %d is below the accepted revision %d", rev, m.Revision)
+			return false, outOfOrder("revision", "assignment revision %d is below the accepted revision %d", rev, m.Revision)
 		case rev == m.Revision:
 			held := st.Assignments[dep]
 			prev := &cloudpbv2.DeviceAssignment{}
 			if held == nil || proto.Unmarshal(held.Assignment, prev) != nil || !sameContent(prev, a) {
-				return false, stale("revision_conflict", "assignment revision %d differs from the one already accepted", rev)
+				return false, outOfOrder("revision_conflict", "assignment revision %d differs from the one already accepted", rev)
 			}
 			return true, nil
 		}
 	}
 	if err := checkConfig(a.GetConfigJson()); err != nil {
-		return false, &contractRefusal{cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "config", err}
+		return false, &contractRefusal{outcome: cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, reason: "config", err: err}
 	}
 	from, fromRev := a.GetReplacesDeploymentId(), a.GetReplacesRevision()
 	if from != "" || fromRev != 0 {
@@ -231,6 +241,9 @@ func markRemoved(st *postboxState, dep string, rev int32, now time.Time) {
 func refused(app string, err error) (string, cloudpbv2.ApplyOutcome, string, error) {
 	var r *contractRefusal
 	if errors.As(err, &r) {
+		if r.old {
+			app = "" // not news: audit only
+		}
 		return app, r.outcome, r.reason, r.err
 	}
 	return app, cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "assignment", err

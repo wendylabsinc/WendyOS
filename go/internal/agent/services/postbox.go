@@ -505,10 +505,12 @@ func (p *Postbox) process(ctx context.Context, client cloudpbv2.DevicePostboxSer
 		return err
 	}
 	if verr != nil {
-		// A refused removal (stale, expired, replayed) is audit only: it must
-		// not overwrite the outcome of the deployment the device holds. The
-		// app named above serves only to report an interrupted removal.
-		if _, removal := req.(*cloudpbv2.UnassignDeviceRequest); removal {
+		// A deployment statement refused in verification (stale, expired,
+		// replayed, signature, target) is not news: audit only, so it never
+		// overwrites the outcome of the deployment the device holds. The app
+		// named above serves only to report an interrupted entry.
+		switch req.(type) {
+		case *cloudpbv2.UnassignDeviceRequest, *cloudpbv2.DeviceAssignment:
 			app = ""
 		}
 		return p.decide(ctx, e, desc.Correlation, app, outcome, reason, verr)
