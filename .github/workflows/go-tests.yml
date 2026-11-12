@@ -252,9 +252,11 @@ jobs:
       - name: Install disposable block-device tools
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y dosfstools parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
+          sudo apt-get install -y dosfstools e2fsprogs parted util-linux udev libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Compile host fixtures
-        run: go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
+        run: |
+          go test -c -o "$RUNNER_TEMP/install.test" ./go/internal/cli/commands
+          go test -c -o "$RUNNER_TEMP/t234.test" ./go/internal/cli/tegraflash/t234
       - name: Require loop-device and actual sudo ownership regressions
         env:
           WENDY_INSTALL_HOST_TESTS: '1'
@@ -263,6 +265,10 @@ jobs:
           for test in TestInstallLoopRetriesDelayedPartitionDiscovery TestInstallLoopReconnectNeverWritesReplacementDisk TestSudoHandBackRealOwnership; do
             grep -q "^--- PASS: $test " "$RUNNER_TEMP/install-host.log"
           done
+      - name: Require exclusive recovery writer access on a mounted loop disk
+        run: |
+          sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
+          grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
 
   darwin-install-host:
     name: macOS install safety
