@@ -1667,10 +1667,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2453",
       "title": "fix(agent): cap combined memory and swap for explicit memory budgets",
       "package": "06",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "OCI resource tests assert combined memory/swap limits; a hardware resource fixture exists but is release-gated.",
-      "required_follow_up": "Run a cgroup-backed workload that exceeds the combined limit and verify enforcement.",
-      "evidence": []
+      "required_follow_up": "Require real cgroup OOM enforcement and the uncapped-swap mutation on both containerd runtime versions. Do not count compilation or OCI-field assertions as enforcement.",
+      "evidence": [
+        {
+          "files": [
+            "go/internal/agent/containerd/memory_budget_integration_test.go",
+            ".github/ci-tests/memory-budget/main.go",
+            ".github/scripts/test-memory-budget.sh",
+            ".github/scripts/test-containerd-versions.sh"
+          ],
+          "result": "Added actual anonymous-page allocation through a production-created container with a 64 MiB memory budget. The real cgroup must permit a 16 MiB workload and OOM-kill a 96 MiB workload. A 128 MiB combined-limit control must complete and use actual swap. Removing production Swap must let the over-budget workload complete and fail the regression assertion. Linux compilation and uncapped fixture execution passed; real kernel enforcement remains pending on both containerd versions in the existing shared job."
+        }
+      ]
     },
     {
       "key": "2049",

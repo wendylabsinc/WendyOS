@@ -202,7 +202,7 @@ jobs:
           python3 scripts/package-chatgpt-plugin.py --check
 
   containerd-regressions:
-    name: Containerd lifecycle and DNS regressions
+    name: Containerd lifecycle, DNS and resource regressions
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -216,6 +216,25 @@ jobs:
         run: |
           go test -c -o "$RUNNER_TEMP/containerd.test" ./go/internal/agent/containerd
           go test -c -o "$RUNNER_TEMP/rtps.test" ./go/internal/rtps
+          go build -trimpath -o "$RUNNER_TEMP/memory-workload" ./.github/ci-tests/memory-budget
+      - name: Compile the uncapped-swap negative control
+        env:
+          CGO_ENABLED: '0'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          source = Path('go/internal/agent/oci/resources.go').resolve()
+          text = source.read_text()
+          needle = 'Limit: memBytes, Swap: memBytes'
+          assert text.count(needle) == 1
+          root = Path(os.environ['RUNNER_TEMP'])
+          mutation = root / 'memory-uncapped.go'
+          mutation.write_text(text.replace(needle, 'Limit: memBytes'))
+          (root / 'memory-overlay.json').write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
+          PY
+          go test -overlay "$RUNNER_TEMP/memory-overlay.json" -c -o "$RUNNER_TEMP/memory-uncapped.test" ./go/internal/agent/containerd
       - name: Compile the pinned-upstream negative control
         env:
           CGO_ENABLED: '0'
@@ -256,7 +275,7 @@ jobs:
               for archive in ./*.deb; do dpkg-deb --extract "$archive" root; done
             )
           done
-      - name: Require lifecycle, DNS and DDS checks on both runtimes
+      - name: Require lifecycle, DNS, DDS and memory checks on both runtimes
         run: bash .github/scripts/test-containerd-versions.sh
 
   linux-install-host:
