@@ -109,7 +109,10 @@ jobs:
         with:
           node-version: '24.22.1'
       - name: Install the review SDK and fixture dependencies
-        run: python -m pip install -r .github/scripts/requirements-regression-tests.txt
+        run: |
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y libarchive-tools
+          python -m pip install -r .github/scripts/requirements-regression-tests.txt
       - name: Exercise review, event and failure contracts without publishing
         run: python .github/scripts/run-automation-regressions.py
 
