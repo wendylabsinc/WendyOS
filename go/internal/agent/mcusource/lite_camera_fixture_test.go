@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,6 +47,9 @@ func newLiteCameraFixture(t *testing.T, ctx context.Context) *liteCameraFixture 
 	t.Helper()
 	const base = "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/"
 	fixture := &liteCameraFixture{pairing: SensorPairing{SourcePrincipalURI: base + "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Transport: "wendycom", Name: "synthetic-lite-camera"}}
+	if name := os.Getenv("WENDY_TEST_LITE_CAMERA_LABEL"); name != "" {
+		fixture.pairing.Name = name
+	}
 	root, rootKey := liteCameraCertificate(t, 1, "", nil, nil)
 	consumer, consumerKey := liteCameraCertificate(t, 2, base+"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", root, rootKey)
 	source, sourceKey := liteCameraCertificate(t, 3, fixture.pairing.SourcePrincipalURI, root, rootKey)
