@@ -304,6 +304,15 @@ const DiscoveryURLEnvVar = "WENDY_DISCOVERY_URL"
 // envVarNamePattern matches a POSIX-portable environment variable name.
 var envVarNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// ReservedEnvPrefixes are environment variable prefixes a caller may never
+// set: the dynamic linkers' (code injection) and the agent's own WENDY_*
+// variables (device and app identity the agent sets).
+var ReservedEnvPrefixes = []string{"LD_", "DYLD_", "WENDY_"}
+
+// IsEnvVarName reports whether name is a POSIX-portable environment variable
+// name.
+func IsEnvVarName(name string) bool { return envVarNamePattern.MatchString(name) }
+
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
 	AppID string     `json:"appId"`

@@ -99,6 +99,15 @@ type postboxControl interface {
 	AppOf(ctx context.Context, name string) string
 	// ImportRelease imports a verified registry release into containerd.
 	ImportRelease(ctx context.Context, img ReleaseImage) error
+	// HasRelease reports whether the release image is on the device with the
+	// signed manifest digest.
+	HasRelease(ctx context.Context, app, release, manifestDigest string) bool
+	// ReleaseAppConfig is the app definition (the release's wendy.json) the
+	// verified release image carries; ErrNoAppDefinition when it carries none.
+	ReleaseAppConfig(ctx context.Context, app, release, manifestDigest string) ([]byte, error)
+	// StartRelease creates the app's container from a release through the
+	// path `wendy run` takes, then starts it or leaves it stopped.
+	StartRelease(ctx context.Context, s ReleaseStart) error
 	// RemoveReleases deletes app's registry releases except the release ids
 	// in keep, and the containers running one; every app's when app is "".
 	RemoveReleases(ctx context.Context, app string, keep []string) error
@@ -167,6 +176,10 @@ type postboxAssignment struct {
 	EntryID       int64  `json:"entryId,omitempty"`
 	CorrelationID string `json:"correlationId,omitempty"`
 	Pulled        bool   `json:"pulled,omitempty"`
+	// Previous is the statement this one replaced on the device (the same
+	// deployment's earlier revision, or a move's old deployment), kept so
+	// its app can be started again if this one cannot start.
+	Previous []byte `json:"previous,omitempty"`
 }
 
 // postboxOutcome is the latest postbox decision about an app, carried on the

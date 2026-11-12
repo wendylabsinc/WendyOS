@@ -669,10 +669,15 @@ func TestPostboxFailedSaveLeavesEntryForNextCycle(t *testing.T) {
 
 type crashingControl struct{}
 
-func (crashingControl) StartApp(context.Context, string) error                { panic("agent killed") }
-func (crashingControl) StopApp(context.Context, string) error                 { panic("agent killed") }
-func (crashingControl) AppOf(_ context.Context, name string) string           { return name }
-func (crashingControl) RemoveReleaseImages(context.Context) error             { panic("agent killed") }
+func (crashingControl) StartApp(context.Context, string) error                  { panic("agent killed") }
+func (crashingControl) StopApp(context.Context, string) error                   { panic("agent killed") }
+func (crashingControl) AppOf(_ context.Context, name string) string             { return name }
+func (crashingControl) RemoveReleaseImages(context.Context) error               { panic("agent killed") }
+func (crashingControl) HasRelease(context.Context, string, string, string) bool { return false }
+func (crashingControl) ReleaseAppConfig(context.Context, string, string, string) ([]byte, error) {
+	panic("agent killed")
+}
+func (crashingControl) StartRelease(context.Context, ReleaseStart) error      { panic("agent killed") }
 func (crashingControl) PruneReleases(context.Context, string, []string) error { panic("agent killed") }
 func (crashingControl) RemoveReleases(context.Context, string, []string) error {
 	panic("agent killed")

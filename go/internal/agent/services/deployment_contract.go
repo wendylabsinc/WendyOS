@@ -90,7 +90,10 @@ func checkConfig(config string) error {
 	if _, err := dec.Token(); err != io.EOF {
 		return errors.New("the configuration is more than one JSON object")
 	}
-	return nil
+	// Named values only: host access comes from the release, never from a
+	// deployment (sem, 2026-11-12).
+	_, err := configEnv(config)
+	return err
 }
 
 // checkJSONObject reads the rest of an object whose '{' was read, refusing a
@@ -279,6 +282,10 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 		DeploymentKeyID: r.GetDeploymentKeyId(), DesiredState: r.GetDesiredState().String(),
 		Assignment: raw, EntryID: entryID, CorrelationID: correlation, Pulled: absent,
 	}
+	replaced := dep
+	if move {
+		replaced = from
+	}
 	outcome := outcomePulling
 	now := p.trustedNow()
 	if err := p.commit(func(st *postboxState) {
@@ -290,6 +297,13 @@ func (p *Postbox) applyAssignment(ctx context.Context, id *postboxIdentity, entr
 			if prev.Pulled && o != nil && o.EntryID == prev.EntryID && pullSucceeded(o.Outcome) {
 				held.Pulled, outcome = true, o.Outcome
 			}
+		}
+		// The statement this one replaces on the device, started again if
+		// this one cannot start; a rotation copy keeps the one it had.
+		if prev := st.Assignments[replaced]; repeat && prev != nil {
+			held.Previous = prev.Previous
+		} else if prev != nil && prev.Pulled {
+			held.Previous = prev.Assignment
 		}
 		st.Assignments = maps.Clone(st.Assignments) // copy on write: a pull's commit reads it
 		st.Marks = maps.Clone(st.Marks)

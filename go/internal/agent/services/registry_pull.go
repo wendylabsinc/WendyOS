@@ -202,11 +202,20 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "stage", err
 	}
-	img, err := p.fetchRelease(ctx, id, a, dir, report)
-	if err == nil {
-		if err = p.control.ImportRelease(ctx, img); err != nil {
-			err = pullFailed("import", err)
+	// A release already on the device (a configuration-only revision, or an
+	// import a restart interrupted after it finished) is not fetched again.
+	var err error
+	if !p.control.HasRelease(ctx, a.GetAppId(), a.GetAppReleaseId(), a.GetManifestDigest()) {
+		var img ReleaseImage
+		img, err = p.fetchRelease(ctx, id, a, dir, report)
+		if err == nil {
+			if err = p.control.ImportRelease(ctx, img); err != nil {
+				err = pullFailed("import", err)
+			}
 		}
+	}
+	if err == nil {
+		err = p.startRelease(ctx, a)
 	}
 	if err != nil {
 		var f *pullFailure
@@ -215,11 +224,9 @@ func (p *Postbox) pullAssignment(ctx context.Context, id *postboxIdentity, a *cl
 		}
 		return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED, "pull", err
 	}
-	// The superseded releases go; a failure is retried (Removals).
+	// Only now, with the new release running (or installed), do the
+	// superseded releases go; a failure is retried (Removals).
 	p.removeReleases(ctx, a.GetAppId())
-	if a.GetDesiredState() == cloudpbv2.Running_RUNNING {
-		return outcomeNotStarted, "not_started", nil
-	}
 	return cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED, "", nil
 }
 

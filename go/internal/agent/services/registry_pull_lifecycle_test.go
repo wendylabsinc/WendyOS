@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
@@ -121,27 +123,120 @@ func TestRegistryPullResumesAfterARestart(t *testing.T) {
 	}
 }
 
-// B5: a release meant to run is on the device but nothing starts it yet, so
-// it is not reported as applied, nor as a failure: it carries no outcome
-// until the not-started value is accepted, and is not counted as a refusal.
-func TestRegistryPullRunningReleaseIsNotApplied(t *testing.T) {
+// T1: a release meant to run is started through the run path with the
+// release's app definition and the configuration as environment, and is
+// reported applied only once it started.
+func TestRegistryPullStartsTheAppWithItsConfiguration(t *testing.T) {
+	f := newPBFixture(t)
+	r := f.release(t)
+	r.assign.DesiredState, r.assign.ConfigJson = cloudpbv2.Running_RUNNING, `{"PORT":8080,"DEBUG":true,"NAME":"a b"}`
+	rec := f.withArtifacts(&fakeArtifacts{r: r})
+	rec.appConfig = []byte(`{"appId":"web","entitlements":[{"type":"network","mode":"host"}]}`)
+	f.assignEntry(r.assign)
+	f.cycle()
+	f.p.waitPulls()
+	want := ReleaseStart{AppID: "web", ReleaseID: r.assign.GetAppReleaseId(), AppConfig: rec.appConfig,
+		Env: []string{"DEBUG=true", "NAME=a b", "PORT=8080"}, Run: true}
+	if len(rec.starts) != 1 || !reflect.DeepEqual(rec.starts[0], want) || f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatalf("starts %+v, outcome %v: want one start %+v, then applied", rec.starts, f.outcome("web"), want)
+	}
+	if len(rec.digests) == 0 || rec.digests[0] != r.assign.GetManifestDigest() {
+		t.Fatalf("definition read for digests %v: want only the signed manifest digest", rec.digests)
+	}
+}
+
+// A start that fails is not applied, and the app the statement replaced is
+// started again; its release is not pruned.
+func TestRegistryPullFailedStartRestoresThePreviousApp(t *testing.T) {
 	f := newPBFixture(t)
 	r := f.release(t)
 	r.assign.DesiredState = cloudpbv2.Running_RUNNING
 	rec := f.withArtifacts(&fakeArtifacts{r: r})
 	f.assignEntry(r.assign)
 	f.cycle()
-	o := f.outcome("web")
-	if o.Outcome != outcomeNotStarted || o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED ||
-		o.Outcome == cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED || o.EntryID != 1 || len(rec.imported) != 1 {
-		t.Fatalf("outcome %+v, imported %d: want the release imported, neither applied nor failed", o, len(rec.imported))
+	f.p.waitPulls()
+	old := r.assign.GetAppReleaseId()
+	// Revision 2 changes only the configuration: no download, a restart.
+	rec.present = map[string]bool{old: true}
+	imported := len(rec.imported)
+	next := proto.Clone(r.assign).(*cloudpbv2.DeviceAssignment)
+	next.Revision, next.ConfigJson = 2, `{"MODE":"b"}`
+	f.assignEntry(next)
+	f.cycle()
+	f.p.waitPulls()
+	if len(rec.imported) != imported || len(rec.starts) != 2 || !slices.Equal(rec.starts[1].Env, []string{"MODE=b"}) || f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLIED {
+		t.Fatalf("imports %d, starts %+v, outcome %v: want a restart with the new configuration and no download", len(rec.imported), rec.starts, f.outcome("web"))
 	}
-	if len(f.p.refusals) != 0 {
-		t.Fatalf("refusals = %v, want none for a release not started yet", f.p.refusals)
+	// Revision 3 cannot start: revision 2 is started again.
+	rec.startErr = func(s ReleaseStart) error {
+		if slices.Contains(s.Env, "MODE=c") {
+			return errors.New("exec format error")
+		}
+		return nil
 	}
-	if a := f.p.snapshot().Assignments[r.assign.GetDeploymentId()]; a == nil || !a.Pulled {
-		t.Fatalf("assignment not marked pulled: want the pull finished, not resumed")
+	removed := len(rec.removed)
+	bad := proto.Clone(next).(*cloudpbv2.DeviceAssignment)
+	bad.Revision, bad.ConfigJson = 3, `{"MODE":"c"}`
+	f.assignEntry(bad)
+	f.cycle()
+	f.p.waitPulls()
+	last := rec.starts[len(rec.starts)-1]
+	if o := f.outcome("web"); o.Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED || o.EntryID != 3 ||
+		!slices.Equal(last.Env, []string{"MODE=b"}) || len(rec.removed) != removed {
+		t.Fatalf("outcome %+v, last start %+v, removals %v: want failed, revision 2 restored, nothing pruned", o, last, rec.removed[removed:])
 	}
+}
+
+// The release's app definition is held to what `wendy run` accepts, and
+// stricter: a missing, oversized, unknown-field, other-app or multi-service
+// definition refuses the release and nothing starts.
+func TestRegistryPullRefusesABadAppDefinition(t *testing.T) {
+	for name, def := range map[string]string{
+		"unknown field":           `{"appId":"web","entitlementz":[]}`,
+		"unknown entitlement key": `{"appId":"web","entitlements":[{"type":"network","modee":"host"}]}`,
+		"other app":               `{"appId":"db"}`,
+		"several services":        `{"appId":"web","services":{"api":{"context":"."}}}`,
+		"oversized":               `{"appId":"web","platform":"` + strings.Repeat("x", maxAppDefinitionSize) + `"}`,
+		"malformed":               `{"appId":`,
+	} {
+		f := newPBFixture(t)
+		r := f.release(t)
+		r.assign.DesiredState = cloudpbv2.Running_RUNNING
+		rec := f.withArtifacts(&fakeArtifacts{r: r})
+		rec.appConfig = []byte(def)
+		f.assignEntry(r.assign)
+		f.cycle()
+		f.p.waitPulls()
+		if len(rec.starts) != 0 || f.outcome("web").Outcome != cloudpbv2.ApplyOutcome_APPLY_OUTCOME_APPLY_FAILED {
+			t.Errorf("%s: starts %d, outcome %v: want the release refused", name, len(rec.starts), f.outcome("web"))
+		}
+	}
+}
+
+// A release image without the app definition label is refused with the
+// publish-again sentence: it never runs with default host access.
+func TestReleaseWithoutAppDefinitionIsRefused(t *testing.T) {
+	m := &releaseReaderMock{mockContainerdClient: &mockContainerdClient{}, labels: map[string]string{"other": "x"}}
+	_, err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).ReleaseAppConfig(context.Background(), "web", "r1", "sha256:aa")
+	if !errors.Is(err, ErrNoAppDefinition) || !strings.Contains(err.Error(), "publish it again with a current CLI") {
+		t.Fatalf("err %v", err)
+	}
+	if m.digest != "sha256:aa" {
+		t.Fatalf("labels read for %q: want the signed digest passed down", m.digest)
+	}
+}
+
+type releaseReaderMock struct {
+	*mockContainerdClient
+	labels map[string]string
+	digest string
+}
+
+func (m *releaseReaderMock) HasRelease(context.Context, string, string, string) bool { return true }
+
+func (m *releaseReaderMock) ReleaseLabels(_ context.Context, _, _, digest string) (map[string]string, error) {
+	m.digest = digest
+	return m.labels, nil
 }
 
 // Install only (desired state stopped) is applied once the image is imported.
@@ -493,5 +588,38 @@ func TestPostboxControlPruneKeepsReleasesInUse(t *testing.T) {
 	}
 	if !slices.Equal(m.steps, []string{"delete releases of web"}) || !slices.Equal(m.keep, []string{"new", "old"}) {
 		t.Fatalf("steps %v, keep %v: want only images deleted, keeping the new and the in-use release", m.steps, m.keep)
+	}
+}
+
+// T2: the start goes through the run path: validated while the old app
+// runs, then created with the release image, its app definition, the
+// configuration as environment, restart unless stopped and the release id,
+// then started (registered with the monitor, so it restarts on boot and
+// after a crash), or for install only stopped explicitly.
+func TestPostboxControlStartReleaseUsesTheRunPath(t *testing.T) {
+	for _, run := range []bool{true, false} {
+		m := &mockContainerdClient{resolvedIDs: map[string][]string{"web": {"web"}}}
+		s := ReleaseStart{AppID: "web", ReleaseID: "r1", AppConfig: []byte(`{"appId":"web"}`), Env: []string{"A=1"}, Run: run}
+		err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).StartRelease(context.Background(), s)
+		if err != nil {
+			t.Fatalf("run %v: %v", run, err)
+		}
+		if len(m.validateReqs) != 1 || len(m.createReqs) != 1 {
+			t.Fatalf("run %v: validated %d, created %d: want one of each", run, len(m.validateReqs), len(m.createReqs))
+		}
+		req := m.createReqs[0]
+		if req.GetImageName() != ReleaseImageName("web", "r1") || req.GetAppName() != "web" || string(req.GetAppConfig()) != `{"appId":"web"}` ||
+			!slices.Equal(req.GetEnv(), []string{"A=1"}) || req.GetReleaseId() != "r1" ||
+			req.GetRestartPolicy().GetMode() != agentpb.RestartPolicyMode_UNLESS_STOPPED {
+			t.Fatalf("run %v: create request %v", run, req)
+		}
+		if started := m.startedNames["web"]; started != run || (!run && !slices.Contains(m.stopCalls, "web")) {
+			t.Fatalf("run %v: started %v, stops %v", run, started, m.stopCalls)
+		}
+	}
+	// A create the run path would refuse never replaces the running app.
+	m := &mockContainerdClient{validateErr: errors.New("unknown entitlement")}
+	if err := NewPostboxControl(NewContainerService(zap.NewNop(), m)).StartRelease(context.Background(), ReleaseStart{AppID: "web", ReleaseID: "r1", Run: true}); err == nil || len(m.createReqs) != 0 {
+		t.Fatalf("err %v, created %d: want refused before the create", err, len(m.createReqs))
 	}
 }
