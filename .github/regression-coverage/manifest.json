@@ -1768,30 +1768,60 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2347",
       "title": "fix(ci): supply compatible CUDA libraries for Orin GPU tests",
       "package": "07",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "The GPU fixture images now use compatible CUDA libraries. Their execution is gated on hardware/release workflows rather than ordinary PR checks.",
       "required_follow_up": "Require the relevant Orin fixture on GPU-runtime changes and report skipped hardware checks explicitly.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/jetson-gpu-rehearsal.py",
+          "tests": [
+            ".github/scripts/gpu_hardware_test.py"
+          ],
+          "validation": "Generated and inspected 24 unexecuted cases: Orin NX / JetPack 6, AGX Orin / JetPack 7 with CUDA 13 host, and Thor / CUDA 13; both PyTorch and ONNX, three positive runs and one no-GPU control each. Offline fixture tests reject asynchronous compute errors, wrong results and CPU/missing/mixed ONNX execution providers. Generator tests reject incompatible inventories and changed CLI artifacts. No device was accessed.",
+          "hardware_execution": "not_run"
+        }
+      ],
+      "resolution": "Prepared a target-specific human procedure with pinned local artifacts, explicit device identities, bounded commands, actual app exit/compute assertions, no-GPU controls, cleanup and evidence review. Hardware execution remains not_run. Portable verdict and procedure checks use the existing required automation job."
     },
     {
       "key": "1699",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1699",
       "title": "Fix Jetson GPU entitlement device access",
       "package": "07",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests assert Jetson render-group/device-node grants. They do not run a GPU workload using those permissions.",
       "required_follow_up": "Require an affected Jetson GPU fixture whenever entitlement logic changes.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/jetson-gpu-rehearsal.py",
+          "tests": [
+            ".github/scripts/gpu_hardware_test.py"
+          ],
+          "validation": "Generated and inspected 24 unexecuted cases: Orin NX / JetPack 6, AGX Orin / JetPack 7 with CUDA 13 host, and Thor / CUDA 13; both PyTorch and ONNX, three positive runs and one no-GPU control each. Offline fixture tests reject asynchronous compute errors, wrong results and CPU/missing/mixed ONNX execution providers. Generator tests reject incompatible inventories and changed CLI artifacts. No device was accessed.",
+          "hardware_execution": "not_run"
+        }
+      ],
+      "resolution": "Prepared a target-specific human procedure with pinned local artifacts, explicit device identities, bounded commands, actual app exit/compute assertions, no-GPU controls, cleanup and evidence review. Hardware execution remains not_run. Portable verdict and procedure checks use the existing required automation job."
     },
     {
       "key": "1693",
       "url": "https://github.com/wendylabsinc/wendyos/pull/1693",
       "title": "fix(ci): support CUDA 13 GPU fixtures",
       "package": "07",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "CUDA 13 fixture Dockerfiles and architecture gating exist. They execute only on applicable hardware workflows.",
       "required_follow_up": "Require a Thor CUDA 13 smoke run when these fixtures or GPU entitlements change.",
-      "evidence": []
+      "evidence": [
+        {
+          "script": ".github/regression-coverage/manual/jetson-gpu-rehearsal.py",
+          "tests": [
+            ".github/scripts/gpu_hardware_test.py"
+          ],
+          "validation": "Generated and inspected 24 unexecuted cases: Orin NX / JetPack 6, AGX Orin / JetPack 7 with CUDA 13 host, and Thor / CUDA 13; both PyTorch and ONNX, three positive runs and one no-GPU control each. Offline fixture tests reject asynchronous compute errors, wrong results and CPU/missing/mixed ONNX execution providers. Generator tests reject incompatible inventories and changed CLI artifacts. No device was accessed.",
+          "hardware_execution": "not_run"
+        }
+      ],
+      "resolution": "Prepared a target-specific human procedure with pinned local artifacts, explicit device identities, bounded commands, actual app exit/compute assertions, no-GPU controls, cleanup and evidence review. Hardware execution remains not_run. Portable verdict and procedure checks use the existing required automation job."
     },
     {
       "key": "1692",
