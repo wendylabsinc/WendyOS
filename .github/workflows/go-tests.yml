@@ -726,5 +726,3 @@ jobs:
           python3 .github/ci-tests/host-sensor-loopback/check_test.py
       - name: release priority tests
         run: node --test .github/scripts/release-priority.test.cjs
-      - name: Release tags use the built commit
-        run: python3 .github/scripts/tag-built-commit_test.py

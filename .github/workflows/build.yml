@@ -17,6 +17,7 @@ on:
       - 'go.sum'
       - 'swift/**'
       - '.github/workflows/build.yml'
+      - '.github/scripts/verify-release.py'
   workflow_dispatch:
     inputs:
       publish:
@@ -417,6 +418,8 @@ jobs:
     timeout-minutes: 45
     needs: [determine-version, build-macos-runtime-guest]
     permissions:
+      id-token: write
+      attestations: write
       contents: read
       actions: read
     steps:
@@ -530,6 +533,11 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      - name: Attest notarized release zip
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ steps.build_wendy_agent_mac_app.outputs.artifact_path }}
+
       - name: Upload release zip
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -567,6 +575,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [determine-version]
     permissions:
+      id-token: write
+      attestations: write
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -596,6 +606,11 @@ jobs:
           cat MANIFEST
           tar -czf "../wendy-web-${VERSION}.tar.gz" *
 
+      - name: Attest browser archive
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: wendy-web-${{ needs.determine-version.outputs.version }}.tar.gz
+
       - name: Upload wendy-web
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -608,6 +623,10 @@ jobs:
     name: SBOM (source + swift)
     runs-on: ubuntu-latest
     needs: [determine-version]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -624,6 +643,11 @@ jobs:
           mkdir -p sboms
           scripts/generate-sbom.sh swift  "sboms/wendy-swift-${VERSION}.spdx.json"  --repo-root "$PWD"
           scripts/generate-sbom.sh source "sboms/wendy-source-${VERSION}.spdx.json" --repo-root "$PWD"
+
+      - name: Attest source SBOM files
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: sboms/*.spdx.json
 
       - name: Upload swift SBOM
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -708,6 +732,11 @@ jobs:
           subject-path: ${{ steps.sbom.outputs.archive }}
           sbom-path: ${{ steps.sbom.outputs.sbom }}
 
+      - name: Attest binary SBOM file
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ steps.sbom.outputs.sbom }}
+
       - name: Upload SBOM
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -731,6 +760,10 @@ jobs:
           - arch: arm64
             goarch: arm64
             rpm-arch: aarch64
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -960,6 +993,13 @@ jobs:
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/avahi/services/wendy-agent.service" > /dev/null
           rpm -qp --scripts "$WENDY_AGENT_RPM" | grep "^posttrans scriptlet" > /dev/null
 
+      - name: Attest Linux packages
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            *.deb
+            *.rpm
+
       - name: Upload .deb packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -1081,6 +1121,11 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      - name: Attest signed MSI
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.msi
 
       - name: Upload MSI
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1259,6 +1304,9 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: read
     needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, package-web, test-templates, integration-tests]
     if: |
       always() &&
@@ -1290,31 +1338,26 @@ jobs:
             find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.msi" -o -name "*.deb" -o -name "*.rpm" -o -name "*.spdx.json" | sort
             echo 'EOF'
           } >> $GITHUB_ENV
-      # Tag the commit this run built before creating the release. Left to
-      # itself, the release action creates the tag on the default branch's
-      # newest commit, which is later than the built one whenever something
-      # merges while the release is building. The action's documentation warns
-      # that the workflow token may not be allowed to tag an older commit, so
-      # if that happens, warn and fall back to the action's default.
+      # Verify the producing jobs' signed bytes and source before publishing.
+      # The tag is immutable: a mismatched existing tag or API failure stops here.
+      - name: Checkout release verification
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: .release-source
+          persist-credentials: false
       - name: Tag the built commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.determine-version.outputs.tag_name }}
         run: |
-          set -euo pipefail
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --silent 2>/dev/null; then
-            echo "Tag ${TAG} already exists; leaving it as it is."
-          elif gh api "repos/${GITHUB_REPOSITORY}/git/refs" --silent -f "ref=refs/tags/${TAG}" -f "sha=${GITHUB_SHA}"; then
-            echo "Tagged ${GITHUB_SHA} as ${TAG}."
-          else
-            echo "::warning::Could not tag ${GITHUB_SHA} as ${TAG}. The release will be tagged on the default branch's newest commit instead."
-          fi
+          python3 .release-source/.github/scripts/verify-release.py
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           name: ${{ needs.determine-version.outputs.version }}
           tag_name: ${{ needs.determine-version.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           draft: false
           prerelease: ${{ needs.determine-version.outputs.is_prerelease == 'true' }}
           make_latest: ${{ needs.determine-version.outputs.is_prerelease == 'false' }}
