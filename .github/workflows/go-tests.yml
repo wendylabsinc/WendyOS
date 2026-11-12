@@ -504,6 +504,8 @@ jobs:
         run: bash .github/scripts/test-relay-path-traffic.sh "$RUNNER_TEMP/relay-path-traffic"
       - name: Require explicit disconnect intent across native process restarts
         run: bash .github/scripts/test-operator-native-restart.sh "$RUNNER_TEMP/operator-native-restart"
+      - name: Require persisted clock trust and packet expiry across restarts
+        run: bash .github/scripts/test-clock-packet-restart.sh "$RUNNER_TEMP/clock-packet-restart"
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
