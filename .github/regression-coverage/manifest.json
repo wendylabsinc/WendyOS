@@ -2822,10 +2822,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/commit/d11d2e983ddfb1a592e86468bd73458c875082d0",
       "title": "cli: report the config partition written only once it is released",
       "package": "10",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Write, close, unmount, retry and error aggregation have direct tests. The full Orin install rehearsal is opt-in rather than ordinary CI.",
-      "required_follow_up": "Run the rehearsal in a controlled job and fail on skipped seed-verification checks.",
-      "evidence": []
+      "required_follow_up": "Register and execute the full three-pass Orin seed rehearsal and flashed-seed omission control on the existing Nano/NVMe producer row. The full archive, real arm64 Agent and private 128 GiB sparse target remain required; portable checks alone do not close the entry.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-orin-seed-rehearsal.py",
+            ".github/scripts/orin_seed_rehearsal_test.py",
+            ".github/scripts/fixtures/orin-seed-rehearsal-d11d2e983.md",
+            "go/internal/cli/commands/os_install_orin_seed_fixture_test.go",
+            "go/internal/cli/commands/os_install_orin_seed_sim_test.go"
+          ],
+          "result": "Prepared full producer-archive rehearsal with streamed hash/header/XML accounting before allocation, explicit arm64 Agent bytes, private cache and three actual writer passes. Seed-omission control must fail after a complete write and flashed readback. Four portable tests and both actual-file producer helper tests pass locally. Full producer execution and companion workflow registration remain pending; local free capacity is below the preflight minimum. No payload or iteration was removed, and no physical first-boot claim is made."
+        }
+      ]
     },
     {
       "key": "2805",
