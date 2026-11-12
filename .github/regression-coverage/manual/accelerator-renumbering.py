@@ -192,7 +192,10 @@ def generate(inventory, output):
                 "logs": cli_command("device", "logs", "--app", app, "--tail", "200", "--no-follow"),
                 "remove": [cli, "device", "apps", "remove", app, "--force", "--device", selector]},
                 "board": {"info": cli_command("device", "info"),
-                "update": cli_command("device", "update", "--binary", artifacts["agent_binary"]["path"], "--artifact-url", url, "--yes")}}
+                # Artifact updates explicitly reject JSON mode, which skips OS
+                # updates. The shared runner still records bounded text output.
+                "update": [cli, "device", "update", "--binary", artifacts["agent_binary"]["path"],
+                           "--artifact-url", url, "--yes", "--device", selector]}}
     if is_npu:
         helpers.write(out / "probe.py", npu.PROBE)
         for stage in ("status", "report", "log"):

@@ -87,6 +87,8 @@ class AcceleratorRenumberingTests(unittest.TestCase):
                         self.assertNotIn("--delete-volumes", argv)
                         self.assertNotIn("--cleanup", argv)
                 self.assertIn("--no-restart", commands["app"]["deploy"])
+                self.assertNotIn("--json", commands["board"]["update"])
+                self.assertIn("--artifact-url", commands["board"]["update"])
                 self.assertEqual("--detach" in commands["app"]["start"], npu)
                 self.assertNotIn("run", commands["app"]["start"])
                 cfg = json.loads((out / "project/wendy.json").read_text())
