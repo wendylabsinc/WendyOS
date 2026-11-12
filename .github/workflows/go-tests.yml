@@ -459,6 +459,8 @@ jobs:
               test -z "$(git status --porcelain)"
             )
           done
+      - name: Require TLS UDP admission and recovery under a stalled stream
+        run: bash .github/scripts/test-tls-udp-admission.sh "$RUNNER_TEMP/tls-udp-admission"
       - name: Require duplicate rejection with an incumbent forwarding route
         shell: bash
         run: |
