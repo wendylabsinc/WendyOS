@@ -2269,10 +2269,17 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2353",
       "title": "Keep disk space free on the self-hosted macOS CI runner",
       "package": "11",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Disk cleanup has an operational guard and maintenance scripts, but no selected fixture proves that only stale CI builders are removed.",
       "required_follow_up": "Test cleanup with active, stale, foreign and malformed builder records and low-disk conditions.",
-      "evidence": []
+      "evidence": [
+        {
+          "test": ".github/scripts/runner_cleanup_test.py",
+          "runner": "local macOS; required offline automation job",
+          "result": "Six fixtures execute the actual stale-builder selector with a fake Docker CLI and the actual disk gate with isolated df results. Current-run attempts, foreign names, the user-owned hexadecimal builder name, malformed names and node rows are preserved; stale owned names are removed once. Dry run, missing/invalid run ID, listing failure, removal failure, exact disk threshold, insufficient space and malformed disk inputs are covered. Original script failed active/malformed-selection checks; tightened selection passes. All 308 offline regressions pass. No real Docker builder or cache was accessed."
+        }
+      ],
+      "resolution": "The sweep retains its documented single-runner-per-Docker-daemon requirement and now preserves current-run builders explicitly. Outside an identifiable GitHub run it skips sweeping. Required CI remains pending."
     },
     {
       "key": "2352",
