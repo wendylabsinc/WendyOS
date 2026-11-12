@@ -270,17 +270,35 @@ func TestAgentWindowNegotiationAndTransfer(t *testing.T) {
 }
 
 func TestAgentWindowBounds(t *testing.T) {
+	// Router: the echoed selection is nonzero only when both peers opted in.
 	for _, test := range []struct {
-		local, peer, want uint32
-		fail              bool
+		local, offered, want, echoed uint32
+		fail                         bool
 	}{
-		{0, 0, agentWindow, false}, {agentTCPWindow, 0, agentWindow, false}, {0, agentTCPWindow, agentWindow, false},
-		{agentTCPWindow, 64 * 1024, 64 * 1024, false}, {64 * 1024, agentTCPWindow, 64 * 1024, false},
-		{agentTCPWindow, 1, 0, true}, {agentTCPWindow, agentTCPWindow + 1, 0, true}, {agentTCPWindow, ^uint32(0), 0, true},
+		{0, 0, agentWindow, 0, false}, {agentTCPWindow, 0, agentWindow, 0, false}, {0, agentTCPWindow, agentWindow, 0, false},
+		{agentTCPWindow, 64 * 1024, 64 * 1024, 64 * 1024, false}, {64 * 1024, agentTCPWindow, 64 * 1024, 64 * 1024, false},
+		{agentTCPWindow, agentTCPWindow, agentTCPWindow, agentTCPWindow, false},
+		{agentTCPWindow, 1, 0, 0, true}, {agentTCPWindow, agentTCPWindow + 1, 0, 0, true}, {agentTCPWindow, ^uint32(0), 0, 0, true},
+		{0, 1, 0, 0, true},
 	} {
-		got, err := negotiateAgentWindow(test.local, test.peer)
+		got, echoed, err := selectAgentWindow(test.local, test.offered)
+		if (err != nil) != test.fail || got != test.want || echoed != test.echoed {
+			t.Fatalf("select %+v got %d/%d %v", test, got, echoed, err)
+		}
+	}
+	// Operator: the router may select only within the operator's own offer.
+	for _, test := range []struct {
+		offered, selected, want uint32
+		fail                    bool
+	}{
+		{0, 0, agentWindow, false}, {agentTCPWindow, 0, agentWindow, false},
+		{agentTCPWindow, 64 * 1024, 64 * 1024, false}, {agentTCPWindow, agentWindow, agentWindow, false}, {agentTCPWindow, agentTCPWindow, agentTCPWindow, false},
+		{0, agentWindow, 0, true}, {0, agentTCPWindow, 0, true}, {64 * 1024, agentTCPWindow, 0, true},
+		{agentTCPWindow, agentWindow - 1, 0, true}, {agentTCPWindow, agentTCPWindow + 1, 0, true}, {agentTCPWindow, ^uint32(0), 0, true},
+	} {
+		got, err := acceptAgentWindow(test.offered, test.selected)
 		if (err != nil) != test.fail || got != test.want {
-			t.Fatalf("%+v got %d %v", test, got, err)
+			t.Fatalf("accept %+v got %d %v", test, got, err)
 		}
 	}
 	for _, window := range []uint32{agentWindow, agentTCPWindow} {

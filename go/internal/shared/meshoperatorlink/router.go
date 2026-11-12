@@ -96,12 +96,9 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 	if reply.Kind != "operator-router-ready" {
 		return nil, errors.New("missing operator router readiness")
 	}
-	window, err := negotiateAgentWindow(offeredWindow, reply.AgentWindow)
+	window, err := acceptAgentWindow(offeredWindow, reply.AgentWindow)
 	if err != nil {
 		return nil, err
-	}
-	if reply.AgentWindow != 0 && (offeredWindow == 0 || reply.AgentWindow > offeredWindow) {
-		return nil, errors.New("operator router selected an unoffered agent window")
 	}
 	peer, err := meshid.PeerFromPrincipal(cfg.Identity.Operator().Principal())
 	if err != nil {
@@ -234,13 +231,9 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if err != nil {
 		return nil, err
 	}
-	window, err := negotiateAgentWindow(agentWindowOffer(c), hello.AgentWindow)
+	window, selectedWindow, err := selectAgentWindow(agentWindowOffer(c), hello.AgentWindow)
 	if err != nil {
 		return nil, err
-	}
-	var selectedWindow uint32
-	if hello.AgentWindow != 0 && agentWindowOffer(c) != 0 {
-		selectedWindow = window
 	}
 	if err = writeControl(c, control{Kind: "operator-router-ready", AgentWindow: selectedWindow}); err != nil {
 		return nil, err

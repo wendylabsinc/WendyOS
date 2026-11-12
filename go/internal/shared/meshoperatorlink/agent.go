@@ -29,14 +29,30 @@ func agentWindowOffer(c *tls.Conn) uint32 {
 	return 0
 }
 
-func negotiateAgentWindow(local, peer uint32) (uint32, error) {
-	if peer != 0 && (peer < agentWindow || peer > agentTCPWindow) {
-		return 0, errors.New("invalid operator router agent window")
+// selectAgentWindow is the router's choice from the operator's hello maximum.
+// Ready echoes the selection only when both peers opted in; otherwise both
+// sides keep the legacy window and ready stays byte-identical to legacy peers.
+func selectAgentWindow(local, offered uint32) (window, echoed uint32, err error) {
+	if offered != 0 && (offered < agentWindow || offered > agentTCPWindow) {
+		return 0, 0, errors.New("invalid operator router agent window")
 	}
-	if local == 0 || peer == 0 {
+	if local == 0 || offered == 0 {
+		return agentWindow, 0, nil
+	}
+	window = min(local, offered)
+	return window, window, nil
+}
+
+// acceptAgentWindow checks the router's ready selection against the operator's
+// own offer. Absent keeps the legacy window; anything else must lie within it.
+func acceptAgentWindow(offered, selected uint32) (uint32, error) {
+	if selected == 0 {
 		return agentWindow, nil
 	}
-	return min(local, peer), nil
+	if offered == 0 || selected < agentWindow || selected > offered {
+		return 0, errors.New("operator router selected an unoffered agent window")
+	}
+	return selected, nil
 }
 
 func (l *Link) receiveWindow() uint32 {
