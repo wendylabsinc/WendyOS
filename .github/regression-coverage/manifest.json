@@ -2942,6 +2942,11 @@
             ".github/scripts/installed_linux_package_guests_test.py"
           ],
           "result": "Ten artifact tests and nine guest ownership/deadline checks pass. Exact shared release packaging produced all four packages, and dependency provisioning passed for all three pinned distributions. Actual hosted static CLI compilation and booted systemd Agent transactions remain pending; inert local packaging tests are not runtime proof."
+        },
+        {
+          "head": "751a26298cf2a1986442de1ba291138432bd892f",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43319307528/job/131535787788",
+          "result": "Actual Ubuntu22 normal and negative-control package journeys passed. Candidate CLI/Agent2099.01.04-regression-package amd64 served real RPCs before and after a successful upgrade; PID/start identity changed, five-second stable health and retained configuration passed, and removal stayed inactive for eight samples. The successful negative-control upgrade left the service inactive for eight samples as required. Cleanup reported no errors. Ubuntu24 stopped in dependency provisioning because nspawn host timezone synchronization prevented tzdata replacing /etc/localtime; --timezone=off fixture correction is prepared. Ubuntu24/Fedora and nativearm64 remain pending; this is partial distribution evidence, not full2352 closure."
         }
       ]
     },
