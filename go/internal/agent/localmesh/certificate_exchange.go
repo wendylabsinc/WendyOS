@@ -332,6 +332,14 @@ func (e *CertificateExchange) Poll(now time.Time, slots ...int) (replies []*Cert
 			continue
 		}
 		_, err := e.cache.put(chain, pending.chain.Principal, now)
+		if errors.Is(err, errIdentityNotRenewal) {
+			// A neighbor may describe its still-valid older leaf after our
+			// renewal. Keep the newer trusted identity and the carrier; this
+			// stale descriptor grants no admission or retention extension.
+			delete(e.pending, principal)
+			budget--
+			continue
+		}
 		if err != nil {
 			return nil, nil, err
 		}
