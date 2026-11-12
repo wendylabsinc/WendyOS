@@ -202,17 +202,9 @@ jobs:
           python3 scripts/package-chatgpt-plugin.py --check
 
   containerd-regressions:
-    name: Containerd lifecycle regressions (${{ matrix.runtime }})
+    name: Containerd lifecycle and DNS regressions
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runtime: '1.7'
-            package: containerd=1.7.12-0ubuntu4
-          - runtime: current
-            package: containerd
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
@@ -224,41 +216,7 @@ jobs:
         run: |
           go test -c -o "$RUNNER_TEMP/containerd.test" ./go/internal/agent/containerd
           go test -c -o "$RUNNER_TEMP/rtps.test" ./go/internal/rtps
-      - name: Extract test runtime without replacing the runner's daemon
-        env:
-          CONTAINERD_PACKAGE: ${{ matrix.package }}
-        run: |
-          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update --error-on=any
-          mkdir -p "$RUNNER_TEMP/wendy-runtime"
-          cd "$RUNNER_TEMP/wendy-runtime"
-          apt-get download "$CONTAINERD_PACKAGE" runc busybox-static
-          for package in ./*.deb; do dpkg-deb --extract "$package" root; done
-      - name: Test replacement, restoration and layer repair
-        run: |
-          runtime="$RUNNER_TEMP/wendy-runtime/root"
-          sudo env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
-            bash .github/scripts/test-containerd-regressions.sh "$RUNNER_TEMP/containerd.test"
-
-      - name: Check real DDS network namespace isolation
-        run: |
-          command -v ip unshare
-          tests='TestHostNetworkContainersAndBatteryShareTwoParticipants|TestIsolatedNamespaceUsesSeparateParticipant|TestAutomaticHostInterfaceResolvesBeforePoolLookup'
-          sudo "$RUNNER_TEMP/rtps.test" -test.run "^($tests)$" -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/rtps-results"
-          for test in ${tests//|/ }; do
-            grep -F -- "--- PASS: $test (" "$RUNNER_TEMP/rtps-results"
-          done
-
-      - name: Install resolver fixtures
-        run: sudo apt-get install -y systemd-resolved dbus iproute2 util-linux
-      - name: Require container DNS recovery through the real resolved stub
-        shell: bash
-        run: |
-          runtime="$RUNNER_TEMP/wendy-runtime/root"
-          sudo env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
-            bash .github/scripts/test-host-network-dns.sh "$RUNNER_TEMP/containerd.test" | tee "$RUNNER_TEMP/host-dns-positive.log"
-          grep -q '^--- PASS: TestHostNetworkDNSOutage ' "$RUNNER_TEMP/host-dns-positive.log"
-      - name: Reject a resolver pinned to the old upstream
+      - name: Compile the pinned-upstream negative control
         env:
           CGO_ENABLED: '0'
         shell: bash
@@ -276,13 +234,30 @@ jobs:
           (root / 'host-dns-overlay.json').write_text(json.dumps({'Replace': {str(source): str(mutation)}}))
           PY
           go test -overlay "$RUNNER_TEMP/host-dns-overlay.json" -c -o "$RUNNER_TEMP/host-dns-pinned.test" ./go/internal/agent/containerd
-          runtime="$RUNNER_TEMP/wendy-runtime/root"
-          if sudo env PATH="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$PATH" \
-            bash .github/scripts/test-host-network-dns.sh "$RUNNER_TEMP/host-dns-pinned.test" 2>&1 | tee "$RUNNER_TEMP/host-dns-negative.log"; then
-            echo 'Pinned resolver mutation unexpectedly passed' >&2
-            exit 1
-          fi
-          grep -q 'container DNS did not recover for after-upstream-replacement' "$RUNNER_TEMP/host-dns-negative.log"
+      - name: Extract both runtimes without replacing the runner daemon
+        run: |
+          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update --error-on=any
+          sudo apt-get install -y systemd-resolved dbus iproute2 util-linux
+          root="$RUNNER_TEMP/wendy-runtime"
+          mkdir -p "$root/common"
+          (
+            cd "$root/common"
+            apt-get download runc busybox-static
+            for package in ./*.deb; do dpkg-deb --extract "$package" root; done
+          )
+          for runtime_version in 1.7 current; do
+            package=containerd
+            if [[ "$runtime_version" == 1.7 ]]; then package=containerd=1.7.12-0ubuntu4; fi
+            mkdir -p "$root/$runtime_version"
+            (
+              cd "$root/$runtime_version"
+              apt-get download "$package"
+              for archive in ./*.deb; do dpkg-deb --extract "$archive" root; done
+            )
+          done
+      - name: Require lifecycle, DNS and DDS checks on both runtimes
+        run: bash .github/scripts/test-containerd-versions.sh
 
   linux-install-host:
     name: Linux install safety
@@ -318,19 +293,19 @@ jobs:
           sudo env WENDY_TEST_LOOP_DEVICES=1 "$RUNNER_TEMP/t234.test" -test.run '^TestRawWriterExclusiveMountedPartition$' -test.v -test.count=1 -test.timeout=120s | tee "$RUNNER_TEMP/recovery-host.log"
           grep -q '^--- PASS: TestRawWriterExclusiveMountedPartition ' "$RUNNER_TEMP/recovery-host.log"
 
-  packet-backends:
-    name: Kernel and userspace packet contracts
+  network-regressions:
+    name: Linux network regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
         with:
-          cache-name: packet-backends
-      - name: Install kernel networking tools
+          cache-name: network-regressions
+      - name: Install network fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config
+          sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Compile both packet backends with the race detector
         run: go test -race -c -o "$RUNNER_TEMP/packet-backends.test" ./go/internal/cli/netmesh
       - name: Require identical tenant and route behavior
@@ -367,29 +342,14 @@ jobs:
           PY
           for mutation in tenant withdrawal; do
             go test -race -overlay="$RUNNER_TEMP/$mutation-overlay.json" -c -o "$RUNNER_TEMP/$mutation.test" ./go/internal/cli/netmesh
-            if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/$mutation.test" > "$RUNNER_TEMP/$mutation.log" 2>&1; then
-              cat "$RUNNER_TEMP/$mutation.log"
+            if sudo .github/scripts/test-packet-backends.sh "$RUNNER_TEMP/$mutation.test" 2>&1 | tee "$RUNNER_TEMP/$mutation.log"; then
               echo "$mutation mutation unexpectedly passed" >&2
               exit 1
             fi
-            cat "$RUNNER_TEMP/$mutation.log"
           done
           grep -q 'foreign tenant acquired a packet port' "$RUNNER_TEMP/tenant.log"
           grep -q 'unrouted packet reached carrier: withdrawn' "$RUNNER_TEMP/withdrawal.log"
 
-  multicast-interfaces:
-    name: Multicast interface lifecycle
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: ./.github/actions/setup-go-ci
-        with:
-          cache-name: multicast-interfaces
-      - name: Install namespace tools
-        run: |
-          sudo apt-get update --error-on=any
-          sudo apt-get install -y iproute2 util-linux
       - name: Compile real multicast receiver with the race detector
         run: go test -race -c -o "$RUNNER_TEMP/multicast.test" ./go/internal/agent/timesync
       - name: Require delivery across interface hotplug and removal
@@ -415,21 +375,13 @@ jobs:
           overlay.write_text(json.dumps({'Replace': {str(source): str(mutated)}}))
           PY
           go test -race -overlay="$RUNNER_TEMP/multicast-overlay.json" -c -o "$RUNNER_TEMP/multicast-startup-only.test" ./go/internal/agent/timesync
-          if sudo .github/scripts/test-multicast-interfaces.sh "$RUNNER_TEMP/multicast-startup-only.test" > "$RUNNER_TEMP/multicast-startup-only.log" 2>&1; then
-            cat "$RUNNER_TEMP/multicast-startup-only.log"
+          if sudo .github/scripts/test-multicast-interfaces.sh "$RUNNER_TEMP/multicast-startup-only.test" 2>&1 | tee "$RUNNER_TEMP/multicast-startup-only.log"; then
             echo 'Startup-only multicast subscriptions unexpectedly passed' >&2
             exit 1
           fi
-          cat "$RUNNER_TEMP/multicast-startup-only.log"
           grep -q 'multicast proof never arrived on time2' "$RUNNER_TEMP/multicast-startup-only.log"
           grep -q '^--- FAIL: TestMulticastInterfaceLifecycle ' "$RUNNER_TEMP/multicast-startup-only.log"
 
-  operator-policy:
-    name: Mesh operator policy and rollback
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # Main immediately before #2579. Compile its real ownership and
@@ -443,13 +395,6 @@ jobs:
           ref: 581bff3a8aeb368680f346a9785934eef14848d7
           path: .ci/operator-original-baseline
           persist-credentials: false
-      - uses: ./.github/actions/setup-go-ci
-        with:
-          cache-name: operator-policy
-      - name: Install kernel policy test dependencies
-        run: |
-          sudo apt-get update --error-on=any
-          sudo apt-get install -y iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Compile current and pre-operator agent paths
         run: |
           test "$(git -C .ci/operator-baseline rev-parse HEAD)" = ceef5cfa15f6739b04559a365a617e1dd287ae47
@@ -477,25 +422,12 @@ jobs:
             done
           done
 
-  hostname-restart:
-    name: Hostname and mDNS restart
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: wendylabsinc/WendyOS-Builder
           ref: 954d4e8680c3e5ef6c5fc7b6179902149cebd830
           path: .ci/hostname-builder
           persist-credentials: false
-      - uses: ./.github/actions/setup-go-ci
-        with:
-          cache-name: hostname-restart
-      - name: Install namespace and advertisement tools
-        run: |
-          sudo apt-get update --error-on=any
-          sudo apt-get install -y avahi-daemon iproute2 util-linux libasound2-dev libusb-1.0-0-dev pkg-config
       - name: Compile the actual rename and startup paths
         run: go test -c -o "$RUNNER_TEMP/hostname.test" ./go/internal/agent/configpartition
       - name: Require hostname and wire advertisement after process restart
@@ -506,9 +438,9 @@ jobs:
           grep -q '^--- PASS: TestDeviceNameRestartIntegration ' "$RUNNER_TEMP/hostname-restart.log"
 
   darwin-install-host:
-    name: macOS install safety
+    name: macOS CLI and device regressions
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -566,19 +498,21 @@ jobs:
           path: go/macos/Build/RegressionResults.xcresult
           if-no-files-found: warn
 
-  camera-node-regression:
-    name: Camera node removal
+  media-regressions:
+    name: Linux media regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
         with:
-          cache-name: camera-node
-      - name: Install a real loopback control device
+          cache-name: media-regressions
+      - name: Install camera and GStreamer fixture dependencies
         run: |
           sudo apt-get update --error-on=any
-          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential
+          sudo apt-get install -y "linux-headers-$(uname -r)" build-essential libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-tools libasound2-dev libusb-1.0-0-dev
+          gst-inspect-1.0 fakesrc
+          gst-inspect-1.0 fdsink
       # Match the WendyOS 0.15.4 ABI; Ubuntu's older package has different ioctls.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -603,21 +537,6 @@ jobs:
           sudo "$RUNNER_TEMP/ipcam.test" -test.run '^TestLoopbackNodeRemoveDeletesTheNode$' -test.v -test.count=1 -test.timeout=60s | tee "$RUNNER_TEMP/loopback.log"
           grep -q '^--- PASS: TestLoopbackNodeRemoveDeletesTheNode ' "$RUNNER_TEMP/loopback.log"
 
-  gstreamer-regressions:
-    name: GStreamer output and cancellation
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: ./.github/actions/setup-go-ci
-        with:
-          cache-name: gstreamer
-      - name: Install GStreamer core elements
-        run: |
-          sudo apt-get update --error-on=any
-          sudo apt-get install -y libgstreamer1.0-0 gstreamer1.0-plugins-base gstreamer1.0-tools libasound2-dev libusb-1.0-0-dev
-          gst-inspect-1.0 fakesrc
-          gst-inspect-1.0 fdsink
       - name: Require actual pipeline output and shutdown
         shell: bash
         run: |
@@ -825,7 +744,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, camera-node-regression, gstreamer-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, hostname-restart, operator-policy, multicast-interfaces, packet-backends, plugin-launcher]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, media-regressions, simulator-python310, native-app-regressions, automation-regressions, dependency-security, linux-install-host, darwin-install-host, network-regressions, plugin-launcher]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -838,16 +757,12 @@ jobs:
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
-          CAMERA_NODE_RESULT: ${{ needs.camera-node-regression.result }}
-          GSTREAMER_RESULT: ${{ needs.gstreamer-regressions.result }}
+          MEDIA_RESULT: ${{ needs.media-regressions.result }}
           SIMULATOR_PYTHON_RESULT: ${{ needs.simulator-python310.result }}
           NATIVE_APP_RESULT: ${{ needs.native-app-regressions.result }}
           AUTOMATION_RESULT: ${{ needs.automation-regressions.result }}
           DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
-          HOSTNAME_RESTART_RESULT: ${{ needs.hostname-restart.result }}
-          OPERATOR_POLICY_RESULT: ${{ needs.operator-policy.result }}
-          MULTICAST_INTERFACES_RESULT: ${{ needs.multicast-interfaces.result }}
-          PACKET_BACKENDS_RESULT: ${{ needs.packet-backends.result }}
+          NETWORK_RESULT: ${{ needs.network-regressions.result }}
           LINUX_INSTALL_RESULT: ${{ needs.linux-install-host.result }}
           DARWIN_INSTALL_RESULT: ${{ needs.darwin-install-host.result }}
           PLUGIN_LAUNCHER_RESULT: ${{ needs.plugin-launcher.result }}
@@ -864,16 +779,12 @@ jobs:
           test "$STARTUP_RESULT" = success
           test "$INFERENCE_WORKER_RESULT" = success
           test "$CONTAINERD_RESULT" = success
-          test "$CAMERA_NODE_RESULT" = success
-          test "$GSTREAMER_RESULT" = success
+          test "$MEDIA_RESULT" = success
           test "$SIMULATOR_PYTHON_RESULT" = success
           test "$NATIVE_APP_RESULT" = success
           test "$AUTOMATION_RESULT" = success
           test "$DEPENDENCY_SECURITY_RESULT" = success
-          test "$HOSTNAME_RESTART_RESULT" = success
-          test "$OPERATOR_POLICY_RESULT" = success
-          test "$MULTICAST_INTERFACES_RESULT" = success
-          test "$PACKET_BACKENDS_RESULT" = success
+          test "$NETWORK_RESULT" = success
           test "$LINUX_INSTALL_RESULT" = success
           test "$DARWIN_INSTALL_RESULT" = success
           test "$PLUGIN_LAUNCHER_RESULT" = success
