@@ -173,12 +173,16 @@ func TestOperatorBrokerNormalCredentialRenewalRejoins(t *testing.T) {
 func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	var extraSources []carriers.Source
 	var fixtureSource carriers.Source
+	var spare *operatorSpareFixture
 	openedSessions := make(chan *operatormesh.Session, 8)
 	previousOpen := openOperatorSession
 	t.Cleanup(func() { openOperatorSession = previousOpen })
 	openOperatorSession = func(ctx context.Context, options operatormesh.Options) (*operatormesh.Session, error) {
 		options.CarrierSources = append([]carriers.Source{fixtureSource}, extraSources...)
 		session, err := operatormesh.Open(ctx, options)
+		if spare != nil && err == nil {
+			spare.sessions <- session
+		}
 		if algorithm == "P256-reconnect" && err == nil {
 			openedSessions <- session
 		}
@@ -186,7 +190,7 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	}
 
 	lifetime := 30 * time.Second
-	if algorithm == "P256-native-restart" {
+	if algorithm == "P256-native-restart" || algorithm == "P256-spare-recovery" {
 		lifetime = 90 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), lifetime)
@@ -321,13 +325,16 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	listeners := []net.Listener{socket}
 	var useAlternate atomic.Bool
 	var browses atomic.Int32
-	if algorithm == "P256-roam" || algorithm == "P256-nearby-paths" {
+	if algorithm == "P256-roam" || algorithm == "P256-nearby-paths" || algorithm == "P256-spare-recovery" {
 		alternate, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer alternate.Close()
 		listeners = append(listeners, alternate)
+	}
+	if algorithm == "P256-spare-recovery" {
+		spare = newOperatorSpareFixture(t, router, listeners)
 	}
 	var transit *brokerTransitFixture
 	if algorithm == "P256-transit" || algorithm == "P256-embedded-transit" {
@@ -382,16 +389,24 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 					raw.Close()
 					return
 				}
-				carrierSockets <- raw
+				if spare == nil {
+					carrierSockets <- raw
+				}
 				link, err := meshoperatorlink.AcceptRouter(ctx, secure, tenant, []*x509.Certificate{root}, ingress.Deliver)
 				if err != nil {
 					raw.Close()
 					return
 				}
 				admitted.Add(1)
-				proofs <- link.Peer()
+				if spare == nil {
+					proofs <- link.Peer()
+				}
 				defer func() { _ = link.Close(); link.Wait(); withdrawn.Add(1) }()
-				_ = peerNode.AttachOperatorRouterLink(ctx, link, 128)
+				cost := uint16(128)
+				if spare != nil {
+					cost = spare.accepted(listener, raw)
+				}
+				_ = peerNode.AttachOperatorRouterLink(ctx, link, cost)
 			}()
 		}
 	}
@@ -420,6 +435,9 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	var leases []*os.File
 	launchOperatorBroker = func(spec Spec) error {
 		starts.Add(1)
+		if spare != nil {
+			spare.specs <- spec
+		}
 		b, _ := json.Marshal(spec)
 		r, w, err := os.Pipe()
 		if err != nil {
@@ -493,6 +511,11 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		return ctx.Err()
 	}
 
+	if spare != nil {
+		fixtureSource = spare.source
+		spare.run(t, ctx, certificate, peerNetwork, service, &admitted, &withdrawn)
+		return
+	}
 	if algorithm == "P256-native-restart" {
 		operatorNativeRestartJourney(t, ctx, directory, principal, router, socket.Addr().String(), service, &admitted, &withdrawn)
 		return
