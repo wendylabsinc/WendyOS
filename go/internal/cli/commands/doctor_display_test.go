@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -34,5 +35,26 @@ func TestDoctorDisplayDoesNotClaimUnobservedReadiness(t *testing.T) {
 	renderDoctorReport(&b, doctorReport{OK: true, Checks: []doctorCheck{{ID: "project", Status: "unknown", Message: "No project selected."}}})
 	if !strings.Contains(b.String(), "in the checks performed") || !strings.Contains(b.String(), "Not checked") || strings.Contains(b.String(), "\nReady") {
 		t.Fatal(b.String())
+	}
+}
+
+// Every check doctor emits needs a readable label; the underscore fallback
+// prints internal IDs such as "wendy agent".
+func TestDoctorDisplayLabelsEveryEmittedCheck(t *testing.T) {
+	d := doctorTestDeps(t)
+	d.probe = func(context.Context, string) doctorTargetEvidence {
+		return doctorTargetEvidence{Reachable: true, AgentResponding: true}
+	}
+	report, _, _ := doctorExecute(t, d, "--device", "192.168.1.20")
+	if doctorFindCheck(t, report, "wendy_agent").Status != "pass" {
+		t.Fatalf("agent check missing from %+v", report.Checks)
+	}
+	for _, check := range report.Checks {
+		if label := doctorCheckLabel(check.ID); label == strings.ReplaceAll(check.ID, "_", " ") {
+			t.Errorf("check %q has no label; doctor prints %q", check.ID, label)
+		}
+	}
+	if got := doctorCheckLabel("wendy_agent"); got != "Wendy Agent" {
+		t.Errorf("agent label = %q", got)
 	}
 }
