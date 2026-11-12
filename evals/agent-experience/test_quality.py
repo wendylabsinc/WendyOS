@@ -189,6 +189,23 @@ class ScenarioQuality(unittest.TestCase):
             {'tool': 'bluetooth_connect', 'arguments': {}, 'canned': True, 'captured': False, 'is_error': False, 't': 1}])
         self.assertEqual(g.grade(fallback, expect, '', True)['outcome'], 'missed')
 
+    def test_app_commands_match_with_the_app_name_before_the_flags(self):
+        rows = {r['id']: r['expect'] for r in json.loads((Path(__file__).parent / 'scenarios.json').read_text())}
+        def cli(*argv):
+            return [{'channel': 'cli', 'name': ' '.join(argv[:2]), 'arguments': list(argv), 'is_error': False}]
+        for scenario, argv in (
+                ('app-exec-command', ('device', 'attach', 'sensor-dashboard', '--', 'python3', '--version')),
+                ('app-exec-command', ('device', 'attach', '--device', 'vm:sim', 'sensor-dashboard', '--', 'python', '-V')),
+                ('app-remove-free-space', ('device', 'apps', 'remove', 'sensor-dashboard', '--cleanup')),
+                ('app-remove-free-space', ('device', 'apps', 'remove', '--cleanup', 'sensor-dashboard'))):
+            self.assertEqual(g.grade(cli(*argv), rows[scenario], '', True)['outcome'], 'right', argv)
+        for scenario, argv in (
+                ('app-exec-command', ('device', 'attach', 'other-app', '--', 'python3', '--version')),
+                ('app-exec-command', ('device', 'attach', 'sensor-dashboard')),
+                ('app-remove-free-space', ('device', 'apps', 'remove', 'other-app', '--cleanup')),
+                ('app-remove-free-space', ('device', 'apps', 'remove', 'sensor-dashboard'))):
+            self.assertEqual(g.grade(cli(*argv), rows[scenario], '', True)['outcome'], 'missed', argv)
+
     def test_suite_plan_is_explicit_and_dry_by_default(self):
         argv = command('smoke', '/c', '/w', '/t', '/o')
         self.assertNotIn('--execute', argv)

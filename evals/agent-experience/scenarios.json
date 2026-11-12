@@ -426,7 +426,7 @@
         },
         {
           "cli": "device apps remove",
-          "args_regex": "(?i)(?=.*sensor-dashboard)--cleanup\\b"
+          "args_regex": "(?i)^(?=.*\\bsensor-dashboard\\b).*--cleanup\\b"
         }
       ],
       "wrong": [
@@ -507,7 +507,7 @@
         },
         {
           "cli": "device attach",
-          "args_regex": "(?i)(?=.*sensor-dashboard)(?:^|\\s)--\\s.*?(?:python)"
+          "args_regex": "(?i)^(?=.*\\bsensor-dashboard\\b).*\\s--\\s.*?python"
         }
       ],
       "wrong": [
