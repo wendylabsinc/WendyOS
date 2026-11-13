@@ -106,6 +106,13 @@ def generate(inventory, output):
         "controller_trace_on_target": ["sudo", "-n", "timeout", "--signal=INT", "--kill-after=3s", "100s", "btmon", "--index", str(host["adapter_index"]), "--write", "controller.btsnoop"],
         "input_registry_on_target": ["timeout", "--signal=TERM", "--kill-after=3s", "70s", "python3", "bluez-input-observer.py", "--address", peripheral_mac, "--seconds", "65", "--output", "input-registry.jsonl"],
     }
+    methods = [
+        f"type='method_call',destination='org.bluez',path='{adapter}',interface='org.bluez.Adapter1',member='RemoveDevice'",
+        f"type='method_call',destination='org.bluez',path='{device}',interface='org.bluez.Device1',member='Pair'",
+        f"type='method_call',destination='org.bluez',path='{device}',interface='org.freedesktop.DBus.Properties',member='Get'",
+    ]
+    commands["target_methods_on_target"] = ["sudo", "-n", "timeout", "--signal=INT", "--kill-after=3s", "100s",
+        "stdbuf", "-oL", "-eL", "dbus-monitor", "--system", "--monitor", *methods]
     for prop in ("Address", "Paired", "Trusted", "Connected", "UUIDs"):
         commands["target_" + prop.lower()] = ["busctl", "--system", "--timeout=5s", "get-property", "org.bluez", device, "org.bluez.Device1", prop]
     shutil.copyfile(Path(__file__).with_name("bluez-input-observer.py"), out / "bluez-input-observer.py")

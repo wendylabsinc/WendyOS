@@ -44,7 +44,7 @@ Reservation and identity
 Baseline with real input
 
 5. Start a fresh case directory, UTC timeline and full Agent journal capture.
-   Confirm btmon, busctl, timeout and evtest are installed and their --help matches
+   Confirm btmon, busctl, dbus-monitor, stdbuf, timeout and evtest are installed and their --help matches
    the commands. Confirm the reserved account already has the needed observation
    access; sudo -n must fail rather than wait for credentials. Run baseline_pair on the management host. This bounded command
    requests pairing and trust for only @ADDRESS@; owner authorization is required
@@ -90,12 +90,20 @@ Create and prove the mismatch
 
 Measured repair
 
-9. Use three terminals: start the generated bounded controller trace on the target,
+9. Use separate terminals: start target_methods_on_target with both stdout/stderr
+   redirected to a fresh dbus-methods.txt, start the bounded controller trace,
    start input_registry_on_target in a fresh directory, then run
    repair_preserving_live_trust on the management host. Save the complete command
    exit/output and correlated Agent journal. The command explicitly sets trust=false
    to prove that a previously live Trusted=true survives RemoveDevice and re-pairing.
    It still requests pair=true. Do not issue a second connect while it runs.
+   Before and after the measured connect, run target_paired and require its
+   Properties.Get call in dbus-methods.txt. A denied/terminated monitor or missing
+   boundary calls leaves method observation incomplete. Require the successful
+   repair to show Adapter1.RemoveDevice with the exact target object path argument
+   and Device1.Pair on the target path. This is the positive control for the same
+   method filters used in the no-pair case; retain method sender IDs and timestamps.
+   An unrelated client's intervention makes attribution inconclusive.
 
 10. Classify the actual trigger separately; do not force both branches from one run:
     - Key-error recovery requires an observed key/authentication failure and the
@@ -119,9 +127,14 @@ Measured repair
 No implicit bond removal and reconnect
 
 11. From a healthy baseline, recreate the peripheral-only mismatch exactly as in
-    steps 7–8. Capture target properties, HCI, input registry and Agent journal,
-    then run no_pair_control. This explicitly sets pair=false/trust=false. Require
-    no Agent-initiated RemoveDevice or fresh Pair. The call may fail or report a
+    steps 7–8. Start a new target_methods_on_target trace using the same already-verified
+    filters. Capture target properties, HCI, input registry and Agent journal,
+    then run no_pair_control. Require target_paired Properties.Get boundary calls
+    before and after the complete command interval, with no monitor error or gap. This explicitly sets pair=false/trust=false. Require
+    no target RemoveDevice or Pair method at all during that bounded interval.
+    Check RemoveDevice's object-path argument, since its method lives on the
+    adapter. Mere absence of a successful repair log cannot prove this. If D-Bus
+    monitoring is unavailable, keep this no-removal proof pending. The call may fail or report a
     direct connection, because this mode deliberately does not authorize bond
     removal; it must not be counted as repaired HID unless actual events appear.
     If the peripheral itself initiates fresh pairing, retain that trace and mark
@@ -166,3 +179,5 @@ Bounds, recovery and acceptance
 Tool references:
 https://github.com/bluez/bluez/blob/master/doc/btmon.rst
 https://manpages.debian.org/bookworm/evtest/evtest.1.en.html
+
+https://dbus.freedesktop.org/doc/dbus-monitor.1.html
