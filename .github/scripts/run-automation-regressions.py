@@ -31,6 +31,8 @@ SUITES = (
     "gpu_fixture_selection_test.py",
     "gpu_hardware_test.py",
     "go2_camera_rehearsal_test.py",
+    "go2_recording_archive_test.py",
+    "go2_replay_admission_test.py",
     "watch_container_admission_test.py",
     "driver_lifecycle_vm_test.py",
     "npu_hardware_test.py",
