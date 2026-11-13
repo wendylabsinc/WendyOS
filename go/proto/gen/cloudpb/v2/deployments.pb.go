@@ -230,14 +230,13 @@ const (
 	DetachState_DETACH_STATE_UNSPECIFIED DetachState = 0
 	// Cloud received the detach and queued it; the device has not applied it.
 	DetachState_DETACH_STATE_SENT DetachState = 1
-	// The device refused the detach, and its agent does not list DetachDevice
-	// in PullChangesRequest.accepted_operations (an agent that predates
-	// detach). A refusal is judged by the accepted_operations sent with the
-	// pull that delivered that entry, so an old agent's refusal that arrives
-	// after an upgraded agent's first pull is not taken as REFUSED. Cloud sends the detach again once each time the device's
-	// accepted_operations changes to include DetachDevice, until the device
-	// applies it or its validity ends. Until then the device keeps running the
-	// app as a deployment.
+	// Cloud holds the accepted detach: the device's pulls do not list
+	// DetachDevice in PullChangesRequest.accepted_operations (an agent that
+	// predates detach). Cloud delivers it only once a pull lists DetachDevice,
+	// and never to an agent that does not; it does not re-send, because an old
+	// agent moves past an entry it refuses and never asks for it again. Held,
+	// not refused: until delivery, or the end of its validity, the device keeps
+	// running the app as a deployment.
 	DetachState_DETACH_STATE_WAITING_FOR_AGENT DetachState = 2
 	// The detach's validity ended before the device applied it. The device
 	// keeps the deleted deployment, which blocks a new app with the same id
@@ -245,10 +244,11 @@ const (
 	// is gone, so no new detach can be signed. The device owner removes the app
 	// locally, or resets the device.
 	DetachState_DETACH_STATE_EXPIRED DetachState = 3
-	// An agent that listed DetachDevice, in the pull that delivered the entry,
-	// refused the detach (its outcome is in `outcome` (16)). Final: no re-send. As with EXPIRED, there is no way out
-	// through cloud; the device owner removes the app locally or resets the
-	// device. Cloud's checks at accept make this rare.
+	// The device refused the delivered detach (its outcome is in `outcome`
+	// (16)); it was delivered only to an agent that lists DetachDevice. Final.
+	// As with EXPIRED, there is no way out through cloud; the device owner
+	// removes the app locally or resets the device. Cloud's checks at accept
+	// make this rare.
 	DetachState_DETACH_STATE_REFUSED DetachState = 4
 )
 
@@ -458,8 +458,11 @@ type AppRelease struct {
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	OrganizationId string                 `protobuf:"bytes,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	AppId          string                 `protobuf:"bytes,3,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	Name           string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	Details        string                 `protobuf:"bytes,5,opt,name=details,proto3" json:"details,omitempty"`
+	// A name ending in `@sha256:` followed by 64 lowercase hex characters is an
+	// untagged release (published by digest); any other name is tagged
+	// (LifecyclePolicy).
+	Name    string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	Details string `protobuf:"bytes,5,opt,name=details,proto3" json:"details,omitempty"`
 	// For a registry-backed release: ArtifactManifest.manifest_digest, set by
 	// ArtifactRegistryService.PublishArtifact.
 	ImageDigest *string                `protobuf:"bytes,6,opt,name=image_digest,json=imageDigest,proto3,oneof" json:"image_digest,omitempty"`
@@ -905,7 +908,8 @@ type Deployment struct {
 	// app_release_id, reported after the deployment was created (the reported_at fence).
 	TargetCount  int32 `protobuf:"varint,8,opt,name=target_count,json=targetCount,proto3" json:"target_count,omitempty"`
 	UpdatedCount int32 `protobuf:"varint,9,opt,name=updated_count,json=updatedCount,proto3" json:"updated_count,omitempty"`
-	// The targeting the deployment was created with (WDY-3576). Both empty: every device.
+	// The targeting the deployment was created with (WDY-3576). All three lists empty
+	// (target_tags, target_device_ids, target_site_ids (20)): every device.
 	TargetTags      []string `protobuf:"bytes,10,rep,name=target_tags,json=targetTags,proto3" json:"target_tags,omitempty"`
 	TargetDeviceIds []string `protobuf:"bytes,11,rep,name=target_device_ids,json=targetDeviceIds,proto3" json:"target_device_ids,omitempty"`
 	// Named, lasting deployments with revisions (apps and deployments spec
@@ -930,7 +934,10 @@ type Deployment struct {
 	// client sets each statement's expires_at to its signing time plus this.
 	// Default 60 days (the tenant cap default), never above the tenant cap or
 	// the platform cap of 1 year (conformance/postbox-entry/README.md).
-	Validity      *durationpb.Duration `protobuf:"bytes,19,opt,name=validity,proto3" json:"validity,omitempty"`
+	Validity *durationpb.Duration `protobuf:"bytes,19,opt,name=validity,proto3" json:"validity,omitempty"`
+	// The sites the current revision selects devices by, beside target_tags
+	// (10) and target_device_ids (11); the rules are on DeviceSelection.
+	TargetSiteIds []string `protobuf:"bytes,20,rep,name=target_site_ids,json=targetSiteIds,proto3" json:"target_site_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1094,6 +1101,13 @@ func (x *Deployment) GetRemovedAt() *timestamppb.Timestamp {
 func (x *Deployment) GetValidity() *durationpb.Duration {
 	if x != nil {
 		return x.Validity
+	}
+	return nil
+}
+
+func (x *Deployment) GetTargetSiteIds() []string {
+	if x != nil {
+		return x.TargetSiteIds
 	}
 	return nil
 }
@@ -1328,8 +1342,10 @@ type CreateDeploymentRequest struct {
 	Running        Running                `protobuf:"varint,5,opt,name=running,proto3,enum=wendycloud.v2.Running" json:"running,omitempty"`
 	// Targeting (WDY-3576). The deployment goes to the union of the devices that carry any of
 	// target_tags (exact match) and the devices named in target_device_ids (UUIDs, each must
-	// belong to the organization). Both empty: every device in the organization. The set is
-	// resolved once, at create time; a device tagged later does not get the deployment. A
+	// belong to the organization). All three lists empty (target_tags, target_device_ids,
+	// target_site_ids (14)): every device in the organization. The set is
+	// resolved once, at create time: a device tagged later does not get the deployment, and one
+	// untagged later keeps it, until a new revision is made (DeviceSelection). A
 	// non-empty targeting that matches no device is refused with FAILED_PRECONDITION.
 	TargetTags      []string `protobuf:"bytes,6,rep,name=target_tags,json=targetTags,proto3" json:"target_tags,omitempty"`
 	TargetDeviceIds []string `protobuf:"bytes,7,rep,name=target_device_ids,json=targetDeviceIds,proto3" json:"target_device_ids,omitempty"`
@@ -1355,7 +1371,13 @@ type CreateDeploymentRequest struct {
 	// refusal names the device and the deployment.
 	MoveDevices bool `protobuf:"varint,12,opt,name=move_devices,json=moveDevices,proto3" json:"move_devices,omitempty"`
 	// Deployment.validity. Unset = 60 days.
-	Validity      *durationpb.Duration `protobuf:"bytes,13,opt,name=validity,proto3" json:"validity,omitempty"`
+	Validity *durationpb.Duration `protobuf:"bytes,13,opt,name=validity,proto3" json:"validity,omitempty"`
+	// Read by CreateDeploymentV2: sites to select devices by, beside
+	// target_tags (6) and target_device_ids (7). The rules are on
+	// DeviceSelection. The deprecated CreateDeployment refuses a request that
+	// carries any with INVALID_ARGUMENT ("site selection needs
+	// CreateDeploymentV2"); it never ignores them.
+	TargetSiteIds []string `protobuf:"bytes,14,rep,name=target_site_ids,json=targetSiteIds,proto3" json:"target_site_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1481,15 +1503,37 @@ func (x *CreateDeploymentRequest) GetValidity() *durationpb.Duration {
 	return nil
 }
 
+func (x *CreateDeploymentRequest) GetTargetSiteIds() []string {
+	if x != nil {
+		return x.TargetSiteIds
+	}
+	return nil
+}
+
 // The full new device set of a deployment.
 type DeviceSelection struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	TargetTags []string               `protobuf:"bytes,1,rep,name=target_tags,json=targetTags,proto3" json:"target_tags,omitempty"`
-	// Asset UUIDs, at most 1000. A selection with both lists empty is refused;
-	// it never means "every device".
+	// Asset UUIDs, at most 1000. A selection with all of its lists empty is
+	// refused; it never means "every device".
 	TargetDeviceIds []string `protobuf:"bytes,2,rep,name=target_device_ids,json=targetDeviceIds,proto3" json:"target_device_ids,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Sites (sem 2026-11-13: target "anything you can scope towards"): Site.id
+	// values (SiteService; a device's site is Asset.site_id, and every device
+	// is in exactly one site). Each site must belong to the organization
+	// (NOT_FOUND otherwise). The selection is the union of devices named, the
+	// devices carrying any selected tag, and the devices in any selected site.
+	// Cloud resolves it to devices when the revision is made; the operator is
+	// shown the resolved device names and signs one statement per device, so a
+	// selection is never itself an instruction to a device. A selection is
+	// resolved once, when a revision is made: a device that later joins a
+	// selected tag or site does not get the deployment, and one that later
+	// leaves it keeps the deployment, until a new revision is made. A site
+	// authorizes nothing: choosing sites is SiteService
+	// .ListSites (gate `site:list`), and a site selection reaches no device a
+	// selection by its devices would not.
+	TargetSiteIds []string `protobuf:"bytes,3,rep,name=target_site_ids,json=targetSiteIds,proto3" json:"target_site_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeviceSelection) Reset() {
@@ -1532,6 +1576,13 @@ func (x *DeviceSelection) GetTargetTags() []string {
 func (x *DeviceSelection) GetTargetDeviceIds() []string {
 	if x != nil {
 		return x.TargetDeviceIds
+	}
+	return nil
+}
+
+func (x *DeviceSelection) GetTargetSiteIds() []string {
+	if x != nil {
+		return x.TargetSiteIds
 	}
 	return nil
 }
@@ -3899,7 +3950,7 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"\x17ListAppReleasesResponse\x12<\n" +
 	"\fapp_releases\x18\x01 \x03(\v2\x19.wendycloud.v2.AppReleaseR\vappReleases\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x05R\x05total\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x05R\x06offset\"\xf1\x05\n" +
+	"\x06offset\x18\x03 \x01(\x05R\x06offset\"\x99\x06\n" +
 	"\n" +
 	"Deployment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
@@ -3926,7 +3977,8 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x129\n" +
 	"\n" +
 	"removed_at\x18\x12 \x01(\v2\x1a.google.protobuf.TimestampR\tremovedAt\x125\n" +
-	"\bvalidity\x18\x13 \x01(\v2\x19.google.protobuf.DurationR\bvalidity\"\xc0\x04\n" +
+	"\bvalidity\x18\x13 \x01(\v2\x19.google.protobuf.DurationR\bvalidity\x12&\n" +
+	"\x0ftarget_site_ids\x18\x14 \x03(\tR\rtargetSiteIds\"\xc0\x04\n" +
 	"\x12DeploymentRevision\x12#\n" +
 	"\rdeployment_id\x18\x01 \x01(\tR\fdeploymentId\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x05R\brevision\x12$\n" +
@@ -3951,7 +4003,7 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"DeviceMove\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12,\n" +
 	"\x12from_deployment_id\x18\x02 \x01(\tR\x10fromDeploymentId\x12(\n" +
-	"\x10to_deployment_id\x18\x03 \x01(\tR\x0etoDeploymentId\"\x91\x04\n" +
+	"\x10to_deployment_id\x18\x03 \x01(\tR\x0etoDeploymentId\"\xb9\x04\n" +
 	"\x17CreateDeploymentRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12 \n" +
 	"\tjq_filter\x18\x02 \x01(\tH\x00R\bjqFilter\x88\x01\x01\x12$\n" +
@@ -3969,13 +4021,15 @@ const file_wendycloud_v2_deployments_proto_rawDesc = "" +
 	"configJson\x12\x12\n" +
 	"\x04note\x18\v \x01(\tR\x04note\x12!\n" +
 	"\fmove_devices\x18\f \x01(\bR\vmoveDevices\x125\n" +
-	"\bvalidity\x18\r \x01(\v2\x19.google.protobuf.DurationR\bvalidityB\f\n" +
+	"\bvalidity\x18\r \x01(\v2\x19.google.protobuf.DurationR\bvalidity\x12&\n" +
+	"\x0ftarget_site_ids\x18\x0e \x03(\tR\rtargetSiteIdsB\f\n" +
 	"\n" +
-	"_jq_filter\"^\n" +
+	"_jq_filter\"\x86\x01\n" +
 	"\x0fDeviceSelection\x12\x1f\n" +
 	"\vtarget_tags\x18\x01 \x03(\tR\n" +
 	"targetTags\x12*\n" +
-	"\x11target_device_ids\x18\x02 \x03(\tR\x0ftargetDeviceIds\"\x84\x04\n" +
+	"\x11target_device_ids\x18\x02 \x03(\tR\x0ftargetDeviceIds\x12&\n" +
+	"\x0ftarget_site_ids\x18\x03 \x03(\tR\rtargetSiteIds\"\x84\x04\n" +
 	"\x17UpdateDeploymentRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12#\n" +
 	"\rdeployment_id\x18\x02 \x01(\tR\fdeploymentId\x12+\n" +

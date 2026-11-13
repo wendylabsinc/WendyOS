@@ -59,7 +59,9 @@ type DeploymentServiceClient interface {
 	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
 	// Deprecated: use CreateDeploymentV2, which also returns the per-device
 	// statements still to sign. Kept for clients that have not re-pinned; its
-	// response type cannot change (wire-incompatible for them).
+	// response type cannot change (wire-incompatible for them). It refuses a
+	// request carrying target_site_ids with INVALID_ARGUMENT ("site selection
+	// needs CreateDeploymentV2"); it never ignores them.
 	CreateDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Deployment, error)
 	// Creates a named, lasting deployment at revision 1. Not relayed to
 	// devices: each device gets its own AssignDevice statement, which the client
@@ -443,7 +445,9 @@ type DeploymentServiceServer interface {
 	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
 	// Deprecated: use CreateDeploymentV2, which also returns the per-device
 	// statements still to sign. Kept for clients that have not re-pinned; its
-	// response type cannot change (wire-incompatible for them).
+	// response type cannot change (wire-incompatible for them). It refuses a
+	// request carrying target_site_ids with INVALID_ARGUMENT ("site selection
+	// needs CreateDeploymentV2"); it never ignores them.
 	CreateDeployment(context.Context, *SignedRequest) (*Deployment, error)
 	// Creates a named, lasting deployment at revision 1. Not relayed to
 	// devices: each device gets its own AssignDevice statement, which the client

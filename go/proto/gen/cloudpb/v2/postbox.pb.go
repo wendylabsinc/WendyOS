@@ -197,9 +197,9 @@ type PullChangesRequest struct {
 	// The relayed operations (fully-qualified method names, as in the JWS
 	// `operation` claim) this agent accepts from its postbox. Empty from an
 	// agent that predates this field. Device-asserted and descriptive: it
-	// authorizes nothing, and the device still checks every entry. Cloud uses
-	// it to tell an agent that predates an operation from one that refused an
-	// entry it knows (AssetApp.detach_state).
+	// authorizes nothing, and the device still checks every entry. Cloud holds
+	// back an entry whose operation the pull does not list (a detach: see
+	// AssetApp.detach_state) and delivers it once a pull lists it.
 	AcceptedOperations []string `protobuf:"bytes,3,rep,name=accepted_operations,json=acceptedOperations,proto3" json:"accepted_operations,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
