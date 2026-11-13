@@ -2329,10 +2329,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2770",
       "title": "Support 96\u00d796 TOPDON thermometry and temperature-based alerts",
       "package": "08",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Tests cover thermal geometry, metadata separation and alert freshness. The example Swift tests are outside the standard WendyAgentCore test command, and real sensor calibration is not checked here.",
-      "required_follow_up": "Run ThermalNotify tests in CI and retain a recorded 96x96 device-frame fixture with expected Celsius values.",
-      "evidence": []
+      "required_follow_up": "Require ThermalNotify tests in the existing macOS job and retain a recorded physical 96x96 TOPDON frame with device/firmware provenance and independently expected Celsius values. Synthetic metadata fixtures do not establish recorded sensor behavior.",
+      "evidence": [
+        {
+          "tests": [
+            "Examples/ThermalNotify/Tests/ThermalNotifyTests/ThermalNotifyTests.swift",
+            "Examples/ThermalNotify/Tests/ThermalNotifyTests/ViewerSourceTests.swift",
+            "Examples/ThermalNotify/Package.resolved",
+            ".github/workflows/go-tests.yml"
+          ],
+          "result": "All 18 existing ThermalNotify tests passed locally. They exercise 96x96 summary geometry, Celsius conversion, malformed/truncated inputs, freshness and frozen summaries, strict alert thresholds, recipient selection and retries. Registered with resolved dependency versions in the existing macOS job and included package changes in both workflow path filters. Hosted execution remains pending. Frame bytes are synthetic; a recorded physical sensor fixture with provenance remains open."
+        }
+      ]
     },
     {
       "key": "2698",
