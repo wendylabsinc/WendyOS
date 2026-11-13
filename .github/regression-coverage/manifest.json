@@ -1517,9 +1517,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2576",
       "title": "[WN3] Connect WendyOS to native Lite mesh carriers",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "Advertisement, identity and carrier-selection tests exist. Listener ownership and native TLS handover across radios require runtime coverage beyond the codec fixtures.",
-      "required_follow_up": "Require both actual native TLS listener-drain and Lite LAN-attachment tests in the existing network job. Ordinary race CI skips these namespace-only cases. Qualified physical handover/listener acceptance has an executable procedure and remains not_run.",
+      "required_follow_up": "Retain required actual native TLS listener-drain and Lite LAN-attachment namespace tests plus the exact physical radio handover procedure. All physical results remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -1536,6 +1536,12 @@
             ".github/scripts/test-packet-backends.sh"
           ],
           "result": "Found namespace-only native listener/dial tests were not selected by the existing required operator gate. Added explicit required selection, nonzero PASS markers and skip rejection using the already-built localmesh binary in private namespaces. Hosted runtime remains pending. Existing crossed-provider TLS software tests passed in the ordinary race job; those do not establish native listener/kernel behavior."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898807",
+          "artifact": 14015322328,
+          "result": "Full Linux network job passed. Actual TestNormalNativeTLSListenerAttachmentAndDrain passed context-cancellation and listener-close cases with zero retained links/leases. TestNormalNativeTLSLANDialsLitePeer passed real socket/TLS/hello and bootstrap control, using a controlled mDNS result in the private interface namespace. Artifact contains both explicit PASS results and no skips. This proves software listener/attachment ownership; physical BLE/WiFi handover is covered only by the prepared exact-target procedure, all cases not_run."
         }
       ]
     },
@@ -2175,6 +2181,12 @@
             "go/internal/agent/services/driver_lifecycle_vm_linux_test.go"
           ],
           "result": "Hosted guest booted the real kernel, answered D-Bus/systemd RPC and began the first healthy driver installation, then the host600-second watchdog drained QEMU. Artifact14012323888 reports empty cleanup errors; lifecycle is not verified. Added one bounded guest-only goroutine/systemd/process/journal observation before watchdog expiry, with unchanged test deadlines and assertions. Linux compile and source review pass; runtime diagnosis pending."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898743",
+          "artifact": 14014637372,
+          "result": "Actual Fedora guest reaches its first healthy driver install, then its console switches to console-getty login. All later45s observer,6min context and7min test-timeout diagnostics are absent before the600s QEMU watchdog. Exact source hashes match. Corrected fixture masks both login services and captures test/observer output through a separate virtio-serial port, keeping boot console independently. Nine portable unit/real-private-PTY checks and ShellCheck pass; no new VM or product defect is claimed. Complete install/replacement/rollback/reboot gate remains pending."
         }
       ]
     },
