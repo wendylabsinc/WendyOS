@@ -1,0 +1,109 @@
+Physical Go2 camera acceptance for audit1831
+
+Generation does not access a device. All cases begin not_run. Use a reserved
+robot and companion with the owner's recorded approval. Perception only: no
+locomotion, actuator, posture, power/reset, firmware update or bond commands.
+Keep the robot physically stationary according to its owner's safe setup.
+Do not treat the generated H264 test as a real firmware recording.
+
+Inventory JSON must contain cli_binary, agent_binary, source_commit, and
+consumer_image as a reviewed immutable OCI digest with Python3 and GStreamer
+(v4l2src,h264parse,avdec_h264,videoconvert,fdsink). target contains selector,
+serial, owner, board, kernel, camera_stable_id. robot contains model="Unitree Go2",
+serial, exact firmware version, firmware_record path, wired_interface,
+topic="/frontvideostream", resolution=360. records names device_info,
+installed_agent, camera_list, kernel_module, ros_interfaces, baseline_apps,
+recovery must be actual saved nonempty observations. camera_list is the CLI JSON
+array. The firmware record must identify this robot serial and firmware version,
+not a screenshot of another robot. Hashes identify inputs, not acceptance.
+
+1. On the reserved companion's owner-controlled local console, record its serial,
+   physical wired link to the recorded robot, uname -a, OS and boot identity,
+   installed Agent binary digest and MainPID. Independently compare these to
+   plan.json and the selected device info. Reject a different robot/companion.
+   No SSH, default-device changes, radio reconfiguration, or automatic selection.
+   Preserve baseline app states. Check this plan's generated app ID is absent.
+
+2. Require the already owner-installed supported module, without unloading any
+   module or stopping any other capture:
+     modinfo -F version v4l2loopback
+     cat /sys/module/v4l2loopback/version
+     v4l2-ctl --device=@NODE@ --all --list-formats-ext
+   Require version0.15.4 or a separately qualified compatible0.15+ build, record
+   its source and installed module hash. Distro0.12.7 does not qualify. Missing
+   module/occupied camera is pending, not permission to change driver state.
+   Re-run the exact camera listing and check the stable ROS ID still maps to
+   @NODE@, /frontvideostream and the pinned robot-facing interface. Require
+   640x360 H264 after the first producer frame. Keep the same Agent PID.
+
+3. Confirm the installed ROS environment provides rclpy and the pinned Unitree
+   Go2FrontVideoData message package; save package/source hashes and output of:
+     ros2 interface show unitree_go/msg/Go2FrontVideoData
+     ros2 topic info /frontvideostream --verbose
+   Require exactly one publisher, corroborated against this physically wired
+   robot; save its endpoint GUID/type/QoS before and after the capture. DDS camera
+   samples are unauthenticated. A second publisher or an unverified interface/RMW
+   selection leaves source identity pending. Preserve the reviewed ROS RMW/interface
+   configuration with the recording; do not assume ROS_DOMAIN_ID alone selects a
+   physical link. These commands only inspect. Run only against this trusted wired robot graph
+   with explicit ROS_DOMAIN_ID=0. Do not publish any ROS commands. On the local
+   companion console, copy the sealed plan and included go2-record-cdr.py into
+   a fresh owned directory, then invoke the exact confirmed robot serial:
+     timeout --signal=TERM --kill-after=5s 40s env ROS_DOMAIN_ID=0 \
+       python3 go2-record-cdr.py --plan plan.json \
+       --confirm-robot-serial SERIAL_FROM_PLAN --output raw-recording
+   Require exit0 from the recorder; the outer40-second bound is not success.
+   The helper subscribes raw to /frontvideostream for30seconds and saves each
+   exact CDR sample with length, hash, receipt time and firmware timestamp.
+   It refuses non360p/other-layout samples and bounds samples/bytes. An interrupted
+   recording, zero/few frames or a different format stays pending. A recorded
+   SDK three-JPEG stream does not qualify for the observed H264 firmware case.
+
+4. Keep all robot control unchanged. While recording, an owner presents a fresh
+   human-written challenge identifier and moves red, green then blue cards across
+   the front camera, repeating every few seconds. Record the presentation times
+   and the physical camera/serial being challenged. Do not cover safety sensors
+   or alter the robot's environment beyond its approved stationary camera test.
+   Concurrently, on the development host run:
+     sh @PLAN@/capture-cli.sh
+   The35-second deadline and exit124 merely bound capture; they are not success.
+   Require a nonempty physical.h264 starting with Annex-B, separate stderr,
+   advancing frames and SPS/PPS/IDR followed by non-IDR slices. Independently decode:
+     ffmpeg -v error -f h264 -i @PLAN@/physical.h264 -f null -
+     ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height \
+       -show_entries frame=key_frame,pict_type,best_effort_timestamp_time -of json @PLAN@/physical.h264
+   Save both exit codes and reports; require H264640x360 and at least30 decoded
+   frames. Review the video against the exact challenge/time notes. Codec metadata,
+   growing bytes, or successful discovery alone cannot pass.
+
+5. Stop only this plan's bounded CLI capture before starting its container, to
+   avoid conflating simultaneous capture negotiation with container delivery.
+   Recheck the same stable camera ID and node. Validate the generated consumer
+   project with the pinned CLI, then run its exact deploy_owned_consumer command.
+   This creates only the unique app listed in plan.json, with the parameterless
+   camera entitlement. It decodes60 kernel H264 buffers using an independent
+   decoder, without a ROS or robot-control publisher. Present the same timed
+   three-color challenge during this capture. Detached deploy is not acceptance:
+   fetch exact app logs and require normal exit0, the matching nonce/node,
+   H264640x360, exactly60 decoded frames, at least20 distinct frame hashes, and
+   center RGB means consistent with the owner's timed color challenge. Require
+   actual runtime label sh.wendy/entitlement.camera to be nonempty via the
+   owner-controlled local companion containerd inspection, with exact app ID.
+   Do not inspect or modify another container. A blank label, only a host stream,
+   a node that exists but cannot deliver frames, forced timeout, or stale frame
+   sequence fails container acceptance. Save app state and its complete log.
+
+6. Copy the raw-recording directory and physical.h264 to the review artifact store
+   outside Git, retaining per-sample hashes, pinned firmware/serial/source records
+   and challenge notes. Do not commit images/videos or substitute generated frames.
+   Recorded service replay remains pending until this exact archived corpus is
+   replayed through the production CDR parser/writer/service and independently
+   decoded with matching frame content. The automated generated-video gate does
+   not consume this archive and must not be used to claim recorded replay passed.
+
+7. Run only remove_owned_consumer for this exact generated app ID. It does not
+   delete volumes or image caches. Verify its absence and compare baseline app
+   states, Agent PID, camera identity and owner normal read-only camera probe.
+   Do not remove production containers, recordings or ROS camera registry entries.
+   Preserve incomplete/failing evidence; module and robot state stay owner-managed.
+   A human may mark each completed case passed only with its cited evidence.
