@@ -77,7 +77,8 @@ def main():
         source = client.read_text()
         beginning = source.index('func cycloneDDSBeyondDeviceConfig(')
         ending = source.index('\n}\n', beginning)+2
-        replacement = source[:beginning]+'func cycloneDDSBeyondDeviceConfig(interfaces []string) string { return cycloneDDSInlineConfig }'+source[ending:]
+        signature = source[beginning:source.index('{', beginning)]
+        replacement = source[:beginning]+signature+'{ return cycloneDDSInlineConfig }'+source[ending:]
         routes = ROOT/'go/internal/rtps/peripherals.go'
         route_source = routes.read_text()
         before = 'if err != nil {\n\t\treturn nil, nil\n\t}'
