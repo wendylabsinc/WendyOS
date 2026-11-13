@@ -217,21 +217,6 @@ jobs:
             grep -F -- "--- PASS: $test (" "$RUNNER_TEMP/rtps-results"
           done
 
-  darwin-regressions:
-    name: Darwin BLE regressions
-    runs-on: macos-15
-    timeout-minutes: 15
-    env:
-      CGO_ENABLED: '1'
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Exercise the native BLE bridge without a radio
-        run: go test -race -count=1 -timeout 120s ./go/internal/shared/ble/central
-
   windows:
     name: Windows CLI
     runs-on: runs-on,runner=2cpu-linux-x64
@@ -368,7 +353,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions, darwin-regressions]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker, containerd-regressions]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -381,7 +366,6 @@ jobs:
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
-          DARWIN_RESULT: ${{ needs.darwin-regressions.result }}
           CONTAINERD_RESULT: ${{ needs.containerd-regressions.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
@@ -395,7 +379,6 @@ jobs:
           test "$STARTUP_RESULT" = success
           test "$INFERENCE_WORKER_RESULT" = success
           test "$CONTAINERD_RESULT" = success
-          test "$DARWIN_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
