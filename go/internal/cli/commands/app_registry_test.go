@@ -12,9 +12,11 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
@@ -104,26 +106,53 @@ type fakeRegistry struct {
 	sealed   []*cloudpb.SealedContentKey
 	deploys  map[string]*cloudpb.Deployment
 	assigned []*cloudpb.DeviceAssignment
+	removed  []*cloudpb.UnassignDeviceRequest
+	sel      map[string]*cloudpb.DeviceSelection // deployment -> current selection
+	defaults map[string]string                   // release -> default_config_json
+	extra    []*cloudpb.PendingDeviceStatement   // rows cloud adds to to_sign
 }
 
 func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry {
-	return &fakeRegistry{t: t, keys: keys, releases: map[string]*cloudpb.ArtifactManifest{}, blobs: map[string][]byte{}, deploys: map[string]*cloudpb.Deployment{}}
+	return &fakeRegistry{t: t, keys: keys, releases: map[string]*cloudpb.ArtifactManifest{}, blobs: map[string][]byte{}, deploys: map[string]*cloudpb.Deployment{},
+		sel: map[string]*cloudpb.DeviceSelection{}, defaults: map[string]string{}}
+}
+
+// fakeDeployments serves DeploymentService from the same fake: its moved
+// AssignDevice and UnassignDevice return DeviceStatementResponse. Like cloud,
+// it accepts a statement only at the deployment's current revision with that
+// revision's release, configuration and desired state.
+type fakeDeployments struct{ *fakeRegistry }
+
+func (f fakeDeployments) AssignDevice(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.DeviceStatementResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var a cloudpb.DeviceAssignment
+	if err := f.accept(cloudpb.DeploymentService_AssignDevice_FullMethodName, in, &a); err != nil {
+		return nil, err
+	}
+	d := f.deploys[a.GetDeploymentId()]
+	if d == nil || a.GetRevision() != d.GetRevision() || a.GetAppReleaseId() != d.GetAppReleaseId() || a.GetConfigJson() != d.GetConfigJson() || a.GetDesiredState() != d.GetDesiredState() {
+		return nil, status.Error(codes.FailedPrecondition, "the statement does not match the deployment's current revision")
+	}
+	f.assigned = append(f.assigned, &a)
+	return &cloudpb.DeviceStatementResponse{PostboxEntryId: int64(len(f.assigned))}, nil
+}
+
+func (f fakeDeployments) UnassignDevice(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.DeviceStatementResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var req cloudpb.UnassignDeviceRequest
+	if err := f.accept(cloudpb.DeploymentService_UnassignDevice_FullMethodName, in, &req); err != nil {
+		return nil, err
+	}
+	if d := f.deploys[req.GetDeploymentId()]; d == nil || req.GetRevision() != d.GetRevision() {
+		return nil, status.Error(codes.FailedPrecondition, "a removal carries the deployment's current revision")
+	}
+	f.removed = append(f.removed, &req)
+	return &cloudpb.DeviceStatementResponse{PostboxEntryId: 1}, nil
 }
 
 // accept decodes a signed request into msg and records it.
-// fakeDeployments serves DeploymentService from the same fake. Its moved
-// AssignDevice and UnassignDevice return DeviceStatementResponse; this CLI
-// still calls the deprecated ArtifactRegistryService pair.
-type fakeDeployments struct{ *fakeRegistry }
-
-func (fakeDeployments) AssignDevice(context.Context, *cloudpb.SignedRequest) (*cloudpb.DeviceStatementResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not served by this fake")
-}
-
-func (fakeDeployments) UnassignDevice(context.Context, *cloudpb.SignedRequest) (*cloudpb.DeviceStatementResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not served by this fake")
-}
-
 func (f *fakeRegistry) accept(method string, in *cloudpb.SignedRequest, msg proto.Message) error {
 	if in.GetPayloadType() != string(msg.ProtoReflect().Descriptor().FullName()) {
 		return status.Errorf(codes.InvalidArgument, "payload_type %q", in.GetPayloadType())
@@ -312,16 +341,91 @@ func (f *fakeRegistry) GetMyWraps(_ context.Context, in *cloudpb.GetMyWrapsReque
 	return resp, nil
 }
 
-func (f *fakeRegistry) CreateDeployment(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.Deployment, error) {
+// ListAppReleases serves every published release as one of the example app's.
+func (f *fakeRegistry) ListAppReleases(in *cloudpb.ListAppReleasesRequest, stream grpc.ServerStreamingServer[cloudpb.ListAppReleasesResponse]) error {
+	f.mu.Lock()
+	page := &cloudpb.ListAppReleasesResponse{}
+	for id := range f.releases {
+		page.AppReleases = append(page.AppReleases, &cloudpb.AppRelease{Id: id, AppId: "sh.wendy.example", DefaultConfigJson: f.defaults[id]})
+	}
+	f.mu.Unlock()
+	page.Total = int32(len(page.AppReleases))
+	return stream.Send(page)
+}
+
+// extraRows are f.extra for d.
+func (f *fakeRegistry) extraRows(d *cloudpb.Deployment) []*cloudpb.PendingDeviceStatement {
+	var out []*cloudpb.PendingDeviceStatement
+	for _, r := range f.extra {
+		r = proto.Clone(r).(*cloudpb.PendingDeviceStatement)
+		r.DeploymentId = d.GetId()
+		out = append(out, r)
+	}
+	return out
+}
+
+func (f *fakeRegistry) rows(d *cloudpb.Deployment, kind cloudpb.PendingDeviceStatement_Kind, devices []string) []*cloudpb.PendingDeviceStatement {
+	var out []*cloudpb.PendingDeviceStatement
+	for _, dev := range devices {
+		out = append(out, &cloudpb.PendingDeviceStatement{Kind: kind, DeploymentId: d.GetId(), Device: deviceURI(testOperatorTenant, dev), Revision: d.GetRevision()})
+	}
+	return out
+}
+
+func (f *fakeRegistry) CreateDeploymentV2(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.DeploymentChangeResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var req cloudpb.CreateDeploymentRequest
-	if err := f.accept(cloudpb.DeploymentService_CreateDeployment_FullMethodName, in, &req); err != nil {
+	if err := f.accept(cloudpb.DeploymentService_CreateDeploymentV2_FullMethodName, in, &req); err != nil {
 		return nil, err
 	}
-	d := &cloudpb.Deployment{Id: uuid.NewString(), OrganizationId: req.GetOrganizationId(), AppReleaseId: req.GetAppReleaseId(), TargetDeviceIds: req.GetTargetDeviceIds()}
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	d := &cloudpb.Deployment{
+		Id: uuid.NewString(), OrganizationId: req.GetOrganizationId(), AppReleaseId: req.GetAppReleaseId(), AppId: "sh.wendy.example",
+		Name: req.GetName(), ConfigJson: req.GetConfigJson(), DesiredState: req.GetRunning(), Revision: 1, TargetDeviceIds: req.GetTargetDeviceIds(),
+	}
 	f.deploys[d.Id] = d
-	return d, nil
+	f.sel[d.Id] = &cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds()}
+	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: append(f.rows(d, cloudpb.PendingDeviceStatement_KIND_ASSIGN, req.GetTargetDeviceIds()), f.extraRows(d)...)}, nil
+}
+
+func (f *fakeRegistry) ListDeploymentRevisions(_ context.Context, in *cloudpb.ListDeploymentRevisionsRequest) (*cloudpb.ListDeploymentRevisionsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d := f.deploys[in.GetDeploymentId()]
+	return &cloudpb.ListDeploymentRevisionsResponse{Revisions: []*cloudpb.DeploymentRevision{{DeploymentId: d.GetId(), Revision: d.GetRevision(), Selection: f.sel[d.GetId()]}}}, nil
+}
+
+func (f *fakeRegistry) UpdateDeployment(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.DeploymentChangeResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var req cloudpb.UpdateDeploymentRequest
+	if err := f.accept(cloudpb.DeploymentService_UpdateDeployment_FullMethodName, in, &req); err != nil {
+		return nil, err
+	}
+	d := f.deploys[req.GetDeploymentId()]
+	if d == nil || req.GetExpectedRevision() != d.GetRevision() {
+		return nil, status.Error(codes.Aborted, "expected_revision is not the current revision")
+	}
+	before, after := f.sel[d.Id].GetTargetDeviceIds(), req.GetDevices().GetTargetDeviceIds()
+	var added, dropped []string
+	for _, dev := range after {
+		if !slices.Contains(before, dev) {
+			added = append(added, dev)
+		}
+	}
+	for _, dev := range before {
+		if !slices.Contains(after, dev) {
+			dropped = append(dropped, dev)
+		}
+	}
+	d = proto.Clone(d).(*cloudpb.Deployment)
+	d.Revision++
+	f.deploys[d.Id], f.sel[d.Id] = d, req.GetDevices()
+	toSign := append(f.rows(d, cloudpb.PendingDeviceStatement_KIND_ASSIGN, added), f.rows(d, cloudpb.PendingDeviceStatement_KIND_UNASSIGN, dropped)...)
+	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: append(toSign, f.extraRows(d)...)}, nil
 }
 
 func (f *fakeRegistry) GetDeployment(_ context.Context, in *cloudpb.GetDeploymentRequest) (*cloudpb.Deployment, error) {
@@ -489,60 +593,85 @@ func TestPutBlobRefusedOnDigestMismatch(t *testing.T) {
 	}
 }
 
-// Deploy verifies every device key first, records the deployment for its
-// picked devices, seals the release key under a new deployment key wrapped
-// to this machine and the custodian, and signs one assignment per device
-// (x5c, the device's own resource, its own wrap).
-func TestDeployAssignsEachDeviceWithItsOwnWrap(t *testing.T) {
+// deployFixture publishes a release with default configuration and deploys
+// it as "line-3" to the vector device.
+func deployFixture(t *testing.T) (*registryOp, *fakeRegistry, string, *cloudpb.ArtifactManifest, string) {
+	t.Helper()
 	v := loadRecipientVectors(t)
-	deviceKey, deviceKeyID := vectorRecipientKey(t, v, "recipient-key-valid")
+	deviceKey, _ := vectorRecipientKey(t, v, "recipient-key-valid")
 	op, fake := registryFixture(t, deviceKey)
 	releaseID, m := publishFixture(t, op)
-
-	if err := op.deploy(context.Background(), "sh.wendy.example", releaseID, "sha256:"+strings.Repeat("0", 64), []string{vectorDevice}); err == nil {
-		t.Fatal("a release whose digest is not the pinned one was deployed")
-	}
-	if err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), []string{vectorDevice}); err != nil {
+	fake.defaults[releaseID] = `{"LOG_LEVEL":"info"}`
+	if err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice}); err != nil {
 		t.Fatal(err)
-	}
-	created := fake.signed(cloudpb.DeploymentService_CreateDeployment_FullMethodName)
-	if len(created) != 1 || created[0].resource != "org/"+testOperatorTenant+"/release/"+releaseID || created[0].header["x5c"] == nil {
-		t.Fatalf("CreateDeployment %+v", created)
-	}
-	req := created[0].payload.(*cloudpb.CreateDeploymentRequest)
-	if len(req.GetTargetDeviceIds()) != 1 || req.GetTargetDeviceIds()[0] != vectorDevice || len(req.GetTargetTags()) != 0 || req.GetValidUntil() == nil {
-		t.Fatalf("deployment targets %v", req)
 	}
 	var depID string
 	for id := range fake.deploys {
 		depID = id
 	}
+	return op, fake, releaseID, m, depID
+}
 
+// Deploy creates a named deployment at revision 1 (CreateDeploymentV2, the
+// release's defaults as its configuration) and signs each device's statement
+// under DeploymentService at revision 1 with that revision's content: the
+// stack's agent refuses revision 0.
+func TestDeploySignsRevisionOneThroughDeploymentService(t *testing.T) {
+	v := loadRecipientVectors(t)
+	_, deviceKeyID := vectorRecipientKey(t, v, "recipient-key-valid")
+	op, fake, releaseID, m, depID := deployFixture(t)
+	if err := op.deploy(context.Background(), "sh.wendy.example", releaseID, "sha256:"+strings.Repeat("0", 64), "other", []string{vectorDevice}); err == nil {
+		t.Fatal("a release whose digest is not the pinned one was deployed")
+	}
+	created := fake.signed(cloudpb.DeploymentService_CreateDeploymentV2_FullMethodName)
+	if len(created) != 1 || created[0].resource != "org/"+testOperatorTenant+"/release/"+releaseID {
+		t.Fatalf("CreateDeploymentV2 %+v", created)
+	}
+	req := created[0].payload.(*cloudpb.CreateDeploymentRequest)
+	if req.GetName() != "line-3" || req.GetConfigJson() != `{"LOG_LEVEL":"info"}` || req.GetRunning() != cloudpb.Running_RUNNING ||
+		len(req.GetTargetDeviceIds()) != 1 || req.GetTargetDeviceIds()[0] != vectorDevice || len(req.GetTargetTags()) != 0 {
+		t.Fatalf("deployment request %v", req)
+	}
+	if len(fake.signed(cloudpb.DeploymentService_CreateDeployment_FullMethodName)) != 0 || len(fake.signed(cloudpb.ArtifactRegistryService_AssignDevice_FullMethodName)) != 0 {
+		t.Fatal("the deprecated operations were signed")
+	}
 	if len(fake.sealed) != 1 || len(fake.wraps) != 4 {
 		t.Fatalf("%d sealed keys, %d wraps", len(fake.sealed), len(fake.wraps))
 	}
-	kd, err := op.current(context.Background(), depID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	s := fake.sealed[0]
-	contentKey, err := registrycrypto.SealedKey{OrganizationID: testOperatorTenant, DeploymentID: depID, ManifestDigest: m.GetManifestDigest(), ContentKeyID: m.GetContentKeyId(), DeploymentKeyID: s.GetDeploymentKeyId()}.Open(kd.key, s.GetNonce(), s.GetCiphertext())
-	if err != nil || registrycrypto.KeyID(contentKey) != m.GetContentKeyId() {
-		t.Fatalf("sealed key does not open to the content key: %v", err)
-	}
-
-	assigns := fake.signed(cloudpb.ArtifactRegistryService_AssignDevice_FullMethodName)
+	assigns := fake.signed(cloudpb.DeploymentService_AssignDevice_FullMethodName)
 	device := deviceURI(testOperatorTenant, vectorDevice)
 	if len(assigns) != 1 || assigns[0].resource != "org/"+testOperatorTenant+"/deployment/"+depID+"/device/"+vectorDevice || assigns[0].header["x5c"] == nil || assigns[0].header["kid"] != nil {
 		t.Fatalf("AssignDevice %+v", assigns)
 	}
 	a := assigns[0].payload.(*cloudpb.DeviceAssignment)
 	w := a.GetDeviceWrap()
-	if a.GetDevice() != device || a.GetAppId() != "sh.wendy.example" || a.GetAppReleaseId() != releaseID || a.GetManifestDigest() != m.GetManifestDigest() ||
+	if a.GetRevision() != 1 || a.GetConfigJson() != `{"LOG_LEVEL":"info"}` || a.GetDevice() != device || a.GetAppId() != "sh.wendy.example" ||
+		a.GetAppReleaseId() != releaseID || a.GetManifestDigest() != m.GetManifestDigest() ||
 		a.GetDeploymentKeyId() != s.GetDeploymentKeyId() || a.GetDesiredState() != cloudpb.Running_RUNNING || a.GetExpiresAt() == nil ||
 		w.GetRecipientKind() != cloudpb.RecipientKind_RECIPIENT_KIND_DEVICE || w.GetRecipient() != device || w.GetRecipientKeyId() != deviceKeyID ||
 		w.GetScope().GetDeploymentId() != depID || w.GetScope().GetKeyId() != s.GetDeploymentKeyId() || len(w.GetEnc()) == 0 {
-		t.Fatalf("assignment %v", a)
+		t.Fatalf("statement %v", a)
+	}
+}
+
+// A statement cloud lists that the operator did not ask for (another device,
+// or a move) is refused and never signed; the asked-for device still is.
+func TestDeployRefusesStatementsNotAskedFor(t *testing.T) {
+	v := loadRecipientVectors(t)
+	deviceKey, _ := vectorRecipientKey(t, v, "recipient-key-valid")
+	op, fake := registryFixture(t, deviceKey)
+	releaseID, m := publishFixture(t, op)
+	fake.extra = []*cloudpb.PendingDeviceStatement{
+		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: deviceURI(testOperatorTenant, vectorOtherDevice), Revision: 1},
+		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: deviceURI(testOperatorTenant, vectorDevice), Revision: 1, ReplacesDeploymentId: uuid.NewString(), ReplacesRevision: 4},
+	}
+	err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice})
+	if err == nil || !strings.Contains(err.Error(), "not asked for") {
+		t.Fatalf("an unasked-for statement: %v", err)
+	}
+	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != deviceURI(testOperatorTenant, vectorDevice) {
+		t.Fatalf("signed %v", fake.assigned)
 	}
 }
 
@@ -556,7 +685,7 @@ func TestDeployRefusesUnverifiedDevicesBeforeCreating(t *testing.T) {
 	op, fake := registryFixture(t, valid, substituted)
 	releaseID, m := publishFixture(t, op)
 	for _, devices := range [][]string{{vectorDevice, vectorOtherDevice}, {vectorDevice, uuid.NewString()}} {
-		err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), devices)
+		err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), "line-3", devices)
 		if err == nil || !strings.Contains(err.Error(), "nothing was changed") {
 			t.Fatalf("%v: %v", devices, err)
 		}
@@ -566,39 +695,73 @@ func TestDeployRefusesUnverifiedDevicesBeforeCreating(t *testing.T) {
 	}
 }
 
-// Tag targets are refused with the reason; picked devices are required.
+// Tag targets are refused with the reason; picked devices and a name are required.
 func TestDeployRefusesTagTargets(t *testing.T) {
-	cmd := newAppDeployCmd()
-	cmd.SetArgs([]string{"--release", uuid.NewString(), "--target-tag", "fleet"})
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "tag targets are not supported") {
-		t.Fatalf("tag target: %v", err)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--release", uuid.NewString(), "--name", "a", "--target-tag", "fleet"}, "tag targets are not supported"},
+		{[]string{"--release", uuid.NewString(), "--name", "a"}, "--device"},
+		{[]string{"--release", uuid.NewString(), "--device", vectorDevice}, "Add --name"},
+	} {
+		cmd := newAppDeployCmd()
+		cmd.SetArgs(tc.args)
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
 	}
-	cmd = newAppDeployCmd()
-	cmd.SetArgs([]string{"--release", uuid.NewString()})
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--device") {
-		t.Fatalf("no devices: %v", err)
+}
+
+// Adding and dropping devices is one new revision each (expected_revision =
+// the current one), and each device's statement carries that new revision.
+func TestAssignAndUnassignSignTheNextRevision(t *testing.T) {
+	op, fake, _, _, depID := deployFixture(t)
+	ctx := context.Background()
+	kd, err := op.current(ctx, depID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := op.change(ctx, kd.deployment, kd, "sh.wendy.example", []string{vectorDevice}, nil); err == nil || !strings.Contains(err.Error(), "already in") {
+		t.Fatalf("re-adding a device: %v", err)
+	}
+	d := fake.deploys[depID]
+	if err := op.change(ctx, d, nil, "sh.wendy.example", nil, []string{vectorDevice}); err != nil {
+		t.Fatal(err)
+	}
+	updates := fake.signed(cloudpb.DeploymentService_UpdateDeployment_FullMethodName)
+	if len(updates) != 1 || updates[0].resource != "org/"+testOperatorTenant+"/deployment/"+depID || updates[0].payload.(*cloudpb.UpdateDeploymentRequest).GetExpectedRevision() != 1 {
+		t.Fatalf("UpdateDeployment %+v", updates)
+	}
+	removals := fake.signed(cloudpb.DeploymentService_UnassignDevice_FullMethodName)
+	if len(removals) != 1 || removals[0].header["x5c"] == nil || removals[0].resource != "org/"+testOperatorTenant+"/deployment/"+depID+"/device/"+vectorDevice {
+		t.Fatalf("UnassignDevice %+v", removals)
+	}
+	if r := removals[0].payload.(*cloudpb.UnassignDeviceRequest); r.GetRevision() != 2 || r.GetValidUntil().AsTime().Before(time.Now().Add(364*24*time.Hour)) {
+		t.Fatalf("removal %v", r)
+	}
+	kd, err = op.current(ctx, depID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := op.change(ctx, kd.deployment, kd, "sh.wendy.example", []string{vectorDevice}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if last := fake.assigned[len(fake.assigned)-1]; len(fake.assigned) != 2 || last.GetRevision() != 3 {
+		t.Fatalf("re-added at %v", fake.assigned)
+	}
+	if err := op.change(ctx, fake.deploys[depID], kd, "sh.wendy.other", []string{vectorOtherDevice}, nil); err == nil || !strings.Contains(err.Error(), "not sh.wendy.other") {
+		t.Fatalf("another app's deployment: %v", err)
 	}
 }
 
 // Rotation keeps the content key, seals it under a new deployment key and
-// re-assigns the deployment's devices at it; assign uses the newest key.
-func TestRotateAndAssignUseTheNewestDeploymentKey(t *testing.T) {
-	v := loadRecipientVectors(t)
-	deviceKey, _ := vectorRecipientKey(t, v, "recipient-key-valid")
-	op, fake := registryFixture(t, deviceKey)
-	releaseID, m := publishFixture(t, op)
+// re-signs the named devices at the current revision; later changes use it.
+func TestRotateResignsAtTheCurrentRevisionWithTheNewKey(t *testing.T) {
+	op, fake, _, m, depID := deployFixture(t)
 	ctx := context.Background()
-	if err := op.deploy(ctx, "sh.wendy.example", releaseID, "", []string{vectorDevice}); err != nil {
-		t.Fatal(err)
-	}
-	var depID string
-	for id := range fake.deploys {
-		depID = id
-	}
 	first := fake.sealed[0].GetDeploymentKeyId()
 	if err := op.rotate(ctx, depID, "sh.wendy.example", nil); err == nil {
 		t.Fatal("rotate re-assigned devices nobody named")
@@ -609,39 +772,12 @@ func TestRotateAndAssignUseTheNewestDeploymentKey(t *testing.T) {
 	if len(fake.sealed) != 2 || fake.sealed[1].GetDeploymentKeyId() == first || fake.sealed[1].GetContentKeyId() != m.GetContentKeyId() {
 		t.Fatalf("rotation sealed %v", fake.sealed)
 	}
-	if len(fake.assigned) != 2 || fake.assigned[1].GetDeploymentKeyId() != fake.sealed[1].GetDeploymentKeyId() {
-		t.Fatalf("rotation re-assigned %v", fake.assigned)
+	if len(fake.assigned) != 2 || fake.assigned[1].GetDeploymentKeyId() != fake.sealed[1].GetDeploymentKeyId() || fake.assigned[1].GetRevision() != 1 {
+		t.Fatalf("rotation re-signed %v", fake.assigned)
 	}
 	kd, err := op.current(ctx, depID)
 	if err != nil || registrycrypto.KeyID(kd.key) != fake.sealed[1].GetDeploymentKeyId() {
 		t.Fatalf("current key after rotation: %v", err)
-	}
-	if err := op.assign(ctx, kd, "sh.wendy.example", []string{vectorDevice}); err != nil {
-		t.Fatal(err)
-	}
-	if fake.assigned[2].GetDeploymentKeyId() != fake.sealed[1].GetDeploymentKeyId() {
-		t.Fatal("assign used a stale deployment key")
-	}
-}
-
-// Unassign signs one UnassignDeviceRequest per device over the device's own
-// resource, with a validity, by x5c.
-func TestUnassignRequestShape(t *testing.T) {
-	op, fake := registryFixture(t)
-	depID := uuid.NewString()
-	if err := op.unassign(context.Background(), depID, []string{vectorDevice, vectorOtherDevice}); err != nil {
-		t.Fatal(err)
-	}
-	calls := fake.signed(cloudpb.ArtifactRegistryService_UnassignDevice_FullMethodName)
-	if len(calls) != 2 {
-		t.Fatalf("%d unassignments", len(calls))
-	}
-	for i, d := range []string{vectorDevice, vectorOtherDevice} {
-		req := calls[i].payload.(*cloudpb.UnassignDeviceRequest)
-		if calls[i].resource != "org/"+testOperatorTenant+"/deployment/"+depID+"/device/"+d || calls[i].header["x5c"] == nil ||
-			req.GetDevice() != deviceURI(testOperatorTenant, d) || req.GetOrganizationId() != testOperatorTenant || req.GetValidUntil() == nil {
-			t.Fatalf("unassignment %d: %+v %v", i, calls[i], req)
-		}
 	}
 }
 
