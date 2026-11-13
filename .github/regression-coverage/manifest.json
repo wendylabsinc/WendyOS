@@ -2333,6 +2333,13 @@
             ".github/scripts/test-coke-dla-package.py"
           ],
           "result": "Hosted G1 job passes42 locked review cases, actual SIGINT/SystemExit flock/socket/watchdog cleanup and historical swallowed-interruption control. Real pinned NVIDIA package extraction passes fresh/existing/corrupt/missing cases; the historical existing-file bypass fails exact library byte-identity admission. No hardware, DLA library execution or policy-inference accuracy claim. Hosted scene asset supply and remaining observer/cache/Patrol boundaries remain separately tracked."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254176",
+          "artifact": 14014963577,
+          "artifact_sha256": "5000cd3b475ef82e0d643a55606a86484ac38ff3158ed3de79d88c1c31ab9295",
+          "result": "Actual shipped Patrol ROS CLI passes five cases over native DDS: strict stale-scan stop, sparse-scan opt-in with obstacle stop, arrival-age opt-in with frozen capture refusal, closed-loop kinematic route completion, and malformed stamp refusal/recovery. Three production-source controls fail their corresponding flag/stamp boundary. Five source hashes match integrated source. Controlled kinematic publishers are not MuJoCo or a physical robot. Observer/cache and hosted scene asset supply remain separately tracked."
         }
       ]
     },
@@ -4303,9 +4310,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2306",
       "title": "Restore Foxglove bridge deployment on current devices",
       "package": "13",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Tests cover accepted WebSocket subprotocols, cleanup scope and builder validation. They do not deploy a real Foxglove bridge image to a current device.",
-      "required_follow_up": "Require the actual generated Foxglove build/deployment, real WebSocket/CDR ROS delivery and all three historical controls in the existing Go2 ROS job. Confirm recorded runtime, disk and cleanup evidence before marking verified.",
+      "required_follow_up": "Retain the required generated-image deployment, real ROS/WebSocket delivery and all three historical controls in the existing Go2 ROS job.",
       "evidence": [
         {
           "tests": [
@@ -4334,6 +4341,13 @@
             "go/internal/cli/commands/foxglove_runtime_test.go"
           ],
           "result": "Post-fix actual OCI image started CycloneDDS and Foxglove3.6.0, advertised the nonce ROS topic and created a real subscription through the forwarded WebSocket. Normal gate then failed its test-only CDR decoder string-bounds check. Humble rmw_cyclonedds serdata_rmw::resize explicitly rounds serialized buffers to four bytes and zero-fills the tail; corrected independent decoder retains declared string length/NUL and admits only exact zero alignment padding. Targeted native parser cases pass and independent source review is clear. Full normal and three controls remain pending; no end-to-end pass claimed."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378091991/job/131729254176",
+          "artifact": 14016570162,
+          "artifact_sha256": "0344b99d4e1a6bb613b177f3ac5e0c5bf2173ef0ce656742696053d938dd887d",
+          "result": "Hosted actual production-generated ros:humble image build/deployment passes. Five nonce-bound increasing ROS messages cross Foxglove WebSocket and production ExecContainer forwarding; the deployed app survives forwarding cancellation. Historical named-service shape fails the retained-app invariant, named-forward target fails actual WebSocket readiness, and original duplicate-loopback configuration crashes CycloneDDS before readiness. All ten recorded source hashes match integrated source. Cleanup errors are empty. This verifies the software deployment boundary; no physical robot or browser UI claim."
         }
       ]
     },
