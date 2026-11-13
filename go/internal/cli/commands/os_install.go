@@ -2278,6 +2278,19 @@ type wifiCLIOptions struct {
 	// RequireChoice makes an unanswered Wi-Fi question an error without a
 	// terminal; only callers with Wi-Fi flags to point at set it.
 	RequireChoice bool
+	// MaxNetworks is the most networks the board takes; 0 means no limit.
+	MaxNetworks int
+}
+
+// liteMaxWiFiNetworks is how many Wi-Fi networks a Wendy Lite board takes.
+const liteMaxWiFiNetworks = 1
+
+// tooManyWiFiNetworks is the error for a board that takes max networks.
+func tooManyWiFiNetworks(max int) error {
+	if max == 1 {
+		return usageErrorf("this board supports one Wi-Fi network: pass a single network")
+	}
+	return usageErrorf("this board supports at most %d Wi-Fi networks: pass no more than %d", max, max)
 }
 
 // chosen reports whether a flag settles first-boot Wi-Fi.
@@ -2393,6 +2406,9 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 		creds = append(creds, c)
 	}
 
+	if opts.MaxNetworks > 0 && len(creds) > opts.MaxNetworks {
+		return nil, tooManyWiFiNetworks(opts.MaxNetworks)
+	}
 	if len(creds) > 0 {
 		return creds, nil
 	}
@@ -2424,6 +2440,9 @@ func resolveWiFiCredentialsList(opts wifiCLIOptions) ([]wendyconf.WifiCredential
 			break
 		}
 		creds = append(creds, c)
+		if opts.MaxNetworks > 0 && len(creds) >= opts.MaxNetworks {
+			break
+		}
 
 		more, err := tui.Confirm("Add another WiFi network?")
 		if err != nil {
@@ -3209,6 +3228,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
+	wifi.MaxNetworks = liteMaxWiFiNetworks
 	provCreds, err := resolveWiFiCredentialsList(wifi)
 	if err != nil {
 		return err
@@ -3240,8 +3260,8 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return fmt.Errorf("building Wendy config: %w", err)
 	}
 
-	if wendyConf.Wifi != nil && len(wendyConf.Wifi.Networks) > 1 {
-		return fmt.Errorf("this device only supports one Wi-Fi network")
+	if wendyConf.Wifi != nil && len(wendyConf.Wifi.Networks) > liteMaxWiFiNetworks {
+		return tooManyWiFiNetworks(liteMaxWiFiNetworks)
 	}
 
 	if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {

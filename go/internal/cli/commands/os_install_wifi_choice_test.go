@@ -293,3 +293,33 @@ func TestInstallESP32FirmwareScansForBoardBeforeQuestions(t *testing.T) {
 		t.Fatalf("no board: %v; want ESP32 not found before any Wi-Fi question", err)
 	}
 }
+
+// A board that takes one network never offers to add another.
+func TestWiFiPromptWithMaximumOneDoesNotOfferAnother(t *testing.T) {
+	stubWifiChoice(t, true, "")
+	stubWifiPrompts(t)
+	confirmWifiSetup = func() (bool, error) { return true, nil }
+	selectWifiNetworkFromScan = func() (wifiScanSelection, error) {
+		return wifiScanSelection{ScanErr: errNoWifiAdapter}, nil
+	}
+	confirmManualWifiEntry = func() (bool, error) { return true, nil }
+	confirmKeychainLookup = func(string) (bool, error) { return false, nil }
+	promptWifiSSID = func() (string, error) { return "homenet", nil }
+	promptWifiPassword = func(string) (string, error) { return "hunter2", nil }
+	// An "Add another" question would reach tui.Confirm, which cannot run here.
+	creds, err := resolveWiFiCredentialsList(wifiCLIOptions{MaxNetworks: 1})
+	if err != nil || len(creds) != 1 {
+		t.Fatalf("got %v, %v; want one network and no further question", creds, err)
+	}
+}
+
+// Too many networks on the flags stop the Lite install before the name question.
+func TestInstallESP32FirmwareRefusesTooManyNetworksBeforeTheNameQuestion(t *testing.T) {
+	stubSessionTerminals(t, false, false, nil)
+	err := installESP32Firmware(context.Background(), false, "esp32c6_generic_native",
+		discovery.SerialPortInfo{Port: "/dev/ttyACM0"},
+		wifiCLIOptions{Entries: []string{"ssid=A,password=pw1", "ssid=B,password=pw2"}}, "", preEnrollOptions{mode: preEnrollSkip})
+	if err == nil || !strings.Contains(err.Error(), "supports one Wi-Fi network") || !IsUsageError(err) {
+		t.Fatalf("two networks: %v; want the one-network usage error", err)
+	}
+}
