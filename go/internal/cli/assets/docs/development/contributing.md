@@ -15,6 +15,26 @@ For questions about initialization, [generators](https://guides.rubyonrails.org/
 and file conflicts, use concrete references such as the [Ruby on Rails CLI](https://guides.rubyonrails.org/command_line.html)
 for inspiration, applying judgment while Wendy's executable specs remain authoritative.
 
+The following agreed design conventions apply to new work and intentional
+redesigns. Existing commands may not yet comply; preserve established interfaces
+until deliberate compatibility changes.
+
+- A TUI is optional convenience. All capabilities must be available without
+  Bubble Tea through the ordinary CLI, arguments/options, and plain prompts
+  where appropriate.
+- Use one Rails-style file-generation policy: create missing files, leave
+  identical files untouched, explicitly resolve differing files, and preserve
+  unrelated files. Interactive conflicts must offer overwrite, skip, diff, and
+  quit.
+- Explicit `--force` overwrites conflicts; `--skip` preserves conflicts while
+  still creating missing files. Reject `--force` together with `--skip`.
+- Outside `--dry-run`, non-interactive unresolved conflicts must fail with
+  actionable paths. Absent input or EOF must never grant overwrite permission.
+- Use `--dry-run`, not `--dry` or `--pretend`, to preview actions and conflicts
+  without prompting or writing.
+- Preflight unresolved conflicts before writing. This does not promise rollback
+  of later I/O failures.
+
 ## CI / GitHub Actions
 
 ### Source-only AI review
