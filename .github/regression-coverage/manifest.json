@@ -1681,9 +1681,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2527",
       "title": "fix(ble): keep a Wendy Net BLE link when the controller refuses the interval update",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "The test injects Command Disallowed and checks the link stays up. Other controller-specific timing and PHY responses remain unverified.",
-      "required_follow_up": "Require actual Linux provider/TLS transport for all eight HCI outcomes and the historical refusal-fallback control in the existing race job. Physical controller behavior remains separate.",
+      "required_follow_up": "Retain the passing actual Linux provider/TLS negotiation matrix and exact physical controller/firmware acceptance procedure; hardware results remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -1700,6 +1700,11 @@
             ".github/scripts/fixtures/ble-mesh-coverage.md"
           ],
           "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
+          "result": "All eight actual Linux provider/TLS/hello/echo outcomes passed under the race detector; the historical refusal-fallback control failed at its intended transport assertion. Hosted log includes BLE_INTERVAL_PROVIDER_MATRIX_VERIFIED. The exact controller/radio procedure is ready, but HCI outcomes in CI are synthetic and physical firmware qualification remains not_run."
         }
       ]
     },
@@ -3585,9 +3590,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1572",
       "title": "Wendy Lite: wendy run: offer Wendy Lite reinstall (part 1)",
       "package": "10",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover busy-port classification, picker cleanup and flash prompting. Actual disappearing serial ports and reinstall/reconnect behavior remain hardware-dependent.",
-      "required_follow_up": "Reconcile the actual PTY normal/control journeys in required hosted race CI, then execute exact Unix/Windows same-command reinstall and reconnect procedures on qualified hardware.",
+      "required_follow_up": "Retain passing actual Unix PTY normal/control journeys and the exact Unix/Windows same-command reinstall/reconnect procedures; all physical cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -3603,6 +3608,11 @@
             ".github/regression-coverage/manual/serial-windows-run.py"
           ],
           "result": "Windows physical acceptance now requires actual unplug/changed COM and the same interactive command through capability failure, reinstall, restart, second build and heartbeat. A later independent successful command cannot satisfy recovery. Six offline checks pass; actual hardware remains not_run."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
+          "result": "Hosted actual serial discovery and retry PTY cases passed; both historical misclassification controls failed at named boundaries. SERIAL_DISCONNECT_MATRIX_VERIFIED confirms execution. Unix and Windows procedures require actual port disappearance/reappearance and recovery through the same interactive command, followed by heartbeat. No hardware, reset or flashing execution is inferred."
         }
       ]
     },
@@ -4546,6 +4556,15 @@
             ".github/scripts/test-mldsa-policy-transport.py"
           ],
           "result": "Eight full loopback TLS13 cases pass under race with actual ECDSA possession and ML-DSA issuer signatures. Valid peers exchange nonce bytes; malformed critical extensions and unknown EKU produce actual production verifier errors with zero delivery. Restoring historical missing issuer policy admits application bytes and fails both directions. Required in existing sensor identity/race step, sharing its artifact and seven-minute bound; no extra job. Hosted execution and unknown-own-scope startup remain pending."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
+          "tests": [
+            "go/internal/agent/mtls/peer_chain_transport_test.go",
+            "go/internal/agent/mcusource/mtls_identity_transport_test.go"
+          ],
+          "result": "Hosted full race job passed all eight real TLS13 ML-DSA-policy cases and twelve sensor tenant TLS/gRPC cases. Historical missing-issuer-policy control admitted application bytes and failed both expected directions; pairing-derived tenant control failed exact intended peer boundaries. Unknown-own-scope actual Agent startup matrix still pending, so the mixed entry remains partial."
         }
       ]
     },
@@ -4564,9 +4583,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2048",
       "title": "WASM Web Support",
       "package": "15",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The mixed PR includes browser authentication, refresh serialization and CI review repairs. WASM, Go and Python tests cover different portions; not every script/UI path is a required check.",
-      "required_follow_up": "Require new twelve-case MCU TLS/gRPC tenant matrix and original-scope control in existing race CI; reconcile with seven-fix map, passing browser/automation jobs and native OAuth process proofs.",
+      "required_follow_up": "Retain required browser/WASM, automation, native OAuth/ACME and twelve-case sensor tenant transport tests and original-scope control.",
       "evidence": [
         {
           "tests": [
@@ -4582,6 +4601,11 @@
             "go/internal/agent/mcusource/mtls_identity_transport_test.go"
           ],
           "result": "Twelve actual loopback TCP/TLS and sensorRPC cases cover numeric asset identity derived from the consumer certificate tenant, despite stale pairingOrgID; wrong tenant/asset are refused before dispatch for legacy and SPIFFE scopes. Race normal passes1.100s; original pairing-org assumption fails both intended boundaries. Existing BrowserWASM job131700219405 and automation job131700219478 pass at8b59c8dce. Seven original fixes mapped independently; adapter/browser-worker evidence is not a real browser profile or live Cloud run. Required newMCU hosted gate pending."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688",
+          "result": "Reconciled all seven original fixes in wasm-auth/behavior-map.txt with passing native commands/ACME race packages, BrowserWASM job131714898682 and automation job131714898568 at this head. The twelve actual TLS/gRPC sensor cases pass; restoring pairing-org derivation fails correct-peer TLS/RPC boundaries in both legacy and SPIFFE scopes. Existing controlled OAuth child processes, actual CSR parsing and API-review repair/batching checks cover the selected corrections. No live public Cloud, real browser profile, unrelated Swift UI feature or physical MCU qualification is claimed."
         }
       ]
     },

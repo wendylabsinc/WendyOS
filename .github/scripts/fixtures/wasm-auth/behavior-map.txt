@@ -42,7 +42,8 @@ WASM feature ancestry. It is not an audit completion ledger.
   preflight, and an enabled missing-auth-before-device case. They did not
   implement Swift enrollment. Help/render cases are outside this non-UI task;
   those Swift E2E cases are not claimed as newly executed.
-  New MCU gate passes locally; required hosted integration remains pending.
+  New MCU gate passes locally and in required hosted race job131714898688
+  at50ce4945a; all twelve normal cases and the original-scope control executed.
 
 10b0dc858: native cross-process OAuth refresh/checkpoint serialization
   Source: go/internal/cli/commands/auth_refresh_lock_test.go
@@ -114,5 +115,5 @@ New gate and registration
 
 Closure rule
   Reconcile these exact assertions and hosted source heads with the audit
-  before changing status. New MCU gate awaits required hosted execution.
+  before changing status. New MCU gate passed required hosted execution at50ce4945a.
   This map alone does not close the mixed audit or its external acceptance.
