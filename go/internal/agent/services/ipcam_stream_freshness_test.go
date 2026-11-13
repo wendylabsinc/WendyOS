@@ -25,7 +25,7 @@ func TestIPCameraAuthenticatedStreamChangesDecodedPixels(t *testing.T) {
 		}
 		t.Skip("GStreamer is not installed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 27*time.Second)
 	defer cancel()
 	source := newCameraAdmissionServer(t, ctx, launch)
 	alternate := encodeAdmissionAccessUnit(t, ctx, launch, color.RGBA{G: 240, A: 255})
@@ -38,7 +38,7 @@ func TestIPCameraAuthenticatedStreamChangesDecodedPixels(t *testing.T) {
 	}
 	// Keep production network/depay/decoder elements. Only the final kernel sink
 	// is replaced for this portable protocol fixture's raw pixel observation.
-	args = append(args[:sink], "video/x-raw,format=RGB", "!", "fdsink", "fd=1")
+	args = append(args[:sink], "video/x-raw,format=RGB,framerate=25/1", "!", "fdsink", "fd=1")
 	frames := make(chan []byte, 2)
 	done := make(chan error, 1)
 	go func() {
@@ -68,6 +68,7 @@ func TestIPCameraAuthenticatedStreamChangesDecodedPixels(t *testing.T) {
 			}
 		}
 	})
+	started := time.Now()
 	for _, phase := range []int32{0, 1} {
 		source.phase.Store(phase)
 		for index := 0; index < 10; index++ {
@@ -82,6 +83,19 @@ func TestIPCameraAuthenticatedStreamChangesDecodedPixels(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("production RTSP decoder did not deliver changing pixels")
 			}
+		}
+	}
+	// The kernel lifecycle keeps one authenticated stream alive across multiple
+	// ten-second idle grace periods. A handshake deadline must not expire PLAY.
+	for time.Since(started) < 22*time.Second {
+		select {
+		case frame := <-frames:
+			assertAdmissionRGB(t, frame, 1)
+		case err := <-done:
+			completed = true
+			t.Fatalf("authenticated RTSP fixture expired during active PLAY: %v", err)
+		case <-ctx.Done():
+			t.Fatal("authenticated RTSP fixture stopped producing live frames")
 		}
 	}
 	cancel()

@@ -118,8 +118,10 @@ func newCameraAdmissionServer(t *testing.T, ctx context.Context, launch string) 
 
 func encodeAdmissionAccessUnit(t *testing.T, ctx context.Context, launch string, left color.RGBA) []byte {
 	t.Helper()
+	// JPEG bytes carry no cadence. Declare the same 25fps used by RTP below,
+	// so decoded caps and the kernel loopback time-per-frame are finite.
 	jpegFrame := sensorLinkColorFrame(t, left).Data
-	encoder := exec.CommandContext(ctx, launch, "-q", "fdsrc", "fd=0", "!", "jpegparse", "!", "jpegdec", "!", "videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "tune=zerolatency", "key-int-max=1", "byte-stream=true", "!", "video/x-h264,stream-format=byte-stream,alignment=au", "!", "fdsink", "fd=1")
+	encoder := exec.CommandContext(ctx, launch, "-q", "fdsrc", "fd=0", "!", "image/jpeg,framerate=25/1", "!", "jpegparse", "!", "jpegdec", "!", "videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "tune=zerolatency", "key-int-max=1", "byte-stream=true", "!", "video/x-h264,stream-format=byte-stream,alignment=au", "!", "fdsink", "fd=1")
 	encoder.Stdin = bytes.NewReader(bytes.Repeat(jpegFrame, 3))
 	var diagnostics bytes.Buffer
 	encoder.Stderr = &diagnostics
@@ -212,6 +214,11 @@ func (f *cameraAdmissionServer) serveRTSP(conn net.Conn) {
 			if !respond("200 OK", "Session: fixture\r\nRange: npt=0.000-\r\n", "") {
 				return
 			}
+			// The 20-second deadline bounds only the RTSP handshake. PLAY must
+			// remain alive across the kernel test's idle-grace observations.
+			if err := conn.SetDeadline(time.Time{}); err != nil {
+				return
+			}
 			f.rtspPlays.Add(1)
 			f.sendRTP(conn)
 			return
@@ -228,6 +235,11 @@ func (f *cameraAdmissionServer) sendRTP(conn net.Conn) {
 	var seq uint16
 	var timestamp uint32
 	for range ticker.C {
+		// Bound a stalled peer independently of the session's total lifetime.
+		// Fixture cleanup closes this owned connection and joins the sender.
+		if err := conn.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return
+		}
 		accessUnit := f.accessUnit
 		if alternate := f.alternateAccessUnit.Load(); f.phase.Load() == 1 && alternate != nil {
 			accessUnit = *alternate
