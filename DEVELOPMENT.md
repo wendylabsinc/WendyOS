@@ -488,6 +488,8 @@ delete it to give a device a fresh chance at uncompressed uploads.
 | `WENDY_REGISTRY_ADDR` | Embedded OCI registry address. |
 | `WENDY_BROKER_URL` | Cloud tunnel broker WebSocket URL. |
 | `WENDY_MTLS_ORG_ENFORCEMENT` | `off` / `grace` / `strict` client-org enforcement on the mTLS gate. |
+| `WENDY_CRL_GRACE` | How long past a CRL's `NextUpdate` new operator sessions are still admitted, as a Go duration (`72h`). Unset: aged or missing CRLs are logged and never refuse a session. See `go/internal/shared/revocation/README.md`. |
+| `WENDY_CRL_MIRROR` | Base URL replacing the scheme and host of certificate CRL URLs, for self-hosted, proxied and NAT64 sites. Agent and CLI. |
 | `WENDY_COLLECT_DMESG` | `true` to enable kernel dmesg collection. |
 | `WENDY_DATA_DIR` | Wendy Data episode store, for a custom location only. Unset, it is `/var/lib/wendy/wendy-data/episodes` when `/var/lib/wendy` is a separate filesystem larger than the one holding `/var/lib/wendy-agent` (WendyOS `/data`), else `/var/lib/wendy-agent/data/episodes`. |
 | `WENDY_BT_ADAPTER` | Pin a specific BlueZ adapter path. |

@@ -39,7 +39,7 @@ func (n *Node) AttachOperatorRouterLink(ctx context.Context, link *meshoperatorl
 	if err := n.verifyPeerCertificates(link.Peer(), link.ConnectionState().PeerCertificates); err != nil {
 		return err
 	}
-	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), link.Peer(), cost, &operatorRouterNodeLink{link})
+	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), link.Peer(), cost, &operatorRouterNodeLink{link}, link.ConnectionState().PeerCertificates...)
 }
 
 func (n *Node) AttachOperatorRouterStream(ctx context.Context, c *tls.Conn, cost uint16) error {

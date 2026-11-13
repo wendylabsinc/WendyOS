@@ -68,7 +68,7 @@ func addLiteDeviceTrust(cfg *tls.Config, operator tls.Certificate, chain, device
 		}
 		intermediates = append(intermediates, state.PeerCertificates[1:]...)
 		now := time.Now()
-		if verifyErr := certs.VerifyPeerCertificateChain(leaf, intermediates, known, x509.ExtKeyUsageServerAuth, now, now); verifyErr != nil {
+		if verifyErr := certs.VerifyLivePeerCertificateChain(leaf, intermediates, known, x509.ExtKeyUsageServerAuth, now, now); verifyErr != nil {
 			return fmt.Errorf("Lite device certificate does not chain to the session trust: %w", verifyErr)
 		}
 		return nil

@@ -14,6 +14,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
+	"github.com/wendylabsinc/wendy/go/internal/shared/revocation"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -30,6 +31,11 @@ import (
 // certs remain valid when the device clock has not yet been synchronised via NTP. Pass a
 // zero time.Time to disable the floor.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
+	cfg, _, err := newFloorTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor)
+	return cfg, err
+}
+
+func newFloorTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, peerCheck, error) {
 	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(now, nb time.Time) (time.Time, time.Time) {
 		return now, effectiveVerificationTime(now, notBeforeFloor, nb)
 	}, time.Now, false)
@@ -38,12 +44,17 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 // NewTLSConfigWithTimePolicy selects an explicit local boot-clock policy.
 // It never uses an announcement timestamp to establish certificate trust.
 func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, error) {
-	cfg, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(wall, nb time.Time) (time.Time, time.Time) {
+	cfg, _, err := newPolicyTLSConfig(certPEM, chainPEM, keyPEM, logger, policy)
+	return cfg, err
+}
+
+func newPolicyTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, peerCheck, error) {
+	cfg, check, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(wall, nb time.Time) (time.Time, time.Time) {
 		base := policy.BaseTime(wall)
 		return base, policy.LeafTimeAtBase(base, nb)
 	}, policy.WallTime, true)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	previous := cfg.VerifyConnection
 	cfg.VerifyConnection = func(state tls.ConnectionState) error {
@@ -61,18 +72,25 @@ func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Lo
 		}
 		return cfg.VerifyPeerCertificate(raw, nil)
 	}
-	return cfg, nil
+	return cfg, check, nil
 }
 
-func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), now func() time.Time, leafOnly bool) (*tls.Config, error) {
+// peerCheck re-verifies a presented chain at the given evidence level.
+type peerCheck func(raw [][]byte, level revocation.Level) error
+
+func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), now func() time.Time, leafOnly bool) (*tls.Config, peerCheck, error) {
 	if chainPEM == "" {
-		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
+		return nil, nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
 
 	cert, err := certs.TLSKeyPair(certPEM, chainPEM, keyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("loading X509 key pair: %w", err)
+		return nil, nil, fmt.Errorf("loading X509 key pair: %w", err)
 	}
+	// This server also faces the mobile apps, whose TLS stacks may try to read
+	// a staple as an OCSP response. Nothing depends on the device stapling its
+	// own CRL: device certificates never fail for lack of evidence.
+	cert.OCSPStaple = nil
 
 	var caPool *x509.CertPool
 	var caCerts []*x509.Certificate
@@ -82,7 +100,7 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 		// become an independent anchor and hide its issuer's expiry.
 		caPool, caCerts, err = peerCertificateTrust(chainPEM)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	} else {
 		// Preserve the general mTLS loopback policy for legacy callers.
@@ -90,10 +108,10 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 		certs.AppendChainToPool(caPool, chainPEM)
 		caCerts, err = parseCertsFromPEM([]byte(chainPEM))
 		if err != nil {
-			return nil, fmt.Errorf("parsing chain PEM: %w", err)
+			return nil, nil, fmt.Errorf("parsing chain PEM: %w", err)
 		}
 		if len(caCerts) == 0 {
-			return nil, fmt.Errorf("parsing chain PEM: no certificates found")
+			return nil, nil, fmt.Errorf("parsing chain PEM: no certificates found")
 		}
 		caPool.AppendCertsFromPEM([]byte(certPEM))
 	}
@@ -113,19 +131,47 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 		ClientCAs:  nil,
 		MinVersion: tls.VersionTLS12,
 	}
-	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, clockTimes, nil, leafOnly)
-	cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error { _, err := verify(raw, now()); return err }
+	var verifiers [revocation.Fresh + 1]func([][]byte, time.Time) (certs.CertificateWindow, error)
+	for level := range verifiers {
+		verifiers[level] = buildPeerCertificateWindowVerifier(caPool, caCerts, logger, clockTimes, nil, leafOnly, revocation.Level(level))
+	}
+	check := func(raw [][]byte, level revocation.Level) error { _, err := verifiers[level](raw, now()); return err }
+	// Established connections and rechecks fail only on positive revocation.
+	cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error { return check(raw, revocation.RevokedOnly) }
 	cfg.Time = func() time.Time { base, _ := clockTimes(now(), time.Time{}); return base }
 	// Session resumption: stamp the client cert window into tickets and
 	// decline stale ones (see session_ticket.go for the security rationale).
 	wireSessionTicketChecksWithClock(cfg, now, clockTimes)
+	// Every new session, full or resumed, is new authority. Take the CRL the
+	// peer stapled; it is trusted only once a verified path names its issuer.
+	// A resumed session skipped VerifyPeerCertificate, so run it. Then, when
+	// the fleet set a grace, require operator evidence within it. Without one
+	// that level equals the revoked-only check which already ran, and a
+	// stapled revocation takes effect at the first RPC boundary.
+	cfg.VerifyConnection = func(state tls.ConnectionState) error {
+		revocation.Default.Offer(state.OCSPResponse)
+		raw := make([][]byte, len(state.PeerCertificates))
+		for i, certificate := range state.PeerCertificates {
+			raw[i] = certificate.Raw
+		}
+		if state.DidResume {
+			if err := cfg.VerifyPeerCertificate(raw, nil); err != nil {
+				return err
+			}
+		}
+		if !revocation.Default.Enforcing() {
+			return nil
+		}
+		return check(raw, revocation.Session)
+	}
+
 	// Direct PKI device certificates carry a tenant SPIFFE identity instead
 	// of a legacy numeric org. Keep tenant enforcement active even when the
 	// legacy org interceptor has no numeric identity to compare. VerifyConnection
 	// runs for resumed sessions as well as full certificate handshakes.
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		return nil, fmt.Errorf("parsing device certificate: %w", err)
+		return nil, nil, fmt.Errorf("parsing device certificate: %w", err)
 	}
 	if own, ok := certs.TenantPrincipalFromCert(leaf); ok {
 		parts := strings.Split(own, "/")
@@ -149,7 +195,7 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 			}
 		}
 	}
-	return cfg, nil
+	return cfg, check, nil
 }
 
 // NewServer creates a gRPC server with mTLS credentials.
@@ -163,23 +209,23 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 // expected and orgMode are forwarded to the mandatory mTLS interceptors, which
 // enforce tenant-equality between the connecting client cert and this device.
 func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
-	tlsConfig, err := NewTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor)
+	tlsConfig, check, err := newFloorTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor)
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
 
-	return newServerWithTLSConfig(tlsConfig, chainPEM, logger, expected, orgMode, extraOpts...)
+	return newServerWithTLSConfig(tlsConfig, check, chainPEM, logger, expected, orgMode, extraOpts...)
 }
 
 func NewServerWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
-	cfg, err := NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	cfg, check, err := newPolicyTLSConfig(certPEM, chainPEM, keyPEM, logger, policy)
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
-	return newServerWithTLSConfig(cfg, chainPEM, logger, expected, orgMode, extraOpts...)
+	return newServerWithTLSConfig(cfg, check, chainPEM, logger, expected, orgMode, extraOpts...)
 }
 
-func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.Logger, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
+func newServerWithTLSConfig(tlsConfig *tls.Config, check peerCheck, chainPEM string, logger *zap.Logger, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
 
 	known, err := parseCertsFromPEM([]byte(chainPEM))
 	if err != nil {
@@ -188,6 +234,7 @@ func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.
 	tlsConfig.NextProtos = []string{"h2"}
 	meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
 
+	checkLive := livePeerCheck(check)
 	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
 	opts := []grpc.ServerOption{
 		grpc.Creds(creds),
@@ -195,9 +242,11 @@ func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.
 		// so that no handler can be reached without a verified client certificate.
 		grpc.ChainUnaryInterceptor(
 			interceptor.UnaryMTLSInterceptor(logger, expected, orgMode),
+			liveUnaryInterceptor(checkLive),
 			interceptor.UnaryRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.ChainStreamInterceptor(
 			interceptor.StreamMTLSInterceptor(logger, expected, orgMode),
+			liveStreamInterceptor(checkLive),
 			interceptor.StreamRPCIdentityInterceptor(logger, expected, orgMode)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),

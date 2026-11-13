@@ -219,8 +219,8 @@ func TestResumptionSecondConnectionResumes(t *testing.T) {
 	if !c2 || !s2 {
 		t.Fatalf("second connection did not resume (client=%v server=%v)", c2, s2)
 	}
-	if n := env.verifyCount.Load(); n != 1 {
-		t.Errorf("full ML-DSA verification ran %d times, want exactly 1", n)
+	if n := env.verifyCount.Load(); n != 2 {
+		t.Errorf("live certificate verification ran %d times, want 2 including resumption", n)
 	}
 }
 
