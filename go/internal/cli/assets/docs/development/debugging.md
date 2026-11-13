@@ -173,8 +173,9 @@ The agent continues to work without it, but Bluetooth container isolation is deg
 The Go `wendy-agent` drives WiFi through `nmcli` only — it does not auto-detect
 between ConnMan and NetworkManager, and it ignores `WENDY_NETWORK_MANAGER`
 (only the earlier Swift agent for Linux, which the Go agent replaced, read that
-variable). If `nmcli` is not on the agent's
-`PATH`, every WiFi management RPC fails with `Unavailable: WiFi management is
+variable). The agent first searches `PATH`, then `/usr/bin/nmcli`,
+`/usr/sbin/nmcli`, and `/usr/local/bin/nmcli`. If none is found, every WiFi
+management RPC fails with `Unavailable: WiFi management is
 not available (nmcli not found)`. Check:
 
 ```sh
