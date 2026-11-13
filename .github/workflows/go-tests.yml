@@ -337,7 +337,7 @@ jobs:
         run: |
           sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update --error-on=any
-          sudo apt-get install -y systemd-resolved dbus iproute2 util-linux
+          sudo apt-get install -y systemd-resolved dbus iproute2 util-linux libusb-1.0-0-dev libasound2-dev pkg-config
           root="$RUNNER_TEMP/wendy-runtime"
           mkdir -p "$root/common"
           (
@@ -357,6 +357,25 @@ jobs:
           done
       - name: Require lifecycle, DNS, DDS and memory checks on both runtimes
         run: bash .github/scripts/test-containerd-versions.sh
+      - name: Require real Compose watch sessions and regression controls
+        timeout-minutes: 15
+        run: |
+          bash .github/scripts/prepare-watch-container.sh "$RUNNER_TEMP/watch-container"
+          runtime="$RUNNER_TEMP/wendy-runtime/current/root"
+          common="$RUNNER_TEMP/wendy-runtime/common/root"
+          runtime_path="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$common/usr/bin:$common/usr/sbin:$common/bin:$common/sbin:$PATH"
+          for case_name in normal forced-detach restart-sibling; do
+            sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+              bash .github/scripts/test-watch-container.sh "$RUNNER_TEMP/containerd.test" "$RUNNER_TEMP/watch-container" "$case_name"
+          done
+      - name: Preserve Compose watch evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: watch-container
+          path: ${{ runner.temp }}/watch-container/*.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Prepare real ROS scope image and regression controls
         run: |
           python3 .github/scripts/ros_scope_runtime_test.py
@@ -792,7 +811,7 @@ jobs:
   media-regressions:
     name: Linux media regressions
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ./.github/actions/setup-go-ci
@@ -926,6 +945,27 @@ jobs:
         with:
           name: ipcam-loopback-lifecycle
           path: ${{ runner.temp }}/wendy-ipcam-lifecycle.*/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Require Go2 H264 decoding through the kernel and a camera-entitled container
+        timeout-minutes: 15
+        run: |
+          root="$RUNNER_TEMP/go2-runtime"
+          mkdir "$root"
+          (
+            cd "$root"
+            apt-get download containerd runc busybox-static
+            for archive in ./*.deb; do dpkg-deb --extract "$archive" root; done
+          )
+          runtime_path="$root/root/usr/bin:$root/root/usr/sbin:$root/root/bin:$root/root/sbin:$PATH"
+          env PATH="$runtime_path" bash .github/scripts/test-go2-h264-loopback.sh
+      - name: Preserve Go2 H264 evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go2-h264-loopback
+          path: ${{ runner.temp }}/wendy-go2-h264.*/*.log
           if-no-files-found: ignore
           retention-days: 7
 
