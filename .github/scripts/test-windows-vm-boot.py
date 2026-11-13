@@ -250,8 +250,8 @@ def execute(output):
         # populated, but PATH deliberately lacks QEMU. It must fail before boot.
         owner.run('path-only-control',[control,'vm','start',name,'--port',str(port),'--memory','2048','--cpus','2'],30,env,expected=6)
         evidence['control_error']=validate_path_only_control(6,(output/'path-only-control.stderr.log').read_text(errors='replace'))
-        stopped=json.loads(owner.run('control-stopped',[cli,'vm','list','--json'],20,env))
-        if len(stopped)!=1 or stopped[0].get('name')!=name or stopped[0].get('state')!='stopped':
+        control_listing=json.loads(owner.run('control-stopped',[cli,'vm','list','--json'],20,env))
+        if len(control_listing)!=1 or control_listing[0].get('name')!=name or control_listing[0].get('state')!='stopped':
             raise RuntimeError('historical launch failure left an active VM')
         evidence['control']='passed_expected_failure'
         boot=owner.start('console',[cli,'vm','start',name,'--port',str(port),'--memory','2048','--cpus','2'],env)
