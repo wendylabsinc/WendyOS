@@ -29,6 +29,9 @@ source /fixture/evidence.sh
 driver_vm_open_evidence
 exec 1>&3 2>&3
 printf 'DRIVER_VM_EVIDENCE_CHANNEL_READY\n'
+# shellcheck source=.github/scripts/fixtures/driver-vm/boot.sh
+source /fixture/boot.sh
+driver_vm_require_native_boot
 # Keep this after the nonce guard and exit trap, before any driver operation.
 # A broken guest service must produce diagnostics, not consume the VM deadline.
 # shellcheck source=.github/scripts/fixtures/driver-vm/dbus.sh

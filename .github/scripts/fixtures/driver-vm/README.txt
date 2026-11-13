@@ -159,3 +159,27 @@ read-only observations of the merged payload, mount table, activation receipt,
 module lookup and vermagic through the independent evidence channel. These
 observations never load a module or refresh the merge. The original test exit
 status remains authoritative even if diagnostics fail or time out.
+
+Exported container identity
+---------------------------
+The 1e493be06 run43384520729/job131749791485 passed all actual SquashFS
+module/metadata checks, but its boot console reported "Detected virtualization
+docker". After the supposedly successful merge, mountinfo had a private root,
+systemd-sysext status listed no extensions, and every merged payload was absent.
+This is an exported-container fixture error, not evidence of a module failure.
+
+Systemd262 detects /.dockerenv and /run/.containerenv as container identities;
+its native boot only marks the root shared when no container is detected.
+Sysext merges in a child mount namespace and relies on that propagation:
+https://github.com/systemd/systemd/blob/v262/src/basic/virt.c
+https://github.com/systemd/systemd/blob/v262/src/shared/mount-setup.c
+https://github.com/systemd/systemd/blob/v262/src/sysext/sysext.c
+
+After archive validation/extraction, remove only the exact regular container
+identity markers from the nonce-bound, fresh export tree before mkfs. Record
+their hashes. This does not change the Docker image, host identity, guest kernel,
+shipped apply script or target modules. No mount propagation is forced. Every
+actual boot must independently report non-container QEMU/KVM, shared /usr mount
+propagation, and the same mount namespace as guest PID1 before driver operations.
+The original complete module lifecycle and negative controls remain required;
+the fixture correction alone does not establish that they pass.

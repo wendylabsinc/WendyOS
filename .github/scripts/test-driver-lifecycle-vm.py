@@ -51,6 +51,9 @@ def digest(path):
     return value.hexdigest()
 
 
+CONTAINER_IDENTITY_MARKERS = (".dockerenv", "run/.containerenv", "run/systemd/container", "run/host/container-manager")
+
+
 def validate_export(path):
     """Reject traversal/link ancestors before privileged extraction of image bytes."""
     nodes = {}
@@ -62,6 +65,8 @@ def validate_export(path):
                     "unsafe image archive member")
             require(name not in nodes, "duplicate image archive member")
             require(item.isdir() or item.isfile() or item.issym() or item.islnk(), "special image archive member")
+            if name in CONTAINER_IDENTITY_MARKERS:
+                require(item.isfile(), "container identity marker must be a regular archive member")
             if item.islnk():
                 target = PurePosixPath(item.linkname)
                 require(not target.is_absolute() and ".." not in target.parts, "unsafe image hardlink")
@@ -75,12 +80,14 @@ def validate_export(path):
         if item.islnk():
             target = nodes.get(str(PurePosixPath(item.linkname)))
             require(target is not None and target.isfile(), "image hardlink target is not a regular member")
-    return {"members": len(nodes), "expanded_bytes": total}
+    return {"members": len(nodes), "expanded_bytes": total,
+            "container_identity_markers": [name for name in CONTAINER_IDENTITY_MARKERS if name in nodes]}
 
 
 def accept_log(text, nonce, control, phase, code):
     require(code == 0, "QEMU did not shut down normally")
     require("DRIVER_VM_EVIDENCE_CHANNEL_READY\n" in text, "missing independent guest evidence channel")
+    require("DRIVER_VM_NATIVE_BOOT_READY " in text, "guest did not prove native VM mount propagation")
     require("--- SKIP:" not in text, "guest driver test skipped")
     marker = f"DRIVER_VM_EXIT nonce={nonce} control={control} phase={phase} status="
     lines = [line.strip() for line in text.splitlines() if line.startswith(marker)]
@@ -195,6 +202,7 @@ RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fix
         # The exported archive is validated before this only privileged file write.
         # It contains no member below a symlink and no devices or outside hardlinks.
         self.command(["sudo", "-n", "tar", "--extract", "--file", str(export), "--directory", str(rootfs), "--numeric-owner", "--same-owner", "--same-permissions"], timeout=180)
+        self.remove_export_container_identity(rootfs)
         disk = self.work / "base.ext4"
         with disk.open("xb") as stream:
             stream.truncate(4 * GIB)
@@ -202,6 +210,30 @@ RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fix
         self.remove_rootfs(rootfs)
         export.unlink()
         self.results["guest_base"] = {"disk_bytes": disk.stat().st_size, "kernel_sha256": digest(self.work / "vmlinuz"), "initrd_sha256": digest(self.work / "initrd")}
+
+    def remove_export_container_identity(self, rootfs):
+        # Docker export includes its identity markers. In a booted QEMU disk
+        # they make systemd skip native shared-root setup, so sysext's child
+        # namespace merge disappears when that child exits. Remove only these
+        # exact inert files from our fresh, validated, unmounted export tree.
+        require(rootfs.parent == self.work and rootfs.name == "rootfs" and rootfs.is_dir() and not rootfs.is_symlink(),
+                "unsafe exported root for identity removal")
+        nonce_path = rootfs / "fixture/nonce"
+        require(not nonce_path.parent.is_symlink() and not nonce_path.is_symlink() and nonce_path.read_text().strip() == self.nonce,
+                "exported root nonce mismatch")
+        removals = []
+        for name in self.results["export"]["container_identity_markers"]:
+            require(name in CONTAINER_IDENTITY_MARKERS, "unrecognized container identity marker")
+            path = rootfs / name
+            require(all(not parent.is_symlink() for parent in path.parents if parent == rootfs or rootfs in parent.parents),
+                    "container identity marker has a symlink ancestor")
+            require(path.is_file() and not path.is_symlink(), "container identity marker is not a regular file")
+            removals.append({"path": name, "sha256": digest(path), "bytes": path.stat().st_size})
+        if removals:
+            self.command(["sudo", "-n", "rm", "--", *[str(rootfs / item["path"]) for item in removals]], timeout=10)
+        require(all(not os.path.lexists(rootfs / name) for name in CONTAINER_IDENTITY_MARKERS),
+                "exported container identity remains")
+        self.results["removed_export_container_identity"] = removals
 
     def remove_rootfs(self, rootfs):
         require(rootfs.parent == self.work and rootfs.name == "rootfs" and not rootfs.is_symlink(), "unsafe rootfs cleanup target")
