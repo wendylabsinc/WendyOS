@@ -12,6 +12,7 @@ for arg in "${boot_arguments[@]}"; do
 done
 case "$control" in normal|omit-unload|removal-rollback) ;; *) exit 2 ;; esac
 case "$phase" in first|reboot) ;; *) exit 2 ;; esac
+# shellcheck disable=SC2329 # Invoked through the EXIT trap.
 finish() {
   result=$?
   trap - EXIT
@@ -44,4 +45,12 @@ fi
 /usr/sbin/wendyos-sysext-apply.sh
 binary=/fixture/services.test
 [[ $control != removal-rollback ]] || binary=/fixture/removal-rollback.test
-"$binary" -test.run '^TestDriverLifecycleVM$' -test.v -test.timeout=420s
+if "$binary" -test.run '^TestDriverLifecycleVM$' -test.v -test.timeout=420s; then
+  exit 0
+else
+  result=$?
+  # Preserve the exact failure and shipped script bytes. Read-only observations
+  # distinguish missing merged payloads from failed module lookup/activation.
+  timeout --kill-after=1s 20s /bin/bash /fixture/diagnostics.sh || true
+  exit "$result"
+fi
