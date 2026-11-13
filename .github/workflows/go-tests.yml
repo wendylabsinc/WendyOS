@@ -505,6 +505,17 @@ jobs:
           sudo gem install fpm -v 1.18.0 --no-document
       - name: Verify native Make VERSION in the built CLI
         run: python3 .github/scripts/test-native-make-version.py --retain-binary "$RUNNER_TEMP/wendy-stagefile-cli"
+      - name: Execute the README installer with the actual candidate CLI
+        timeout-minutes: 5
+        run: python3 .github/scripts/test-readme-install.py --cli "$RUNNER_TEMP/wendy-stagefile-cli" --evidence "$RUNNER_TEMP/readme-install-evidence"
+      - name: Preserve README installation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: readme-install-execution
+          path: ${{ runner.temp }}/readme-install-evidence
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Build and execute inherited Stagefiles with both packaged backends
         run: python3 .github/scripts/test-stagefile-images.py "$RUNNER_TEMP/wendy-stagefile-cli" --output "$RUNNER_TEMP/stagefile-images"
       - name: Preserve Stagefile execution evidence
