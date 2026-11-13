@@ -887,6 +887,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Require native G1 source cache publication and failure cleanup
+        run: python3 .github/scripts/test-g1-cache-publication.py --output "$RUNNER_TEMP/g1-cache-publication"
+      - name: Preserve G1 source cache filesystem evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: g1-cache-publication
+          path: |
+            ${{ runner.temp }}/g1-cache-publication/*.json
+            ${{ runner.temp }}/g1-cache-publication/*.jsonl
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Test direct and nested USB disk discovery
         shell: bash
         run: |

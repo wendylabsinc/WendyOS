@@ -66,6 +66,7 @@ SUITES = (
     "linklocal_multi_interface_test.py",
     "rtps_multicast_isolation_test.py",
     "patrol_ros_runtime_test.py",
+    "g1_cache_publication_test.py",
     "linklocal_windows_test.py",
     "windows_vm_boot_test.py",
     "macos_vm_lifecycle_test.py",
