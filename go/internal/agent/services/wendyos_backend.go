@@ -86,7 +86,13 @@ func (w wendyOSUpdater) install(ctx context.Context, artifactURL string, onProgr
 		return err
 	}
 	if err := w.prepareRootfs(ctx); err != nil {
-		return fmt.Errorf("OS update preparation failed: %w", err)
+		var legacy *jetsonFirmwareManagedRedundancyError
+		if !errors.As(err, &legacy) || !updaterRootfsReady(ctx, binary) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("OS update preparation failed: %w", err)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
