@@ -41,14 +41,13 @@ for variant in normal missing-disconnect-wakeup disconnect-borrowed-link; do
     "$output/$variant.test" -test.run "$selection" -test.v -test.count=1 -test.timeout=30s \
     > "$output/$variant.log" 2>&1 || status=$?
   cat "$output/$variant.log"
-  if grep -q "WARNING: DATA RACE" "$output/$variant.log"; then exit 1; fi
+  if grep -Eq "WARNING: DATA RACE|--- SKIP:" "$output/$variant.log"; then exit 1; fi
   if [[ $variant == normal ]]; then
     [[ $status == 0 ]] || exit 1
     grep -q '^--- PASS: TestGATTPrivateBusDisconnectLifecycle ' "$output/$variant.log"
     [[ $(grep -c 'private GATT disconnect lifecycle verified:' "$output/$variant.log") == 2 ]]
-    if grep -q -- '--- SKIP:' "$output/$variant.log"; then exit 1; fi
   else
-    [[ $status != 0 ]] || exit 1
+    [[ $status == 1 ]] || exit 1
     grep -q '^--- FAIL: TestGATTPrivateBusDisconnectLifecycle ' "$output/$variant.log"
     if [[ $variant == missing-disconnect-wakeup ]]; then
       grep -q 'disconnect did not wake both pending GATT waiters within one second' "$output/$variant.log"
