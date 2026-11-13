@@ -32,4 +32,6 @@ if sudo .github/scripts/test-packet-backends.sh "$output/wireless-allowed.test" 
   exit 1
 fi
 grep -q 'automatic discovery emitted RTPS on wireless path' "$output/mutation.log"
-grep -q -- "--- FAIL: $test_name/automatic-wireless-only " "$output/mutation.log"
+for phase in automatic-wired-and-wireless automatic-wireless-only; do
+  grep -q -- "--- FAIL: $test_name/$phase " "$output/mutation.log"
+done

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -95,6 +96,11 @@ func TestAutomaticROSDiscoveryNeverUsesWirelessPath(t *testing.T) {
 		}
 	})
 	t.Run("automatic-wired-and-wireless", func(t *testing.T) {
+		// The capture ends long before discovery would move on from the wired
+		// candidate, so packets alone cannot show the wireless one was excluded.
+		if candidates := candidateInterfaces(); !slices.Equal(candidates, []string{"ethfixture"}) {
+			t.Fatalf("automatic discovery candidates are not the wired peripheral alone: %v", candidates)
+		}
 		counts, _ := captureBatteryDiscovery(t, Config{Enabled: true, DomainID: 212})
 		if counts[1] != 0 {
 			t.Fatalf("automatic discovery emitted RTPS on wireless path: %v", counts)
