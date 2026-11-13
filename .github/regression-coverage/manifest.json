@@ -1653,9 +1653,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2524",
       "title": "fix(agent): let a Wendy Net roaming device finish its gateway lease over Bluetooth",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "Tests model pending lease ownership, slow radio negotiation and cancellation. They do not establish successful roaming on a physical BLE link.",
-      "required_follow_up": "Require the actual Controller/kernel policy slow-lease gate and pending-withdrawal control in the existing network job. Preserve the unchanged five-second wait and fifteen-second step context; physical BLE remains separate.",
+      "required_follow_up": "Retain the passing actual Controller/kernel-policy slow-lease gate and exact physical BLE roaming procedure. Five-second wait and fifteen-second step context are unchanged; hardware cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -1673,6 +1673,12 @@
             ".github/scripts/fixtures/ble-mesh-coverage.md"
           ],
           "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898807",
+          "artifact": 14014893304,
+          "result": "Actual namespace/TLS/controller/kernel-policy normal gate passed in30.86s. Retained one dial across three pending steps and17.187s, then verified existing dual-stack recovery and cleanup. Historical withdrawal control fails at pending controller withdrew the live TLS lease before recovery. Downloaded artifact source hashes match current unchanged production/fixture files. Physical BLE timing, firmware and roaming remain covered by the prepared exact-target procedure, all cases not_run."
         }
       ]
     },
@@ -2295,6 +2301,16 @@
             ".github/scripts/test-rtps-multicast-isolation.sh"
           ],
           "result": "Required existing-network-job gate sends actual SPDP/SEDP/sample datagrams over separate loopback/veth interfaces into production participants, requires20 exact positive samples per interface and rejects cross-interface discovery. Removing only production multicast restriction must fail that named boundary. Linux normal/control compilation, ShellCheck and local/self-hosted refusal checks pass; actual kernel/race execution pending. Container observer and other original mixed-merge residuals remain open."
+        },
+        {
+          "head": "50ce4945a7a14ae3bd776cd07f6965ca066f5f06",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898807",
+          "artifact": 14014349861,
+          "tests": [
+            "go/internal/shared/rtps/multicast_isolation_linux_test.go",
+            ".github/scripts/test-rtps-multicast-isolation.sh"
+          ],
+          "result": "Actual per-interface multicast packet isolation passed6.02s with real loopback and wired namespace interfaces. Reverting socket membership filtering fails CROSS_INTERFACE_DISCOVERY by admitting the loopback writer on the wired participant. This closes the packet-filtering boundary only; observer, Patrol runtime, hosted scene/assets and remaining mixed-merge behaviors stay partial."
         }
       ]
     },
