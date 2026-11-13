@@ -48,6 +48,11 @@ func TestMain(m *testing.M) {
 	discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) {
 		return nil, nil
 	}
+	// A named device that does not answer is then looked for on USB. Default
+	// to no USB interfaces, so a failed dial in a test neither lists this
+	// machine's interfaces nor dials a board plugged into it. Tests of the USB
+	// paths install their own candidates.
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
 	// Every os install with --device-type reads install aliases first. Tests
 	// that exercise an alias install a manifest; the rest must not reach GCS.
 	fetchInstallMainManifest = func(context.Context, int) (*mainManifest, error) {
