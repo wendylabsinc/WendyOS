@@ -19,9 +19,9 @@ func ServiceRuntimeCredentials(t *testing.T) (*Credentials, *Credentials) {
 	return testCredentials(t)
 }
 
-// RenewServiceRuntimeCredentials renews the same device principal under a
-// fresh ML-DSA-65 key, as provisioning_renew.go always does. NotBefore stays
-// backdated here; pki-core stamps the issuance time instead.
+// RenewServiceRuntimeCredentials renews the same device principal as
+// provisioning_renew.go describes: a fresh ML-DSA-65 key, and a validity
+// start at issuance, which pki-core does not backdate.
 func RenewServiceRuntimeCredentials(t *testing.T, old *Credentials) *Credentials {
 	t.Helper()
 	leaf, err := x509.ParseCertificate(old.Certificate.Certificate[0])
@@ -29,7 +29,7 @@ func RenewServiceRuntimeCredentials(t *testing.T, old *Credentials) *Credentials
 		t.Fatal(err)
 	}
 	leaf.SerialNumber = big.NewInt(time.Now().UnixNano())
-	leaf.NotBefore = leaf.NotBefore.Add(time.Minute)
+	leaf.NotBefore = time.Now()
 	leaf.NotAfter = leaf.NotAfter.Add(time.Hour)
 	signer, err := mldsa.GenerateKey(mldsa.MLDSA65())
 	if err != nil {
