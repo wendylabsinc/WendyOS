@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -37,6 +38,7 @@ type cameraAdmissionServer struct {
 	httpRequests        atomic.Int32
 	rtspConns           atomic.Int32
 	rtspPlays           atomic.Int32
+	rtpAccessUnits      atomic.Int64
 	authenticated       atomic.Int32
 	mu                  sync.Mutex
 	connections         []net.Conn
@@ -122,6 +124,14 @@ func encodeAdmissionAccessUnit(t *testing.T, ctx context.Context, launch string,
 	// so decoded caps and the kernel loopback time-per-frame are finite.
 	jpegFrame := sensorLinkColorFrame(t, left).Data
 	encoder := exec.CommandContext(ctx, launch, "-q", "fdsrc", "fd=0", "!", "image/jpeg,framerate=25/1", "!", "jpegparse", "!", "jpegdec", "!", "videoconvert", "!", "video/x-raw,format=I420", "!", "x264enc", "tune=zerolatency", "key-int-max=1", "byte-stream=true", "!", "video/x-h264,stream-format=byte-stream,alignment=au", "!", "fdsink", "fd=1")
+	// Synthetic frame generation must not truncate the live producer's debug
+	// file when another test reuses the already initialized in-process library.
+	for _, variable := range os.Environ() {
+		if !strings.HasPrefix(variable, "GST_DEBUG_FILE=") && !strings.HasPrefix(variable, "GST_DEBUG=") {
+			encoder.Env = append(encoder.Env, variable)
+		}
+	}
+	encoder.Env = append(encoder.Env, "GST_DEBUG=0")
 	encoder.Stdin = bytes.NewReader(bytes.Repeat(jpegFrame, 3))
 	var diagnostics bytes.Buffer
 	encoder.Stderr = &diagnostics
@@ -254,6 +264,7 @@ func (f *cameraAdmissionServer) sendRTP(conn net.Conn) {
 			}
 			seq++
 		}
+		f.rtpAccessUnits.Add(1)
 		timestamp += 3600
 	}
 }
