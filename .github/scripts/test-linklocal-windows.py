@@ -239,10 +239,10 @@ def main():
         if '--- SKIP:' in log:
             raise ValueError('Windows interface test skipped')
         if name=='normal':
-            if code!=0 or '--- PASS: '+TEST+' ' not in log or 'WINDOWS_LINKLOCAL_FULL_16_VERIFIED' not in log:
+            if code!=0 or '--- PASS: '+TEST+' ' not in log or 'WINDOWS_LINKLOCAL_FULL_16_VERIFIED' not in log or log.count('WINDOWS_LISTENER_INTERFACE_VERIFIED:') != 2:
                 raise ValueError('Windows full /16 interface proof failed')
         else:
-            marker='wrong-route Windows listener reply' if name=='unbound-listeners' else 'wrong-route Windows device b'
+            marker='Windows listener did not pin expected interface:' if name=='unbound-listeners' else 'wrong-route Windows device b'
             if code==0 or '--- FAIL: '+TEST+' ' not in log or marker not in log:
                 raise ValueError('Windows control failed at an unrelated boundary: '+name)
     (output/'result.json').write_text(json.dumps({'passed':True,'topology':'two owned Windows Wintun /16 interfaces','physical_usb':False},indent=2))

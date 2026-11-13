@@ -342,7 +342,34 @@ func TestWindowsLinkLocalCompetingInterfaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer listener.Close()
-		listener.(*net.TCPListener).SetDeadline(time.Now().Add(3 * time.Second))
+		tcpListener := listener.(*net.TCPListener)
+		ifi, err := net.InterfaceByName(peer.address.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := tcpListener.SyscallConn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var boundIndex int
+		var optionErr error
+		if err := raw.Control(func(fd uintptr) {
+			boundIndex, optionErr = windows.GetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, ipUnicastIF)
+		}); err != nil {
+			t.Fatalf("cannot inspect Windows listener socket: %v", err)
+		}
+		if optionErr != nil {
+			t.Fatalf("cannot read Windows listener IP_UNICAST_IF: %v", optionErr)
+		}
+		// Winsock returns IP_UNICAST_IF in host byte order, although setting it
+		// requires network byte order. An exact-address listener can route its
+		// replies correctly without this option, so traffic alone does not prove
+		// that production pinned the socket to the intended interface.
+		// https://learn.microsoft.com/en-us/windows/win32/winsock/ipproto-ip-socket-options
+		if boundIndex != ifi.Index {
+			t.Fatalf("Windows listener did not pin expected interface: device %s got %d want %d", peer.address.Role, boundIndex, ifi.Index)
+		}
+		tcpListener.SetDeadline(time.Now().Add(3 * time.Second))
 		result := make(chan error, 1)
 		go func() {
 			conn, err := listener.Accept()
@@ -381,6 +408,7 @@ func TestWindowsLinkLocalCompetingInterfaces(t *testing.T) {
 		if dialErr != nil || responseErr != nil || acceptedErr != nil {
 			t.Fatalf("wrong-route Windows listener reply for %s failed: dial=%v response=%v accept=%v", peer.address.Role, dialErr, responseErr, acceptedErr)
 		}
+		t.Logf("WINDOWS_LISTENER_INTERFACE_VERIFIED: device %s interface %d and actual callback", peer.address.Role, boundIndex)
 	}
 	reverse(peers[1])
 	configure("Reverse")
