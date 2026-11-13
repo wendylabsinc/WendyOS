@@ -230,8 +230,8 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 	t.Logf("FOXGLOVE_DEPLOYED_IMAGE container=%s digest=%s", ids[0], imageDigest)
 	// Observe the actually installed package version, not the package requested
 	// in a Dockerfile or a mutable registry tag.
-	var packageInfo bytes.Buffer
-	code, err := store.ExecInContainer(ctx, foxgloveAppID, []string{"dpkg-query", "-W", "-f=${Package} ${Version}\\n", "ros-humble-foxglove-bridge", "ros-humble-rmw-cyclonedds-cpp", "socat"}, false, nil, &packageInfo, &packageInfo, nil)
+	var packageInfo, packageErrors bytes.Buffer
+	code, err := store.ExecInContainer(ctx, foxgloveAppID, []string{"dpkg-query", "-W", "-f=${Package} ${Version}\\n", "ros-humble-foxglove-bridge", "ros-humble-rmw-cyclonedds-cpp", "socat"}, false, nil, &packageInfo, &packageErrors, nil)
 	if err != nil || code != 0 || !strings.Contains(packageInfo.String(), "ros-humble-foxglove-bridge ") {
 		// Let the already subscribed startup log reach its terminal marker so a
 		// failed native domain creation is not hidden by a stopped-container error.
@@ -239,7 +239,7 @@ func TestFoxgloveGeneratedAppDeploysAndCarriesROS(t *testing.T) {
 		case <-appStopped:
 		case <-time.After(3 * time.Second):
 		}
-		t.Fatalf("Foxglove package provenance failed: code=%d err=%v output=%s", code, err, packageInfo.String())
+		t.Fatalf("Foxglove package provenance failed: code=%d err=%v stdout=%s stderr=%s", code, err, packageInfo.String(), packageErrors.String())
 	}
 	if err := os.WriteFile(filepath.Join(output, "installed-packages.txt"), packageInfo.Bytes(), 0644); err != nil {
 		t.Fatal(err)
