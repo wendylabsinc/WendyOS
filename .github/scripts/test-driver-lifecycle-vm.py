@@ -157,7 +157,7 @@ class Runner:
         (context / "nonce").write_text(self.nonce + "\n")
         (context / "driver-fixture.service").write_text('''[Unit]
 Description=Owned driver regression VM
-After=local-fs.target systemd-udevd.service
+After=local-fs.target systemd-udevd.service dbus.socket
 Requires=systemd-udevd.service
 [Service]
 Type=oneshot
