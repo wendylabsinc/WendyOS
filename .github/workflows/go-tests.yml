@@ -7,6 +7,9 @@ on:
     paths:
       - '.gitattributes'
       - '.github/dependabot.yml'
+      # Read by go/internal/cli/commands/docs_command_contract_test.go.
+      - 'README.md'
+      - 'Examples/NvidiaPAIR/README.md'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -42,6 +45,9 @@ on:
     paths:
       - '.gitattributes'
       - '.github/dependabot.yml'
+      # Read by go/internal/cli/commands/docs_command_contract_test.go.
+      - 'README.md'
+      - 'Examples/NvidiaPAIR/README.md'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
