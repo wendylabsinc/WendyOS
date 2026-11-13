@@ -320,7 +320,7 @@ struct `'wendy init'` {
 extension `'wendy init'` {
     /**
      `--here` creates a complete manual Python app in the current directory.
-     The manifest, installable package entry point, and container command agree
+     The manifest, parsed package build settings, and container command agree
      on the app name. No git repository or assistant session is started.
      */
     @Test
@@ -341,10 +341,24 @@ extension `'wendy init'` {
             let entitlements = try #require(manifest["entitlements"] as? [[String: Any]])
             #expect(entitlements.count == 1)
             #expect(entitlements[0]["type"] as? String == "network")
-            let package = try await LocalCLIAssertions.read(cli, path: "pyproject.toml")
-            #expect(package.contains("name = \"first-app\""))
-            #expect(package.contains("first_app = \"first_app:main\""))
-            #expect(package.contains("[build-system]"))
+            let parsed = try await FirstAppFixture.python(
+                cli,
+                """
+                import json, pathlib, tomllib
+                print(json.dumps(tomllib.loads(pathlib.Path('pyproject.toml').read_text())))
+                """
+            )
+            try parsed.requireSuccess()
+            let package = try FirstAppFixture.object(parsed.stdout)
+            let project = try #require(package["project"] as? [String: Any])
+            #expect(project["name"] as? String == "first-app")
+            #expect(project["version"] as? String == "0.1.0")
+            #expect(project["requires-python"] as? String == ">=3.11")
+            #expect(project["dependencies"] as? [String] == [])
+            #expect(project["scripts"] as? NSDictionary == ["first_app": "first_app:main"])
+            let build = try #require(package["build-system"] as? [String: Any])
+            #expect(build["requires"] as? [String] == ["hatchling"])
+            #expect(build["build-backend"] as? String == "hatchling.build")
             let dockerfile = try await LocalCLIAssertions.read(cli, path: "Dockerfile")
             #expect(dockerfile.contains("COPY . ."))
             #expect(dockerfile.contains("uv sync"))
@@ -364,6 +378,60 @@ extension `'wendy init'` {
             #expect(tree[".claude"] == nil)
             #expect(tree["first-app"] == nil)
             #expect(tree["AGENTS.md"] != nil)
+        }
+    }
+
+    /**
+     The generated Python project installs with its declared build backend and
+     exposes a working console entry point. This offline check requires Python
+     3.11+ and a preprovisioned Hatchling wheelhouse selected by
+     `WENDY_E2E_PYTHON_WHEELHOUSE`. Each run installs into its own virtual
+     environment and executes from outside the source directory.
+     */
+    @Test(
+        .enabled(
+            if: FirstAppFixture.pythonWheelhouse != nil,
+            "FIXTURE: set WENDY_E2E_PYTHON_WHEELHOUSE to a provisioned offline Hatchling wheel directory."
+        )
+    )
+    func `installs and runs the generated Python console entry point offline`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            let wheelhouse = try #require(FirstAppFixture.pythonWheelhouse)
+            _ = try await FirstAppFixture.run(cli, FirstAppFixture.manual)
+            let execution = try await FirstAppFixture.python(
+                cli,
+                """
+                import json, os, pathlib, subprocess, sys
+                wheels = pathlib.Path(sys.argv[1]).resolve(strict=True)
+                assert wheels.is_dir(), 'wheelhouse must be a directory'
+                target = pathlib.Path(os.environ['TMPDIR']) / 'installed-first-app'
+                env = {k: v for k, v in os.environ.items() if not k.startswith(('PYTHON', 'PIP_'))}
+                env.update(PIP_CONFIG_FILE=os.devnull, PIP_NO_INDEX='1', PIP_DISABLE_PIP_VERSION_CHECK='1')
+                def run(args, cwd=None):
+                    result = subprocess.run(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                            capture_output=True, text=True, timeout=60)
+                    if result.returncode:
+                        sys.stdout.write(result.stdout)
+                        sys.stderr.write(result.stderr)
+                        raise RuntimeError('isolated package command failed: ' + str(args))
+                    return result
+                run([sys.executable, '-m', 'venv', str(target)])
+                scripts = target / ('Scripts' if os.name == 'nt' else 'bin')
+                python = scripts / ('python.exe' if os.name == 'nt' else 'python')
+                run([str(python), '-m', 'pip', 'install', '--no-index', '--no-cache-dir',
+                     '--find-links', str(wheels), '.'])
+                outside = target / 'outside-source'
+                outside.mkdir()
+                console = scripts / ('first_app.exe' if os.name == 'nt' else 'first_app')
+                result = run([str(console)], cwd=outside)
+                print(json.dumps({'stdout': result.stdout, 'stderr': result.stderr}))
+                """,
+                arguments: [wheelhouse]
+            )
+            try execution.requireSuccess()
+            let output = try FirstAppFixture.object(execution.stdout)
+            #expect(output["stdout"] as? String == "Hello from first-app!\n")
+            #expect(output["stderr"] as? String == "")
         }
     }
 

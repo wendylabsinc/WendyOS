@@ -8,6 +8,9 @@ enum FirstAppFixture {
     static let knownDefectsEnabled =
         ProcessInfo.processInfo.environment["WENDY_E2E_KNOWN_INIT_DEFECTS"] == "1"
 
+    static let pythonWheelhouse = ProcessInfo.processInfo.environment["WENDY_E2E_PYTHON_WHEELHOUSE"]
+        .flatMap { $0.isEmpty ? nil : $0 }
+
     static let manual = [
         "init", "--here", "--app-id", "first-app", "--target", "wendyos",
         "--language", "python", "--no-extra-entitlements", "--assistant", "skip",

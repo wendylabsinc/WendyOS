@@ -38,17 +38,17 @@ struct `'wendy project remove'` {
             let command = ["project", "remove", "persist", "--entry", "2", "--json"]
             let preview = try await FirstAppFixture.run(cli, command + ["--dry-run"])
             let planned = try FirstAppFixture.editSummary(preview, saved: false, dryRun: true)
-            #expect(!planned.isEmpty)
-            #expect(
-                planned.allSatisfy {
-                    ($0["path"] as? String)?.hasPrefix("/entitlements/2/") == true
-                }
-            )
+            let expectedChanges: [[String: Any]] = [
+                ["path": "/entitlements/2/name", "before": "models", "after": NSNull()],
+                ["path": "/entitlements/2/path", "before": "/data/models", "after": NSNull()],
+                ["path": "/entitlements/2/type", "before": "persist", "after": NSNull()],
+            ]
+            #expect(planned as NSArray == expectedChanges as NSArray)
             #expect(try await FirstAppFixture.snapshot(cli) == before)
             let result = try await FirstAppFixture.run(cli, command)
             #expect(
                 try FirstAppFixture.editSummary(result, saved: true, dryRun: false) as NSArray
-                    == planned as NSArray
+                    == expectedChanges as NSArray
             )
             expected["entitlements"] = Array(entries.prefix(2))
             try await FirstAppFixture.sameManifest(cli, expected)

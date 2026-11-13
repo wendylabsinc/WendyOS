@@ -59,6 +59,22 @@ bash Scripts/E2ETest.sh \
 
 Repeat `--filter` to pass multiple test filters.
 
+The Python scaffold installation spec uses Python 3.11+ and an offline wheelhouse.
+Provision it once in an isolated fixture directory, then pass its absolute path
+on the CLI machine as `WENDY_E2E_PYTHON_WHEELHOUSE`:
+
+```bash
+python3 -m pip download --no-cache-dir --only-binary=:all: \
+  --dest /path/to/isolated/wheelhouse hatchling==1.27.0
+WENDY_E2E_PYTHON_WHEELHOUSE=/path/to/isolated/wheelhouse \
+  bash Scripts/E2ETest.sh --output-dir /path/to/evidence \
+    --no-managed-agent --filter "installs and runs the generated Python"
+```
+
+The spec creates a per-test virtual environment, installs with `--no-index`, and
+runs the installed console script outside the source tree. Without that fixture,
+only this installation spec is skipped; parsed build settings remain covered.
+
 ### Test against a remote device
 
 From `swift/`:

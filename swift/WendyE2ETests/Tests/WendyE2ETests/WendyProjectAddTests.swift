@@ -36,16 +36,14 @@ struct `'wendy project add'` {
                 let command = ["project", "add", type, "--json"] + flags
                 let preview = try await FirstAppFixture.run(cli, command + ["--dry-run"])
                 let planned = try FirstAppFixture.editSummary(preview, saved: false, dryRun: true)
-                #expect(!planned.isEmpty)
-                #expect(
-                    planned.allSatisfy {
-                        ($0["path"] as? String)?.hasPrefix("/entitlements/1/") == true
-                    }
-                )
+                let expectedChanges: [[String: Any]] = entry.sorted { $0.key < $1.key }.map {
+                    ["path": "/entitlements/1/\($0.key)", "before": NSNull(), "after": $0.value]
+                }
+                #expect(planned as NSArray == expectedChanges as NSArray)
                 #expect(try await FirstAppFixture.snapshot(cli) == before)
                 let saved = try await FirstAppFixture.run(cli, command)
                 let changes = try FirstAppFixture.editSummary(saved, saved: true, dryRun: false)
-                #expect(changes as NSArray == planned as NSArray)
+                #expect(changes as NSArray == expectedChanges as NSArray)
                 var expected = try FirstAppFixture.object(FirstAppFixture.project)
                 expected["entitlements"] = [
                     ["type": "network", "mode": "host"] as [String: Any], entry,
@@ -106,12 +104,17 @@ struct `'wendy project add'` {
                 ["project", "add", "http", "--port", "3002", "--service", "worker", "--json"]
             )
             let changes = try FirstAppFixture.editSummary(result, saved: true, dryRun: false)
-            #expect(!changes.isEmpty)
-            #expect(
-                changes.allSatisfy {
-                    ($0["path"] as? String)?.hasPrefix("/services/worker/entitlements/") == true
-                }
-            )
+            let expectedChanges: [[String: Any]] = [
+                [
+                    "path": "/services/worker/entitlements/1/port", "before": NSNull(),
+                    "after": 3002,
+                ],
+                [
+                    "path": "/services/worker/entitlements/1/type", "before": NSNull(),
+                    "after": "http",
+                ],
+            ]
+            #expect(changes as NSArray == expectedChanges as NSArray)
             var expected = try FirstAppFixture.object(FirstAppFixture.project)
             var services = try #require(expected["services"] as? [String: Any])
             var worker = try #require(services["worker"] as? [String: Any])
