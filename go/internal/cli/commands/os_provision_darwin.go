@@ -3,12 +3,14 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
 )
@@ -31,13 +33,13 @@ func writeConfigPartition(d drive, agentBinary []byte, creds []wendyconf.WifiCre
 	if err != nil {
 		return fmt.Errorf("mounting config partition %s: %w", partDev, err)
 	}
-	defer m.release()
 
 	var target configTarget = dirTarget(m.path)
 	if m.elevated {
 		target = sudoDirTarget(m.path)
 	}
-	return writeConfigFilesTo(target, agentBinary, creds, deviceName, provisioningJSON)
+	writeErr := writeConfigFilesTo(target, agentBinary, creds, deviceName, provisioningJSON)
+	return errors.Join(writeErr, m.release())
 }
 
 // darwinPartitionRe matches the slice device nodes diskutil reports for
@@ -101,6 +103,10 @@ func readDriveIdentity(d drive) (driveIdentity, error) {
 	}, nil
 }
 
+// diskutilTimeout bounds one diskutil call: a FAT volume the driver has wedged
+// can hang it indefinitely.
+const diskutilTimeout = 30 * time.Second
+
 // configMount is a mounted config partition: where it lives, whether writing to
 // it needs elevation, and how to let it go.
 type configMount struct {
@@ -119,7 +125,8 @@ type configMount struct {
 	// stat — inside the mount. Measured on an SSD in a USB enclosure with
 	// ownership enabled.
 	elevated bool
-	release  func()
+	// release lets the mount go, or leaves it to the eject that follows.
+	release func() error
 }
 
 // mountConfigPartition returns a writable view of the FAT32 config partition.
@@ -147,7 +154,7 @@ func mountConfigPartition(partDev string) (configMount, error) {
 			elevated: !userWritable(mp),
 			// Not ours to unmount — we did not mount it, and os install ejects
 			// the whole disk once provisioning is done.
-			release: func() {},
+			release: func() error { return nil },
 		}, nil
 	}
 
@@ -159,24 +166,18 @@ func mountConfigPartition(partDev string) (configMount, error) {
 	}
 	out, err := exec.Command("diskutil", "mount", "-mountPoint", tmpDir, partDev).CombinedOutput()
 	if err != nil {
-		os.RemoveAll(tmpDir) //nolint:errcheck
+		os.Remove(tmpDir) //nolint:errcheck // not RemoveAll: the mount may have happened anyway
 		return configMount{}, fmt.Errorf("diskutil mount %s: %s: %w", partDev, strings.TrimSpace(string(out)), err)
 	}
 
 	return configMount{
 		path:     tmpDir,
 		elevated: !userWritable(tmpDir),
-		release: func() {
-			if out, err := exec.Command("diskutil", "unmount", tmpDir).CombinedOutput(); err != nil {
-				// Leave tmpDir alone: with the volume still mounted there,
-				// RemoveAll would delete the partition's contents, not the
-				// mount point. ejectDisk tears the mount down later anyway.
-				fmt.Printf("Warning: could not unmount config partition at %s: %s: %v\n", tmpDir, strings.TrimSpace(string(out)), err)
-				return
-			}
-			if err := os.RemoveAll(tmpDir); err != nil {
-				fmt.Printf("Warning: could not remove temporary mount dir %s: %v\n", tmpDir, err)
-			}
+		// Every caller ejects the disk next, which releases this mount too.
+		release: func() error {
+			return releaseMountBeforeEject(tmpDir, func() ([]byte, error) {
+				return runWithTimeout(diskutilTimeout, "/usr/sbin/diskutil", "unmount", tmpDir)
+			}, time.Sleep, os.Stdout)
 		},
 	}, nil
 }

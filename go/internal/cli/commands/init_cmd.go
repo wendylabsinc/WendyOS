@@ -729,7 +729,7 @@ var fetchRepoMetaWithUI = func(branch string) (*repoMeta, error) {
 		prog.Send(tui.SpinnerDoneMsg{Err: fetchErr})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-done
@@ -781,7 +781,7 @@ func downloadTemplateArchiveWithUI(language, tmpl, branch string) (map[string][]
 		prog.Send(tui.ProgressDoneMsg{Err: dlErr})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-done

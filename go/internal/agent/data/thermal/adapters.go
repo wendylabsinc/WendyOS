@@ -77,11 +77,14 @@ func Plane(adapter string, layout *pb.RawFormat) (*pb.ThermalPlane, error) {
 			return p, nil
 		}
 	case TOPDONTC001HIK:
-		// HIK-based TC001 hardware uses sensor counts, not the older TC001's
-		// temperature codes. Four metadata rows follow the 256x192 plane.
+		// HIK-based TOPDON hardware uses sensor counts, not the older TC001's
+		// temperature codes. Four metadata rows follow each sensor/preview plane.
+		// The 96x200 variant was verified on USB 2bdf:0102, bcdDevice 0409:
+		// 96 sensor rows, 4 metadata rows (magic at row 97), 96 YUYV rows,
+		// then 4 trailer rows. Never include the preview or metadata as samples.
 		// No temperature scale is established for this default capture mode.
-		if layout.GetFourcc() == "YUYV" && w == 256 && h == 392 {
-			p.Height = 192
+		if layout.GetFourcc() == "YUYV" && ((w == 256 && h == 392) || (w == 96 && h == 200)) {
+			p.Height = (h - 8) / 2
 			return p, nil
 		}
 	}

@@ -66,7 +66,7 @@ func toolErrorClass(result *mcpgo.CallToolResult, err error) string {
 		case errCodeNotConnected, errCodeInvalidArgument, errCodeDeviceUnreachable,
 			errCodeEntitlementDenied, errCodeAuthRequired, errCodeMultipleSessions,
 			errCodeNotFound, errCodeTimeout, errCodeCancelled, errCodeUnsupported,
-			errCodeInternal:
+			errCodeInternal, errCodeConfirmationRequired:
 			return strings.ToLower(code)
 		}
 	}

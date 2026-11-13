@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
 )
 
 func shortenConfigPartitionTimeout(t *testing.T, wait time.Duration) {
@@ -45,7 +48,24 @@ func fakeProvisioningTools(t *testing.T, lsblkMisses int, mountExits ...int) fak
 		"i=1\nfor code in %s; do\n  if [ \"$i\" -eq \"$n\" ]; then echo 'mount: fake failure' >&2; exit \"$code\"; fi\n  i=$((i+1))\ndone\n",
 		strings.Trim(fmt.Sprint(mountExits), "[]")))
 	t.Setenv("PATH", f.bin)
+	// Mount points are not really mounted here, so keep what is left of them
+	// inside the test's own temp dir.
+	t.Setenv("TMPDIR", t.TempDir())
 	return f
+}
+
+// failUmount makes umount report a busy target for its first n calls.
+func (f fakeTools) failUmount(n int) {
+	f.t.Helper()
+	f.write("umount", "read n < \"$0.count\"; n=$((n+1)); echo $n > \"$0.count\"\n"+fmt.Sprintf(
+		"if [ \"$n\" -le %d ]; then echo \"umount: $1: target is busy.\" >&2; exit 32; fi\nexit 0\n", n))
+}
+
+func shortenUnmountRetry(t *testing.T) {
+	t.Helper()
+	origAttempts, origDelay := unmountAttempts, unmountRetryDelay
+	unmountAttempts, unmountRetryDelay = 3, time.Millisecond
+	t.Cleanup(func() { unmountAttempts, unmountRetryDelay = origAttempts, origDelay })
 }
 
 func (f fakeTools) write(name, body string) {
@@ -197,5 +217,93 @@ func TestRetryConfigPartitionStopsWhenTheDriveIsGone(t *testing.T) {
 	}, func() bool { return false })
 	if !errors.Is(err, gone) || calls != 1 {
 		t.Fatalf("got %v after %d attempts, want the error at once", err, calls)
+	}
+}
+
+func TestWriteConfigPartitionKeepsFilesWhenUnmountFails(t *testing.T) {
+	shortenConfigPartitionTimeout(t, 5*time.Second)
+	shortenUnmountRetry(t)
+	tools := fakeProvisioningTools(t, 0)
+	tools.failUmount(1000)
+
+	err := writeConfigPartition(fakeDisk(t), []byte("agent"), nil, "lab-nano", nil)
+
+	got := tools.sudoed()
+	dir := strings.TrimPrefix(got[len(got)-1], "umount ")
+	if notApplied, stillMounted := splitStillMounted(err); notApplied != nil || stillMounted == nil ||
+		!strings.Contains(err.Error(), "still mounted at "+dir) {
+		t.Fatalf("writeConfigPartition = %v; want only a still-mounted error naming %s", err, dir)
+	}
+	if n := tools.ran("umount"); n != unmountAttempts {
+		t.Errorf("umount ran %d times; want %d", n, unmountAttempts)
+	}
+	// The mount point still holds the partition: nothing in it may be deleted.
+	for _, name := range []string{"wendy-agent", "wendy.conf", "clock_floor"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s inside the still-mounted partition: %v", name, err)
+		}
+	}
+}
+
+func TestWriteConfigPartitionRetriesABusyUnmount(t *testing.T) {
+	shortenConfigPartitionTimeout(t, 5*time.Second)
+	shortenUnmountRetry(t)
+	tools := fakeProvisioningTools(t, 0)
+	tools.failUmount(1)
+
+	if err := writeConfigPartition(fakeDisk(t), nil, nil, "", nil); err != nil {
+		t.Fatalf("writeConfigPartition: %v", err)
+	}
+	if n := tools.ran("umount"); n != 2 {
+		t.Errorf("umount ran %d times; want 2", n)
+	}
+}
+
+func TestWriteConfigPartitionReportsWriteAndUnmountFailures(t *testing.T) {
+	shortenConfigPartitionTimeout(t, 5*time.Second)
+	shortenUnmountRetry(t)
+	tools := fakeProvisioningTools(t, 0)
+	tools.failUmount(1000)
+
+	// A newline in the name fails the write after the mount.
+	err := writeConfigPartition(fakeDisk(t), nil, nil, "bad\nname", nil)
+	if notApplied, _ := splitStillMounted(err); notApplied == nil || !strings.Contains(err.Error(), "newline") || !strings.Contains(err.Error(), "still mounted") {
+		t.Fatalf("writeConfigPartition = %v; want both the write and the unmount failure", err)
+	}
+}
+
+func TestInstallWithAStillMountedConfigPartitionFailsAsWritten(t *testing.T) {
+	shortenConfigPartitionTimeout(t, 5*time.Second)
+	shortenUnmountRetry(t)
+	tools := fakeProvisioningTools(t, 0)
+	tools.failUmount(1000)
+	disk := fakeDisk(t)
+	withStubbedProvisioning(t, func(d drive, creds []wendyconf.WifiCredential, name string, j []byte) error {
+		return writeConfigPartition(d, []byte("agent"), creds, name, j)
+	}, true, nil)
+	retried := false
+	confirmProvisioningRetry = func() (bool, error) { retried = true; return true, nil }
+
+	var provErr error
+	out, _ := captureCommandStdout(t, func() error {
+		_, _, provErr = provisionConfigWithRetry(context.Background(), disk, nil, "lab-nano", nil, true, nil)
+		return nil
+	})
+	if retried || tools.ran("mount") != 1 || !strings.Contains(out, "Config partition written: name lab-nano") {
+		t.Fatalf("retry offered %v, mounts %d, output %q; want one mount reported as written", retried, tools.ran("mount"), out)
+	}
+
+	got := tools.sudoed()
+	dir := strings.TrimPrefix(got[len(got)-1], "umount ")
+	err := diskInstallResult("WendyOS 1.0", "SD Card", provErr, ejectDisk(disk))
+	if err == nil || !strings.Contains(err.Error(), "run 'sudo umount "+dir+"' before removing the drive") ||
+		strings.Contains(err.Error(), "not applied") {
+		t.Fatalf("install result = %v; want written but still mounted at %s", err, dir)
+	}
+}
+
+func TestEjectDiskIsANoOpOnLinux(t *testing.T) {
+	if err := ejectDisk(drive{DevicePath: "/dev/sdz"}); err != nil {
+		t.Fatalf("ejectDisk = %v; want nil", err)
 	}
 }

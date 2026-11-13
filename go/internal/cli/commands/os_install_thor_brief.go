@@ -97,7 +97,7 @@ func confirmThorReady(version string, force bool) error {
 		return nil
 	}
 	fmt.Println()
-	ok, err := tui.Confirm("Is the target Thor connected and in recovery mode?")
+	ok, err := confirmInstallStep("flashing the Jetson AGX Thor", "Is the target Thor connected and in recovery mode?", false, force)
 	if errors.Is(err, tui.ErrCancelled) || (err == nil && !ok) {
 		return ErrUserCancelled
 	}

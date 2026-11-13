@@ -49,6 +49,25 @@ func NewNMCLINetworkManager(logger *zap.Logger) *NMCLINetworkManager {
 	return &NMCLINetworkManager{logger: logger, nmcliPath: path}
 }
 
+// ErrNMCLINotFound reports that no nmcli binary could be found.
+var ErrNMCLINotFound = errors.New("nmcli not found")
+
+// nmcliNotRunning is nmcli's exit status when NetworkManager is not running.
+const nmcliNotRunning = 8
+
+// nmcliPathFn is a seam so tests can stand in a fake nmcli, or none.
+var nmcliPathFn = resolveNMCLIPath
+
+// NetworkManagerUnavailable reports whether err means NetworkManager could not
+// be reached at all, so the same request may succeed once it is up.
+func NetworkManagerUnavailable(err error) bool {
+	if errors.Is(err, ErrNMCLINotFound) {
+		return true
+	}
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == nmcliNotRunning
+}
+
 func resolveNMCLIPath() string {
 	if path, err := exec.LookPath("nmcli"); err == nil {
 		return path
@@ -570,9 +589,9 @@ type SavedCredential struct {
 // credential without activating it. If a profile with the same SSID already
 // exists, its password / priority / hidden flag are updated in place.
 func AddOrUpdateProfile(ctx context.Context, c SavedCredential) error {
-	path := resolveNMCLIPath()
+	path := nmcliPathFn()
 	if path == "" {
-		return fmt.Errorf("nmcli not found")
+		return ErrNMCLINotFound
 	}
 	return addOrUpdateProfile(ctx, path, c)
 }
@@ -710,9 +729,9 @@ func modifyProfile(ctx context.Context, nmcliPath, uuid string, c SavedCredentia
 // ActivateProfile brings up a saved profile (the equivalent of `nmcli
 // connection up`). It is a no-op when the profile is already active.
 func ActivateProfile(ctx context.Context, ssid string) error {
-	path := resolveNMCLIPath()
+	path := nmcliPathFn()
 	if path == "" {
-		return fmt.Errorf("nmcli not found")
+		return ErrNMCLINotFound
 	}
 	return activateProfile(ctx, path, ssid)
 }

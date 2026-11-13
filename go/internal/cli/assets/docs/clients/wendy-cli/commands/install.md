@@ -21,7 +21,14 @@ wendy install --nightly
 wendy install --device-type dragonwing-iq-9075 --device-name iq9-mesh --nightly --driver intel-be202
 
 # Linux: non-interactive with all flags
-wendy install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
+wendy install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force \
+  --device-name lab-pi --wifi-ssid MyNetwork --wifi-password hunter2
+
+# Same, for a board you reach over Ethernet or USB
+wendy install --device-type raspberry-pi-5 --drive /dev/disk4 --force --no-wifi
+
+# Prompts still work when you keep a log of the output
+wendy install | tee install.log
 
 # Use a locally built Linux agent instead of downloading the latest release
 wendy install --device-type raspberry-pi-5 --binary ./wendy-agent-linux-arm64
@@ -36,6 +43,14 @@ wendy install --device-type headless-mac
 # Same, with pre-enrollment into your org (requires `wendy auth login`)
 wendy install --device-type linux-desktop --pre-enroll
 ```
+
+## Prompts, pipes and scripts
+
+When you type `wendy install` in a terminal, it asks its questions even when its output goes to a pipe or a file, as in `wendy install | tee install.log`. The prompts are drawn on the terminal, together with the first-boot summary and the warning before each erase. The log keeps the rest of the output, including that summary and the flash steps.
+
+Without a terminal (CI, an agent's shell), nothing is asked. Pass `--wifi` or `--wifi-ssid`, or `--no-wifi`; without one of them the install stops before anything is downloaded or erased. Pass `--force` for the confirmations. Without `--device-name`, the device gets an auto-generated name. See [Running without a terminal](os/install.md#running-without-a-terminal) for every flag a script needs.
+
+Before anything is erased, the installer prints what first boot will apply, also with `--force`: the device name, the Wi-Fi networks and Cloud enrollment (Wendy Lite enrolls after flashing, so its summary has no Cloud line). Passwords are never printed.
 
 ## Reference
 

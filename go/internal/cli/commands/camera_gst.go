@@ -101,7 +101,7 @@ func installGStreamerViaBrew(ctx context.Context) error {
 		prog.Send(tui.SpinnerDoneMsg{})
 	}()
 
-	finalModel, err := prog.Run()
+	finalModel, err := tui.RunProgram(prog)
 	if err != nil {
 		cancel()
 		<-doneCh

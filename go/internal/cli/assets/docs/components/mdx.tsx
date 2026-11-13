@@ -8,6 +8,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 import { TypeTable } from 'fumadocs-ui/components/type-table';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import type { MDXComponents } from 'mdx/types';
+import { Asciicast } from './docs/asciicast';
 import {
   JetsonBuyersTable,
   Pi5BuyersTable,
@@ -15,7 +16,7 @@ import {
 } from './docs/buyers-tables';
 import { CliClip, CliShot } from './docs/cli-shot';
 import { CliToAgentRelationshipDiagram } from './docs/cli-to-agent-relationship-diagram';
-import { Figure } from './docs/figure';
+import { Figure, Frame, Frames } from './docs/figure';
 import { Flow, FlowArrow, FlowNode, FlowPart } from './docs/flow';
 import { HardwareCard, HardwareShowcase } from './docs/hardware-showcase';
 import { TrackedCodeBlock } from './docs/install-copy-tracking';
@@ -33,6 +34,7 @@ export function getMDXComponents(components?: MDXComponents) {
     ),
     Accordion,
     Accordions,
+    Asciicast,
     Callout,
     Card,
     Cards,
@@ -44,6 +46,8 @@ export function getMDXComponents(components?: MDXComponents) {
     FlowNode,
     FlowPart,
     Folder,
+    Frame,
+    Frames,
     HardwareCard,
     HardwareShowcase,
     JetsonBuyersTable,

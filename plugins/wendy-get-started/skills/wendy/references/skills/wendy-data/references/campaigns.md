@@ -126,7 +126,16 @@ in its `status` response reports at most one, in `active`.
 campaign episode. It does not disarm a campaign. Do not use it as general
 cleanup when another capture could be active. The campaign CLI has `deploy`,
 `list`, `inspect`, `trigger`, `arm`, `disarm`, and `remove`; do not invent
-stop, delete, or replay subcommands.
+stop or replay subcommands.
+
+`wendy data delete <episode-id>...` permanently deletes finalized episodes from
+the device, and `--all` deletes every finalized one. It cannot be undone, and an
+episode that has not been uploaded is lost, so delete only what the user asked
+to delete, naming the IDs. It confirms interactively; `--force` skips that and
+is required in non-interactive or `--json` mode. It refuses an episode still
+recording, draining or sealing, and one being downloaded or uploaded, and checks
+every ID before deleting any. Removing a campaign keeps its episodes. Agents
+that predate the command answer with a request to update the agent.
 
 ## Switch a campaign off, or remove it
 

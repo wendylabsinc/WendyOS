@@ -16,6 +16,7 @@
   "dependencies": {
     "@next/third-parties": "16.3.8",
     "@orama/orama": "3.1.18",
+    "@xterm/xterm": "6.0.0",
     "fumadocs-core": "16.9.0",
     "fumadocs-mdx": "15.0.7",
     "fumadocs-ui": "16.9.0",

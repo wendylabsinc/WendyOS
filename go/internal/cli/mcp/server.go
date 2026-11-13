@@ -54,6 +54,7 @@ type mcpServer struct {
 	discoverLANFn        func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
 	meshDirectoryFn      func(context.Context) (sessionbroker.OperatorDirectory, error)
 	usbSetupNoticeFn     func() string
+	wifiSetupConnectFn   WiFiSetupConnectFunc
 	mu                   sync.RWMutex
 	proxyDiag            []proxyDiagEntry
 	containerMCP         *containerMCPManager
@@ -195,6 +196,20 @@ func (s *mcpServer) SetUSBSetupNotice(fn func() string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usbSetupNoticeFn = fn
+}
+
+// WiFiSetupConnectFunc opens a connection for one Wi-Fi tool call. unverified
+// reports a plaintext setup connection to an unbound device that only
+// self-reported NotProvisioned; nothing authenticated that peer.
+type WiFiSetupConnectFunc func(ctx context.Context, device string) (conn *grpcclient.AgentConnection, unverified bool, err error)
+
+// SetWiFiSetupConnect enables the Wi-Fi tools' device argument, which reaches
+// a first-boot device that device_connect refuses for lack of an expected
+// identity. The connection lasts one call and never becomes the session's.
+func (s *mcpServer) SetWiFiSetupConnect(fn WiFiSetupConnectFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wifiSetupConnectFn = fn
 }
 
 // SetConnType records the transport type of the active connection ("direct" or "cloud").
