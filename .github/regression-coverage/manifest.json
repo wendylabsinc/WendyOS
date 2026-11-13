@@ -4227,9 +4227,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2414",
       "title": "feat(evals): grade agents' Wendy tool use, and run the benchmark on a Jetson against itself",
       "package": "13",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "Evaluation parser, proxy and grading tests cover many reported failures. The benchmark itself depends on an agent/device environment and is not an ordinary required test.",
-      "required_follow_up": "Require443 pure eval tests in existing offline CI and execute the prepared exact-Thor local-model/tool-guard/timeout procedure.",
+      "required_follow_up": "Execute the prepared exact-Thor local-model, GPU/tool-guard and timeout-report procedure on a reserved qualified device; keep physical results separate from passing required software CI.",
       "evidence": [
         {
           "tests": [
@@ -4248,6 +4248,11 @@
             ".github/regression-coverage/manual/jetson-eval-controls.py"
           ],
           "result": "Five offline qualification/procedure checks pass. Actual native CLI delayedHTTP request through production benchmark.trial produces an unscored timeout report after30s and joins its peer. Physical generator binds stagedCLI/Agent/source/model/board identities, unique app and volumes, real GPU/model pass and shim/MCP guards with bounded owned cleanup. Physical Thor/model execution remains not_run. Pure443-case CI gate awaits hosted execution."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219478",
+          "head": "8b59c8dcec630c978b627754eafef3d139ac47b7",
+          "result": "Required hosted offline job passes578 automation tests in113.881s and all443 evaluator tests in32.110s without evaluator skips. Evaluator source and exact-Thor controls/procedure are unchanged in the next local batch. Software gate reconciled; physical model/GPU/tool acceptance remains not_run with executable qualified-target procedure."
         }
       ]
     },
