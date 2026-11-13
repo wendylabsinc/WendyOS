@@ -121,7 +121,8 @@ if (group(p) === group(other)) throw Error('unrelated PRs share a group');
         self.assertIn(".github/scripts/**", config["on"]["pull_request"]["paths"])
         self.assertIn(".github/dependabot.yml", config["on"]["pull_request"]["paths"])
         for event in ("push", "pull_request"):
-            for filename in (".github/ci-tests/python-gpu/main.py", ".github/ci-tests/python-onnx-gpu/main.py",
+            for filename in ("README.md", "Examples/NvidiaPAIR/README.md",
+                             ".github/ci-tests/python-gpu/main.py", ".github/ci-tests/python-onnx-gpu/main.py",
                              ".github/regression-coverage/manual/jetson-display-rehearsal.py",
                              ".github/regression-coverage/manual/fixtures/jetson-display/main.c",
                              "swift/Scripts/SetupSigningCI.sh", "swift/Scripts/Build.sh",
