@@ -355,6 +355,7 @@ func TestMCPWatchRetriesOnlyWhenNothingAnswered(t *testing.T) {
 		"i/o timeout":            {errors.New("dial tcp 192.168.1.20:50052: i/o timeout"), true},
 		"expired login":          {chooseRejectionErrorForScope(context.Background(), certs.Scope{TenantUUID: meshTenant}, storedCerts(cfg), bad), false},
 		"pinned, expired login":  {pinnedRefusalError(&noAuthenticatedEndpointError{msg: "pinned", certSeen: true}, meshTenant, storedCerts(cfg), time.Now()), false},
+		"pinned, no login":       {pinnedRefusalError(&noAuthenticatedEndpointError{msg: "pinned"}, meshTenant, nil, time.Now()), false},
 		"TLS rejection":          {newTLSHandshakeRejectedError(bad), false},
 		"identity refused":       {errDeviceIdentityRefused, false},
 		"not logged in":          {config.ErrNotLoggedIn, false},

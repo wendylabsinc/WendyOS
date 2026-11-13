@@ -586,6 +586,34 @@ func (e *unprovisionedRefusal) Error() string { return e.msg }
 // steps it shares.
 func (e *unprovisionedRefusal) CLIMessage() string { return e.diagnostic.message(true) }
 
+// missingLoginError is the pinned refusal when this CLI holds no client
+// certificate at all (see pinnedRefusalError). No authenticated connection
+// could be attempted, so nothing is known about the device: not whether it is
+// reachable, and not which identity it would present. The message says only
+// that, and that signing in is the next step. The refusal stays in the chain,
+// so every caller that branches on it does what it did before.
+type missingLoginError struct {
+	refusal *noAuthenticatedEndpointError
+}
+
+// missingLoginStep matches the step `wendy discover` gives for the same
+// situation (missingLANCredentials).
+const missingLoginStep = "Run 'wendy auth login' with an account that can access the device's organization, then retry."
+
+func (e missingLoginError) Error() string {
+	device := "this device"
+	if e.refusal.pinnedKey != "" {
+		device = fmt.Sprintf("device %q", e.refusal.pinnedKey)
+	}
+	return "Not signed in: this CLI has no client certificates, so it could not attempt an authenticated connection to " + device + ".\n" +
+		"The saved pin is intact; unpinning the device is not the fix.\n  " + missingLoginStep
+}
+
+// NextSteps exposes the sign-in step the message ends with to JSON mode.
+func (e missingLoginError) NextSteps() []string { return []string{missingLoginStep} }
+
+func (e missingLoginError) Unwrap() error { return e.refusal }
+
 // blocksUnauthenticatedFallback reports whether err forbids reaching this device
 // over a transport that enforces nothing — today the picker's Bluetooth
 // fallback, where attemptBLEConnect sets no ExpectedIdentity and
