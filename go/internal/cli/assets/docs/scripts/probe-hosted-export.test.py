@@ -118,6 +118,22 @@ class HostedProbeTests(unittest.TestCase):
         del self.routes["/latest/old/"]
         self.assertTrue(any(f["route"] == "/old/" and "404" in f["reason"] for f in self.probe()["failures"]))
 
+    def test_latest_contract_drift_is_reported_but_only_the_preview_blocks(self):
+        # /latest is the last stable release: a redirect added or moved by
+        # this revision cannot exist there until the next release ships.
+        self.contract["redirects"]["added"] = "/guide/"
+        added = self.routes[self.base + "/old/"]
+        self.routes[self.base + "/added/"] = added
+        (self.root / "added").mkdir()
+        (self.root / "added/index.html").write_bytes(added)
+        failures = self.probe()["failures"]
+        self.assertEqual([(f["base"], f["route"]) for f in failures], [("/latest", "/added/")])
+        self.assertEqual(m.blocking(failures), [])
+        del self.routes[self.base + "/added/"]
+        self.fetcher.cache.clear()
+        self.assertEqual([f["base"] for f in m.blocking(self.probe()["failures"])], [self.base])
+        self.assertEqual(m.blocking([{"reason": "hosted probe deadline expired"}]), [{"reason": "hosted probe deadline expired"}])
+
     def test_production_redirect_and_target_anchor_mutations_fail(self):
         self.routes["/latest/old/"] = self.routes["/latest/old/"].replace(b"0; url=/latest/guide/", b"0; url=https://example.invalid/")
         self.routes["/latest/guide/"] = self.routes["/latest/guide/"].replace(b'id="section"', b'id="removed"')

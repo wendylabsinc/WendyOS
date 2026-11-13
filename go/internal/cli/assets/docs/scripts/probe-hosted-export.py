@@ -18,6 +18,7 @@ spec.loader.exec_module(crawler)
 ORIGIN = "https://docs.wendy.dev"
 MAX_BODY = 8 * 1024 * 1024
 MAX_REQUESTS = 250
+LATEST = "/latest"
 
 
 @contextmanager
@@ -105,6 +106,14 @@ def artifact_bytes(root, route):
     return raw
 
 
+def blocking(failures):
+    """Failures that fail the run. Public /latest is the last stable release,
+    not this revision: it cannot satisfy a redirect this revision adds or moves
+    until the next release ships, so its findings are reported, not enforced.
+    A failure without a base (an aborted probe, a deadline) still blocks."""
+    return [failure for failure in failures if failure.get("base") != LATEST]
+
+
 def probe(preview_root, preview_base, contract, analytics_id, fetcher=None, total_seconds=180):
     if not re.fullmatch(r"/branch-[a-z0-9][a-z0-9._-]{0,193}-[0-9a-f]{40}", preview_base):
         raise ValueError("preview prefix must include the exact 40-character source commit")
@@ -151,7 +160,7 @@ def probe(preview_root, preview_base, contract, analytics_id, fetcher=None, tota
             fail(base, route, "production route is non-indexable")
 
     with wall_timeout(total_seconds):
-        for base, preview in ((preview_base, True), ("/latest", False)):
+        for base, preview in ((preview_base, True), (LATEST, False)):
             pages = {}
             for route in sorted(target_routes):
                 raw = read(base, route, preview)
@@ -207,7 +216,12 @@ if __name__ == "__main__":
     except (OSError, ValueError, TimeoutError) as error:
         report = {"origin": ORIGIN, "requests": fetcher.observations if "fetcher" in locals() else [], "failures": [{"reason": str(error)}]}
     args.report.write_text(json.dumps(report, indent=2) + "\n")
-    print(f"Hosted docs probe: {len(report.get('requests', []))} bounded requests; {len(report['failures'])} failures")
+    failed = blocking(report["failures"])
+    advisory = len(report["failures"]) - len(failed)
+    print(f"Hosted docs probe: {len(report.get('requests', []))} bounded requests; {len(failed)} failures; {advisory} advisory {LATEST} findings")
     for failure in report["failures"][:20]:
         print(failure)
-    raise SystemExit(bool(report["failures"]))
+    if advisory:
+        print(f"::warning title=Public {LATEST} docs do not match this revision's route contract::{advisory} finding(s) on the last stable release. "
+              "Expected until the next release if this revision adds or moves a redirect; otherwise check production. See the probe report.")
+    raise SystemExit(bool(failed))
