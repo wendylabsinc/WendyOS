@@ -54,7 +54,7 @@ All environment variables are read at startup. Restart the agent after changing 
 | `WENDY_MDNS_DEBUG` | _(unset)_ | Set to any value to log mDNS query failures during discovery |
 | `WENDY_MDNS_TIMEOUT` | `4s` | Timeout for mDNS browse fallback on Linux/Windows hosts (range: 1s–30s) |
 | `WENDY_CONFIG_PATH` | `/etc/wendy-agent` | Directory for provisioning certificates and config |
-| `WENDY_AGENT_HOST` | `::` | Host address for the plaintext gRPC server (Swift macOS agent only; accepted values: `127.0.0.1`, `::1`, `localhost`) |
+| `WENDY_AGENT_HOST` | `127.0.0.1` | Host address for the plaintext gRPC server (Swift macOS agent only; accepted values: `127.0.0.1`, `::1`, `localhost`) |
 | `WENDY_AGENT_PORT` | `50051` | Port for the plaintext gRPC server (pre-provisioning only) |
 | `WENDY_CONTAINERD_ADDR` | _(containerd default)_ | Unix socket path for the containerd client |
 | `WENDY_REGISTRY_ADDR` | _(internal default)_ | Address for the embedded OCI registry |
