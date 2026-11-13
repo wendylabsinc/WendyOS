@@ -30,12 +30,12 @@ func DesktopPinRecovery(err error) string {
 	if !errors.As(err, &refusal) {
 		return ""
 	}
-	if refusal.diagnostic != nil {
-		return refusal.diagnostic.hostname
-	}
 	var mismatch *devicepin.PinMismatchError
 	if errors.As(err, &mismatch) {
 		return mismatch.Key
+	}
+	if refusal.diagnostic != nil {
+		return refusal.diagnostic.hostname
 	}
 	return ""
 }

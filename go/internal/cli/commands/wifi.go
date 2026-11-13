@@ -55,7 +55,7 @@ type wifiCredentialTargetKey struct{}
 // and nothing authenticated the peer, so any host answering the selected name
 // would receive the password. Consent lasts for the selected target.
 func confirmUnverifiedWiFiCredentials(target *SelectedDevice) error {
-	if target == nil || !target.unverifiedSetup || target.unverifiedSetupAccepted {
+	if target == nil || !(target.unverifiedSetup || target.Agent.UnverifiedPlaintext()) || target.unverifiedSetupAccepted {
 		return nil
 	}
 	if allowUnverifiedWiFiDevice {
@@ -277,7 +277,7 @@ func (c *wifiClient) List(ctx context.Context) ([]*agentpb.ListWiFiNetworksRespo
 
 func (c *wifiClient) Connect(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error {
 	if c.agent != nil {
-		if c.target != nil && c.target.unverifiedSetup && !c.target.unverifiedSetupAccepted && req.GetPassword() != "" {
+		if c.target != nil && (c.target.unverifiedSetup || c.target.Agent.UnverifiedPlaintext()) && !c.target.unverifiedSetupAccepted && req.GetPassword() != "" {
 			return errUnverifiedWiFiCredentials
 		}
 		resp, err := c.agent.ConnectToWiFi(ctx, req)
