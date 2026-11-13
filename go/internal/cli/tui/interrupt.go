@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"io"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,7 +33,12 @@ func InterruptFilter(_ tea.Model, msg tea.Msg) tea.Msg {
 // which stays on stdout for piping/redirection. Use it instead of
 // tea.NewProgram when running those models.
 func NewProgressProgram(model tea.Model, opts ...tea.ProgramOption) *tea.Program {
+	// A set prompt output is the terminal the person is watching; stderr may be piped.
+	var out io.Writer = os.Stderr
+	if w, ok := PromptOutput(); ok {
+		out = w
+	}
 	// Defaults first so explicit caller opts can override them.
 	return tea.NewProgram(model,
-		append([]tea.ProgramOption{tea.WithOutput(os.Stderr), tea.WithFilter(InterruptFilter)}, opts...)...)
+		append([]tea.ProgramOption{tea.WithOutput(out), tea.WithFilter(InterruptFilter)}, opts...)...)
 }

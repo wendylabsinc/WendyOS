@@ -45,10 +45,9 @@ import (
 // as an explicit denial, so they are reported as themselves rather than
 // retried.
 const (
-	// renewLeadTime is how much remaining validity triggers a renewal attempt.
-	// It has to exceed the round trip plus any clock skew between CLI and
-	// pki-core, or the renew arrives after the leaf it is renewing has expired
-	// and takes the grant branch.
+	// renewLeadTime caps the renewal window. Shorter-lived certificates use
+	// one third of their signed lifetime instead, leaving a useful period
+	// before the next attempt. Renewal must still arrive before expiry.
 	renewLeadTime = 15 * time.Minute
 
 	// renewEndpointEnv names pki-core's renew frontend, e.g.
@@ -56,6 +55,7 @@ const (
 	//
 	// Custom deployments require an explicit endpoint. Known Wendy deployments
 	// use the documented renewal URL, never a host/port inferred by substitution.
+	// Keep this name in sync with the refresh-certs command reference.
 	renewEndpointEnv = "WENDY_PKI_RENEW_ENDPOINT"
 
 	renewRequestTimeout = 15 * time.Second
@@ -139,9 +139,21 @@ func tenantPrincipalFor(certPEM string) (string, bool) {
 	return certs.TenantPrincipalFromCert(leaf)
 }
 
+// certificateRenewalMargin leaves two thirds of even a short policy lifetime
+// usable before renewal. Keep the historical ceiling for longer certificates.
+func certificateRenewalMargin(certPEM string) time.Duration {
+	leaf, err := storedLeaf(certPEM)
+	if err != nil {
+		// Callers diagnose unreadable expiry separately; retain the existing
+		// lead time when the full validity interval cannot be read.
+		return renewLeadTime
+	}
+	return max(0, min(renewLeadTime, leaf.NotAfter.Sub(leaf.NotBefore)/3))
+}
+
 // certNeedsRenewal reports whether the leaf is close enough to expiry to renew.
-func certNeedsRenewal(notAfter, now time.Time) bool {
-	return notAfter.Sub(now) < renewLeadTime
+func certNeedsRenewal(notAfter, now time.Time, margin time.Duration) bool {
+	return notAfter.Sub(now) < margin
 }
 
 // renewEndpoint resolves the explicit override or a documented deployment URL.
@@ -472,7 +484,7 @@ func ensureFreshCertificate(ctx context.Context, auth *config.AuthConfig) error 
 		// diagnose; the connection attempt reports it with better context.
 		return nil
 	}
-	if !certNeedsRenewal(notAfter, timeNowFn()) {
+	if !certNeedsRenewal(notAfter, timeNowFn(), certificateRenewalMargin(auth.Certificates[0].PemCertificate)) {
 		return nil
 	}
 

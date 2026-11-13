@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
 
@@ -59,8 +61,17 @@ type flashStep struct {
 	run          func(out io.Writer, detail func(string)) (cached bool, err error)
 }
 
+// stdoutIsTerminalFn reports whether stdout is a terminal; stubbed in tests.
+var stdoutIsTerminalFn = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+
+// flashStepsUI reports whether to draw the steps UI. It replaces the step
+// output, which is what a redirected stdout is kept for.
+func flashStepsUI() bool {
+	return isInteractiveTerminal() && stdoutIsTerminalFn()
+}
+
 func runFlashSteps(title string, steps []flashStep, cancelWork func(), logW io.Writer) (int, error) {
-	if !isInteractiveTerminal() {
+	if !flashStepsUI() {
 		return runFlashStepsPlain(title, steps, cancelWork, logW)
 	}
 	m := tui.NewStepsModel(title)
@@ -97,7 +108,7 @@ func runFlashSteps(title string, steps []flashStep, cancelWork func(), logW io.W
 		resC <- outcome{failedID, runErr, failVerbose}
 		prog.Send(tui.StepsDoneMsg{Err: runErr})
 	}()
-	final, uiErr := prog.Run()
+	final, uiErr := tui.RunProgram(prog)
 	if uiErr != nil {
 		return -1, fmt.Errorf("flash progress UI: %w", uiErr)
 	}
@@ -168,7 +179,7 @@ func runFlashStepPlain(step flashStep, out io.Writer, cancelWork func()) (bool, 
 		case <-signals:
 			if armedAt.IsZero() || time.Since(armedAt) > abortWindow {
 				armedAt = time.Now()
-				fmt.Fprintln(os.Stderr, "\n"+step.abortWarning)
+				fmt.Fprintln(stderrPromptWriter(), "\n"+step.abortWarning)
 				continue
 			}
 			cancelWork()
@@ -292,7 +303,7 @@ func waitForRecovery[T any](hints recoveryWaitHints, scan func() ([]T, error)) (
 		}
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	close(stop)
 	if err != nil {
 		return nil, fmt.Errorf("recovery scan: %w", err)

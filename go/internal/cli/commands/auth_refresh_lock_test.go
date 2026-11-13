@@ -137,6 +137,20 @@ func TestOAuthRefreshConcurrentCloudContexts(t *testing.T) {
 // The parent then starts both calls, so this exercises an actual filesystem
 // lock and reload across processes, not just goroutine synchronization.
 func TestOAuthRefreshProcessHelper(t *testing.T) {
+	if os.Getenv("WENDY_OAUTH_REFRESH_TEST_CHILD") == "config-update" {
+		t.Setenv("WENDY_CONFIG_DIR", os.Getenv("WENDY_OAUTH_REFRESH_TEST_CONFIG_DIR"))
+		if err := config.Update(func(cfg *config.Config) (bool, error) {
+			fmt.Println("ready") // config.lock held; old refresh handle loaded.
+			if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
+				return false, err
+			}
+			cfg.DefaultDevice = "chosen-during-checkpoint"
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	if os.Getenv("WENDY_OAUTH_REFRESH_TEST_CHILD") != "1" {
 		return
 	}
@@ -279,5 +293,90 @@ func TestOAuthRefreshPersistsOnlySelectedSession(t *testing.T) {
 				t.Fatal("refresh changed another session or lost the selected session's token")
 			}
 		})
+	}
+}
+
+func TestOAuthCheckpointSerializesWithConfigUpdateAcrossProcesses(t *testing.T) {
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	auth := &config.AuthConfig{CloudGRPC: "cloud.example:443", OAuthIssuer: "https://auth.example", RefreshToken: "consumed"}
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestOAuthRefreshProcessHelper$")
+	cmd.Env = append(os.Environ(), "WENDY_OAUTH_REFRESH_TEST_CHILD=config-update", "WENDY_OAUTH_REFRESH_TEST_CONFIG_DIR="+dir)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() || scanner.Text() != "ready" {
+		t.Fatalf("config writer did not reach locked snapshot: %q (%v)", scanner.Text(), scanner.Err())
+	}
+	unlock, err := acquireAuthRefreshLock(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	completed := make(chan error, 1)
+	go func() { completed <- persistRotatedOAuthToken(auth, "successor") }()
+	var checkpointErr error
+	bypassed := false
+	select {
+	case checkpointErr = <-completed:
+		bypassed = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	// Let the writer save its old-token snapshot. The checkpoint must follow
+	// that save under config.lock, preserving both the token and device choice.
+	if _, err := io.WriteString(stdin, "save\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdin.Close()
+	var output strings.Builder
+	for scanner.Scan() {
+		fmt.Fprintln(&output, scanner.Text())
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("config writer failed: %v\n%s", err, output.String())
+	}
+	if !bypassed {
+		select {
+		case checkpointErr = <-completed:
+		case <-ctx.Done():
+			t.Fatal("checkpoint did not finish after config writer released its lock")
+		}
+	}
+	if checkpointErr != nil {
+		t.Fatal(checkpointErr)
+	}
+	if bypassed {
+		t.Error("token checkpoint bypassed another process's config.lock")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth[0].RefreshToken != "successor" {
+		t.Error("config writer restored a consumed refresh token")
+	}
+	if cfg.DefaultDevice != "chosen-during-checkpoint" {
+		t.Error("checkpoint discarded the concurrent device choice")
 	}
 }

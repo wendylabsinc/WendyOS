@@ -133,6 +133,19 @@ jobs:
         working-directory: go
         run: make build-cli
 
+      - name: Refresh CI login before device discovery
+        if: inputs.hostname == '' || inputs.jobs == 'all' || inputs.jobs == 'discover'
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          # Match the gate's SSH login session; use this checkout's fresh CLI.
+          printf -v remote_command '%q ' env CI=true WENDY_SECRET_STORE=file \
+            python3 "$PWD/.github/scripts/refresh-gate-auth.py" --wendy "$PWD/go/bin/wendy"
+          if ! ssh -o BatchMode=yes localhost "$remote_command" </dev/null 2>/dev/null; then
+            echo "::error::CI login refresh did not complete. In the runner login session, run WENDY_SECRET_STORE=file wendy auth login as ci@wendy.sh, then WENDY_SECRET_STORE=file wendy auth use wendy."
+            exit 1
+          fi
+
       - name: Run wendy discover
         id: scan
         if: inputs.hostname == '' || inputs.jobs == 'all' || inputs.jobs == 'discover'
@@ -215,6 +228,17 @@ jobs:
       - name: Build CLI
         working-directory: go
         run: make build-cli
+
+      - name: Refresh CI login before device tests
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          printf -v remote_command '%q ' env CI=true WENDY_SECRET_STORE=file \
+            python3 "$PWD/.github/scripts/refresh-gate-auth.py" --wendy "$PWD/go/bin/wendy"
+          if ! ssh -o BatchMode=yes localhost "$remote_command" </dev/null 2>/dev/null; then
+            echo "::error::CI login refresh did not complete. In the runner login session, run WENDY_SECRET_STORE=file wendy auth login as ci@wendy.sh, then WENDY_SECRET_STORE=file wendy auth use wendy."
+            exit 1
+          fi
 
       - name: Prepare Docker
         id: prepare-docker

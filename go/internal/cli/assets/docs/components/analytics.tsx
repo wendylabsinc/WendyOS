@@ -1,4 +1,5 @@
 import { GoogleAnalytics } from '@next/third-parties/google';
+import { isPreviewDeploy } from '@/lib/shared';
 
 // Google Analytics 4 / Firebase Analytics — shares the same measurement ID as
 // the marketing site (wendy.dev): the "marketing-website-wendy" Firebase web
@@ -10,7 +11,10 @@ import { GoogleAnalytics } from '@next/third-parties/google';
 const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 
 export function Analytics() {
-  if (!GA_MEASUREMENT_ID) {
+  // Branch previews are short-lived copies of the site. Crawlers find them and
+  // keep requesting them after they are deleted, which filled the property with
+  // preview page views and 404s. Only the published deploys report.
+  if (!GA_MEASUREMENT_ID || isPreviewDeploy) {
     return null;
   }
 

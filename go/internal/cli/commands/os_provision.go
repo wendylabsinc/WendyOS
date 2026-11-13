@@ -252,8 +252,21 @@ type configTarget interface {
 // dirTarget writes into a mounted config-partition directory.
 type dirTarget string
 
+// WriteFile syncs each file: on removable media the drive can be pulled the
+// moment the install says it is done.
 func (d dirTarget) WriteFile(name string, data []byte, perm os.FileMode) error {
-	return os.WriteFile(filepath.Join(string(d), name), data, perm)
+	f, err := os.OpenFile(filepath.Join(string(d), name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 func writeConfigFiles(mountPoint string, agentBinary []byte, creds []wendyconf.WifiCredential, deviceName string, enrollmentJSON []byte) error {

@@ -25,6 +25,7 @@ func TestMeshCertificateRefreshesSelectedSession(t *testing.T) {
 		{name: "issuance failed after token rotation", lifetime: -time.Hour, wantRefresh: true, refreshErr: failure},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			resetAutomaticCertReissue(t)
 			a := config.AuthConfig{Name: "a", CloudGRPC: "cloud", OAuthIssuer: "https://auth.example", Certificates: []config.CertificateInfo{meshTestCert(tenantA, "operator")}}
 			b := config.AuthConfig{Name: "b", CloudGRPC: "cloud", OAuthIssuer: "https://auth.example", RefreshToken: "original", Certificates: []config.CertificateInfo{meshTestCert(tenantB, "operator")}}
 			setTempConfig(t, &config.Config{CurrentContext: "b", Auth: []config.AuthConfig{a, b}})

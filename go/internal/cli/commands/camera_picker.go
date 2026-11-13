@@ -129,7 +129,7 @@ func pickCamera(candidates []*agentpb.VideoDevice) (uint32, error) {
 		p.Send(tui.PickerDoneMsg{})
 	}()
 
-	finalModel, err := p.Run()
+	finalModel, err := tui.RunProgram(p)
 	if err != nil {
 		return 0, fmt.Errorf("camera picker: %w", err)
 	}

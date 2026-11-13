@@ -202,6 +202,30 @@ Python-specific settings.
 | `python.sourceRoot` | Path to the Python source root directory |
 | `python.container.sourceRoot` | Path to the Python source root inside the container image |
 
+### `mcu`
+
+An Arduino sketch for the board's microcontroller (Arduino UNO Q). `wendy run` compiles it, flashes the STM32, then deploys the app as usual. The layout matches Arduino App Lab: the `.ino` and a `sketch.yaml` in one folder.
+
+```json
+"mcu": { "sketch": "sketch" }
+```
+
+| Field | Description |
+|-------|-------------|
+| `mcu.sketch` | Sketch folder, relative to the project (required). It must hold a `sketch.yaml` that pins the platform, e.g. `arduino:zephyr (1.1.0)`. |
+| `mcu.profile` | `sketch.yaml` profile to build. Default: its `default_profile`. |
+
+- Wendy compiles with its own pinned `arduino-cli`, downloaded on first use. Your Arduino IDE setup is not touched.
+- Supported cores: `arduino:zephyr` 1.0 and 1.1. If the sketch talks to Linux, list `Arduino_RouterBridge` in the profile; the core does not bundle it.
+- The sketch is flashed before the container build. If the compile or the flash fails, the app is not deployed.
+- The board needs a WendyOS and agent that can flash it; otherwise `wendy run` stops and asks you to run `wendy device update`.
+- One board per run: `wendy run` refuses a project with `mcu` when `--device` lists several devices.
+- With `--watch`, the sketch is compiled and flashed again only when a file in the sketch folder changes.
+- The board holds one sketch. Deploying a second app with a sketch replaces the first app's sketch and stops that app. To go back, run `wendy run` in the first app's project again. `wendy device apps start <app>` never flashes: it is refused when the board does not hold that app's sketch. Removing an app also removes its sketch from the board. Stopping an app leaves its sketch running.
+- `wendy build` compiles the sketch too; it needs no device.
+- A `sketch.yaml` from Arduino App Lab works as it is. When it names no board, does not pin `arduino:zephyr`, or lists no libraries for a sketch that uses the Bridge, Wendy fills these in on a copy and prints a notice for each. Your file is not changed.
+- To talk to the sketch from the app, add the [`arduino-bridge`](#arduino-bridge) entitlement.
+
 ### `resources`
 
 Optional CPU, memory, and process-count ceilings the agent enforces on the container via cgroups. Edge devices are resource-constrained and often run several apps side by side, so capping a service keeps one busy or leaky app from starving its neighbours. Every field is optional. Omitting `memory` or `cpus` leaves that resource **unbounded** (the historical behaviour), so adding `resources` is backward compatible. `pids` is the exception: when omitted, a conservative default ceiling (4096) is applied as a fork-bomb guard — set it explicitly to raise or lower that ceiling.
@@ -575,6 +599,26 @@ GPIO pin access.
 | Field | Description |
 |-------|-------------|
 | `pins` | Pin numbers to expose. Omit to grant access to all GPIO chips. |
+
+### `arduino-bridge`
+
+Talk to the microcontroller's sketch through Arduino's router (Arduino UNO Q). The agent mounts `/run/arduino-router` and sets `APP_SOCKET`, which Arduino's Python package `arduino-router-bridge` reads. A value you set in `env` wins.
+
+```json
+{ "type": "arduino-bridge" }
+```
+
+No fields. On other boards, and on older WendyOS, `wendy run` refuses it before building.
+
+```python
+import os
+from arduino.router_bridge import Bridge
+
+bridge = Bridge(os.environ["APP_SOCKET"])
+bridge.connect(timeout=5)
+bridge.provide("climate", lambda celsius, humidity: print(celsius, humidity))  # sketch: Bridge.notify("climate", c, h)
+bridge.call("buzz", 880, 200)                                                  # sketch: Bridge.provide_safe("buzz", buzz)
+```
 
 ### `spi`
 
