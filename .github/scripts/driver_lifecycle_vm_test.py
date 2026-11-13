@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import tarfile
 import tempfile
+import sys
+import time
 import unittest
 from unittest import mock
 
@@ -55,6 +57,28 @@ class DriverVMTests(unittest.TestCase):
         VM.accept_log(control,nonce,"omit-unload","first",0)
         with self.assertRaises(ValueError):VM.accept_log(control.replace("live driver version mismatch: wendy_fixture_target","compile failed"),nonce,"omit-unload","first",0)
         with self.assertRaises(ValueError):VM.accept_log(control,nonce,"omit-unload","first",124)
+
+    def test_shared_deadline_bounds_a_real_command_and_prevents_next_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = VM.Runner(Path(tmp), Path(tmp), "a" * 32)
+            runner.deadline = time.monotonic() + 1
+            # The real command exits immediately. The guardian's mandatory group
+            # drain also consumes the shared budget and cannot reset it.
+            with mock.patch.object(VM.GUARDIAN, "run", wraps=VM.GUARDIAN.run) as run:
+                code = runner.command([sys.executable, "-c", "print('owned command completed')"], timeout=120)
+                self.assertEqual(code, 0)
+                self.assertGreater(run.call_args.args[1], 0)
+                self.assertLessEqual(run.call_args.args[1], 1)
+            self.assertIn("owned command completed", (Path(tmp) / "command-01.log").read_text())
+            with mock.patch.object(VM.GUARDIAN, "run") as run:
+                with self.assertRaisesRegex(ValueError, "shared wall deadline"):
+                    runner.command([sys.executable, "-c", "raise SystemExit(0)"])
+                run.assert_not_called()
+            # Expiration must not disable the separately bounded cleanup.
+            with mock.patch.object(VM.shutil, "rmtree") as remove:
+                self.assertEqual(runner.cleanup(), [])
+                remove.assert_called_once_with(Path(tmp))
+                self.assertGreater(runner.remaining_timeout(120), 0)
 
     def test_never_deletes_a_mounted_root(self):
         with tempfile.TemporaryDirectory() as tmp:
