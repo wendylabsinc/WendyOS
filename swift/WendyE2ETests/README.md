@@ -59,6 +59,26 @@ bash Scripts/E2ETest.sh \
 
 Repeat `--filter` to pass multiple test filters.
 
+The first-app Python scaffold checks (default parsed build settings and optional
+installation) require Python 3.11+ on the CLI machine. They check this prerequisite
+before scaffolding and report how to select a supported `python3` on `PATH`.
+CI selecting either check must provision that interpreter. The optional installation
+check additionally needs an offline wheelhouse and venv/ensurepip tooling.
+Provision the wheelhouse once in an isolated fixture directory, then pass its absolute path
+on the CLI machine as `WENDY_E2E_PYTHON_WHEELHOUSE`:
+
+```bash
+python3 -m pip download --no-cache-dir --only-binary=:all: \
+  --dest /path/to/isolated/wheelhouse hatchling==1.27.0
+WENDY_E2E_PYTHON_WHEELHOUSE=/path/to/isolated/wheelhouse \
+  bash Scripts/E2ETest.sh --output-dir /path/to/evidence \
+    --no-managed-agent --filter "installs and runs the generated Python"
+```
+
+The spec creates a per-test virtual environment, installs with `--no-index`, and
+runs the installed console script outside the source tree. Without that fixture,
+only this installation spec is skipped; parsed build settings remain covered.
+
 ### Test against a remote device
 
 From `swift/`:
@@ -197,6 +217,38 @@ sandbox. Prefer a dedicated E2E fixture config instead of your live
 `~/.wendy/config.json`; do not commit fixture configs, and avoid putting
 credential-related values directly in shell history. If the variable is not set,
 the runner uses the current CLI user's `~/.wendy/config.json` where possible.
+
+For repeated explicit-device inner loops with the Bash runner, add
+`--device-cache-fixture /absolute/path/to/e2e-target-cache.json` (or
+`WENDY_E2E_CLI_DEVICE_CACHE_FIXTURE`) alongside `--device-address`. The first
+run prepares target-only, untrusted `devices.json` address hints after a successful
+`device info --read-only` preflight in a temporary HOME. The supplied auth fixture
+must already contain a saved device principal for the explicit target hostname.
+The CLI parses and enforces that existing binding on every connection; cache
+metadata never creates or replaces identity bindings. In particular, a cached
+`mtls: true` value is a routing hint, not proof of an authenticated connection.
+Unset `WENDY_AGENT_SOCKET`: the runner, preflight and opted-in scenario reject
+this ambient override because it bypasses the explicit device address.
+Preparation pays the normal cold lookup cost. Later runs seed that preflight
+HOME from the prepared fixture and check reachability using the real CLI and
+its mandatory saved binding. Each run writes a separate refreshed snapshot;
+tests copy it into their own HOME. No TLS session cache, pin store or additional
+credentials are copied.
+The preflight command has a separate 30-second deadline; `--test-timeout` applies
+to the subsequent Swift test process.
+
+Only scenario calls with `run(useDeviceCache: true)` consume that snapshot;
+currently the explicit-device and non-interactive device-info specs opt in.
+Discovery and other scenarios remain cold by default. This requires `per-test`
+isolation and an unmanaged explicit target. The prepared fixture is immutable
+and bound to the exact target argument. Use a named LAN target that the CLI
+persists in its discovery cache; IP literals do not produce these entries.
+Missing fixtures are prepared; malformed or mismatched fixtures fail setup.
+The CLI retains its normal stale-address
+fallback. Remove a stale fixture to prepare a fresh one rather than repeatedly
+paying for fallback. Use a dedicated path, never your personal
+`~/.wendy/devices.json`. Do not commit fixture files. The PowerShell runner does
+not prepare these fixtures.
 
 ## Artifacts
 
