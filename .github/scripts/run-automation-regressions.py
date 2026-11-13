@@ -58,6 +58,7 @@ SUITES = (
     "usb_profile_dependencies_test.py",
     "linklocal_multi_interface_test.py",
     "linklocal_windows_test.py",
+    "windows_vm_boot_test.py",
     "chunk_stall_ownership_test.py",
     "broker_uplink_namespace_test.py",
     "accelerator_renumbering_test.py",

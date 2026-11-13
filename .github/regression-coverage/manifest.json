@@ -3931,10 +3931,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2325",
       "title": "Fix Windows VM setup and QEMU discovery",
       "package": "13",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Native Windows CI now executes QEMU path, sparse file and storage tests. It still does not boot QEMU and connect to the agent as part of those tests.",
-      "required_follow_up": "Add a Windows VM boot-and-connect smoke test with the packaged emulator.",
-      "evidence": []
+      "required_follow_up": "Require the packaged Windows QEMU boot/control gate to pass in the existing native Windows row. Compilation and portable coordinator tests do not prove a Windows guest boot.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/scripts/test-windows-vm-boot.py",
+            ".github/scripts/windows_vm_boot_test.py",
+            ".github/scripts/fixtures/windows-vm-boot.txt"
+          ],
+          "result": "Actual candidate CLI and historical PATH-only control compile for Windows; six portable coordinator tests pass. The hosted gate extracts a pinned QEMU package into a private Program Files directory, boots a pinned WendyOS ARM64 guest with TCG through vm create/start, connects using device info --read-only, verifies the listener belongs to the owned emulator, exits the foreground console and removes the stopped VM. Historical executable lookup must fail at its exact site. All children use a retained Windows Job; small logs and hashes are retained. Registered in the existing Windows native job with no additional runner. Native Windows boot remains unrun."
+        }
+      ]
     },
     {
       "key": "2242",
