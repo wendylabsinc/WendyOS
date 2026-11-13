@@ -3,13 +3,113 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// Observe supported screen-mode output without replacing Bubble Tea's renderer.
+type tourProgramOutput struct {
+	mu         sync.Mutex
+	text       strings.Builder
+	command    string
+	fullscreen chan struct{}
+}
+
+func (w *tourProgramOutput) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.text.Write(p)
+	// This assertion observes EnterAltScreen's emitted sequence, not a custom
+	// escape injected into the application or its displayed command lines.
+	if strings.Contains(w.text.String(), w.command) && strings.Contains(string(p), "\x1b[?1049h") {
+		select {
+		case w.fullscreen <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func (w *tourProgramOutput) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.text.String()
+}
+
+type tourObservedCommandModel struct {
+	tourCommandScreenModel
+	ready chan struct{}
+	once  *sync.Once
+}
+
+func (m tourObservedCommandModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.tourCommandScreenModel.Update(msg)
+	m.tourCommandScreenModel = updated.(tourCommandScreenModel)
+	if m.displayed {
+		m.once.Do(func() { close(m.ready) })
+	}
+	return m, cmd
+}
+
+func TestTourLinuxCommandsSurviveLiveRenderer(t *testing.T) {
+	for _, width := range []int{40, 100} {
+		wizard := newTourWizardModel()
+		wizard.phase, wizard.width = phaseAptInstall, width
+		frame := wizard.View()
+		command := linuxDesktopCommand("", "", linuxDesktopMachineLabel)
+		output := &tourProgramOutput{command: command, fullscreen: make(chan struct{}, 1)}
+		ready := make(chan struct{})
+		model := tourObservedCommandModel{tourCommandScreenModel: tourCommandScreenModel{tourWizardModel: wizard}, ready: ready, once: &sync.Once{}}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		program := tea.NewProgram(model, tea.WithInput(strings.NewReader("")), tea.WithOutput(output), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
+		driverDone := make(chan struct{})
+		go func() {
+			defer close(driverDone)
+			program.Send(tea.WindowSizeMsg{Width: width, Height: 80})
+			program.Send(key("enter")) // rapid continuation while output may be pending
+			program.Send(tea.WindowSizeMsg{Width: 100, Height: 80})
+			program.Send(tea.WindowSizeMsg{Width: width, Height: 80})
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return
+			}
+			program.Send(key("enter"))
+			select {
+			case <-output.fullscreen:
+			case <-ctx.Done():
+				return
+			}
+			program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+		}()
+		final, err := program.Run()
+		cancel()
+		<-driverDone
+		if err != nil {
+			t.Fatalf("width %d: live program: %v; output=%q", width, err, output.String())
+		}
+		if final.(tourObservedCommandModel).phase != phaseEnterHostname {
+			t.Fatal("continuation no longer enters the hostname screen")
+		}
+		if !strings.Contains(output.String(), frame) {
+			t.Fatalf("width %d: actual renderer did not emit the complete frame", width)
+		}
+		for _, line := range strings.Split(wizard.viewCommands(), "\n") {
+			if strings.HasPrefix(line, "curl ") || strings.HasPrefix(line, "echo ") || strings.HasPrefix(line, "sudo ") {
+				if strings.Count(output.String(), line) != 1 {
+					t.Fatalf("command cropped or duplicated after rapid Enter/resize: %q", line)
+				}
+			}
+		}
+	}
+}
 
 func TestTourCommandOutputGuard(t *testing.T) {
 	m := tourCommandScreenModel{tourWizardModel: newTourWizardModel()}
