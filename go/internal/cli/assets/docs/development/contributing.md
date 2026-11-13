@@ -2,6 +2,15 @@
 
 Thank you for contributing to WendyOS! This document covers the development workflows, CI pipelines, and guidelines for contributing to the project.
 
+## CLI design
+
+Use the [Command Line Interface Guidelines](https://clig.dev/) as the default
+design guidance for Wendy CLI changes. Apply them with judgment and preserve
+established behavior unless a change is intentional. Document Wendy-specific
+decisions and exceptions in the [executable E2E reference](../../../../../../swift/WendyE2ETests/README.md#reference-directory),
+a behavioral reference backed by executable assertions. Full-screen TUI design
+requires separate guidance.
+
 ## CI / GitHub Actions
 
 ### Source-only AI review

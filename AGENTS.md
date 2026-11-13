@@ -3,6 +3,8 @@
 Wendy is a CLI and agent platform for developing and deploying applications on
 WendyOS edge devices (Raspberry Pi, NVIDIA Jetson, x86 SBCs, and more).
 
+CLI contributors: read the [CLI design guidance](go/internal/cli/assets/docs/development/contributing.md#cli-design).
+
 ## Image files
 
 AI assistants and LLMs must not add or modify image files in Git commits. This
