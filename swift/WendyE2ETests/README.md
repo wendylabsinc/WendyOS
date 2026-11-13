@@ -107,7 +107,11 @@ immutable digest, then run the HTTP payload through Compose's `command` array.
 They need no local or remote builder. Cleanup removes only the exact app;
 the public immutable image remains shared device cache content and is never
 deleted by the fixture. Runs explicitly skip Cloud app registration and never
-consent to changing the builder role.
+consent to changing the builder role. Every fixture CLI command sets the
+supported `WENDY_RUN_NO_CLOUD_FALLBACK=1` setting; failed primary LAN resolution
+must not query Cloud. Build-host resolution is explicitly exempt from that
+setting, so both remote-builder negative specs are deferred with full bodies.
+No product routing or security behavior is changed by this harness setup.
 
 ```bash
 WENDY_E2E_HTTP_APP=true bash Scripts/E2ETest.sh \
@@ -122,7 +126,10 @@ endpoint, inventory identity/state/port, endpoint closure after stop, and a new
 process instance after restart. Detached start must report unchecked readiness.
 A separate full-body disabled spec retains companion version preservation:
 Compose currently reports `latest` instead of configured `1.0.0` in inventory.
-Other Compose cases leave that assertion to the disabled defect spec.
+Other Compose cases leave that assertion to the disabled defect spec. To replay
+that known failure, explicitly set both `WENDY_E2E_REPLAY_KNOWN_DEFECTS=true` and
+`WENDY_E2E_HTTP_APP=true` and filter `preserves the companion version`.
+The replay retains the original `1.0.0` assertion.
 
 Five source-build positive specs retain complete bodies but remain disabled:
 the available test Jetson lacks BuildKit and the CLI host has no container
@@ -134,12 +141,15 @@ cleanup fails loudly with the exact app/repository because app inventory alone
 cannot establish image absence. It never prunes shared device caches.
 
 The same opt-in allows selective real-device checks filtered by
-`rejects a missing application and preserves` and
-`rejects unsupported remote readiness`. To exercise missing-builder failure,
-set `WENDY_E2E_NO_BUILDKIT=true` only for a target known to lack BuildKit and
-filter `reports unavailable remote builder`. These cases assert failure and
-unchanged inventory. Use a trusted hostname or saved identity binding; a bare
-IP may be refused by identity verification.
+`rejects a missing application and preserves`. The unavailable-builder and
+unsupported remote-readiness cases remain deferred because the supported
+no-fallback setting exempts build hosts. Use a trusted hostname or saved
+identity binding; a bare IP may be refused by identity verification.
+
+For the offline no-Cloud contact control, point `WENDY_E2E_CONTROL_CLI` at a
+locally built CLI and run `test_lan_no_cloud.py` with Python's unittest runner.
+It uses only synthetic credentials, an unreachable loopback Agent, and a local
+Cloud contact counter, including an unset-guard positive control.
 
 ## Test environment
 

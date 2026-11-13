@@ -30,12 +30,12 @@ struct `'wendy run'` {
      diagnostic naming that dependency. It does not fall back to a local
      builder, announce a started app, or change existing deployed app state.
 
-     Requires `WENDY_E2E_NO_BUILDKIT=true` on a target known to lack BuildKit.
+     Currently deferred: the supported LAN-only setting exempts build-host
+     resolution, so this fixture cannot safely execute the remote-builder path.
      */
     @Test(
-        .enabled(
-            if: httpAppTestsEnabled
-                && ProcessInfo.processInfo.environment["WENDY_E2E_NO_BUILDKIT"] == "true"
+        .disabled(
+            "Deferred: supported no-Cloud-fallback setting exempts build-host resolution; LAN-only harness cannot contain this remote-builder path"
         )
     )
     func `reports unavailable remote builder without creating an app`() async throws {
@@ -59,8 +59,14 @@ struct `'wendy run'` {
      Remote builds currently reject `--wait-ready` before building or deploying.
      The command returns a failed readiness result and a diagnostic identifying
      the incompatible flags, leaving existing deployed app state untouched.
+     Currently deferred with remote-builder cases until the harness can safely
+     contain every build-host resolution path without Cloud access.
      */
-    @Test(.enabled(if: httpAppTestsEnabled))
+    @Test(
+        .disabled(
+            "Deferred with remote-builder cases: build-host resolution is exempt from supported no-Cloud-fallback setting"
+        )
+    )
     func `rejects unsupported remote readiness before changing deployed apps`() async throws {
         try await HTTPAppFixture.scenario().run { cli, _ in
             try await HTTPAppFixture.withProject(cli: cli, imageMayBeImported: false) { app in

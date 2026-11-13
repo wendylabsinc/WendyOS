@@ -16,7 +16,9 @@ struct HTTPAppFixture: Sendable {
     static let prebuiltImage =
         "docker.io/library/python@sha256:303398d5c9f110790bce60d64f902e51e1a061e33292985c72bf6cd07960bf09"
 
-    var command: String { "wendy --json --device \(Self.quote(device))" }
+    var command: String {
+        "env WENDY_RUN_NO_CLOUD_FALLBACK=1 wendy --json --device \(Self.quote(device))"
+    }
     var buildHostArgument: String { "--build-host=\(Self.quote(device))" }
     var url: String { "http://\(device):\(port)/ready" }
 

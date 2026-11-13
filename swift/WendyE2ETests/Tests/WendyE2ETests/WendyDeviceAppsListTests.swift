@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WendyE2ETesting
 
@@ -23,10 +24,17 @@ struct `'wendy device apps list'` {
     /**
      A Compose app's inventory retains the version declared in its companion
      wendy.json, matching the version served by the application.
+
+     This currently fails: Compose inventory reports `latest` instead of the
+     declared `1.0.0`. The spec is disabled by default. Explicit known-defect
+     replay requires both `WENDY_E2E_HTTP_APP=true` and
+     `WENDY_E2E_REPLAY_KNOWN_DEFECTS=true`; the original assertion is retained.
      */
     @Test(
-        .disabled(
-            "Product defect: Compose drops companion version 1.0.0; real inventory reports latest. Reproduced on Jetson with a responding HTTP app."
+        .enabled(
+            if: httpAppTestsEnabled
+                && ProcessInfo.processInfo.environment["WENDY_E2E_REPLAY_KNOWN_DEFECTS"] == "true",
+            "Known defect, disabled by default: Compose inventory drops companion version; explicit defect replay and hardware opt-in required"
         )
     )
     func `preserves the companion version of a prebuilt HTTP app`() async throws {
