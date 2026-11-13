@@ -35,6 +35,31 @@ def local_url(value):
     return value
 
 
+def listener_pid(text, port, uid):
+    rows=text.splitlines()
+    pids={row[1:] for row in rows if row.startswith('p')}
+    users={row[1:] for row in rows if row.startswith('u')}
+    addresses={row[1:] for row in rows if row.startswith('n')}
+    allowed={'127.0.0.1:'+str(port),'[::1]:'+str(port)}
+    if len(pids)!=1 or users!={str(uid)} or not addresses or not addresses<=allowed:
+        raise ValueError('ambiguous, non-loopback or foreign Agent listener')
+    return pids.pop()
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def local_status(address):
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+    with opener.open(local_url(address),timeout=3) as response:
+        if response.status!=200:raise ValueError('unexpected loopback status response')
+        raw=response.read(65537)
+    if len(raw)>65536:raise ValueError('oversized loopback status response')
+    return json.loads(raw)
+
+
 def admit(plan, port):
     if sys.platform!='darwin' or os.getuid()!=plan['mac']['uid'] or pwd.getpwuid(os.getuid()).pw_name!=plan['mac']['account']:
         raise ValueError('wrong reserved Mac account')
@@ -49,11 +74,7 @@ def admit(plan, port):
     artifact(record)
     command(['/usr/bin/codesign','--verify','--deep','--strict',str(installed)])
     # Require one listener owned by this account and the exact signed app path.
-    rows=command(['/usr/sbin/lsof','-nP','-iTCP:'+str(port),'-sTCP:LISTEN','-Fpu']).splitlines()
-    pids={row[1:] for row in rows if row.startswith('p')}
-    users={row[1:] for row in rows if row.startswith('u')}
-    if len(pids)!=1 or users!={str(os.getuid())}:raise ValueError('ambiguous/foreign Agent listener')
-    pid=pids.pop()
+    pid=listener_pid(command(['/usr/sbin/lsof','-nP','-iTCP:'+str(port),'-sTCP:LISTEN','-Fpun']),port,os.getuid())
     if command(['/bin/ps','-p',pid,'-o','comm='])!=str(binary):raise ValueError('listener is not the pinned signed app')
     return pid
 
@@ -80,8 +101,7 @@ def main():
     local_url(ready['directory']);local_url(ready['status'])
     if not ready['cloud'].startswith('127.0.0.1:'):raise ValueError('foreign Cloud endpoint')
     if args.action=='status':
-        with urllib.request.urlopen(ready['status'],timeout=3) as response:
-            counters=json.loads(response.read(65537))
+        counters=local_status(ready['status'])
         if any(counters.get(name)!=1 for name in ('enrolled','accounts','orders','finalizes')) or counters.get('errors'):
             raise ValueError('incomplete/repeated enrollment or peer errors')
         if state_path.is_symlink() or state_path.stat().st_uid!=os.getuid() or state_path.stat().st_size>1024*1024:raise ValueError('foreign Agent state')
