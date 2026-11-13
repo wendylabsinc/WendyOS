@@ -281,6 +281,18 @@ func runRollback(ctx context.Context, op *registryOp, appID, name string, c chan
 		}
 		newRel = rels[i]
 	}
+	// The same rule as deploy and update: the release rolled back to must get
+	// every setting it requires.
+	if i := slices.IndexFunc(rels, func(r *cloudpb.AppRelease) bool { return r.GetId() == target.GetAppReleaseId() }); i >= 0 {
+		name, err := emptyRequired(target.GetConfigJson(), releaseRequired(rels[i]))
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			return usageErrorf("Revision %d leaves %s empty, which release %s requires. Choose another revision, or use wendy app deployment update --release %s --config %s=<value>.",
+				c.to, name, rels[i].GetName(), rels[i].GetName(), name)
+		}
+	}
 	cur, err := op.revisionDevices(ctx, d.GetId(), d.GetRevision())
 	if err != nil {
 		return err

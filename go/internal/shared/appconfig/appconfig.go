@@ -316,6 +316,20 @@ const (
 	MaxEnvEntryLen = 32 * 1024
 )
 
+// ValidateRequiredEnv checks requiredEnv against env: each name is a key of
+// env (its default there may be empty), and listed once.
+func ValidateRequiredEnv(required []string, env map[string]string) error {
+	for i, name := range required {
+		if _, ok := env[name]; !ok {
+			return fmt.Errorf("requiredEnv: %q is not in env; add it to env with its default (it may be empty)", name)
+		}
+		if slices.Contains(required[:i], name) {
+			return fmt.Errorf("requiredEnv: %q is listed twice; list it once", name)
+		}
+	}
+	return nil
+}
+
 // ValidateEnvEntries checks caller-supplied KEY=value entries: bounded, no
 // NUL, CR or LF, a POSIX name, and no reserved prefix (case-insensitive).
 // The container runtime applies it to every create, and a deployment's
@@ -926,13 +940,8 @@ func (c *AppConfig) Validate() error {
 	if err := ValidateEnv("env", c.Env); err != nil {
 		return err
 	}
-	for i, name := range c.RequiredEnv {
-		if _, ok := c.Env[name]; !ok {
-			return fmt.Errorf("requiredEnv: %q is not in env; add it to env with its default (it may be empty)", name)
-		}
-		if slices.Contains(c.RequiredEnv[:i], name) {
-			return fmt.Errorf("requiredEnv: %q is listed twice", name)
-		}
+	if err := ValidateRequiredEnv(c.RequiredEnv, c.Env); err != nil {
+		return err
 	}
 
 	if c.Frameworks != nil {

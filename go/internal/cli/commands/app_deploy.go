@@ -436,17 +436,26 @@ var releaseRequired = func(rel *cloudpb.AppRelease) []string { return rel.GetReq
 // checkRequired refuses a configuration that leaves a required setting
 // empty (sem 2026-11-13 11:01): naming it, with the one next step.
 func checkRequired(config string, required []string) error {
+	name, err := emptyRequired(config, required)
+	if err != nil || name == "" {
+		return err
+	}
+	return usageErrorf("%s has no value. Add --config %s=<value>.", name, name)
+}
+
+// emptyRequired is the first required setting config leaves empty, or "".
+func emptyRequired(config string, required []string) (string, error) {
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(config), &values); err != nil {
-		return err
+		return "", err
 	}
 	for _, name := range required {
 		var v any
 		if raw, ok := values[name]; !ok || json.Unmarshal(raw, &v) != nil || v == nil || v == "" {
-			return usageErrorf("%s has no value. Add --config %s=<value>.", name, name)
+			return name, nil
 		}
 	}
-	return nil
+	return "", nil
 }
 
 // progress shows each device's state in the dashboard's words; with follow

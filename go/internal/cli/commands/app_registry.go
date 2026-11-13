@@ -223,6 +223,9 @@ func appDefinition(raw []byte, app string) (*appconfig.AppConfig, []byte, error)
 	if err := appconfig.ValidateAppID(cfg.AppID); err != nil {
 		return nil, nil, fmt.Errorf("wendy.json: %w", err)
 	}
+	if err := appconfig.ValidateRequiredEnv(cfg.RequiredEnv, cfg.Env); err != nil {
+		return nil, nil, fmt.Errorf("wendy.json: %w", err)
+	}
 	def, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, nil, err

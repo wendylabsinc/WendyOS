@@ -312,3 +312,16 @@ func TestPublishCreatesAnUnknownApp(t *testing.T) {
 	}
 	published(t, op, fake)
 }
+
+// Publish refuses a requiredEnv entry that is not a setting of env, or is
+// listed twice, before anything is uploaded.
+func TestPublishRefusesAWrongRequiredEnv(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"appId": "sh.wendy.example", "env": {"CAMERA_URL": ""}, "requiredEnv": ["CAMERA_ULR"]}`:               `requiredEnv: "CAMERA_ULR" is not in env`,
+		`{"appId": "sh.wendy.example", "env": {"CAMERA_URL": ""}, "requiredEnv": ["CAMERA_URL", "CAMERA_URL"]}`: `requiredEnv: "CAMERA_URL" is listed twice`,
+	} {
+		if _, _, err := appDefinition([]byte(raw), ""); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: %v", raw, err)
+		}
+	}
+}
