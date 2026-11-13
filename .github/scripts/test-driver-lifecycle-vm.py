@@ -32,6 +32,8 @@ SOURCES = {
 }
 LABEL = "sh.wendy.regression.driver-vm"
 GIB = 1024 ** 3
+WORK_TIMEOUT = 25 * 60
+CLEANUP_TIMEOUT = 3 * 60
 
 
 def require(condition, message):
@@ -100,12 +102,19 @@ class Runner:
         self.created_container = False
         self.created_image = False
         self.results = {}
+        self.started = time.monotonic()
+        self.deadline = self.started + WORK_TIMEOUT
+
+    def remaining_timeout(self, requested):
+        remaining = self.deadline - time.monotonic()
+        require(remaining > 0, "driver VM shared wall deadline exhausted")
+        return min(requested, remaining)
 
     def command(self, argv, timeout=120, capture=False, check=True):
         self.counter += 1
         log = self.output / f"command-{self.counter:02d}.log"
         with log.open("x") as stream:
-            code = GUARDIAN.run(argv, timeout, cwd=ROOT, stdout=stream)
+            code = GUARDIAN.run(argv, self.remaining_timeout(timeout), cwd=ROOT, stdout=stream)
         text = log.read_text(errors="replace")
         if check:
             require(code == 0, f"command failed ({code}); inspect {log}")
@@ -129,7 +138,7 @@ class Runner:
             shutil.copyfile(source, context / source.name)
         for path, expected in SOURCES.items():
             destination = context / Path(path).name
-            self.command(["curl", "--fail", "--location", "--silent", "--show-error", "--connect-timeout", "15", "--max-time", "90",
+            self.command(["curl", "-q", "--fail", "--location", "--silent", "--show-error", "--connect-timeout", "15", "--max-time", "90",
                           "--output", str(destination), f"https://raw.githubusercontent.com/wendylabsinc/WendyOS-Builder/{BUILDER}/{path}"], timeout=100)
             require(digest(destination) == expected, "shipped Builder script checksum mismatch")
         self.command(["env", "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64", "go", "test", "-c", "-o", str(context / "services.test"), "./go/internal/agent/services"], timeout=600)
@@ -215,7 +224,7 @@ RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fix
         log = self.output / (control + "-" + phase + ".log")
         start = time.monotonic()
         with log.open("x") as stream:
-            code = GUARDIAN.run(command, 600, cwd=ROOT, stdout=stream)
+            code = GUARDIAN.run(command, self.remaining_timeout(600), cwd=ROOT, stdout=stream)
         require(log.stat().st_size <= 32 * 1024 * 1024, "guest console exceeded evidence limit")
         accept_log(log.read_text(errors="replace"), self.nonce, control, phase, code)
         self.results[control + "/" + phase] = {"passed": True, "seconds": round(time.monotonic() - start, 2), "log": str(log)}
@@ -231,6 +240,9 @@ RUN install -m644 /fixture/driver-fixture.service /etc/systemd/system/driver-fix
             disk.unlink()
 
     def cleanup(self):
+        # Cleanup has its own reserve even when the work deadline expires.
+        self.results["work_seconds"] = round(time.monotonic() - self.started, 3)
+        self.deadline = time.monotonic() + CLEANUP_TIMEOUT
         failures = []
         for kind, name, created in (("container", self.container, self.created_container), ("image", self.tag, self.created_image)):
             if not created:
@@ -273,7 +285,7 @@ def main():
     work = Path(tempfile.mkdtemp(prefix="wendy-driver-vm-", dir=parent))
     nonce = uuid.uuid4().hex
     runner = Runner(work, output, nonce)
-    evidence = {"audit_entry":"2049", "nonce":nonce, "builder_commit":BUILDER, "builder_sources":SOURCES, "root_image":BASE,
+    evidence = {"audit_entry":"2049", "nonce":nonce, "builder_commit":BUILDER, "builder_sources":SOURCES, "root_image":BASE, "work_budget_seconds":WORK_TIMEOUT, "cleanup_budget_seconds":CLEANUP_TIMEOUT,
                 "scope":"real disposable QEMU kernel/systemd-sysext; no physical vendor hardware", "results":runner.results, "passed":False}
     old_handlers = {}
     def interrupted(signum, frame):

@@ -5,9 +5,12 @@ Run from the WendyOS checkout in one existing GitHub-hosted Linux x86_64 job:
   python3 .github/scripts/test-driver-lifecycle-vm.py \
     --work-parent "$RUNNER_TEMP" --output "$RUNNER_TEMP/driver-lifecycle-vm"
 
-Use the containerd 1.7 matrix row only, or another single existing Linux row.
-This test does not depend on the host containerd version. Do not duplicate it
-across both containerd rows or add a runner. Required host tools are ordinary
+Run once in the existing containerd-regressions job, after the exported ROS
+image/control cleanup and before ESP-IDF pulls its large toolchain image. That job loops over 1.7/current internally; this VM
+must stay outside that loop because it does not use host containerd. Do not
+add a matrix or another runner. Set this step timeout to 30 minutes, keeping
+the existing job timeout of 50 minutes. Add qemu-system-x86, qemu-utils and
+e2fsprogs to the existing apt dependency installation. Required host tools are ordinary
 Docker, Go from the repository, Python3, curl, qemu-system-x86_64, qemu-img,
 e2fsprogs, tar, findmnt and noninteractive sudo for validated private rootfs
 extraction/mkfs/removal. The host runs the coordinator as its ordinary user.
@@ -24,7 +27,9 @@ kernel integration fixture, not an assertion about a vendor kernel's ABI.
 
 Both pack-sysext.sh and wendyos-sysext-apply.sh come byte-for-byte from the pinned
 published WendyOS-Builder commit f72a1b354c80523dc2b092e52e38e44fe56c8d5a.
-The driver checks their SHA256 before execution. That apply script is unchanged
+Both exact URLs were fetched without credentials or curl configuration and
+returned HTTP 200 with matching hashes during preparation. No cross-repository
+GitHub token is required. The driver checks their SHA256 before execution. That apply script is unchanged
 from production source commit 1d2c171e054a4a52bc34954c2f112c2c86ef0c89; the
 package recipe is unchanged from 9c8a3f672fce0f94ce8d7824a8e3956644a6b5df.
 No mock modprobe, fake sysfs, manufactured receipt or substituted merger is used.
@@ -57,7 +62,15 @@ root archive is capped at 3 GiB expanded and 400,000 entries, the base disk at 4
 and each of the three overlays is created and removed sequentially. QEMU uses
 2 GiB RAM and two TCG vCPUs. Per-command ceilings are 10 minutes for each Go binary,
 20 minutes for the ordinary image build, 3 minutes for export/extraction/mkfs and 10 minutes for
-each boot. These are failure bounds, not measured runtime. First hosted execution
+each boot. All preparation and four boots also share one 25-minute work deadline;
+each command receives the smaller of its own limit and the remaining budget.
+Cleanup has a separate three-minute reserve. The 30-minute workflow step
+bound allows command-group draining and evidence upload. The existing job
+completed in 8 minutes 32 seconds at head 4f2f0d9aa (job 131626456277), including
+both containerd versions, ROS scope controls and ESP-IDF. This leaves room for
+the single driver gate without increasing the existing 50-minute job budget.
+The first driver run has not been measured, so 25 minutes is an execution
+budget rather than a runtime claim. First hosted execution
 must establish actual duration/capacity before changing the audit to verified.
 The workflow's existing job timeout remains the outer bound. A smaller runner
 that cannot meet the preflight remains a failed prerequisite, not a skipped pass.
