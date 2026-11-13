@@ -260,3 +260,121 @@ func TestTunnelSessionReadsSigningFilesOnEveryDial(t *testing.T) {
 		t.Fatalf("dial after the signing key was removed: %v", err)
 	}
 }
+
+func TestTunnelSessionAuthorizationReplacementRetainsRelayOwner(t *testing.T) {
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = "127.0.0.1:12345"
+	var session TunnelSession
+	session.SetActive(true)
+	defer session.SetActive(false)
+	ctx := session.Context(t.Context())
+	first, release, err := tunnelAuthorizationFor(ctx, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	// Shutdown and transient failure both require an authorization replacement.
+	// Closing locally makes the state deterministic without network backoff.
+	first.conn.Close()
+	next, release, err := tunnelAuthorizationFor(ctx, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if next == first || next.conn == first.conn {
+		t.Fatal("failed authorization transport reused")
+	}
+	if next.verifier != first.verifier {
+		t.Fatal("replacement lost ownership of existing relay sessions")
+	}
+	generation := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
+	if len(generation.entries) != 1 {
+		t.Fatal("replacement leaked an owner")
+	}
+	session.SetActive(false)
+	if next.conn.GetState().String() != "SHUTDOWN" || len(generation.entries) != 0 {
+		t.Fatal("replacement escaped scope shutdown")
+	}
+}
+
+func TestTunnelSessionUncachedRelayOwnerLifetime(t *testing.T) {
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = "127.0.0.1:12345"
+	var session TunnelSession
+	session.SetActive(true)
+	defer session.SetActive(false)
+	ctx := session.Context(t.Context())
+	for i := 0; i < 4; i++ {
+		snapshot := *auth
+		snapshot.APIKey += string(rune('a' + i))
+		_, release, err := tunnelAuthorizationFor(ctx, &snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		release()
+	}
+	generation := ctx.Value(tunnelContextKey{}).(*tunnelGeneration)
+	entry, release, err := tunnelAuthorizationFor(ctx, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if entry.closeRelay == nil || len(generation.transient) != 1 {
+		t.Fatal("uncached owner not tracked")
+	}
+	// Releasing setup must not release the returned stream's verifier.
+	left, right := net.Pipe()
+	defer right.Close()
+	conn := &ownedTunnelConn{Conn: left, release: entry.closeRelay}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(generation.transient) != 0 {
+		t.Fatal("closed stream retained its relay owner")
+	}
+	entry, release, err = tunnelAuthorizationFor(ctx, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	session.SetActive(false)
+	if len(generation.transient) != 0 {
+		t.Fatal("shutdown retained uncached owner")
+	}
+	entry.closeRelay() // Completion after shutdown is safe and idempotent.
+}
+
+func TestOwnedTunnelDeadlinesKeepRelayLive(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	released := 0
+	conn := &ownedTunnelConn{Conn: left, release: func() { released++ }}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(-time.Second))
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte{1}); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if released != 0 {
+		t.Fatal("temporary timeout released relay owner")
+	}
+	conn.SetDeadline(time.Time{})
+	sent := make(chan error, 1)
+	go func() { _, err := right.Write([]byte{42}); sent <- err }()
+	data := make([]byte, 1)
+	if _, err := conn.Read(data); err != nil || data[0] != 42 {
+		t.Fatal("could not resume after deadline", err)
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	right.Close()
+	if _, err := conn.Read(data); err == nil {
+		t.Fatal("closed pipe still readable")
+	}
+	if released != 1 {
+		t.Fatal("terminal EOF retained relay owner")
+	}
+}

@@ -91,6 +91,11 @@ func (s *Session) connectReporter(ctx context.Context, asset string, dial func(c
 		}
 		return grpc.NewClient("passthrough:///"+target, grpc.WithTransportCredentials(insecure.NewCredentials()), clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, target) }))
 	}}
+	defer func() {
+		if !retained {
+			_ = verifier.Close()
+		}
+	}()
 	record, err := cloudpbv2.NewAssetServiceClient(cloud).GetAsset(ctx, &cloudpbv2.GetAssetRequest{Id: asset})
 	if err != nil {
 		cloud.Close()
@@ -128,7 +133,7 @@ func (s *Session) connectReporter(ctx context.Context, asset string, dial func(c
 		cloud.Close()
 		return nil, nil, nil, err
 	}
-	conn.ExtraClosers = append(conn.ExtraClosers, cloud, cancelReporter(cancelNormal))
+	conn.ExtraClosers = append(conn.ExtraClosers, cloud, verifier, cancelReporter(cancelNormal))
 	retained = true
 	return conn, nil, ctx, nil
 }

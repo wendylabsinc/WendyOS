@@ -73,6 +73,22 @@ Only online devices are shown. To inspect enrolled but offline devices, use
 Use `wendy cloud discover --json` to obtain selectors: UUIDs for Cloud v2,
 numeric asset IDs for legacy Cloud, or device names in either environment.
 
+## Relay connection reuse
+
+Cloud v2 keeps relay connections within the foreground account or agent session.
+Each tunnel still obtains its own authorization grant and proves possession of
+its session key. Closing one tunnel cancels its RPC without disconnecting other
+tunnels using the same broker connection. Account shutdown closes the retained
+connections.
+
+The pool separates broker endpoints, broker incarnations, caller and agent roles,
+and Agent management from application-port forwarding. It retains at most eight
+connections, closes unused connections after 30 seconds, and stops assigning new
+sessions to a connection after ten minutes. Active sessions finish normally when
+a connection ages out. If every slot is active, a new broker connection waits
+within the requesting session's deadline. Presence and reachability probes use
+independent connections.
+
 ## Reconnection and app uploads
 
 For [app uploads over Cloud v2](../clients/wendy-cli/commands/run.md#uploads-over-cloud-v2),

@@ -61,6 +61,7 @@ type Agent struct {
 var errPresenceRefresh = errors.New("refreshing Cloud presence before transport timeout")
 
 func (a *Agent) Run(ctx context.Context) {
+	defer a.Verifier.Close()
 	backoff := time.Second
 	for ctx.Err() == nil {
 		started := time.Now()
@@ -772,7 +773,7 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 }
 
 func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.SessionOffer, c claims, d *pb.DialInstruction) error {
-	session, err := join(ctx, broker, o.SessionGrantJws, c, a.signing, pb.JoinRole_JOIN_ROLE_AGENT, a.Verifier.dialRelay)
+	session, err := join(ctx, broker, o.SessionGrantJws, c, a.signing, pb.JoinRole_JOIN_ROLE_AGENT, a.Verifier, string(d.ServiceDescriptor))
 	if err != nil {
 		return err
 	}
