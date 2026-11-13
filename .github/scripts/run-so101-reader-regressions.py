@@ -15,7 +15,7 @@ if shutil.which("lsof") is None:
 
 directory = Path(__file__).resolve().parents[2] / "Examples/SO101Reader"
 suite = unittest.defaultTestLoader.discover(str(directory), pattern="test_reader.py")
-if suite.countTestCases() < 37:
+if suite.countTestCases() < 38:
     raise SystemExit("The SO-101 reader suite did not discover all existing cases")
 result = unittest.TextTestRunner(verbosity=2).run(suite)
 if result.skipped:
