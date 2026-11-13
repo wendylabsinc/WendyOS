@@ -466,7 +466,7 @@ jobs:
           sudo apt-get update --error-on=any
           sudo apt-get install -y avahi-daemon iproute2 iptables util-linux libasound2-dev libusb-1.0-0-dev pkg-config lsof
       - name: Install USB profile dependencies with isolated service policy
-        run: sudo -n env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
+        run: sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 .github/scripts/install-usb-profile-dependencies.py "$RUNNER_TEMP/usb-profile-dependencies"
       - name: Require native Linux SO-101 reader regressions
         run: python3 .github/scripts/run-so101-reader-regressions.py
       - name: Compile both packet backends with the race detector
