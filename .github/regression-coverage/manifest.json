@@ -2276,9 +2276,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2554",
       "title": "Fix saved NPU grants and mesh duplicate admission on restart",
       "package": "07",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Tests check NPU mount refresh and rejected duplicate mesh admission. They do not verify an actual restarted NPU workload and live mesh teardown together.",
-      "required_follow_up": "Complete the vendor NPU restart/renumbering physical procedure. The independent live duplicate-admission and portable real-node restart checks passed.",
+      "required_follow_up": "Follow the integrated artifact acquisition/qualification guide, then the existing exact-board same-container accelerator renumbering rehearsal with actual vendor inference. No repeatable vendor transition or physical pass has been claimed; all physical cases remain not_run.",
       "evidence": [
         {
           "tests": [
@@ -2298,6 +2298,14 @@
             ".github/scripts/accelerator_renumbering_test.py"
           ],
           "result": "Preparation supports exact-board qualified OS transitions with changed vendor device numbers, retained containers/snapshots, stale-before/repaired-after grants and fresh Qwen HTP or CUDA ONNX output. Offline tests reject unchanged/missing qualification and changed artifacts. No reproducible vendor artifact pair is available here; actual target qualification and hardware execution remain pending. This generator alone does not close the vendor gap."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/accelerator-renumbering.py",
+            ".github/regression-coverage/manual/accelerator-renumbering-qualification.txt",
+            ".github/scripts/accelerator_renumbering_test.py"
+          ],
+          "result": "Completed the missing preparation path: acquire official per-device manifests, select exact storage-specific OTA rows, verify downloaded size/SHA256, review producer/runtime compatibility and recovery, observe a real first node-number change, restore and qualify repeatability, then execute the existing retained-container inference procedure. Four offline tests pass and saved real catalogs distinguish Orin eMMC/NVMe rows. Catalogs and matching hashes never establish a physical transition. No full OS downloads or device operations performed; physical results remain not_run. Existing portable runtime enforcement and mesh evidence are retained separately."
         }
       ]
     },
@@ -2327,9 +2335,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2540",
       "title": "Refresh NPU device permissions before container restarts",
       "package": "07",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "The cgroup permission refresh test checks renumbered NPU device IDs. It does not start a container against a changed real node.",
-      "required_follow_up": "Prepare physical vendor-accelerator restart/renumbering cases with actual model output. Both-runtime real-node/cgroup enforcement and the omit-refresh mutation passed; tun/loop fixtures do not prove vendor access.",
+      "required_follow_up": "Follow the integrated artifact acquisition/qualification guide, then the existing exact-board same-container accelerator renumbering rehearsal with actual vendor inference. No repeatable vendor transition or physical pass has been claimed; all physical cases remain not_run.",
       "evidence": [
         {
           "test": "go/internal/agent/containerd/device_numbers_integration_test.go",
@@ -2346,6 +2354,14 @@
             ".github/scripts/accelerator_renumbering_test.py"
           ],
           "result": "Preparation supports exact-board qualified OS transitions with changed vendor device numbers, retained containers/snapshots, stale-before/repaired-after grants and fresh Qwen HTP or CUDA ONNX output. Offline tests reject unchanged/missing qualification and changed artifacts. No reproducible vendor artifact pair is available here; actual target qualification and hardware execution remain pending. This generator alone does not close the vendor gap."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/accelerator-renumbering.py",
+            ".github/regression-coverage/manual/accelerator-renumbering-qualification.txt",
+            ".github/scripts/accelerator_renumbering_test.py"
+          ],
+          "result": "Completed the missing preparation path: acquire official per-device manifests, select exact storage-specific OTA rows, verify downloaded size/SHA256, review producer/runtime compatibility and recovery, observe a real first node-number change, restore and qualify repeatability, then execute the existing retained-container inference procedure. Four offline tests pass and saved real catalogs distinguish Orin eMMC/NVMe rows. Catalogs and matching hashes never establish a physical transition. No full OS downloads or device operations performed; physical results remain not_run. Existing portable runtime enforcement and mesh evidence are retained separately."
         }
       ]
     },
@@ -2354,9 +2370,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1888",
       "title": "agent: stop pinning device numbers for a container's lifetime, and name a missing device",
       "package": "07",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Device-spec refresh, missing-node and monitor behavior are tested; current containerd integration adds persistence coverage. Actual vendor GPU/NPU device access after renumbering remains a hardware gap.",
-      "required_follow_up": "Prepare physical vendor-accelerator restart/renumbering cases with actual model output. Both-runtime real-node/cgroup enforcement and the omit-refresh mutation passed; tun/loop fixtures do not prove vendor access.",
+      "required_follow_up": "Follow the integrated artifact acquisition/qualification guide, then the existing exact-board same-container accelerator renumbering rehearsal with actual vendor inference. No repeatable vendor transition or physical pass has been claimed; all physical cases remain not_run.",
       "evidence": [
         {
           "test": "go/internal/agent/containerd/device_numbers_integration_test.go",
@@ -2373,6 +2389,14 @@
             ".github/scripts/accelerator_renumbering_test.py"
           ],
           "result": "Preparation supports exact-board qualified OS transitions with changed vendor device numbers, retained containers/snapshots, stale-before/repaired-after grants and fresh Qwen HTP or CUDA ONNX output. Offline tests reject unchanged/missing qualification and changed artifacts. No reproducible vendor artifact pair is available here; actual target qualification and hardware execution remain pending. This generator alone does not close the vendor gap."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/accelerator-renumbering.py",
+            ".github/regression-coverage/manual/accelerator-renumbering-qualification.txt",
+            ".github/scripts/accelerator_renumbering_test.py"
+          ],
+          "result": "Completed the missing preparation path: acquire official per-device manifests, select exact storage-specific OTA rows, verify downloaded size/SHA256, review producer/runtime compatibility and recovery, observe a real first node-number change, restore and qualify repeatability, then execute the existing retained-container inference procedure. Four offline tests pass and saved real catalogs distinguish Orin eMMC/NVMe rows. Catalogs and matching hashes never establish a physical transition. No full OS downloads or device operations performed; physical results remain not_run. Existing portable runtime enforcement and mesh evidence are retained separately."
         }
       ]
     },
