@@ -1,0 +1,25 @@
+version: 1
+stages:
+  - name: app
+    from: python:3.11-slim
+    workdir: /app
+    env:
+      PORT: "8000"
+    install:
+      pip:
+        - requirements: requirements.txt
+    copy:
+      - from: local
+        paths: [app.py]
+    healthcheck:
+      exec:
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 30s
+      timeout: 3s
+      startPeriod: 5s
+      retries: 3
+    # Wendy injects debugpy for Python apps, so the container command stays a
+    # direct Python invocation rather than a shell wrapper.
+    cmd: [python, app.py]

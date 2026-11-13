@@ -621,3 +621,16 @@ func TestMultiServiceCreateConfig_CarriesResolvedResources(t *testing.T) {
 		t.Errorf("api pids = %v, want the inherited %d (a memory override must not drop it)", api.Resources.PIDs, pids)
 	}
 }
+
+// The device forgets an app's sketch when a create carries no mcu field.
+func TestMultiServiceCreateConfig_CarriesTheSketch(t *testing.T) {
+	mcu := &appconfig.MCUConfig{Sketch: "sketch"}
+	app := &appconfig.AppConfig{AppID: "a.b", MCU: mcu}
+	if got := multiServiceCreateConfig(app, "web", &appconfig.ServiceConfig{}); got.MCU != mcu {
+		t.Fatalf("MCU = %v, want the app's", got.MCU)
+	}
+	app.MCU = nil
+	if got := multiServiceCreateConfig(app, "web", &appconfig.ServiceConfig{}); got.MCU != nil {
+		t.Fatalf("MCU = %v, want none", got.MCU)
+	}
+}
