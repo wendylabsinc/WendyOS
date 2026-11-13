@@ -13,6 +13,45 @@ from ci_execution_test import ROOT, load_yaml, workflow
 
 
 class DependencyGatesTests(unittest.TestCase):
+    def test_scan_and_launcher_triggers_have_one_required_owner(self):
+        parent = workflow("go-tests.yml")
+        routes = {
+            "dependency-security": ("security.yml", [
+                "go/**", "Proto/**", "go.mod", "go.sum",
+                "web-client/package.json", "web-client/package-lock.json",
+                ".github/workflows/**",
+            ]),
+            "plugin-launcher": ("plugin-launcher.yml", [
+                "plugins/**", "scripts/pin-cli.sh",
+                "scripts/test/plugin-launcher/**", ".github/workflows/**",
+                ".gitattributes",
+            ]),
+        }
+        for job, (filename, paths) in routes.items():
+            with self.subTest(workflow=filename):
+                child = workflow(filename)
+                self.assertIn("workflow_call", child["on"])
+                self.assertNotIn("pull_request", child["on"])
+                self.assertNotIn("push", child["on"])
+                self.assertEqual(parent["jobs"][job]["uses"], "./.github/workflows/" + filename)
+                self.assertNotIn("if", parent["jobs"][job])
+                self.assertNotIn("continue-on-error", parent["jobs"][job])
+                self.assertIn(job, parent["jobs"]["test"]["needs"])
+                result_name = job.replace("-", "_").upper() + "_RESULT"
+                gate = parent["jobs"]["test"]["steps"][0]
+                self.assertEqual(gate["env"][result_name], "${{ needs." + job + ".result }}")
+                self.assertIn('test "$' + result_name + '" = success', gate["run"])
+                for event in ("pull_request", "push"):
+                    config = parent["on"][event]
+                    self.assertNotIn("paths-ignore", config)
+                    self.assertFalse(any(path.startswith("!") for path in config["paths"]))
+                    self.assertTrue(set(paths).issubset(config["paths"]))
+                self.assertNotIn("branches", parent["on"]["pull_request"])
+                self.assertIn("main", parent["on"]["push"]["branches"])
+        security = workflow("security.yml")
+        self.assertIn("schedule", security["on"])
+        self.assertIn("workflow_dispatch", security["on"])
+
     def test_scans_block_the_required_test_result(self):
         jobs = workflow("go-tests.yml")["jobs"]
         scan = jobs["dependency-security"]
