@@ -4059,6 +4059,11 @@
             ".github/scripts/fixtures/windows-vm-boot.txt"
           ],
           "result": "Actual candidate CLI and historical PATH-only control compile for Windows; six portable coordinator tests pass. The hosted gate extracts a pinned QEMU package into a private Program Files directory, boots a pinned WendyOS ARM64 guest with TCG through vm create/start, connects using device info --read-only, verifies the listener belongs to the owned emulator, exits the foreground console and removes the stopped VM. Historical executable lookup must fail at its exact site. All children use a retained Windows Job; small logs and hashes are retained. Registered in the existing Windows native job with no additional runner. Native Windows boot remains unrun."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43364960395/job/131687685632",
+          "head": "bbb14e431e81f3af15631359f0baff3cfdd5e4cc",
+          "result": "Pinned Windows QEMU extraction/version execution and actual CLI sparse VM creation passed, but the historical control stopped at the earlier QEMU preflight rather than the required executable-launch failure. Exact source hashes match after Windows CRLF normalization. Owned cleanup passed; normal boot was not_run. Added a compiled production-FindQEMU probe in the same private environment/process chain, including expected file stat, observed ProgramFiles and process architecture. It must pass before the original unchanged control assertion. Diagnostic Windows binary compiles; next hosted execution is required to establish the cause."
         }
       ]
     },

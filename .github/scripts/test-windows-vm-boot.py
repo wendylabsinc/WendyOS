@@ -14,6 +14,7 @@ import platform
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -208,6 +209,11 @@ def execute(output):
         cli=output/'wendy.exe';control=output/'wendy-path-only.exe'
         owner.run('build',[go,'build','-o',str(cli),'./go/cmd/wendy'],300,build_env)
         owner.run('build-control',[go,'build','-overlay='+str(mutant_overlay(output)),'-o',str(control),'./go/cmd/wendy'],300,build_env)
+        lookup=output/'qemu-lookup.exe'
+        owner.run('build-lookup',[go,'build','-o',str(lookup),'./go/internal/testfixture/windowsqemulookup'],120,build_env)
+        evidence['lookup_sha256']=digest(lookup)
+        evidence['lookup_source_sha256']=digest(ROOT/'go/internal/testfixture/windowsqemulookup/main.go')
+        evidence['python']={'executable':sys.executable,'pointer_bits':struct.calcsize('P')*8,'machine':platform.machine()}
         evidence['cli_sha256']=digest(cli);evidence['control_sha256']=digest(control)
         evidence['control_source_sha256']=digest(output/'path-only.go')
         env=private_environment(output,program_files)
@@ -218,6 +224,9 @@ def execute(output):
         port=free_port_span()
         evidence.update(name=name,port=port)
         owner.run('create',[cli,'vm','create',name,'--image',output/'guest.wic.zst','--disk','16'],300,env)
+        # Run the unchanged production lookup in the same owned process chain
+        # and environment. A preflight failure is not the historical launch bug.
+        owner.run('qemu-lookup',[lookup,qemu],20,env)
         # Restore historical bare executable launch. Private ProgramFiles is
         # populated, but PATH deliberately lacks QEMU. It must fail before boot.
         before=owner.run('path-only-control',[control,'vm','start',name,'--port',str(port),'--memory','2048','--cpus','2'],30,env,expected=1)
