@@ -72,7 +72,7 @@ func TestUsbAccessHintLines(t *testing.T) {
 	// macOS: a claim-time seize denial. The device enumerated, so the guidance must
 	// point at the two fixes that work — running as root and re-entering recovery —
 	// not the Linux udev rule.
-	mac := strings.ToLower(strings.Join(usbAccessHintLines("darwin"), "\n"))
+	mac := strings.ToLower(strings.Join(usbAccessHintLines("darwin", false), "\n"))
 	if !strings.Contains(mac, "sudo") {
 		t.Errorf("darwin hint should mention sudo, got:\n%s", mac)
 	}
@@ -83,8 +83,8 @@ func TestUsbAccessHintLines(t *testing.T) {
 		t.Errorf("darwin hint should not mention Linux udev rules, got:\n%s", mac)
 	}
 
-	lin := strings.Join(usbAccessHintLines("linux"), "\n")
-	if want := linuxUSBAccessStep("Jetson", wendyPackagedRule("70-wendy-jetson.rules")); !strings.Contains(lin, want) {
+	lin := strings.Join(usbAccessHintLines("linux", wendyPackagedRule("70-wendy-jetson.rules")), "\n")
+	if want, _ := linuxUSBAccessHint("Jetson", wendyPackagedRule("70-wendy-jetson.rules")); !strings.Contains(lin, want) {
 		t.Errorf("linux hint should be the one-sentence step %q, got:\n%s", want, lin)
 	}
 }

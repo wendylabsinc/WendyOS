@@ -517,27 +517,47 @@ func linuxUSBAccessStep(device string, packaged bool) string {
 		", or run the same command with sudo."
 }
 
+// linuxUSBAccessHint keeps the remedy's command separate from the boxed prose.
+func linuxUSBAccessHint(device string, packaged bool) (string, string) {
+	if packaged {
+		return "Your user can't open the " + device + " over USB from this login.\nAdd your user to plugdev with the command below and log in again.\nOr run the same command with sudo.",
+			"Add your user to plugdev:\nsudo usermod -aG plugdev $USER"
+	}
+	return "This wendy was installed without its package.\nIt can't open the " + device + " over USB from this login.\nInstall the package with the command below.\nOr run the same command with sudo.",
+		"Install the Wendy CLI package:\n" + cliupdate.InstallCommand("linux")
+}
+
 // usbAccessHintBox explains how to regain USB access to the Jetson when the OS
 // refuses to open it: on Linux, the packaged rules or plugdev; on macOS, its own kernel driver
 // bound to the recovery device (root needed to seize it).
 func usbAccessHintBox() string {
-	return thorHintBorder.Render(strings.Join(usbAccessHintLines(runtime.GOOS), "\n"))
+	return renderUSBAccessHint(runtime.GOOS, wendyPackagedRule("70-wendy-jetson.rules"))
+}
+
+func renderUSBAccessHint(goos string, packaged bool) string {
+	hint := thorHintBorder.Render(strings.Join(usbAccessHintLines(goos, packaged), "\n"))
+	if goos == "linux" {
+		_, commands := linuxUSBAccessHint("Jetson", packaged)
+		hint += "\n\n" + commands
+	}
+	return hint
 }
 
 // usbAccessHintLines builds the body of the USB-access-denied hint for the given
 // GOOS. Split out from usbAccessHintBox so both OS branches are testable without
 // depending on the runner's platform.
-func usbAccessHintLines(goos string) []string {
+func usbAccessHintLines(goos string, packaged bool) []string {
 	lines := []string{
 		thorHintTitle.Render("⚠  USB access denied"),
 		"",
 		"A Jetson is in recovery mode, but the OS refused wendy access to its USB device.",
 	}
 	if goos == "linux" {
+		step, _ := linuxUSBAccessHint("Jetson", packaged)
 		return []string{
 			thorHintTitle.Render("⚠  USB access denied"),
 			"",
-			linuxUSBAccessStep("Jetson", wendyPackagedRule("70-wendy-jetson.rules")),
+			step,
 		}
 	}
 	// macOS: the device enumerated but couldn't be claimed. macOS binds its own
