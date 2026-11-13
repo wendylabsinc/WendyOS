@@ -19,11 +19,13 @@ class WatchContainerAdmissionTests(unittest.TestCase):
                 target.chmod(0o755)
             environment = dict(os.environ, GITHUB_ACTIONS="false", RUNNER_ENVIRONMENT="self-hosted",
                                PATH=str(root)+os.pathsep+os.environ.get("PATH", ""), WATCH_MARKER=str(marker))
-            result = subprocess.run(["bash", str(SCRIPT), "/absent/test", "/absent/prepared", "normal"],
-                                    env=environment, capture_output=True, text=True, timeout=5)
-            self.assertEqual(result.returncode, 2, result.stderr)
-            self.assertIn("disposable hosted Linux", result.stderr)
-            self.assertFalse(marker.exists())
+            for case in ("normal", "multiapp-normal", "early-readiness", "ignored-service-env", "retained-isolation"):
+                with self.subTest(case=case):
+                    result = subprocess.run(["bash", str(SCRIPT), "/absent/test", "/absent/prepared", case],
+                                            env=environment, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn("disposable hosted Linux", result.stderr)
+                    self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":
