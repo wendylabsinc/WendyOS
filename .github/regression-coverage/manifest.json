@@ -4168,10 +4168,28 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2270",
       "title": "Go2 simulator first run: start VMs from discover, clearer VM errors, vm start port fallback",
       "package": "13",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover simulator picker transitions, port fallback and first-run error messages. They do not boot every supported VM backend through the interactive discovery journey.",
-      "required_follow_up": "Add one Windows and one macOS first-run boot/connect scenario.",
-      "evidence": []
+      "required_follow_up": "Require actual first-run Mac TCG cancellation/recovery plus Windows packaged-QEMU boot with default-port collision and sticky restart in the existing rows. Bare-metal ARM64/HVF procedure remains not_run; no picker/UI rendering claim.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/vm_lifecycle_darwin_test.go",
+            "go/internal/testfixture/vmhttp/main.go",
+            ".github/scripts/test-macos-vm-lifecycle.py",
+            ".github/scripts/macos_vm_lifecycle_test.py",
+            ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
+          ],
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent identity/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+        },
+        {
+          "tests": [
+            ".github/scripts/test-windows-vm-boot.py",
+            ".github/scripts/windows_vm_boot_test.py"
+          ],
+          "result": "Windows gate now holds its own default50051 listener, boots without explicit --port, verifies bounded fallback is persisted, drains the foreground VM, releases the blocker and restarts the same disk on the saved port. Actual Agent hostname/publicKey and kernel TCP listener ownership must agree across both boots. Eight portable tests pass. Runtime remains pending; the preceding published PATH-only control reached its intended structured tool_not_found/exit6 launch boundary but normal boot had not run."
+        }
+      ]
     },
     {
       "key": "2325",
@@ -4258,10 +4276,24 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1875",
       "title": "cli: make VM lifecycle commands interactive",
       "package": "13",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover VM picker behavior, Cloud fallback and port forwarding helpers. Full QMP setup and app reachability after a VM lifecycle operation need a booted VM.",
-      "required_follow_up": "Boot a disposable VM, forward an app port and verify reachability after stop/start.",
-      "evidence": []
+      "required_follow_up": "Require actual macOS QMP/OCI HTTP normal and historical missing-forwarding control in existing CI. Acceptance includes real guest byte delivery after graceful stop/start; compile and helper tests are not closure. Exact reserved ARM64/HVF procedure remains not_run.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/vm_lifecycle_darwin_test.go",
+            "go/internal/testfixture/vmhttp/main.go",
+            ".github/scripts/test-macos-vm-lifecycle.py",
+            ".github/scripts/macos_vm_lifecycle_test.py",
+            ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
+          ],
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent identity/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+        },
+        {
+          "result": "Original fixes0a3c57ff89c6c8e187a76351d918478aff2c06d1 and26e76bc5715b4ec430c63abc84bb0f4e28bd4ea7 distinguish app QMP forwarding/reconnection from picker rendering. New fixture retains production discovery and forwarding APIs and an actual persisted guest app; no background/QMP promise is made for Windows, where the product requires foreground mode."
+        }
+      ]
     },
     {
       "key": "2276",
@@ -4278,10 +4310,24 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2060",
       "title": "Improve CLI pickers, enrollment, and simulator workflows",
       "package": "13",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The PR covers CPU accounting, pickers, enrollment and VM behavior with many unit tests. Its combined UI/device journeys are not all executed in one regression suite.",
-      "required_follow_up": "Keep per-fix tests and add one first-run enrollment/simulator journey covering cancellation and recovery.",
-      "evidence": []
+      "required_follow_up": "Require the new actual Mac simulator cancellation/recovery/forwarded-app journey and retain per-fix CPU/picker/enrollment tests. This is the non-UI VM subset of the mixed audit; independent enrollment evidence and UI exclusions must remain explicit. Bare-metal HVF remains not_run.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/vm_lifecycle_darwin_test.go",
+            "go/internal/testfixture/vmhttp/main.go",
+            ".github/scripts/test-macos-vm-lifecycle.py",
+            ".github/scripts/macos_vm_lifecycle_test.py",
+            ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
+          ],
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent identity/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+        },
+        {
+          "result": "Original simulator correction c9f63eb09530072cfef12836d2980d0cac051a45 preserved authentication refusal while retrying cold-boot reachability and respecting caller cancellation. New fixture cancels only after observing actual waitForSimulatorAgent while QEMU is paused, then resumes that same VM and completes real Agent/app requests. It does not count cancellation before operation entry or mocked readiness as recovery."
+        }
+      ]
     },
     {
       "key": "2414",
