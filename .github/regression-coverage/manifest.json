@@ -2881,7 +2881,7 @@
       "url": "https://github.com/wendylabsinc/wendyos/commit/d11d2e983ddfb1a592e86468bd73458c875082d0",
       "title": "cli: report the config partition written only once it is released",
       "package": "10",
-      "status": "verified",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Write, close, unmount, retry and error aggregation have direct tests. The full Orin install rehearsal is opt-in rather than ordinary CI.",
       "required_follow_up": "Execute the registered full three-pass Orin seed rehearsal and seed-omission control in the existing Nano/NVMe producer row of companion WendyOS-Builder PR356. Preserve full producer archive, real arm64 Agent and private128GiB sparse target; verify complete writer/readback evidence before closure.",
       "evidence": [
