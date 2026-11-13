@@ -1,0 +1,212 @@
+Qualify an artifact pair for accelerator-renumbering.py
+
+This is the missing preparation stage of the existing 2554/2540/1888 procedure,
+not a hardware result or a substitute for its same-container restart checks.
+Run it only on a reserved IQ-9075, AGX Orin or AGX Thor with maintenance-console
+access, stable power and an owner-reviewed recovery route. No published OS pair
+is assumed to renumber a vendor node. Unchanged numbers mean NOT QUALIFIED.
+Catalog/byte-verification commands below only read files. Download commands read
+the official public bucket. Device updates are explicitly identified later.
+
+Acquire and select exact compatible artifacts
+
+1. On the workstation, use Bash, a pinned CLI and a fresh private work directory.
+   Set CLI to its actual executable, SELECTOR to the reserved board and save:
+     umask 077
+     QUAL_WORK=$(mktemp -d)
+     "$CLI" --json device info --device "$SELECTOR" > "$QUAL_WORK/before-info.json"
+     "$CLI" --json os update-status --device "$SELECTOR" > "$QUAL_WORK/before-update-status.json"
+   Independently match the physical serial/asset label and console to that target.
+   Record deviceType, storageMedium, osVersion, updater feature, current slot,
+   kernel, firmware and vendor runtime. The current image must already support
+   wendyos-update and be at least 0.17.0. If it needs a reflash to cross an old
+   partition layout, that is a separate install workflow with exact-drive erase
+   authorization, not an OTA qualification. Prefer a board already running the
+   selected old version. Do not downgrade a production board to create a test.
+
+2. Fetch and retain the same manifest chain production manifest.go reads:
+     BASE=https://storage.googleapis.com/wendyos-images-public
+     curl --fail --silent --show-error --connect-timeout 15 --max-time 60 --max-filesize 2097152 "$BASE/manifests/master.json" -o "$QUAL_WORK/master.json"
+   Set DEVICE to the exact reported deviceType. Read its devices[DEVICE].manifest_path
+   from master.json, review it as a relative path under manifests/, then set
+   MANIFEST_PATH to that observed value. Do not infer a path from the board name
+   or follow an alias to a different device/storage without the owner's review.
+     curl --fail --silent --show-error --connect-timeout 15 --max-time 60 --max-filesize 2097152 "$BASE/$MANIFEST_PATH" -o "$QUAL_WORK/device-manifest.json"
+     sha256sum "$QUAL_WORK/master.json" "$QUAL_WORK/device-manifest.json"
+   Save acquisition UTC, URLs and hashes. These files are mutable catalogs, so
+   pin the downloaded copies and each selected immutable artifact descriptor.
+
+3. Set STORAGE to the actual storageMedium: IQ-9075 ufs, Orin emmc or nvme,
+   Thor nvme. From the checked-out CLI repository, enumerate complete OTA entries:
+     python3 .github/regression-coverage/manual/accelerator-renumbering.py --catalog "$QUAL_WORK/device-manifest.json" --device "$DEVICE" --storage "$STORAGE" > "$QUAL_WORK/catalog.json"
+   The helper validates device_id and selects nvme_ota_update_* when published
+   for NVMe, otherwise ota_update_*, exactly as the CLI resolver does. It excludes
+   incomplete checksums/sizes, mutable 'latest' URLs and non-.wendy artifacts.
+   It never substitutes a flashpack, raw .wic image, driver extension or a bundle
+   for another board. In particular, Orin eMMC and NVMe have separate OTA rows.
+
+4. Choose OLD_VERSION matching the board's current reported version after the
+   WendyOS- display prefix, and NEW_VERSION explicitly from catalog.json. Do not
+   select 'latest' implicitly. Review both release/producer records for this exact
+   board/storage and the same supported OTA partition/bootloader family. Pin the
+   release tags or producer commits/run URLs and kernel/vendor-driver provenance.
+   Stable Builder release tags use the same MAJOR.MINOR.PATCH string as the
+   manifest. Save their actual metadata and resolve tags in a local Builder clone:
+     gh release view "$OLD_VERSION" --repo wendylabsinc/WendyOS-Builder --json tagName,targetCommitish,publishedAt,url,assets > "$QUAL_WORK/old-release.json"
+     gh release view "$NEW_VERSION" --repo wendylabsinc/WendyOS-Builder --json tagName,targetCommitish,publishedAt,url,assets > "$QUAL_WORK/new-release.json"
+     git -C "$BUILDER_CHECKOUT" rev-parse --verify "$OLD_VERSION^{commit}"
+     git -C "$BUILDER_CHECKOUT" rev-parse --verify "$NEW_VERSION^{commit}"
+   For each resolved commit, inspect its .github/device-artifacts.json board and
+   storage row plus the BSP/kernel/vendor runtime recipe revisions. Save those
+   outputs. If the selected release/tag or a nightly's exact producer run cannot
+   be traced, obtain the publisher's provenance before an update; do not infer a
+   source SHA from a mutable branch. These are read-only release/Git operations.
+   Check that the unchanged qualification model image supports BOTH runtimes:
+   the CUDA image/profile for the selected Jetson, or the pinned QCS9075 Qwen,
+   QAIRT and HTP combination in qualcomm-npu-rehearsal.py. A newer date alone does
+   not establish compatibility. The baseline and after-update inference checks
+   below must confirm it with actual execution and library mappings.
+
+   At preparation time on 2026-11-13, official manifests contained 0.20.1 and
+   0.20.2 OTA descriptors for all three families, plus dated nightlies. These are
+   examples of available descriptors, NOT an assertion that those versions
+   renumber a node or are compatible with an uninspected board. Refresh the
+   catalogs and inspect actual release records before selecting. The existing
+   qualification format requires different reported OS versions; nightlies can
+   share a reported WendyOS version and therefore may not qualify even when
+   their artifact names differ. Never falsify to_os_version to force acceptance.
+
+5. Copy each selected row's URL, SHA256 and byte size into a selection record.
+   Set OLD_URL and NEW_URL from those exact rows. Check free disk for both OTA
+   files plus recovery media and captured logs; Orin/Thor OTA files are several
+   GiB each. Download to NEW paths, with bounded transfers and no automatic retry
+   of a partial file. The following are downloads only:
+     curl --fail --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 1800 "$OLD_URL" -o "$QUAL_WORK/old.wendy.part"
+     curl --fail --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 1800 "$NEW_URL" -o "$QUAL_WORK/new.wendy.part"
+     python3 .github/regression-coverage/manual/accelerator-renumbering.py --catalog "$QUAL_WORK/device-manifest.json" --device "$DEVICE" --storage "$STORAGE" --version "$OLD_VERSION" --verify-artifact "$QUAL_WORK/old.wendy.part" > "$QUAL_WORK/old-verified.json"
+     python3 .github/regression-coverage/manual/accelerator-renumbering.py --catalog "$QUAL_WORK/device-manifest.json" --device "$DEVICE" --storage "$STORAGE" --version "$NEW_VERSION" --verify-artifact "$QUAL_WORK/new.wendy.part" > "$QUAL_WORK/new-verified.json"
+   Only after BOTH commands succeed, rename them to old.wendy and new.wendy and
+   preserve the verification records. If download/hash/size fails, retain the
+   failed evidence and use a fresh file on a later attempt. Do not edit a catalog
+   checksum or use a same-sized substitute. Verify the owner can recover the
+   old supported image using separately pinned recovery artifacts. An OTA file
+   is not automatically a USB recovery image.
+
+Observe the first real transition
+
+6. Pin the candidate Agent executable hash and confirm the installed process
+   through /proc/<MainPID>/exe on the board. Record the current boot ID. Prepare
+   an actual disposable vendor workload before changing the OS:
+
+   NVIDIA: copy .github/ci-tests/python-onnx-gpu to a fresh private project and
+   change only its wendy.json appId to a fresh sh.wendy.qualify.<nonce> ID. Keep
+   source hashes and the resolved image digest. Select Dockerfile for AGX Orin
+   or Dockerfile.cuda13 for AGX Thor. With PROJECT and DOCKERFILE set to those
+   observed local paths/names:
+     "$CLI" run --prefix "$PROJECT" --device "$SELECTOR" --dockerfile "$DOCKERFILE" --no-restart --yes
+   Require exit 0, output twos from input ones, profiled Mul exclusively on
+   CUDAExecutionProvider and fresh PASS output. A provider list is insufficient.
+
+   Qualcomm: use qualcomm-npu-rehearsal.py with this same reserved board and its
+   required inventory. It copies iq9-qwen from the pinned companion Git commit
+   and uses unique app/volume identities. Follow only its baseline deployment,
+   ready/status, infer-1, infer-2 and report steps for this qualification. Save
+   two fresh answers, QNN HTP process/mappings, FastRPC fd, model hashes and image
+   QAIRT/Genie/QNN hashes. No CPU fallback or production app/volume is acceptable.
+   Keep its exact generated start/stop commands for the after-update observation.
+
+   Bound each workload readiness/inference attempt to five minutes. If baseline
+   compute fails, fix that independently before qualifying an OS transition.
+
+7. On the maintenance console, inspect the disposable container's actual saved
+   OCI spec with `sudo ctr --namespace default containers info "$APP_ID"`.
+   Select one vendor character-device path from sh.wendy/pinned-devices, its
+   linux.devices entry or NPU bind mount and corresponding cgroup allow rule.
+   Record host path, container destination and exact driver-library path. For
+   the live NPU service, use its process mappings. For the short-lived GPU
+   fixture, use the retained OCI/CDI host library mount source and the saved
+   successful CUDA execution evidence; do not claim an exited process still
+   has readable mappings. Use the real namespace/address if this
+   installation differs. Never choose tun/loop-control or manufacture a node.
+
+   For the observed HOST_NODE and DRIVER_LIBRARY, capture these read-only facts:
+     date -u
+     cat /proc/sys/kernel/random/boot_id
+     cat /etc/wendyos/version.txt
+     uname -a
+     stat -Lc '%n %F %t:%T %a' "$HOST_NODE"
+     readlink -f "$DRIVER_LIBRARY"
+     sha256sum "$DRIVER_LIBRARY"
+     python3 -c 'import os,stat,sys,json; s=os.stat(sys.argv[1]); assert stat.S_ISCHR(s.st_mode); print(json.dumps([os.major(s.st_rdev),os.minor(s.st_rdev)]))' "$HOST_NODE"
+   The last output is the decimal pair expected by transition_record. Also save
+   the loaded driver version from its actual sysfs/package/vendor runtime record
+   and link it to the publisher build recipe/commit. If no driver version can be
+   established, leave qualification incomplete rather than inventing a version.
+   Capture the effective driver-library bytes/hash, not just the symlink name.
+
+8. Stop only the disposable qualification app and verify its task/owner is gone.
+   Preserve its container, snapshot, image and volume. For the Qualcomm HTTP
+   workload, verify the saved stopped-by-user label so reboot cannot start it.
+   Get the owner's authorization for this physical serial, exact new SHA256 and
+   recovery route. Now perform the explicit physical OS transition:
+     "$CLI" device update --device "$SELECTOR" --binary "$CANDIDATE_AGENT" --artifact-url "$NEW_URL" --yes
+   Do not add --json: that mode skips OS updates and is rejected with artifact-url.
+   Capture stdout/stderr and the maintenance console. Observe for at most 30
+   minutes, then follow the recovery record with the owner; a CLI timeout does
+   not cancel the device-side update. Do not repeat the update or cut power to
+   make the timeout disappear. The board may reboot.
+
+9. After recovery, confirm the same physical serial, expected new OS/slot/commit,
+   healthy update status, boot ID and installed candidate hash. Cloud updates do
+   not automatically reapply the candidate after reboot; if needed run ONLY:
+     "$CLI" --json device update --device "$SELECTOR" --binary "$CANDIDATE_AGENT" --yes
+   Repeat step 7 BEFORE restarting the retained workload, and save fresh device
+   info/update-status. The same host path must now be a real vendor character
+   device with a different decimal pair. Preserve before/after raw outputs and
+   driver version/hash records. If the node is missing or unchanged, mark this
+   candidate transition NOT QUALIFIED. Do not patch specs, unload/rebind modules,
+   reorder boot services, chmod, mknod or replace symlinks to obtain a change.
+
+10. Start the retained disposable app, without deployment/recreation, using the
+    original explicit app ID. For NVIDIA use `device apps start "$APP_ID"`;
+    Qualcomm uses the baseline generated detached start. Repeat actual compute
+    with fresh output labels and inspect current library/device mappings. Require
+    the same image/model to execute on the vendor accelerator. If the new OS
+    requires a different model image or permission expansion, this is not a
+    compatible pair for the existing same-container regression.
+
+Create the reviewed qualification, then run the existing acceptance
+
+11. Concatenate the chronological captured files into a new observation log or
+    preserve an indexed archive and its manifest. Hash the exact observation_log
+    file. Create transition.json with accelerator-renumbering.py's documented
+    wendy.accelerator-transition.v1 schema, transcribing only observed values.
+    Record the approving owner, UTC, exact serial/device type, reported old/new
+    OS versions, old/new downloaded artifact hashes, actual driver versions and
+    library hashes, unchanged host/container paths, and changed decimal pairs.
+    Include selection/catalog hashes and producer compatibility evidence in the
+    observation log. A manifest alone cannot populate before_device/after_device.
+
+12. The owner must restore the reserved board to the qualified old supported
+    image using the reviewed recovery route, or supply the same board already
+    restored. No automatic downgrade/erase is part of this helper. Reconfirm
+    source OS, boot/driver hash and old pair; preserve restoration evidence.
+    If the pair cannot be reproduced, the transition is not repeatably qualified.
+    Clean up only the qualification app after retaining evidence. Do not delete
+    shared images/models, another app or an unapproved persistent volume.
+
+13. Fill the existing renumbering inventory with both verified local artifact
+    paths, NEW_URL, transition.json, recovery_record and freshly captured old-state
+    device info. Generate a new ordinary bundle:
+      python3 .github/regression-coverage/manual/accelerator-renumbering.py --inventory "$INVENTORY" --output "$NEW_BUNDLE"
+    It rejects unchanged numbers, wrong board/version/hash, missing observation
+    evidence and invalid vendor paths. Follow its three-phase procedure in full:
+    deploy ONCE on the old state, retain a stopped stale OCI spec through the
+    transition, repair on restart with actual new inference, restart again and
+    clean up. The first qualification observation is not a substitute for that
+    repeat. Record unexpected/unrepeatable numbers as not_run, not a hardware pass.
+
+Human-script completion means these instructions and tools are ready. Actual
+vendor qualification, same-container behavior and recovery remain NOT RUN until
+the owner-reviewed physical evidence exists. No artifact pair has been vouched
+for by this repository or by the offline catalog tests.
