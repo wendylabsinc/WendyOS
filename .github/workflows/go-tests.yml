@@ -1081,7 +1081,7 @@ jobs:
   windows-telemetry:
     name: Windows native regressions
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       CGO_ENABLED: '0'
     steps:
@@ -1133,6 +1133,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/cli/commands -run '^(TestEnsureQEMUOnWindows|TestSimulatorWithoutDetachedSupport|TestDiscoverKeepsScanningWhenSimulatorNeedsForegroundStart|TestDiscoverSimulatorGuidanceFitsPopulatedTerminal|TestVMStorage|TestVMImageSpace|TestVMCreate)' -v -count=1 -timeout 120s
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Boot packaged Windows QEMU and connect through the CLI
+        shell: pwsh
+        timeout-minutes: 26
+        run: python .github/scripts/test-windows-vm-boot.py "$env:RUNNER_TEMP/windows-vm-boot"
+      - name: Preserve Windows VM boot evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-vm-boot
+          path: |
+            ${{ runner.temp }}/windows-vm-boot/*.log
+            ${{ runner.temp }}/windows-vm-boot/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Test pending Windows serial I/O and close races
         shell: bash
