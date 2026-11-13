@@ -2719,9 +2719,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1831",
       "title": "fix(agent): support live Go2 H.264 camera streams",
       "package": "08",
-      "status": "partial",
+      "status": "human_script_ready",
       "audit_finding": "Frame parsing, camera hubs and network setup have tests. Complete live Go2 H.264 decode and container delivery still need a device/simulator integration run.",
-      "required_follow_up": "Execute registered generated-video kernel/OCI gate and controls in hosted CI. Capture exact supported Go2 firmware CDR with the human procedure and add archived-corpus replay through the production service and consumer before claiming recorded-stream acceptance.",
+      "required_follow_up": "Follow the exact-firmware Go2 capture and live native/container procedure, then replay the sealed CDR archive in an independently confirmed disposable VM. Record each hardware outcome separately; all physical cases remain not_run. Reconcile the generated-video kernel/OCI gate and controls at the final hosted head.",
       "evidence": [
         {
           "tests": [
@@ -2731,7 +2731,16 @@
             "go/internal/agent/containerd/go2_h264_loopback_linux_test.go",
             ".github/regression-coverage/manual/go2-camera-rehearsal.py"
           ],
-          "result": "Real generated H264 pixel decode and historical CDR failure control pass locally. Normal/kernel controls compile for Linux; six offline procedure tests pass. Registered production parser/writer/native service/OCI capture and independent pixel decoding in existing media job. Hosted kernel/OCI execution is pending. Exact-target recording and physical CLI/container procedure is prepared with all cases not_run; synthetic publisher bypasses DDS discovery, and archived firmware corpus replay is not implemented."
+          "result": "Generated H264 pixel decode and historical CDR failure control pass locally. The published hosted kernel writer/native capture reached OCI execution, which failed because the private /run hid the inherited XDG runtime directory; the fixture now owns its runtime directory. Hosted rerun remains pending. Exact-target physical capture and CLI/container procedure is prepared with all cases not_run; synthetic publication does not verify DDS discovery."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/go2-recorded-replay.txt",
+            ".github/scripts/test-go2-recorded-replay.py",
+            ".github/scripts/go2_recording_archive_test.py",
+            ".github/scripts/go2_replay_admission_test.py"
+          ],
+          "result": "Executable archive preparation and disposable-VM replay preserve sealed plan/provenance, exact original CDR bytes, and source identity. Replay exercises production parser/writer, native and OCI capture with independent ordered RGB comparisons and historical-CDR, wrong-FourCC and missing-entitlement controls. Eleven portable archive/admission tests pass; generated 90-frame long-GOP race decoding and intended old-CDR failure pass; all Linux variants compile. Actual archived firmware, VM kernel replay and physical acceptance remain not_run. Generated replay mechanics reuse existing normal/control CI invocations with no new jobs."
         }
       ]
     },
