@@ -95,6 +95,7 @@ type fakeRegistry struct {
 	cloudpb.UnimplementedArtifactRegistryServiceServer
 	cloudpb.UnimplementedDeploymentServiceServer
 	cloudpb.UnimplementedKeyDirectoryServiceServer
+	cloudpb.UnimplementedAssetServiceServer
 
 	t        *testing.T
 	mu       sync.Mutex
@@ -114,6 +115,9 @@ type fakeRegistry struct {
 	apps     map[string]*cloudpb.App             // app id -> app
 	users    map[string]string                   // member user id -> email
 	noNotify bool                                // the caller may not turn notifications on
+	assets   []*cloudpb.Asset
+	online   map[string]bool
+	states   []*cloudpb.AppDeviceState
 }
 
 func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry {
@@ -470,9 +474,28 @@ func (f *fakeRegistry) CreateDeploymentV2(_ context.Context, in *cloudpb.SignedR
 		Id: uuid.NewString(), OrganizationId: req.GetOrganizationId(), AppReleaseId: req.GetAppReleaseId(), AppId: "sh.wendy.example",
 		Name: req.GetName(), ConfigJson: req.GetConfigJson(), DesiredState: req.GetRunning(), Revision: 1, TargetDeviceIds: req.GetTargetDeviceIds(),
 	}
+	devices := slices.Clone(req.GetTargetDeviceIds())
+	for _, a := range f.assets { // tags resolve once, at create
+		for _, tag := range req.GetTargetTags() {
+			if slices.Contains(a.GetTags(), tag) && !slices.Contains(devices, a.GetId()) {
+				devices = append(devices, a.GetId())
+			}
+		}
+	}
+	rows := f.rows(d, cloudpb.PendingDeviceStatement_KIND_ASSIGN, devices)
+	for _, r := range rows {
+		for _, st := range f.states {
+			if deviceURI(testOperatorTenant, st.GetAssetId()) == r.GetDevice() && st.GetState().GetDeploymentId() != "" {
+				if !req.GetMoveDevices() {
+					return nil, status.Errorf(codes.FailedPrecondition, "%s is in deployment %s", st.GetAssetId(), st.GetState().GetDeploymentId())
+				}
+				r.ReplacesDeploymentId, r.ReplacesRevision = st.GetState().GetDeploymentId(), 2
+			}
+		}
+	}
 	f.deploys[d.Id] = d
-	f.sel[d.Id] = &cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds()}
-	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: append(f.rows(d, cloudpb.PendingDeviceStatement_KIND_ASSIGN, req.GetTargetDeviceIds()), f.extraRows(d)...)}, nil
+	f.sel[d.Id] = &cloudpb.DeviceSelection{TargetDeviceIds: req.GetTargetDeviceIds(), TargetTags: req.GetTargetTags()}
+	return &cloudpb.DeploymentChangeResponse{Deployment: d, ToSign: append(rows, f.extraRows(d)...)}, nil
 }
 
 func (f *fakeRegistry) ListDeploymentRevisions(_ context.Context, in *cloudpb.ListDeploymentRevisionsRequest) (*cloudpb.ListDeploymentRevisionsResponse, error) {
@@ -565,6 +588,7 @@ func registryFixture(t *testing.T, keys ...*cloudpb.RecipientKey) (*registryOp, 
 	cloudpb.RegisterArtifactRegistryServiceServer(srv, fake)
 	cloudpb.RegisterDeploymentServiceServer(srv, fakeDeployments{fake})
 	cloudpb.RegisterKeyDirectoryServiceServer(srv, fake)
+	cloudpb.RegisterAssetServiceServer(srv, fake)
 	apps := fakeApps{fakeRegistry: fake}
 	cloudpb.RegisterAppServiceServer(srv, apps)
 	cloudpb.RegisterAccessServiceServer(srv, apps)
@@ -683,6 +707,13 @@ func TestPutBlobRefusedOnDigestMismatch(t *testing.T) {
 	}
 }
 
+func testPlan(releaseID, digest, name string, devices []string) deployPlan {
+	return deployPlan{appID: "sh.wendy.example", releaseID: releaseID, digest: digest, name: name, config: `{"LOG_LEVEL":"info"}`,
+		desired: cloudpb.Running_RUNNING, validity: 60 * 24 * time.Hour, deviceIDs: devices, devices: devices}
+}
+
+func deployErr(_ *cloudpb.Deployment, err error) error { return err }
+
 // deployFixture publishes a release with default configuration and deploys
 // it as "line-3" to the vector device.
 func deployFixture(t *testing.T) (*registryOp, *fakeRegistry, string, *cloudpb.ArtifactManifest, string) {
@@ -692,7 +723,7 @@ func deployFixture(t *testing.T) (*registryOp, *fakeRegistry, string, *cloudpb.A
 	op, fake := registryFixture(t, deviceKey)
 	releaseID, m := publishFixture(t, op)
 	fake.defaults[releaseID] = `{"LOG_LEVEL":"info"}`
-	if err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice}); err != nil {
+	if err := deployErr(op.deploy(context.Background(), testPlan(releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice}))); err != nil {
 		t.Fatal(err)
 	}
 	var depID string
@@ -710,7 +741,7 @@ func TestDeploySignsRevisionOneThroughDeploymentService(t *testing.T) {
 	v := loadRecipientVectors(t)
 	_, deviceKeyID := vectorRecipientKey(t, v, "recipient-key-valid")
 	op, fake, releaseID, m, depID := deployFixture(t)
-	if err := op.deploy(context.Background(), "sh.wendy.example", releaseID, "sha256:"+strings.Repeat("0", 64), "other", []string{vectorDevice}); err == nil {
+	if err := deployErr(op.deploy(context.Background(), testPlan(releaseID, "sha256:"+strings.Repeat("0", 64), "other", []string{vectorDevice}))); err == nil {
 		t.Fatal("a release whose digest is not the pinned one was deployed")
 	}
 	created := fake.signed(cloudpb.DeploymentService_CreateDeploymentV2_FullMethodName)
@@ -756,7 +787,7 @@ func TestDeployRefusesStatementsNotAskedFor(t *testing.T) {
 		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: deviceURI(testOperatorTenant, vectorOtherDevice), Revision: 1},
 		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: deviceURI(testOperatorTenant, vectorDevice), Revision: 1, ReplacesDeploymentId: uuid.NewString(), ReplacesRevision: 4},
 	}
-	err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice})
+	err := deployErr(op.deploy(context.Background(), testPlan(releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice})))
 	if err == nil || !strings.Contains(err.Error(), "Cloud asked to give it the deployment, which was not asked for") || !strings.Contains(err.Error(), "Cloud asked to move it from deployment") {
 		t.Fatalf("an unasked-for statement: %v", err)
 	}
@@ -775,33 +806,13 @@ func TestDeployRefusesUnverifiedDevicesBeforeCreating(t *testing.T) {
 	op, fake := registryFixture(t, valid, substituted)
 	releaseID, m := publishFixture(t, op)
 	for _, devices := range [][]string{{vectorDevice, vectorOtherDevice}, {vectorDevice, uuid.NewString()}} {
-		err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), "line-3", devices)
+		err := deployErr(op.deploy(context.Background(), testPlan(releaseID, m.GetManifestDigest(), "line-3", devices)))
 		if err == nil || !strings.Contains(err.Error(), "nothing was changed") {
 			t.Fatalf("%v: %v", devices, err)
 		}
 	}
 	if len(fake.deploys) != 0 || len(fake.assigned) != 0 || len(fake.sealed) != 0 {
 		t.Fatal("a refused deploy changed something")
-	}
-}
-
-// Tag targets are refused with the reason; picked devices and a name are required.
-func TestDeployRefusesTagTargets(t *testing.T) {
-	for _, tc := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"--release", uuid.NewString(), "--name", "a", "--target-tag", "fleet"}, "tag targets are not supported"},
-		{[]string{"--release", uuid.NewString(), "--name", "a"}, "--device"},
-		{[]string{"--release", uuid.NewString(), "--device", vectorDevice}, "Add --name"},
-	} {
-		cmd := newAppDeployCmd()
-		cmd.SetArgs(tc.args)
-		cmd.SetOut(io.Discard)
-		cmd.SetErr(io.Discard)
-		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("%v: %v", tc.args, err)
-		}
 	}
 }
 
