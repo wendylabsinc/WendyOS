@@ -52,6 +52,8 @@ var relayedSignatures = map[string]bool{
 	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:     true,
 	cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName:   true,
 	cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName: true,
+	cloudpbv2.DeploymentService_AssignDevice_FullMethodName:         true,
+	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName:       true,
 }
 
 // Signer creates the JWS request descriptors required by Wendy Cloud for
@@ -156,6 +158,8 @@ var x5cOnly = map[string]bool{
 	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
 	cloudpbv2.ArtifactRegistryService_AssignDevice_FullMethodName:          true,
 	cloudpbv2.ArtifactRegistryService_UnassignDevice_FullMethodName:        true,
+	cloudpbv2.DeploymentService_AssignDevice_FullMethodName:                true,
+	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName:              true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -533,6 +537,26 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.CreateDeploymentRequest)
 		return "org/" + tenant + "/release/" + in.GetAppReleaseId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetAppReleaseId())
+	},
+	// deployments.proto: CreateDeploymentV2 binds the release, as
+	// CreateDeployment; the changes bind the deployment.
+	cloudpbv2.DeploymentService_CreateDeploymentV2_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateDeploymentRequest)
+		return "org/" + tenant + "/release/" + in.GetAppReleaseId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetAppReleaseId())
+	},
+	cloudpbv2.DeploymentService_UpdateDeployment_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateDeploymentRequest)
+		return "org/" + tenant + "/deployment/" + in.GetDeploymentId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetDeploymentId())
+	},
+	// The per-device statements under their DeploymentService names (ruling
+	// D2), bound like the deprecated registry pair.
+	cloudpbv2.DeploymentService_AssignDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeviceAssignment)
+		return assignmentResource(tenant, in.GetDeploymentId(), in.GetDevice(), ok && in.GetOrganizationId() == tenant)
+	},
+	cloudpbv2.DeploymentService_UnassignDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UnassignDeviceRequest)
+		return assignmentResource(tenant, in.GetDeploymentId(), in.GetDevice(), ok && in.GetOrganizationId() == tenant)
 	},
 	// Cloud RequestSigning.md: the encrypted registry (registry.proto).
 	cloudpbv2.ArtifactRegistryService_PublishArtifact_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
