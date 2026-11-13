@@ -555,6 +555,14 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		in, ok := req.(*cloudpbv2.UpdateDeploymentRequest)
 		return "org/" + tenant + "/deployment/" + in.GetDeploymentId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetDeploymentId())
 	},
+	cloudpbv2.DeploymentService_RollbackDeployment_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RollbackDeploymentRequest)
+		return "org/" + tenant + "/deployment/" + in.GetDeploymentId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetDeploymentId())
+	},
+	cloudpbv2.DeploymentService_RemoveDeployment_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RemoveDeploymentRequest)
+		return "org/" + tenant + "/deployment/" + in.GetDeploymentId(), ok && in.GetOrganizationId() == tenant && canonicalUUID(in.GetDeploymentId())
+	},
 	// The per-device statements under their DeploymentService names (ruling
 	// D2), bound like the deprecated registry pair.
 	cloudpbv2.DeploymentService_AssignDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
