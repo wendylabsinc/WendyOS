@@ -228,7 +228,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 					return err
 				}
 				if len(inSite(assets, s.GetId())) == 0 {
-					return usageErrorf("No device is in the site %s.", s.GetName())
+					return usageErrorf("No device is in the site %s. Add devices to it under Sites in the dashboard first.", s.GetName())
 				}
 				sel.TargetSiteIds = append(sel.TargetSiteIds, s.GetId())
 			}
@@ -239,7 +239,7 @@ func runUpdate(ctx context.Context, op *registryOp, appID, name string, c change
 				}
 				i := slices.Index(sel.TargetSiteIds, s.GetId())
 				if i < 0 {
-					return usageErrorf("%s does not select devices by the site %s.", name, s.GetName())
+					return usageErrorf("%s does not select devices by the site %s. To drop a single device, use --remove-device.", name, s.GetName())
 				}
 				sel.TargetSiteIds = slices.Delete(sel.TargetSiteIds, i, i+1)
 			}
