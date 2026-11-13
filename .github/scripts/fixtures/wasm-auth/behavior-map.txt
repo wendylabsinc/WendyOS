@@ -1,0 +1,118 @@
+Audit 2048: exact seven-fix non-UI behavior map
+Original merge: e8c955d91
+
+This maps the seven fixes selected by the authoritative audit, not the whole
+WASM feature ancestry. It is not an audit completion ledger.
+
+4a34815ea: auth picker callback persistence/failure
+  Source: go/internal/cli/commands/auth_picker_callbacks_test.go
+  Test: TestAuthPickerCallbacksPersistOrReportFailure
+  Production callbacks persist/reread private config, preserve sessions, reject
+  stale selections and preserve corrupt config bytes. No terminal rendering.
+  Parent addition d51a373e3: normal 0.078s; silent-clear control fails the
+  concealed-config-failure assertion. Evidence retained by parent:
+  /tmp/wendy-audit2048-control-20261113/control.log
+
+1bc631e78: bounded repair of malformed API review provider output
+  Source: .github/scripts/api_review_test.py
+  Tests: test_invalid_json_gets_one_complete_response_repair,
+  test_repair_remains_strict_and_is_bounded_to_one_attempt,
+  test_truncated_response_does_not_enter_schema_repair.
+  Additional cases verify same-batch evidence, retained decisions/risk,
+  redaction and fail-closed incomplete results. Actual automation parser and
+  repair code consumes controlled provider responses; no live model-service
+  execution or review-quality claim.
+  Offline automation job 131700219478, run 43368990597, passed; parent retained
+  the complete 578-test result.
+
+6acc2f31b: review batching, MCU tenant derivation, dependency/test compatibility
+  Sources: .github/scripts/api_review_test.py and
+  go/internal/agent/mcusource/mtls_identity_transport_test.go.
+  Tests: test_large_diff_reviews_every_file_and_combines_highest_risk,
+  test_one_failed_batch_cannot_publish_partial_decisions,
+  TestSensorAssetIdentityOverTLSAndGRPC.
+  Existing automation cases also reject out-of-batch evidence and cover
+  oversized files. Twelve new TCP/TLS and gRPC cases authenticate the consumer,
+  exchange exact application bytes/manifest and reject wrong tenant/asset before
+  dispatch. Legacy and SPIFFE leaves work despite stale pairing OrgID.
+  Reintroducing pairing-derived scope fails both correct-peer transport
+  boundaries under the race detector. No public PKI or MCU hardware is used.
+  Swift reconciliation: both original Swift files changed only tests: help
+  wording, Foundation import, a public certificate fixture for missing-device
+  preflight, and an enabled missing-auth-before-device case. They did not
+  implement Swift enrollment. Help/render cases are outside this non-UI task;
+  those Swift E2E cases are not claimed as newly executed.
+  New MCU gate passes locally; required hosted integration remains pending.
+
+10b0dc858: native cross-process OAuth refresh/checkpoint serialization
+  Source: go/internal/cli/commands/auth_refresh_lock_test.go
+  Tests: TestOAuthRefreshAcrossProcesses,
+  TestOAuthRefreshConcurrentCloudContexts, TestOAuthRefreshLockCancellation,
+  TestOAuthRefreshRejectsRemovedSession, TestOAuthRefreshPersistsOnlySelectedSession,
+  TestOAuthCheckpointSerializesWithConfigUpdateAcrossProcesses.
+  Real child processes, filesystem locks/config and controlled HTTP refresh
+  peers exercise rotation and checkpointing. This native process proof is
+  distinct from browser-worker storage. Parent selected suite passed 11.942s:
+  /tmp/wendy-audit2048-native-20261113.log
+
+91c7342c3: Cloud v2 discovery identity and trusted certificate destinations
+  Sources: go/internal/cli/commands/cloud_discover_v2_test.go and
+  go/internal/agent/acmeenroll/acmeenroll_test.go.
+  Tests: TestCloudDiscoverJSONV2, TestCloudDiscoveryJSONPreservesPKIDeviceBinding,
+  TestCloudDiscoveryV2DoesNotUseRetiredRelay, TestCloudPickerUsesV2AndPreservesUUID,
+  TestPKICertificateGETRestrictsDestination, TestEnrollDownloadsPKIGetOnlyCertificate.
+  Local gRPC peers exercise roster/request handling and identity selection;
+  actual local HTTP ACME tests count trusted and rejected destination requests.
+  No picker rendering or live Cloud service compatibility is inferred.
+  Parent native selected suite and full protocol suite passed:
+  /tmp/wendy-audit2048-protocols-20261113.log
+
+fd5a8ef90: request clientAuth and serverAuth in the signed ACME CSR
+  Source: go/internal/agent/acmeenroll/acmeenroll_test.go
+  Tests: TestEnroll, TestEnrollRejectsUnusableAuthenticationUsages.
+  Local ACME server parses the actual finalized CSR, verifies its signature,
+  decodes the EKU ASN.1 extension and requires both usage OIDs. Invalid issued
+  usages are rejected. Full package passed 0.197s in the parent protocol run.
+  No production certificate is minted.
+
+bc8bcbf4f: test-only principal-aware pin API compatibility
+  Source: go/internal/cli/commands/vm_identity_test.go
+  Tests: TestVMIdentityUsesNameNotLoopbackOrPort,
+  TestVMReconnectPreservesAliasAndFullEndpoint.
+  Original change adds the empty principal argument to five test calls. No
+  production behavior or VM boot is inferred from this compatibility fix.
+  Alias-selection test passed in the parent's selected native run; reconnect
+  is existing coverage, not separately claimed from that selected run.
+
+Original browser action: independent storage/refresh and auth-proxy coverage
+  Sources: web-client/tests/credential-store.test.mjs,
+  web-client/tests/auth-proxy.test.mjs, web-client/tests/wendy-web-bridge.test.mjs,
+  go/cmd/wendy-web/credentials_js_test.go,
+  go/internal/cli/browserauth/storage_test.go.
+  Existing Browser WASM job runs actual built Go WASM/worker code, WebCrypto
+  wrapping and IndexedDB adapters, restored sessions/token rotation, and
+  single-use transactions across worker contexts. Auth proxy tests execute the
+  real route with controlled fetch, exact method/destination permissions,
+  manual redirects and zero forwarding to untrusted URLs. Native browserauth
+  separately proves certificate/key continuity and fail-closed rotated restore.
+  Hosted Browser WASM success:
+  https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219405
+  Parent retains exact source comparison/logs. Native browserauth passed 2.065s.
+  Limits: fake-indexeddb and Go's JS adapter are not a real browser profile,
+  actual browser Web Locks or public auth/PKI. Opt-in TestLiveCloudRelay was not
+  run. No UI, real-user sign-in or external credentials are claimed.
+
+New gate and registration
+  python3 .github/scripts/test-sensor-asset-identity.py NEW_OUTPUT_DIRECTORY
+  Existing Linux Go race row; no new job/matrix. Existing Go/race compiler and
+  Python; inherits GOFLAGS. Each normal/control compile-and-test is guarded at
+  180 seconds and Go runtime is bounded to 45 seconds. Twelve normal subtests
+  and both named old-assumption failures are required; no skips accepted.
+  Output: source hashes, normal.log, pairing-org.log, evidence.json.
+  Local normal and control are race-instrumented; see
+  /tmp/wendy-audit2048-mcu-proof-20261113/evidence.json.
+
+Closure rule
+  Reconcile these exact assertions and hosted source heads with the audit
+  before changing status. New MCU gate awaits required hosted execution.
+  This map alone does not close the mixed audit or its external acceptance.
