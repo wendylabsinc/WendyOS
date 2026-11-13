@@ -5,9 +5,11 @@ package containerd
 import (
 	"bytes"
 	"context"
+	"debug/elf"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -227,7 +229,7 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 		}
 	}
 	// Same production service capture runs first outside the container, then as
-	// a static test-only executable inside the actual camera-entitled task.
+	// a test-only executable inside the actual camera-entitled task.
 	waitPhase(0)
 	format, err := os.ReadFile("/sys/class/video4linux/video128/format")
 	if err != nil || !strings.Contains(string(format), "H264:640x360@") {
@@ -273,8 +275,10 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Only the executable is injected. Camera mount/device rules remain exactly
-	// those created from the production parameterless camera entitlement.
+	// Inject the executable and its host-matched ELF loader/libraries. CGO=0
+	// does not imply static linking when imported purego packages use dlopen.
+	// Camera rules remain those produced by the real camera entitlement.
+	spec.Mounts = append(spec.Mounts, go2CaptureRuntimeMounts(t, ctx, child)...)
 	spec.Mounts = append(spec.Mounts, specs.Mount{Source: child, Destination: "/capture.test", Type: "bind", Options: []string{"bind", "ro"}})
 	if err := ctr.Update(ctx, runtime.UpdateContainerOpts(runtime.WithSpec(spec))); err != nil {
 		t.Fatal(err)
@@ -325,4 +329,59 @@ func TestGo2H264KernelServiceAndContainerDelivery(t *testing.T) {
 		return
 	}
 	t.Log("GO2_KERNEL_CONTAINER_DECODE_VERIFIED: real native service, camera-entitled OCI delivery, fresh red/green decoded pixels; generated source")
+}
+
+// The fixture executable is built from this checkout, never an external input.
+// Resolve only its loader and concrete ldd paths, without mounting host directories.
+func go2CaptureRuntimeMounts(t *testing.T, ctx context.Context, binary string) []specs.Mount {
+	t.Helper()
+	file, err := elf.Open(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	interpreter := ""
+	for _, program := range file.Progs {
+		if program.Type == elf.PT_INTERP {
+			value, err := io.ReadAll(io.LimitReader(program.Open(), 4096))
+			if err != nil {
+				t.Fatal(err)
+			}
+			interpreter = strings.TrimRight(string(value), "\x00")
+		}
+	}
+	if interpreter == "" {
+		return nil
+	}
+	if !filepath.IsAbs(interpreter) {
+		t.Fatalf("capture ELF loader is not absolute: %q", interpreter)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, "ldd", binary)
+	cmd.WaitDelay = time.Second
+	output, err := cmd.CombinedOutput()
+	if err != nil || strings.Contains(string(output), "not found") {
+		t.Fatalf("resolve capture ELF runtime: %v: %s", err, output)
+	}
+	paths := []string{interpreter}
+	for _, field := range strings.Fields(string(output)) {
+		if filepath.IsAbs(field) && !slices.Contains(paths, field) {
+			paths = append(paths, field)
+		}
+	}
+	var mounts []specs.Mount
+	for _, path := range paths {
+		source, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(source)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("capture runtime dependency is not a regular file: %s: %v", path, err)
+		}
+		mounts = append(mounts, specs.Mount{Source: source, Destination: path, Type: "bind", Options: []string{"bind", "ro"}})
+	}
+	t.Logf("Go2 capture ELF runtime: %s", output)
+	return mounts
 }

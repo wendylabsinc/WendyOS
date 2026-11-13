@@ -55,7 +55,7 @@ def execute(args):
         raise ValueError('prepared replay manifest changed')
     if os.geteuid() == 0:
         raise ValueError('run coordinator as the ordinary VM user; only private kernel execution uses sudo')
-    for tool in ['sudo','go','python3','unshare','containerd','ctr','runc','busybox','gst-launch-1.0','gst-inspect-1.0']:
+    for tool in ['sudo','go','python3','unshare','containerd','ctr','runc','busybox','ldd','gst-launch-1.0','gst-inspect-1.0']:
         if not shutil.which(tool):raise ValueError('missing prerequisite: '+tool)
     expected_manifest_hash=ARCHIVE.sha((prepared/'replay.json').read_bytes())
     def verify_prepared():
