@@ -2021,10 +2021,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1905",
       "title": "Complete native Mojo scaffolding and record WDY-2906\u20132913 acceptance",
       "package": "06",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "The PR combines log heartbeats, slow startup, environment override and network isolation fixes. Tests exist for these components but no single end-to-end journey verifies their interaction.",
-      "required_follow_up": "Run a slow-start multi-service app with quiet logs, service environment overrides and isolation changes.",
-      "evidence": []
+      "required_follow_up": "Execute the real multi-service lifecycle journey and its three controls in the existing containerd job; require slow readiness, quiet heartbeats, service environment overrides, removal of shared isolation, and isolated process restart.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/containerd/multiapp_lifecycle_integration_test.go",
+            ".github/scripts/prepare-multiapp-lifecycle.sh",
+            ".github/scripts/test-watch-container.sh"
+          ],
+          "result": "Added actual CLI/Compose, ContainerService, telemetry and containerd journey with silent delayed HTTP services, initial timeout followed by readiness hooks, literal/empty last-value overrides, host/shared-network to separate private namespaces, cross-namespace connection refusal and production restart monitoring. Normal and three historical controls compile on Linux. Source peer review and offline admission pass. Registered in the existing containerd job; actual kernel execution remains pending."
+        }
+      ]
     },
     {
       "key": "1736",
@@ -3142,10 +3151,18 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2628",
       "title": "Support unenrolled driver installs over USB and after OS flashing",
       "package": "10",
-      "status": "open",
+      "status": "partial",
       "audit_finding": "Upload and driver reconnect fixtures cover USB/unprovisioned flows. First-boot address changes and driver activation still depend on a real flashing/install path.",
-      "required_follow_up": "Run install --driver with a simulated disconnect and first-boot identity/address change, then verify driver readiness.",
-      "evidence": []
+      "required_follow_up": "Execute the registered first-boot driver gRPC gate and controls in CI; prepare and execute exact-target physical flashing/USB reconnect and actual driver activation procedure.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/cli/commands/os_install_drivers_transport_test.go",
+            ".github/scripts/test-firstboot-driver-transport.py"
+          ],
+          "result": "Real owned TCP/gRPC peers model lost transport and return at new endpoints with wrong hostname, wrong board and old kernel before the sole valid target. Production reconnect/check/upload preserves exact specification, signature and multi-chunk bytes. Normal and both removed-guard controls produce required outcomes locally under race checks. Cancellation retains deadline cause and performs zero writes. Full CLI flashing, USB discovery, automatic TLS choice and real module activation are not claimed by this protocol fixture; physical procedure is in progress."
+        }
+      ]
     },
     {
       "key": "2565",
@@ -3170,15 +3187,24 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2341",
       "title": "Prepare Jetson rootfs A/B before OS updates",
       "package": "10",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests validate EFI values, safe failure and preflight ordering with test files. They cannot verify boot firmware behavior or rootfs rollback.",
-      "required_follow_up": "Run an A/B OTA/rollback test on the affected Jetson firmware.",
+      "required_follow_up": "Execute the exact-target Jetson A/B procedure separately for supported Orin and Thor firmware; preserve actual slot/root identity, boot IDs, EFI bytes, commit and health-triggered rollback evidence. All physical cases remain not_run.",
       "evidence": [
         {
           "tests": [
             "go/internal/agent/services/wendyos_readiness_test.go"
           ],
           "result": "Confirmed and fixed a preflight mismatch: Agent rejects valid volatile-zero Orin rootfs state while the exact shipped updater Controller accepts its boot-chain A/B strategy. Delegation is limited to the typed legacy incompatibility after full validation and requires a bounded successful readiness response from the exact selected updater. Legacy repairs and invalid retry refusals remain. Root integrated targeted race suite passes in 11.290s; physical A/B update, reboot and rollback remain pending, as does stale-pending Orin recovery."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/jetson-ab-rehearsal.py",
+            ".github/regression-coverage/manual/jetson-ab-rehearsal.txt",
+            ".github/regression-coverage/manual/jetson-ab-snapshot.py",
+            ".github/scripts/jetson_ab_rehearsal_test.py"
+          ],
+          "result": "Prepared reviewed exact-serial/SoC/ECID/GPT/root-disk/firmware procedure with candidate Agent/updater hashes and two inspected rootfs-only artifacts. Covers Agent OTA, actual opposite-slot boot and commitment, persistent second boot, nonce health rejection and automatic rollback to the original root, plus separately identified direct-updater pre-reboot rollback. Four offline admission/procedure tests pass. Every physical case is not_run. Capsules/power-loss and stale-pending volatile-zero Orin recovery are excluded and remain separate work."
         }
       ]
     },

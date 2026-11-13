@@ -212,6 +212,17 @@ jobs:
       - name: Test bounded physical thermal capture helper
         run: go test -race ./.github/scripts/fixtures/topdon-physical-capture -count=1 -timeout=60s
 
+      - name: Require first-boot driver reconnect and target guards
+        run: python3 .github/scripts/test-firstboot-driver-transport.py --output "$RUNNER_TEMP/firstboot-driver-transport"
+      - name: Retain first-boot driver transport evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: firstboot-driver-transport
+          path: ${{ runner.temp }}/firstboot-driver-transport
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Require delayed first-boot enrollment and its regression control
         run: python3 .github/scripts/test-firstboot-enrollment.py --output "$RUNNER_TEMP/firstboot-enrollment"
 
@@ -334,6 +345,7 @@ jobs:
           PY
           go test -overlay "$RUNNER_TEMP/host-dns-overlay.json" -c -o "$RUNNER_TEMP/host-dns-pinned.test" ./go/internal/agent/containerd
       - name: Extract both runtimes without replacing the runner daemon
+        id: runtimes
         run: |
           sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update --error-on=any
@@ -361,10 +373,11 @@ jobs:
         timeout-minutes: 15
         run: |
           bash .github/scripts/prepare-watch-container.sh "$RUNNER_TEMP/watch-container"
+          bash .github/scripts/prepare-multiapp-lifecycle.sh "$RUNNER_TEMP/watch-container"
           runtime="$RUNNER_TEMP/wendy-runtime/current/root"
           common="$RUNNER_TEMP/wendy-runtime/common/root"
           runtime_path="$runtime/usr/bin:$runtime/usr/sbin:$runtime/bin:$runtime/sbin:$common/usr/bin:$common/usr/sbin:$common/bin:$common/sbin:$PATH"
-          for case_name in normal forced-detach restart-sibling; do
+          for case_name in normal forced-detach restart-sibling multiapp-normal early-readiness ignored-service-env retained-isolation; do
             sudo env PATH="$runtime_path" GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
               bash .github/scripts/test-watch-container.sh "$RUNNER_TEMP/containerd.test" "$RUNNER_TEMP/watch-container" "$case_name"
           done
@@ -405,6 +418,7 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/ros-scopes/ros-image.tar" "$RUNNER_TEMP/ros-scopes/old-loopback.test" "$RUNNER_TEMP/ros-scopes/fail-open-routes.test"
       - name: Require real kernel driver install, replacement, rollback and reboot
+        if: ${{ !cancelled() && steps.runtimes.outcome == 'success' }}
         timeout-minutes: 30
         run: python3 .github/scripts/test-driver-lifecycle-vm.py --work-parent "$RUNNER_TEMP" --output "$RUNNER_TEMP/driver-lifecycle-vm"
       - name: Preserve driver lifecycle evidence
