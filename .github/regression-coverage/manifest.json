@@ -3026,10 +3026,19 @@
       "url": "https://github.com/wendylabsinc/wendyos/commit/49fa7f963b2e4ce371049672119983d3df2b9331",
       "title": "install-jobs: apply first-boot name and Wi-Fi from MCP and the jobs CLI",
       "package": "10",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "CLI/MCP tests assert first-boot input propagation, validation and password redaction. Actual first-boot application after media/recovery flashing is not part of ordinary PR CI.",
-      "required_follow_up": "Run the Orin seed rehearsal and verify persisted name/Wi-Fi from the booted system.",
-      "evidence": []
+      "required_follow_up": "Execute the exact-target Orin first-boot procedure using the verified release/CLI/Agent artifacts. Observe actual seed consumption, persistent hostname, NetworkManager association and unchanged identity after a second boot. The existing producer writer rehearsal proves host writes separately.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/orin-firstboot-rehearsal.py",
+            ".github/regression-coverage/manual/orin-firstboot-rehearsal.txt",
+            ".github/scripts/orin_firstboot_rehearsal_test.py"
+          ],
+          "result": "Prepared an offline generator and exact-board procedure for the jobs CLI seed path, release/target matching, live installed Agent provenance, physical name/Wi-Fi application and persistence after reboot. Jobs do not support binary override or pre-enrollment, which the procedure explicitly distinguishes. Two local admission/isolation tests and generated shell checks pass. All seven physical cases across this entry and 2805 remain not_run; no device was flashed."
+        }
+      ]
     },
     {
       "key": "d11d2e983",
@@ -3076,10 +3085,21 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2805",
       "title": "Fix Wi-Fi setup before first-boot enrollment",
       "package": "10",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Tests cover waiting for ACME discovery, cancellation and Wi-Fi-first identity selection. NetworkManager and enrollment timing on a freshly booted device remain simulated.",
-      "required_follow_up": "Add a boot sequence fixture where Wi-Fi becomes available after the first enrollment attempt.",
-      "evidence": []
+      "required_follow_up": "Require the real delayed-directory ACME enrollment and no-wait negative control in the existing race job. Execute the separate fresh pre-enrollment physical case to prove actual first-boot NetworkManager setup and Wi-Fi becoming available; do not infer physical boot from loopback transport coverage.",
+      "evidence": [
+        {
+          "tests": [
+            "go/internal/agent/services/provisioning_boot_transport_test.go",
+            ".github/scripts/test-firstboot-enrollment.py",
+            ".github/regression-coverage/manual/orin-firstboot-rehearsal.py",
+            ".github/regression-coverage/manual/orin-firstboot-rehearsal.txt",
+            ".github/scripts/orin_firstboot_rehearsal_test.py"
+          ],
+          "result": "Locally passed the production first-boot entry point through real loopback ACME directory/EAB/order/CSR/certificate exchanges and gRPC provisioning status under the race detector. Offline cancellation preserves the credential handoff without a durable attempt; delayed availability enrolls once and restart preserves identity/key. Removing the production wait fails specifically on premature durable attempt creation. Registered the gate in the existing race job. The independently reviewed physical procedure separately covers exact-image first boot, no alternate Internet path, setup availability and subsequent Wi-Fi enrollment; hardware cases remain not_run. Hosted gate remains pending."
+        }
+      ]
     },
     {
       "key": "2628",
