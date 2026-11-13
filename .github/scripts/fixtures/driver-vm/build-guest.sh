@@ -57,7 +57,7 @@ chmod 755 /fixture/omit-unload.sh
 cp "/usr/lib/modules/$kver/vmlinuz" /fixture/vmlinuz
 # No host-only discovery, network, KVM or device access is needed to build this.
 dracut --force --no-hostonly --no-hostonly-cmdline --kver "$kver" \
-  --add-drivers 'virtio_pci virtio_blk ext4 squashfs overlay loop' \
+  --add-drivers 'virtio_pci virtio_blk virtio_console ext4 squashfs overlay loop' \
   --filesystems ext4 /fixture/initrd
 sha256sum /fixture/vmlinuz /fixture/initrd /usr/sbin/wendyos-sysext-apply.sh /fixture/pack-sysext.sh /fixture/images/*/*.raw > /fixture/artifacts.sha256
 # Keep compiler outputs out of the runtime image, without removing runtime modules.
