@@ -565,8 +565,8 @@ func assetID(assets []*cloudpb.Asset, name string) (string, error) {
 	i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool {
 		return d.GetId() == name || d.GetName() == name || d.GetDisplayName() == name
 	})
-	if i < 0 {
-		return "", usageErrorf("No device %s in this organization.", name)
+	if i < 0 || name == "" {
+		return "", usageErrorf("No device %q in this organization.", name)
 	}
 	return assets[i].GetId(), nil
 }

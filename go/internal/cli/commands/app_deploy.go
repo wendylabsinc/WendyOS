@@ -222,8 +222,8 @@ func runDeploy(ctx context.Context, op *registryOp, a deployAnswers, out io.Writ
 		i := slices.IndexFunc(assets, func(d *cloudpb.Asset) bool {
 			return d.GetId() == name || d.GetName() == name || d.GetDisplayName() == name
 		})
-		if i < 0 {
-			return usageErrorf("No device %s in this organization.", name)
+		if i < 0 || name == "" {
+			return usageErrorf("No device %q in this organization.", name)
 		}
 		chosen[assets[i].GetId()] = assets[i]
 		plan.deviceIDs = append(plan.deviceIDs, assets[i].GetId())
