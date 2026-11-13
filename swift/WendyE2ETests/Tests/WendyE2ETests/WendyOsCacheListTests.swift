@@ -250,8 +250,6 @@ struct `'wendy os cache list'` {
                     wendy os cache list \(mode)
                     cache_command_exit=$?
                     set -e
-                    chmod 700 "$locked"
-                    test "$(cat "$locked/kernel")" = 'preserve-this-kernel'
                     exit "$cache_command_exit"
                     """
                 ) { result in
@@ -260,6 +258,13 @@ struct `'wendy os cache list'` {
                     #expect(result.stderr.contains("locked.flashpack"))
                     #expect(result.stderr.lowercased().contains("permission denied"))
                 }
+                // Preservation must succeed independently of the expected CLI failure.
+                try await cli.sh(
+                    """
+                    \(try CacheCommandFixture.environment(cli))
+                    test "$(cat "$cache/os-images/locked.flashpack/boot/kernel")" = 'preserve-this-kernel'
+                    """
+                )
             }
         }
     }

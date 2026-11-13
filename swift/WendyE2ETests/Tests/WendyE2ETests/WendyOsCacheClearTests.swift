@@ -239,6 +239,12 @@ struct `'wendy os cache clear'` {
      files. Clearing removes those entries, leaves an empty inventory, and can be
      repeated. A denied raw removal proves that the POSIX fixture needs cleanup
      permission handling. This does not cover Windows ACLs.
+
+     **CURRENT KNOWN DEFECT:** OS-only clearing currently returns permission
+     denied and leaves readable read-only flashpack content behind. This guarantee
+     does not currently pass. Opt in with `WENDY_E2E_KNOWN_CACHE_DEFECTS=1` and
+     filter `removes read-only extracted flashpacks and remains empty on repeat clear`
+     to reproduce it using the isolated denied-removal fixture below.
      */
     @Test(
         .enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX permissions"),

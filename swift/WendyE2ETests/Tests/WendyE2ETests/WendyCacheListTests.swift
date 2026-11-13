@@ -271,6 +271,12 @@ struct `'wendy cache list'` {
      successful zero-byte or partial inventory. Both output modes identify the
      affected app, emit no successful listing, and preserve its payload. POSIX
      permissions are checked with a real denied read before running the CLI.
+
+     **CURRENT KNOWN DEFECT:** unreadable per-app build directories currently
+     return success with zero bytes instead of failing. This guarantee does not
+     currently pass. Opt in with `WENDY_E2E_KNOWN_CACHE_DEFECTS=1` and filter
+     `fails loudly when a populated build cache cannot be sized` to reproduce it
+     using the isolated denied-read fixture below.
      */
     @Test(
         .enabled(if: WendyE2EMachine.cli.os != .windows, "POSIX permissions"),
@@ -301,8 +307,6 @@ struct `'wendy cache list'` {
                     wendy cache list \(mode)
                     cache_command_exit=$?
                     set -e
-                    chmod 700 "$locked"
-                    test "$(cat "$locked/layer")" = 'preserve-this-layer'
                     exit "$cache_command_exit"
                     """
                 ) { result in
@@ -311,6 +315,13 @@ struct `'wendy cache list'` {
                     #expect(result.stderr.contains("com.example.locked-linux_arm64"))
                     #expect(result.stderr.lowercased().contains("permission denied"))
                 }
+                // Preservation must succeed independently of the expected CLI failure.
+                try await cli.sh(
+                    """
+                    \(try CacheCommandFixture.environment(cli))
+                    test "$(cat "$cache/ocilayout/com.example.locked-linux_arm64/layer")" = 'preserve-this-layer'
+                    """
+                )
             }
         }
     }
