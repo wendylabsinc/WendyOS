@@ -78,8 +78,21 @@ struct `'wendy run'` {
                 ) { result in
                     #expect(result.status.isFailure)
                     #expect(result.stdout.isEmpty)
-                    #expect(result.stderr.contains("persist path must be absolute"))
-                    #expect(result.stderr.contains("config_invalid"))
+                    let lastLine = try #require(result.stderr.split(separator: "\n").last)
+                    let envelope = try #require(
+                        JSONSerialization.jsonObject(with: Data(lastLine.utf8)) as? [String: Any]
+                    )
+                    let error = try #require(envelope["error"] as? [String: Any])
+                    let message = try #require(error["message"] as? String)
+                    #expect(message.contains("companion wendy.json"))
+                    #expect(message.contains("persist path must be absolute"))
+                    #expect(message.contains("relative"))
+                    // global-flags.md permits uncategorized `error`; the
+                    // analytics taxonomy is not a per-path JSON-code promise.
+                    #expect(!(try #require(error["code"] as? String)).isEmpty)
+                    #expect(error["exit"] as? Int == 1)
+                    #expect(error["retryable"] as? Bool == false)
+                    #expect(error["next_steps"] as? [String] != nil)
                 }
                 #expect(try await app.inventory(cli) == inventory)
                 let survived = try await app.response(cli, retryStartup: false)

@@ -49,8 +49,18 @@ struct `'wendy device logs'` {
                     let otherBefore = try await other.response(cli)
                     let entries = try await app.logs(cli)
                     try #require(!entries.isEmpty, "Replay must contain actual app output")
-                    #expect(entries.contains { $0.body.contains(app.marker("stdout", before)) })
-                    #expect(entries.contains { $0.body.contains(app.marker("stderr", before)) })
+                    #expect(
+                        entries.contains {
+                            $0.body.contains(app.marker("stdout", before))
+                                && $0.attributes?["stream"] == "stdout"
+                        }
+                    )
+                    #expect(
+                        entries.contains {
+                            $0.body.contains(app.marker("stderr", before))
+                                && $0.attributes?["stream"] == "stderr"
+                        }
+                    )
                     #expect(entries.allSatisfy { !$0.body.contains(other.app) })
                     #expect(entries.allSatisfy { !$0.timestamp.isEmpty && !$0.severity.isEmpty })
 
@@ -81,13 +91,11 @@ struct `'wendy device logs'` {
         try await HTTPAppFixture.scenario().run { cli, _ in
             try await HTTPAppFixture.withComposeApp(cli: cli) { app in
                 let early = try await app.response(cli)
-                // Separate writes in time so the oracle does not assume one
-                // telemetry batch per HTTP request or per stdout/stderr line.
-                try await cli.sh("sleep 2")
-                _ = try await app.response(cli)
-                try await cli.sh("sleep 2")
+                // Prove the early batch already exists before producing the
+                // recent request, without assuming aggregation timing.
+                _ = try await app.requireReplay(cli, containing: early)
                 let recent = try await app.response(cli)
-                let history = try await app.logs(cli)
+                let history = try await app.requireReplay(cli, containing: recent)
                 #expect(history.contains { $0.body.contains(app.marker("stdout", early)) })
                 #expect(history.contains { $0.body.contains(app.marker("stderr", recent)) })
                 let tail = try await app.logs(cli, tail: 1)

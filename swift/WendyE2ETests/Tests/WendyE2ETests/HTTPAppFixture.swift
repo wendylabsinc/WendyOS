@@ -278,6 +278,29 @@ struct HTTPAppFixture: Sendable {
         "e2e \(stream) app=\(app) instance=\(response.instance) version=\(response.version) request=\(response.requests)"
     }
 
+    func requireReplay(
+        _ cli: WendyE2ESession,
+        containing response: Response
+    ) async throws -> [LogEntry] {
+        // Observe telemetry ingestion without generating more application
+        // output. Retry only missing markers, never command/JSON failures.
+        var entries: [LogEntry] = []
+        for attempt in 0..<5 {
+            entries = try await logs(cli)
+            if entries.contains(where: { $0.body.contains(marker("stdout", response)) })
+                && entries.contains(where: { $0.body.contains(marker("stderr", response)) })
+            {
+                return entries
+            }
+            if attempt < 4 { try await cli.sh("sleep 1") }
+        }
+        try #require(
+            false,
+            "Both request markers must reach stored replay within five bounded reads"
+        )
+        return entries
+    }
+
     func stop(_ cli: WendyE2ESession, expectedVersion: String? = "1.0.0") async throws {
         try await cli.sh("\(command) device apps stop \(Self.quote(app))") { result in
             try #require(result.status.isSuccess)
