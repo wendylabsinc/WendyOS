@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,10 +15,11 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
-func (f *fakeRegistry) ListApps(context.Context, *cloudpb.ListAppsRequest) (*cloudpb.ListAppsResponse, error) {
+func (f fakeApps) ListApps(context.Context, *cloudpb.ListAppsRequest) (*cloudpb.ListAppsResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return &cloudpb.ListAppsResponse{Apps: f.apps, Total: int32(len(f.apps))}, nil
+	apps := slices.SortedFunc(maps.Values(f.apps), func(a, b *cloudpb.App) int { return strings.Compare(a.GetId(), b.GetId()) })
+	return &cloudpb.ListAppsResponse{Apps: apps, Total: int32(len(apps))}, nil
 }
 
 func (f *fakeRegistry) ListAssets(in *cloudpb.ListAssetsRequest, stream grpc.ServerStreamingServer[cloudpb.ListAssetsResponse]) error {
@@ -66,7 +69,7 @@ func stepsFixture(t *testing.T) (*registryOp, *fakeRegistry, string) {
 	op, fake := registryFixture(t, k1)
 	releaseID, _ := publishFixture(t, op)
 	fake.defaults[releaseID] = `{"LOG_LEVEL":"info","UPLOAD_INTERVAL_SECONDS":"30"}`
-	fake.apps = []*cloudpb.App{{Id: "sh.wendy.example"}}
+	fake.apps["sh.wendy.example"] = &cloudpb.App{Id: "sh.wendy.example"}
 	fake.assets = []*cloudpb.Asset{{Id: vectorDevice, Name: "packer-01", Tags: []string{"line-3"}}, {Id: vectorOtherDevice, Name: "dock-cam-07"}}
 	fake.online = map[string]bool{vectorDevice: true}
 	prevAsk, prevConfirm := deployAsk, deployConfirm

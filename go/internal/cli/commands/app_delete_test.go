@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,20 +17,11 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
-func (f *fakeRegistry) GetApp(_ context.Context, in *cloudpb.GetAppRequest) (*cloudpb.App, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if i := slices.IndexFunc(f.apps, func(a *cloudpb.App) bool { return a.GetId() == in.GetId() }); i >= 0 {
-		return f.apps[i], nil
-	}
-	return nil, status.Error(codes.NotFound, "app not found")
-}
-
 // DeleteApp is cloud's by-app delete: each entry passes its own gate (a
 // removal at the maximum revision, never for a device the caller cannot
 // reach), covered devices leave the pending list, and the call after which
 // none is left deletes the app.
-func (f *fakeRegistry) DeleteApp(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.DeleteAppResponse, error) {
+func (f fakeApps) DeleteApp(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.DeleteAppResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var req cloudpb.DeleteAppRequest
@@ -75,7 +65,7 @@ func (f *fakeRegistry) DeleteApp(_ context.Context, in *cloudpb.SignedRequest) (
 	if len(left) > 0 {
 		return nil, status.Errorf(codes.FailedPrecondition, "%d devices still need a removal or a detach", len(left))
 	}
-	f.apps = slices.DeleteFunc(f.apps, func(a *cloudpb.App) bool { return a.GetId() == req.GetId() })
+	delete(f.apps, req.GetId())
 	return &cloudpb.DeleteAppResponse{Success: true}, nil
 }
 
@@ -196,7 +186,7 @@ func TestAppDeleteSendsBatchesOf200(t *testing.T) {
 // asked, only each device's choice.
 func TestAppDeleteBeingDeletedSkipsConfirmations(t *testing.T) {
 	op, fake, _ := deleteFixture(t, row(kindUnassign, vectorDevice, "packer-01"))
-	fake.apps[0].DeletionStartedAt = timestamppb.Now()
+	fake.apps[exampleApp].DeletionStartedAt = timestamppb.Now()
 	var asked []string
 	deployConfirm = func(q string) (bool, error) { asked = append(asked, q); return false, nil }
 	var out bytes.Buffer

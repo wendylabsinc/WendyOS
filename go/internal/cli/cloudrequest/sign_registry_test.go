@@ -38,6 +38,8 @@ func TestRegistryResources(t *testing.T) {
 		{cloudpbv2.DeploymentService_DetachDevice_FullMethodName, &cloudpbv2.DetachDeviceRequest{OrganizationId: release, DeploymentId: deploy, Device: uri}, ""},
 		{cloudpbv2.AppService_DeleteApp_FullMethodName, &cloudpbv2.DeleteAppRequest{OrganizationId: tenant, Id: "sh.wendy.example"}, "org/" + tenant + "/app/sh.wendy.example"},
 		{cloudpbv2.AppService_DeleteApp_FullMethodName, &cloudpbv2.DeleteAppRequest{OrganizationId: release, Id: "sh.wendy.example"}, ""},
+		{cloudpbv2.AccessService_CreateBinding_FullMethodName, &cloudpbv2.CreateBindingRequest{OrganizationId: tenant}, "org/" + tenant + "/access-binding"},
+		{cloudpbv2.AccessService_CreateBinding_FullMethodName, &cloudpbv2.CreateBindingRequest{OrganizationId: release}, ""},
 	}
 	for _, c := range cases {
 		got, ok := signedResources[c.method](tenant, c.req)

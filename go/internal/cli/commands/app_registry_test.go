@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -95,7 +96,6 @@ type fakeRegistry struct {
 	cloudpb.UnimplementedArtifactRegistryServiceServer
 	cloudpb.UnimplementedDeploymentServiceServer
 	cloudpb.UnimplementedKeyDirectoryServiceServer
-	cloudpb.UnimplementedAppServiceServer
 	cloudpb.UnimplementedAssetServiceServer
 
 	t          *testing.T
@@ -118,16 +118,98 @@ type fakeRegistry struct {
 	revDevices map[string][]string // "<deployment>/<revision>" -> devices
 	pending    map[string][]*cloudpb.PendingDeviceStatement
 	tamper     func(*cloudpb.Deployment) // cloud records something else
-	apps       []*cloudpb.App
 	assets     []*cloudpb.Asset
 	online     map[string]bool
 	states     []*cloudpb.AppDeviceState
+	apps       map[string]*cloudpb.App // app id -> app
+	users      map[string]string       // member user id -> email
+	noNotify   bool                    // the caller may not turn notifications on
 }
 
 func newFakeRegistry(t *testing.T, keys ...*cloudpb.RecipientKey) *fakeRegistry {
 	return &fakeRegistry{t: t, keys: keys, releases: map[string]*cloudpb.ArtifactManifest{}, blobs: map[string][]byte{}, deploys: map[string]*cloudpb.Deployment{},
 		sel: map[string]*cloudpb.DeviceSelection{}, defaults: map[string]string{},
-		history: map[string][]*cloudpb.DeploymentRevision{}, revDevices: map[string][]string{}, pending: map[string][]*cloudpb.PendingDeviceStatement{}}
+		history: map[string][]*cloudpb.DeploymentRevision{}, revDevices: map[string][]string{}, pending: map[string][]*cloudpb.PendingDeviceStatement{},
+		apps: map[string]*cloudpb.App{}, users: map[string]string{"u-ana": "ana@example.com"}}
+}
+
+// appRoleIDs are the fake's built-in app role ids, by name.
+var appRoleIDs = map[string]string{"App owner": "r-owner", "App developer": "r-dev", "App operator": "r-op", "App viewer": "r-view"}
+
+// fakeApps serves AppService, AccessService, RoleService, members and users
+// from the same fake.
+type fakeApps struct {
+	*fakeRegistry
+	cloudpb.UnimplementedAppServiceServer
+	cloudpb.UnimplementedAccessServiceServer
+	cloudpb.UnimplementedRoleServiceServer
+	cloudpb.UnimplementedOrganizationServiceServer
+	cloudpb.UnimplementedUserServiceServer
+}
+
+func (f fakeApps) GetApp(_ context.Context, in *cloudpb.GetAppRequest) (*cloudpb.App, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a, ok := f.apps[in.GetId()]; ok && in.GetOrganizationId() == testOperatorTenant {
+		return a, nil
+	}
+	return nil, status.Error(codes.NotFound, "app not found")
+}
+
+func (f fakeApps) UpsertApp(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.App, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var req cloudpb.UpsertAppRequest
+	if err := f.accept(cloudpb.AppService_UpsertApp_FullMethodName, in, &req); err != nil {
+		return nil, err
+	}
+	f.apps[req.GetId()] = &cloudpb.App{Id: req.GetId(), OrganizationId: req.GetOrganizationId(), Name: req.GetName(), Details: req.GetDetails()}
+	return f.apps[req.GetId()], nil
+}
+
+func (f fakeApps) UpdateApp(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.App, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var req cloudpb.UpdateAppRequest
+	if err := f.accept(cloudpb.AppService_UpdateApp_FullMethodName, in, &req); err != nil {
+		return nil, err
+	}
+	if req.CanSendNotifications != nil && f.noNotify {
+		return nil, status.Error(codes.PermissionDenied, "app:set-notification-capability required")
+	}
+	a := f.apps[req.GetId()]
+	a.CanSendNotifications = req.GetCanSendNotifications()
+	return a, nil
+}
+
+func (f fakeApps) CreateBinding(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.Binding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var req cloudpb.CreateBindingRequest
+	if err := f.accept(cloudpb.AccessService_CreateBinding_FullMethodName, in, &req); err != nil {
+		return nil, err
+	}
+	return &cloudpb.Binding{Id: uuid.NewString()}, nil
+}
+
+func (f fakeApps) ListRoles(context.Context, *cloudpb.ListRolesRequest) (*cloudpb.ListRolesResponse, error) {
+	resp := &cloudpb.ListRolesResponse{Roles: []*cloudpb.Role{{Id: "r-org-owner", Name: "Owner", IsBuiltin: true, Kind: cloudpb.RoleKind_ROLE_KIND_ORGANIZATION}}}
+	for name, id := range appRoleIDs {
+		resp.Roles = append(resp.Roles, &cloudpb.Role{Id: id, Name: name, IsBuiltin: true, Kind: cloudpb.RoleKind_ROLE_KIND_APP})
+	}
+	return resp, nil
+}
+
+func (f fakeApps) ListMembers(context.Context, *cloudpb.ListMembersRequest) (*cloudpb.ListMembersResponse, error) {
+	resp := &cloudpb.ListMembersResponse{}
+	for id := range f.users {
+		resp.Members = append(resp.Members, &cloudpb.OrganizationMember{UserId: id})
+	}
+	return resp, nil
+}
+
+func (f fakeApps) GetUser(_ context.Context, in *cloudpb.GetUserRequest) (*cloudpb.User, error) {
+	return &cloudpb.User{Id: in.GetId(), Email: f.users[in.GetId()]}, nil
 }
 
 // fakeDeployments serves DeploymentService from the same fake: its moved
@@ -610,23 +692,39 @@ func registryFixture(t *testing.T, keys ...*cloudpb.RecipientKey) (*registryOp, 
 	session.RegistryKeyID = registrycrypto.KeyID(priv.PublicKey().Bytes()) // bound: no registration call
 
 	fake := newFakeRegistry(t, keys...)
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// Cloud and the registry are two servers: a registry call sent to cloud
+	// (or the reverse) is answered Unimplemented.
+	serve := func(register func(*grpc.Server)) *grpc.ClientConn {
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := grpc.NewServer()
+		register(srv)
+		go func() { _ = srv.Serve(lis) }()
+		t.Cleanup(srv.Stop)
+		conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
 	}
-	srv := grpc.NewServer()
-	cloudpb.RegisterArtifactRegistryServiceServer(srv, fake)
-	cloudpb.RegisterDeploymentServiceServer(srv, fakeDeployments{fake})
-	cloudpb.RegisterKeyDirectoryServiceServer(srv, fake)
-	cloudpb.RegisterAppServiceServer(srv, fake)
-	cloudpb.RegisterAssetServiceServer(srv, fake)
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
+	conn := serve(func(srv *grpc.Server) {
+		cloudpb.RegisterDeploymentServiceServer(srv, fakeDeployments{fake})
+		cloudpb.RegisterKeyDirectoryServiceServer(srv, fake)
+		cloudpb.RegisterAssetServiceServer(srv, fake)
+		apps := fakeApps{fakeRegistry: fake}
+		cloudpb.RegisterAppServiceServer(srv, apps)
+		cloudpb.RegisterAccessServiceServer(srv, apps)
+		cloudpb.RegisterRoleServiceServer(srv, apps)
+		cloudpb.RegisterOrganizationServiceServer(srv, apps)
+		cloudpb.RegisterUserServiceServer(srv, apps)
+	})
+	reg := serve(func(srv *grpc.Server) { cloudpb.RegisterArtifactRegistryServiceServer(srv, fake) })
+	prevDial := dialRegistry
+	dialRegistry = func(*config.AuthConfig) (grpc.ClientConnInterface, error) { return reg, nil }
+	t.Cleanup(func() { dialRegistry = prevDial })
 	op, err := newRegistryOp(context.Background(), conn, &session)
 	if err != nil {
 		t.Fatal(err)
@@ -875,5 +973,21 @@ func TestRegistryRefusesWithoutCustodianPin(t *testing.T) {
 	session = tenantOperatorSession(t, defaultDevCloudGRPC)
 	if _, err := newRegistryOp(context.Background(), nil, &session); err == nil || !strings.Contains(err.Error(), "CA chain") {
 		t.Fatalf("no chain: %v", err)
+	}
+}
+
+// The registry is its own service at registry.<domain> next to cloud's
+// api.<domain>, or where WENDY_REGISTRY says; nothing is guessed otherwise.
+func TestRegistryAddress(t *testing.T) {
+	t.Setenv(registryEnv, "")
+	if got, err := registryAddress("api.dev.wendy.sh:443"); err != nil || got != "registry.dev.wendy.sh:443" {
+		t.Fatalf("dev: %q %v", got, err)
+	}
+	if _, err := registryAddress("wendy-cloud-services-114319063177.us-central1.run.app:443"); err == nil || !strings.Contains(err.Error(), registryEnv) {
+		t.Fatalf("no derivable host: %v", err)
+	}
+	t.Setenv(registryEnv, "localhost:9443")
+	if got, _ := registryAddress("api.dev.wendy.sh:443"); got != "localhost:9443" {
+		t.Fatalf("override: %q", got)
 	}
 }
