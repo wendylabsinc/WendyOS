@@ -24,7 +24,7 @@ def main():
     original = source.read_text()
     if original.count(needle) != 1:
         raise SystemExit("production first-boot wait changed; review control")
-    command = ["go", "test", "-race", "./go/internal/agent/services", "-run", "^" + TEST + "$", "-count=1", "-timeout=90s", "-v"]
+    command = ["go", "test", "-gcflags=all=-c=1", "-vet=off", "-race", "./go/internal/agent/services", "-run", "^" + TEST + "$", "-count=1", "-timeout=90s", "-v"]
     results = {}
     with tempfile.TemporaryDirectory(prefix="wendy-firstboot-control-") as tmp:
         mutation = Path(tmp) / source.name
