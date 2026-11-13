@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WendyE2ETesting
 
@@ -29,55 +30,78 @@ struct `'wendy cloud discover'` {
     }
 
     /**
-     Uses the stored Wendy Cloud auth session to list enrolled devices
-     with names, online status, and connection metadata. Success output
-     is a finite list and emits no stderr.
-     */
-    @Test(
-        .disabled(
-            "WDY-1949: enrolled-device discovery needs isolated cloud auth and seeded asset inventory."
-        )
-    )
-    func `lists enrolled cloud devices`() async throws {}
+     Lists the enrolled compute devices in the explicitly selected Cloud v2
+     tenant. Each JSON row preserves its UUID and a selector containing the
+     endpoint, tenant and asset. The owned fixture appears with its expected
+     name and PKI identity; no fleet size or IP address is assumed.
 
-    /**
-     `--all` includes offline devices and marks their state clearly.
-     Without `--all`, the default listing focuses on currently usable
-     devices.
+     Requires `WENDY_E2E_CLOUD_READ_ONLY=true`, a single-tenant auth fixture,
+     and the explicit `WENDY_E2E_CLOUD_*` target variables. No LAN discovery
+     or device tunnel is needed. Credentials and saved selections are preserved.
      */
-    @Test(
-        .disabled(
-            "WDY-1949: offline-device filtering needs isolated cloud auth and seeded online/offline asset inventory."
-        )
-    )
-    func `includes offline devices when requested`() async throws {}
-
-    /**
-     With no auth session, reports that login is required and performs no
-     cloud discovery request.
-     */
-    @Test
-    func `reports missing auth before contacting discovery services`() async throws {
-        try await self.scenario.run(authenticated: false) { cli, _ in
-            try await cli.sh("wendy cloud discover --json") { result in
-                #expect(result.status.isFailure)
-                #expect(result.stdout == "")
-                #expect(result.stderr.contains("not logged in"))
-                #expect(result.stderr.contains("wendy auth login"))
-            }
+    @Test(.enabled(if: CloudReferenceFixture.enabled))
+    func `lists enrolled cloud devices`() async throws {
+        let target = try CloudReferenceFixture.target()
+        try await CloudReferenceFixture.scenario().run { cli, _ in
+            try await CloudReferenceFixture.prepare(cli, target: target)
+            let rows = try await CloudReferenceFixture.roster(cli, target: target, all: true)
+            try CloudReferenceFixture.selected(rows, target: target)
+            try await CloudReferenceFixture.preserved(cli)
         }
     }
 
     /**
-     With `--json`, emits device objects with stable id, name, status,
-     and endpoint fields. JSON mode emits no table formatting.
+     `--all` includes offline enrolled devices. Verifying offline membership and
+     filtering requires an explicit offline fixture rather than assumptions about
+     the tenant's changing fleet.
      */
-    @Test(
-        .disabled(
-            "WDY-1949: JSON cloud discovery schema needs isolated auth and seeded asset inventory."
-        )
-    )
-    func `prints JSON cloud discovery results for automation`() async throws {}
+    @Test(.disabled("Needs an owned offline Cloud asset fixture to verify offline filtering."))
+    func `includes offline devices when requested`() async throws {}
+
+    /**
+     The default JSON roster contains online devices. `--all` also includes
+     offline enrolled devices. An explicitly provisioned online fixture occurs
+     in both queries with the same UUID, name and tenant-scoped selector.
+     Other devices may come and go; no offline count is assumed.
+     */
+    @Test(.enabled(if: CloudReferenceFixture.enabled))
+    func `online and complete rosters preserve the selected asset identity`() async throws {
+        let target = try CloudReferenceFixture.target()
+        try await CloudReferenceFixture.scenario().run { cli, _ in
+            try await CloudReferenceFixture.prepare(cli, target: target)
+            let online = try await CloudReferenceFixture.roster(cli, target: target, all: false)
+            let all = try await CloudReferenceFixture.roster(cli, target: target, all: true)
+            try CloudReferenceFixture.selected(online, target: target)
+            try CloudReferenceFixture.selected(all, target: target)
+            try await CloudReferenceFixture.preserved(cli)
+        }
+    }
+
+    /**
+     Without credentials, Cloud discovery fails with an actionable login error,
+     empty stdout and a machine-readable stderr error. It does not contact even
+     an explicit reachable Cloud endpoint or alter the saved target and settings.
+     */
+    @Test
+    func `reports missing auth before contacting discovery services`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await LocalCLIAssertions.prepare(cli)
+            let result = try await LocalCLIAssertions.run(
+                cli,
+                ["cloud", "discover", "--cloud-grpc", "127.0.0.1:1", "--json"],
+                exit: 3,
+                monitorNetwork: true
+            )
+            try LocalCLIAssertions.error(
+                result,
+                code: "auth_required",
+                exit: 3,
+                message: "not logged in"
+            )
+            #expect(result.readableStderr.contains("wendy auth login"))
+            try await LocalCLIAssertions.unchanged(cli)
+        }
+    }
 
     /**
      Reads the Wendy CLI configuration before performing work that depends on
