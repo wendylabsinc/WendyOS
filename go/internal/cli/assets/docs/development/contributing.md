@@ -5,33 +5,39 @@ Thank you for contributing to WendyOS! This document covers the development work
 ## CLI design
 
 Use the [Command Line Interface Guidelines](https://clig.dev/) as the baseline
-standard for Wendy CLI design. Apply them with judgment and preserve
-established behavior unless a change is intentional. Document Wendy-specific
-decisions and exceptions in the [executable E2E reference](../../../../../../swift/WendyE2ETests/README.md#reference-directory),
-a behavioral reference backed by executable assertions. Full-screen TUI design
-requires separate guidance.
+standard for Wendy CLI design. Wendy's [executable E2E reference](../../../../../../swift/WendyE2ETests/README.md#reference-directory)
+is the authoritative behavioral reference, backed by executable assertions;
+record Wendy-specific decisions and exceptions there. The additions below guide
+new work and intentional redesigns; existing commands may not yet comply.
 
-Wendy's executable specs remain authoritative.
+### Preserve user work through predictable file generation
 
-The following agreed design conventions apply to new work and intentional
-redesigns. Existing commands may not yet comply; preserve established interfaces
-until deliberate compatibility changes.
+Create missing files, leave identical files untouched, preserve unrelated files,
+and resolve differing files explicitly. Interactive conflicts offer overwrite,
+skip, diff, and quit. `--force` overwrites conflicts; `--skip` preserves them
+while creating missing files. Reject `--force` together with `--skip`. Preflight
+unresolved conflicts before writing; this does not promise rollback of later
+I/O failures.
 
-- A TUI is optional convenience. All capabilities must be available without
-  Bubble Tea through the ordinary CLI, arguments/options, and plain prompts
-  where appropriate.
-- Use one shared file-generation policy: create missing files, leave
-  identical files untouched, explicitly resolve differing files, and preserve
-  unrelated files. Interactive conflicts must offer overwrite, skip, diff, and
-  quit.
-- Explicit `--force` overwrites conflicts; `--skip` preserves conflicts while
-  still creating missing files. Reject `--force` together with `--skip`.
-- Outside `--dry-run`, non-interactive unresolved conflicts must fail with
-  actionable paths. Absent input or EOF must never grant overwrite permission.
-- Use `--dry-run`, not `--dry` or `--pretend`, to preview actions and conflicts
-  without prompting or writing.
-- Preflight unresolved conflicts before writing. This does not promise rollback
-  of later I/O failures.
+### Keep presentation optional and commands usable
+
+A TUI is an optional convenience: all capabilities must remain available without
+Bubble Tea. Full-screen TUI design requires separate guidance. Print displayed
+commands as plain lines outside bordered boxes; box text should point to those
+lines.
+
+### Tools to study for inspiration
+
+Study these tools for the topics below; verify the relevant behavior before
+borrowing a pattern.
+
+| What to study | Official references |
+| --- | --- |
+| Command structure, help, and discovery | [gh](https://cli.github.com/manual/), [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli), [oclif](https://oclif.io/docs/introduction/) |
+| Status, progress, and diagnostics | [Tailscale](https://tailscale.com/docs/reference/tailscale-cli), [Cargo](https://doc.rust-lang.org/cargo/commands/), [rustup](https://rust-lang.github.io/rustup/), [uv](https://docs.astral.sh/uv/) |
+| Setup, local development, and deployment flows | [flyctl](https://docs.fly.io/flyctl), [Stripe CLI](https://docs.stripe.com/stripe-cli), [Wrangler](https://developers.cloudflare.com/workers/wrangler/), [Supabase CLI](https://supabase.com/docs/reference/cli/introduction), [Vercel CLI](https://vercel.com/docs/cli) |
+| Structured output and sensitive data handling | [1Password CLI (op)](https://www.1password.dev/cli) |
+| Prompts, readable output, and optional TUI presentation | Charm: [gum](https://github.com/charmbracelet/gum), [glow](https://github.com/charmbracelet/glow), [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss) |
 
 ## CI / GitHub Actions
 
