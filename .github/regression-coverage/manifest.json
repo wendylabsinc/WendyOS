@@ -1656,9 +1656,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1595",
       "title": "Recover from stale Bluetooth bonds instead of reporting hollow connects",
       "package": "04",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "Tests identify stale-bond errors and wait for HID devices. They do not reproduce the full stale-bond remove/pair/connect sequence with BlueZ.",
-      "required_follow_up": "Require the private D-Bus lifecycle and three controls in the existing Linux network race job. Execute the reserved BlueZ/HID procedure separately for actual stale-key and hollow-input recovery on LE/classic devices; hardware cases remain not_run.",
+      "required_follow_up": "Follow the reserved exact-peripheral BlueZ/HID procedure for physical stale-key and hollow-input acceptance. Preserve separate hardware outcomes; protocol sequencing and three regression controls now passed hosted race execution.",
       "evidence": [
         {
           "tests": [
@@ -1670,6 +1670,11 @@
             ".github/scripts/bluez_stale_bond_rehearsal_test.py"
           ],
           "result": "Unchanged production BlueZ Connect runs over a private real dbus-daemon with a controlled BlueZ peer. Five Linux cases pass: stale-key recovery, hollow-HID recovery, rejected fresh pairing, cancellation during rediscovery and refusal to repair without pair authorization. Assertions cover remove/rediscover/fresh pair/trust/connect order, foreign pairing rejection and actual bus-name withdrawal. Disabling key repair, HID readiness or trust restoration fails intended assertions. Local Linux execution is non-race; required hosted race execution pending. Six offline physical-plan/observer checks pass; reserved vendor peripheral-only reset, real input events, exact identities and restoration are specified, with every hardware case not_run."
+        },
+        {
+          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325987",
+          "result": "Private real D-Bus lifecycle and all three historical controls passed under the hosted Linux race detector. Reserved BlueZ/HID physical procedure is prepared; actual LE/classic key reset and input recovery remain not_run."
         }
       ]
     },
@@ -1806,9 +1811,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2224",
       "title": "cli: reach USB devices when several share the 169.254/16 route",
       "package": "05",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Link-aware dials/listeners and error translation have tests. Multiple real USB links sharing 169.254/16 are not reproduced in ordinary CI.",
-      "required_follow_up": "Require actual Linux and Windows two-interface169.254/16 routing gates and all five binding/byte-order controls in the existing hosted jobs. Native execution remains pending; simulated adapters do not claim physical USB-driver coverage.",
+      "required_follow_up": "Retain both actual Linux and Windows overlapping-interface routing gates and all five regression controls.",
       "evidence": [
         {
           "tests": [
@@ -1826,6 +1831,11 @@
             "go/internal/cli/linklocal/multi_interface_windows_test.go"
           ],
           "result": "Prepared hosted-only Windows fixture with two owned Wintun interfaces and real overlapping169.254/16 routes. Production Dial, SourceIP and Listen must return distinct peer data/correct local addresses, including callback and established stream behavior after route reversal. Three controls remove dialing/listening interface binding or restore wrong byte order. Twelve offline admission/lifecycle tests, normal/three-control Windows cross-compiles and PowerShell parsing pass. Guards preserve the preexisting metadata host route and all nonowned routes; refuse preexisting Wintun devices/drivers and overlapping link-local state; drain the exact Windows Job before GUID-specific cleanup. Registered in the existing Windows job. Native execution remains pending; no local driver changes or physical USB execution occurred."
+        },
+        {
+          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325987",
+          "result": "Linux two-interface169.254/16 kernel routing passed with exact peers/source addresses, bound replies and established sessions after route reversal; both removed-binding controls failed intended assertions. Windows companion job131643325819 passed native owned-Wintun routing and all three dial/listen/byte-order controls. Physical USB-driver behavior is not inferred."
         }
       ]
     },
@@ -2066,9 +2076,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2086",
       "title": "perf(cli): adaptive chunk compression with stall fallback (WDY-3211)",
       "package": "06",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Compression and stall-watchdog tests cover chunk behavior and timing. Root ownership and long-lived stalled real transports are not fully established by the portable tests.",
-      "required_follow_up": "Require the real TCP/disk stall gate and elevated cache/session ownership gate, including all seven negative controls, in the existing hosted Linux network job. Root/UID-switch execution remains pending.",
+      "required_follow_up": "Retain the full-duration TCP/disk and root/user ownership gates with all seven regression controls.",
       "evidence": [
         {
           "tests": [
@@ -2086,6 +2096,11 @@
             "go/internal/cli/sessionbroker/ownership_process_linux_test.go"
           ],
           "result": "Hosted-only fixture compiles race binaries as the runner, then confines root writes and child UID/GID changes to fresh scratch paths. Cases require root-created cache data to be readable and lockable/updateable by the real runner, elevated Start/Run to reject foreign-owned broker configuration without artifacts or upstream traffic, and a real ordinary-user mTLS/IPC RPC round trip with socket cleanup. Two offline admission tests, ShellCheck, normal/four-control Linux builds and the ordinary-user Linux broker round trip pass. Root cases and the four named regression controls await hosted execution. Registered in the existing Linux network job without another runner."
+        },
+        {
+          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325987",
+          "result": "Full30-second real TCP/disk stall recovery passed with exact24MiB bytes, retained chunks and drained streams. All three transport controls failed intended assertions. Root-to-real-user cache access/update and mTLS/IPC broker ownership passed; all four ownership controls failed intended assertions. The job later failed in unrelated USB profile setup."
         }
       ]
     },
@@ -3139,9 +3154,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2805",
       "title": "Fix Wi-Fi setup before first-boot enrollment",
       "package": "10",
-      "status": "coverage_added_pending_ci",
+      "status": "human_script_ready",
       "audit_finding": "Tests cover waiting for ACME discovery, cancellation and Wi-Fi-first identity selection. NetworkManager and enrollment timing on a freshly booted device remain simulated.",
-      "required_follow_up": "Require the real delayed-directory ACME enrollment and no-wait negative control in the existing race job. Execute the separate fresh pre-enrollment physical case to prove actual first-boot NetworkManager setup and Wi-Fi becoming available; do not infer physical boot from loopback transport coverage.",
+      "required_follow_up": "Follow the exact-image first-boot physical procedure for actual NetworkManager/Wi-Fi/enrollment timing. Keep the passing real ACME/gRPC gate and no-wait control.",
       "evidence": [
         {
           "tests": [
@@ -3152,6 +3167,11 @@
             ".github/scripts/orin_firstboot_rehearsal_test.py"
           ],
           "result": "Locally passed the production first-boot entry point through real loopback ACME directory/EAB/order/CSR/certificate exchanges and gRPC provisioning status under the race detector. Offline cancellation preserves the credential handoff without a durable attempt; delayed availability enrolls once and restart preserves identity/key. Removing the production wait fails specifically on premature durable attempt creation. Registered the gate in the existing race job. The independently reviewed physical procedure separately covers exact-image first boot, no alternate Internet path, setup availability and subsequent Wi-Fi enrollment; hardware cases remain not_run. Hosted gate remains pending."
+        },
+        {
+          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325859",
+          "result": "Hosted real delayed-directory ACME enrollment/gRPC sequence and no-wait control passed. Required race suite passed. The exact-image fresh pre-enrollment physical procedure separately specifies NetworkManager setup, no alternate Internet path and Wi-Fi enrollment; hardware cases remain not_run."
         }
       ]
     },
@@ -3796,9 +3816,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2242",
       "title": "Stream Go2 data and commands through the agent, with a ROS 2 bridge",
       "package": "13",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Command acknowledgement, movement expiry and input-validation tests exist. ROS executor responsiveness and physical posture acknowledgements remain device integration concerns.",
-      "required_follow_up": "Require the real ROS/Unix gRPC/Agent/WebRTC command deadline journey and synchronous-callback/missing-lease controls in the existing go2 simulator row. Hosted execution remains pending; physical posture and stopping distance are separate.",
+      "required_follow_up": "Retain the actual ROS/Agent/WebRTC deadline journey and both historical controls; physical posture and stopping distance remain separate from this protocol acceptance.",
       "evidence": [
         {
           "tests": [
@@ -3808,6 +3828,11 @@
             "go/ros2/go2-bridge/tests/command_deadlines_test.py"
           ],
           "result": "Source-hashed ordinary native Linux container evidence passed the unchanged ROS Humble bridge through real Unix gRPC, production UnitreeRobotService and unitree.Connect to a Pion protocol robot. A 1.2-second posture acknowledgement left ROS callbacks, fresh odometry and Stop responsive; Stop completed in0.083s, actual wire move expiry in0.501s and unacknowledged Stop returned failure in0.207s. A late Stop acknowledgement could not complete another pending posture command. Synchronous-posture and disabled-lease controls failed their exact assertions. Owned container/network/image cleanup reported no errors. Root verified evidence source hashes against the integrated files. Registered in the existing go2 matrix row with no new runner; hosted execution pending. No MuJoCo or physical motion claim."
+        },
+        {
+          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325675",
+          "result": "Downloaded hosted summary/normal/control artifacts. Actual ROS Humble bridge/Unix gRPC/Agent/Pion journey passed:30 fresh odometry callbacks during1.2001s posture acknowledgement, Stop0.1048s, real wire lease expiry0.5008s and unacknowledged Stop failure0.2037s. Synchronous-posture and disabled-lease controls failed intended assertions, cleanup errors empty; all four source hashes match integrated files. No physical motion/stopping-distance claim."
         }
       ]
     },
@@ -4010,9 +4035,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2015",
       "title": "wendy device cache prune --all/--min-age with a synchronous containerd GC (WDY-3127)",
       "package": "15",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Prune RPC and GC tests exist. The embedded device-top action correction is mainly compile-checked; a UI action test should assert the options actually passed.",
-      "required_follow_up": "Require the actual Cobra-to-UDS prune option matrix and device-top p-key-to-RPC/result tests in the existing CLI race job. Existing Agent cache/GC tests remain required.",
+      "required_follow_up": "Retain the actual command/top-key transport tests and Agent cache/GC regressions.",
       "evidence": [
         {
           "tests": [
@@ -4020,6 +4045,11 @@
           ],
           "command": "go test -race ./go/internal/cli/commands -run 'Test(CachePruneCommand|TopPruneKeyReaches|RunDeviceCachePruneRPC|TopPruneKeyAndCompletion)' -count=1 -timeout=120s",
           "result": "Actual Cobra parsing sends optional age presence, explicit zero for --all, requested seconds and dry-run over private UDS gRPC. Invalid arguments produce no prune RPC. The actual p-key command reaches Agent once, retains the default grace period, prevents duplicate concurrent actions and preserves success/refusal results. Focused race tests pass locally; dropped-age and dropped-dry-run controls fail the wire assertions. Required hosted CLI race execution pending."
+        },
+        {
+          "head": "ba0e5a0faa44ebee4ab7de935cd4249f62a531ef",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43351475672/job/131643325859",
+          "result": "Complete hosted CLI command race suite passed at the published head, including actual Cobra-to-UDS optional-age/all/dry-run transport and device-top p-key RPC/result tests. Existing Agent cache/GC tests also passed in the race and real-containerd suites. Local dropped-age/dry-run controls already establish wire assertion sensitivity."
         }
       ]
     },
