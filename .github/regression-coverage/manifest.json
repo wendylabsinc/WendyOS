@@ -4667,6 +4667,12 @@
             "go/internal/cli/assets/docs/scripts/crawl-export.py"
           ],
           "result": "Local race checks validate73 actual documented argv across7files through Cobra command resolution and typed flags, including hidden aliases, without executing handlers. Local actual export crawl resolves22 source README references. Parser exposed and fixed invalid wendy apps list instruction. These checks do not execute installers, prove PAIR remote semantics, or establish OS/platform prose claims."
+        },
+        {
+          "tests": [
+            "go/internal/agent/network/documented_backend_unix_test.go"
+          ],
+          "result": "Local race execution proves the corrected Go Agent backend-selection claim: with legacy WENDY_NETWORK_MANAGER=connman, the actual constructor selects an owned nmcli executable and two actual child-process status calls return changing connected/escaped-SSID results with exact argv receipts; ConnMan invocation is trapped. A semantic sensitivity overlay that honors the old selector fails DOCUMENTED_NMCLI_BACKEND with ordinary exit1. This is a supplied process-boundary fixture, not a NetworkManager daemon or radio test and not a claim that this Go implementation historically honored the selector. The existing Fumadocs job requires the focused test, including on DEVELOPMENT.md edits; the ordinary Go race suite also discovers it. Mender/OTA defaults, Swift platform/version and language/template prose remain unverified by this increment."
         }
       ]
     },
