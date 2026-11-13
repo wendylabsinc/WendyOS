@@ -7,6 +7,25 @@ struct `'wendy run'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     A single prebuilt Compose service deploys and starts without a local
+     builder. Detached JSON reports unchecked readiness and a usable HTTP
+     endpoint whose response identifies this app and version.
+
+     The fixture pins a small public Python image by digest and removes its
+     exact app afterward, retaining the shared public image cache.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `deploys a prebuilt HTTP service without a local builder`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                _ = try await app.response(cli)
+                // Companion-version preservation has a separate disabled defect spec.
+                try await app.requireState(cli, "RUNNING", expectedVersion: nil)
+            }
+        }
+    }
+
+    /**
      An explicitly selected remote builder without BuildKit fails with a
      diagnostic naming that dependency. It does not fall back to a local
      builder, announce a started app, or change existing deployed app state.

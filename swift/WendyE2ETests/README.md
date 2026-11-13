@@ -87,38 +87,48 @@ WENDY_E2E_LEGACY_INTEGRATION=true \
 
 ### Run the HTTP app lifecycle specs
 
-`WENDY_E2E_HTTP_APP=true` opts into uniquely named app fixtures from
-`.github/ci-tests/http-app-loop`. Select an explicit WendyOS device and an
-isolated CLI HOME. The fixtures build on that same device with `--build-host`,
-then remove only their exact app and image. The CLI host needs Python 3 and
-curl; the target needs its builder role and BuildKit daemon already available.
-The fixture never installs or enables a builder. Use a trusted device hostname
-or saved identity binding; a bare IP may be refused by identity verification.
+`WENDY_E2E_HTTP_APP=true` opts into uniquely named real-device app fixtures
+from `.github/ci-tests/http-app-loop`. Select an explicit WendyOS device and
+an isolated CLI HOME. The CLI host needs Python 3 and curl.
+
+The prebuilt Compose cases pin a small official Python multiarch image by
+immutable digest, then run the HTTP payload through Compose's `command` array.
+They need no local or remote builder. Cleanup removes only the exact app;
+the public immutable image remains shared device cache content and is never
+deleted by the fixture. Runs explicitly skip Cloud app registration and never
+consent to changing the builder role.
 
 ```bash
 WENDY_E2E_HTTP_APP=true bash Scripts/E2ETest.sh \
   --no-managed-agent --agent-os wendyos \
   --device-address my-device.local \
   --cli-auth-config /private/path/e2e-auth.json \
-  --filter "responding HTTP" --filter "HTTP app" --filter "HTTP endpoint"
+  --filter "prebuilt HTTP"
 ```
 
-The positive lifecycle specs retain full executable bodies but are disabled
-pending validation on a supported builder; the current test Jetson has no
-BuildKit daemon and the CLI host has no container builder.
+The HTTP assertions verify app identity and payload version, a live reported
+endpoint, inventory identity/state/port, endpoint closure after stop, and a new
+process instance after restart. Detached start must report unchecked readiness.
+A separate full-body disabled spec retains companion version preservation:
+Compose currently reports `latest` instead of configured `1.0.0` in inventory.
+Other Compose cases leave that assertion to the disabled defect spec.
 
-The HTTP assertions verify app identity and version as well as a live response;
-stop/start checks also require a different process instance. Detached start
-must report unchecked readiness. The `--wait-ready` HTTP spec retains a full
-body but is disabled because the CLI rejects that flag with `--build-host`.
-It needs a supported builder path before it can be validated.
+Five source-build positive specs retain complete bodies but remain disabled:
+the available test Jetson lacks BuildKit and the CLI host has no container
+builder. Their same-device `--build-host` path also rejects `--wait-ready`.
+No fixture installs or enables a builder. A claimed ready result must satisfy
+the declared TCP probe immediately; only unchecked detached startup may retry.
+If source deployment may have imported an image but no container exists,
+cleanup fails loudly with the exact app/repository because app inventory alone
+cannot establish image absence. It never prunes shared device caches.
 
-When building is unavailable, the same opt-in allows selective real-device
-checks filtered by `rejects a missing application and preserves` and
-`rejects unsupported remote readiness`. To exercise the missing-builder failure
-as well, set `WENDY_E2E_NO_BUILDKIT=true` only for a target known to lack BuildKit
-and filter `reports unavailable remote builder`. These cases assert failure
-and unchanged inventory; they do not establish successful app lifecycle coverage.
+The same opt-in allows selective real-device checks filtered by
+`rejects a missing application and preserves` and
+`rejects unsupported remote readiness`. To exercise missing-builder failure,
+set `WENDY_E2E_NO_BUILDKIT=true` only for a target known to lack BuildKit and
+filter `reports unavailable remote builder`. These cases assert failure and
+unchanged inventory. Use a trusted hostname or saved identity binding; a bare
+IP may be refused by identity verification.
 
 ## Test environment
 

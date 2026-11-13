@@ -9,6 +9,12 @@ struct HTTPAppFixture: Sendable {
     let app = "e2e-" + UUID().uuidString.lowercased()
     let port = Int.random(in: 30_000...49_999)
     let device: String
+    let mode: ProjectMode
+
+    enum ProjectMode: Sendable { case sourceBuild, prebuiltCompose }
+    // Official Python multiarch index; linux/arm64 layers total about 20 MB compressed.
+    static let prebuiltImage =
+        "docker.io/library/python@sha256:303398d5c9f110790bce60d64f902e51e1a061e33292985c72bf6cd07960bf09"
 
     var command: String { "wendy --json --device \(Self.quote(device))" }
     var buildHostArgument: String { "--build-host=\(Self.quote(device))" }
@@ -67,9 +73,23 @@ struct HTTPAppFixture: Sendable {
         }
     }
 
+    static func withComposeApp(
+        cli: WendyE2ESession,
+        body: @Sendable (HTTPAppFixture) async throws -> Void
+    ) async throws {
+        // The immutable public image is shared cache content, not an app-owned
+        // image tag. Remove the exact owned app; never delete that shared image.
+        try await withProject(cli: cli, imageMayBeImported: false, mode: .prebuiltCompose) {
+            fixture in
+            try await fixture.deploy(cli, waitReady: false)
+            try await body(fixture)
+        }
+    }
+
     static func withProject(
         cli: WendyE2ESession,
         imageMayBeImported: Bool = true,
+        mode: ProjectMode = .sourceBuild,
         body: @Sendable (HTTPAppFixture) async throws -> Void
     ) async throws {
         let device = try #require(
@@ -80,7 +100,7 @@ struct HTTPAppFixture: Sendable {
             cli.machine.isLocal && cli.machine.os != .windows,
             "Fixture requires a local POSIX CLI host"
         )
-        let fixture = HTTPAppFixture(device: device)
+        let fixture = HTTPAppFixture(device: device, mode: mode)
         let before = try await fixture.inventory(cli)
         try #require(!before.contains { $0.name == fixture.app })
         // A pre-existing listener must never be mistaken for this service's readiness.
@@ -98,8 +118,9 @@ struct HTTPAppFixture: Sendable {
         do {
             let remaining = try await fixture.inventory(cli)
             if remaining.contains(where: { $0.name == fixture.app }) {
+                let imageCleanup = mode == .sourceBuild ? "--cleanup" : ""
                 try await cli.sh(
-                    "\(fixture.command) device apps remove \(quote(fixture.app)) --force --cleanup"
+                    "\(fixture.command) device apps remove \(quote(fixture.app)) --force \(imageCleanup)"
                 )
             } else if imageMayBeImported {
                 // Container inventory cannot prove that an earlier image import was undone.
@@ -127,11 +148,15 @@ struct HTTPAppFixture: Sendable {
         return try JSONDecoder().decode([App].self, from: Data(result.stdout.utf8))
     }
 
-    func requireState(_ cli: WendyE2ESession, _ state: String) async throws {
+    func requireState(
+        _ cli: WendyE2ESession,
+        _ state: String,
+        expectedVersion: String? = "1.0.0"
+    ) async throws {
         let apps = try await inventory(cli).filter { $0.name == app }
         try #require(apps.count == 1, "Exactly one owned app must be listed")
         #expect(apps[0].runningState == state)
-        #expect(apps[0].version == "1.0.0")
+        if let expectedVersion { #expect(apps[0].version == expectedVersion) }
         #expect(apps[0].httpPort == port)
     }
 
@@ -157,7 +182,7 @@ struct HTTPAppFixture: Sendable {
         return response
     }
 
-    func stop(_ cli: WendyE2ESession) async throws {
+    func stop(_ cli: WendyE2ESession, expectedVersion: String? = "1.0.0") async throws {
         try await cli.sh("\(command) device apps stop \(Self.quote(app))") { result in
             try #require(result.status.isSuccess)
             let object =
@@ -167,7 +192,7 @@ struct HTTPAppFixture: Sendable {
             #expect(object?["status"] == "stopped")
             #expect(object?["action"] == "stop")
         }
-        try await requireState(cli, "STOPPED")
+        try await requireState(cli, "STOPPED", expectedVersion: expectedVersion)
         try await cli.sh("curl --silent --max-time 2 \(Self.quote(url))") { result in
             #expect(result.status.isFailure, "Stopped service must not answer HTTP")
         }
@@ -209,12 +234,34 @@ struct HTTPAppFixture: Sendable {
             printf '%s' \(Self.quote(configText)) > \(Self.quote(app))/wendy.json
             """
         )
+        if mode == .prebuiltCompose {
+            let payload = try String(contentsOfFile: source + "/main.py", encoding: .utf8)
+            let compose: [String: Any] = [
+                "services": [
+                    "web": [
+                        "image": Self.prebuiltImage,
+                        "network_mode": "host",
+                        "command": ["python3", "-u", "-c", payload],
+                        "restart": "no",
+                    ]
+                ]
+            ]
+            let composeData = try JSONSerialization.data(
+                withJSONObject: compose,
+                options: [.sortedKeys, .withoutEscapingSlashes]
+            )
+            try await cli.sh(
+                "printf '%s' \(Self.quote(String(decoding: composeData, as: UTF8.self))) > \(Self.quote(app))/compose.yml"
+            )
+        }
+
     }
 
     private func deploy(_ cli: WendyE2ESession, waitReady: Bool) async throws {
         let flags = waitReady ? "--wait-ready --readiness-timeout 20s" : ""
+        let builder = mode == .sourceBuild ? buildHostArgument : ""
         try await cli.sh(
-            "\(command) run --prefix \(Self.quote(app)) --build-host=\(Self.quote(device)) --skip-cloud-registration --detach --no-restart \(flags)"
+            "\(command) run --prefix \(Self.quote(app)) \(builder) --skip-cloud-registration --detach --no-restart \(flags)"
         ) { result in
             try #require(result.status.isSuccess)
             let output = try JSONDecoder().decode(RunResult.self, from: Data(result.stdout.utf8))

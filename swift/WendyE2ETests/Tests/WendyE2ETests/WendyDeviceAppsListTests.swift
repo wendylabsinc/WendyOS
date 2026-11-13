@@ -6,6 +6,39 @@ struct `'wendy device apps list'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     Inventory identifies the prebuilt HTTP app exactly once with its declared
+     HTTP port and running state, and that endpoint returns the same app ID.
+     Companion version preservation is specified separately below.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `identifies a responding prebuilt HTTP app and its declared port`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                try await app.requireState(cli, "RUNNING", expectedVersion: nil)
+                _ = try await app.response(cli)
+            }
+        }
+    }
+
+    /**
+     A Compose app's inventory retains the version declared in its companion
+     wendy.json, matching the version served by the application.
+     */
+    @Test(
+        .disabled(
+            "Product defect: Compose drops companion version 1.0.0; real inventory reports latest. Reproduced on Jetson with a responding HTTP app."
+        )
+    )
+    func `preserves the companion version of a prebuilt HTTP app`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                try await app.requireState(cli, "RUNNING")
+                _ = try await app.response(cli)
+            }
+        }
+    }
+
+    /**
      JSON inventory includes exactly one entry for a deployed HTTP app, with
      its configured identity, version, running state, and port. The listed
      endpoint serves that app's own identity in a real HTTP response.

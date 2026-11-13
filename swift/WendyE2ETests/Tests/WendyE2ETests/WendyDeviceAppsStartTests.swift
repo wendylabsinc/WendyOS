@@ -6,6 +6,25 @@ struct `'wendy device apps start'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     Starting a stopped prebuilt HTTP service with --detach confirms the app
+     and its saved restart policy. Its endpoint responds from a different
+     process instance while retaining the same app identity and payload version.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `restarts a prebuilt HTTP app as a new responding process`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                let original = try await app.response(cli)
+                try await app.stop(cli, expectedVersion: nil)
+                try await app.start(cli)
+                let restarted = try await app.response(cli)
+                #expect(restarted.instance != original.instance)
+                try await app.requireState(cli, "RUNNING", expectedVersion: nil)
+            }
+        }
+    }
+
+    /**
      An explicitly named application that is absent from the device fails
      without inventing success or changing the inventory of deployed apps.
      The diagnostic identifies the requested app so the caller can correct it.

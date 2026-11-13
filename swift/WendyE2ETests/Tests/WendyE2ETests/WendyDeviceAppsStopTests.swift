@@ -6,6 +6,20 @@ struct `'wendy device apps stop'` {
     let scenario = CLIAndAgentScenario()
 
     /**
+     Stopping a prebuilt HTTP service confirms the selected app, leaves that
+     identity stopped in inventory, and makes its endpoint stop answering.
+     */
+    @Test(.enabled(if: httpAppTestsEnabled))
+    func `stops a prebuilt HTTP app and closes its endpoint`() async throws {
+        try await HTTPAppFixture.scenario().run { cli, _ in
+            try await HTTPAppFixture.withComposeApp(cli: cli) { app in
+                _ = try await app.response(cli)
+                try await app.stop(cli, expectedVersion: nil)
+            }
+        }
+    }
+
+    /**
      An explicitly named application that is absent from the device fails
      without inventing success or changing the inventory of deployed apps.
      The diagnostic identifies the requested app so the caller can correct it.
