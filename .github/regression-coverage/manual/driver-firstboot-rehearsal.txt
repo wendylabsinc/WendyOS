@@ -1,0 +1,210 @@
+Physical first-boot and USB registry driver acceptance, audit2628
+
+Every case starts not_run. The generator hashes local records and reads one
+immutable Builder source object; it never runs the CLI, probes USB, writes media,
+loads a module, reads credentials or changes a device. These commands are for an
+owner's separately authorized execution on reserved serial @SERIAL@ only. One
+Orin Nano/NVMe or AGX Orin/NVMe/eMMC developer-kit result cannot qualify another.
+
+1. Record the real module/carrier revision, recovery ECID, serial-console endpoint,
+   USB physical path, board serial and storage model/serial/capacity. Keep separate
+   board power, a serial console, the board-specific recovery/backup procedure and
+   its exact flashpack hashes available. Confirm the named owner can restore THIS
+   board. The authorization record must separately approve each fresh erase below,
+   the named test module, second boots and its eventual removal. No production
+   board, shared driver or unrelated storage may be used. The install remains
+   interactive; do not add --force, --yes-overwrite-internal or broad cleanup.
+   Check the CLI's physical target/erase summary against the independent inventory
+   before accepting it. Never infer authorization from successful plan generation.
+
+2. Inventory keys are cli_binary, agent_binary, cli_source_commit,
+   agent_source_commit, release_descriptor, release_archive, device_catalog,
+   driver_raw, signing_public_key, signature_review, builder_source,
+   identity_record, recovery_record, authorization_record, network_isolation_record,
+   disconnect_seconds; board {device,carrier,storage,serial,ecid,owner,
+   storage_serial,usb_path,serial_console,device_name,usb_address_before,
+   usb_address_after}. Use full source commits and actual files. The two USB
+   endpoints must be observed link-local addresses on port50051 from this same
+   physical board, not invented addresses or another board sharing a hostname.
+   The generator supports developer-kit Orin Nano/NVMe and AGX Orin/NVMe/eMMC.
+   Record a unique provisioned name @NAME@. Serial/ECID bind the target because the
+   first-boot unauthenticated listener's hostname/board checks alone are not
+   cryptographic hardware identity. Physically isolate other USB boards.
+
+3. Capture the actual public device manifest, immutable OS version and full
+   flashpack descriptor/archive. The descriptor schema is the existing Orin seed
+   schema {device,storage,version,url,sha256,size_bytes}. The corresponding catalog
+   version must publish the same storage-specific flashpack and devkit kernel
+   @KERNEL@, and exactly one wendyos-hello extension for it. Record the published
+   raw image, digest, size, modules_load and detached signature. The actual module
+   source is pinned Builder commit f72a1b354c80523dc2b092e52e38e44fe56c8d5a,
+   drivers/wendyos-hello/wendyos_hello.c. The module logs exactly:
+     wendyos_hello: driver add-on loaded (sysext pipeline OK)
+   Do not substitute an empty module, copied log line, unrelated firmware driver
+   or fabricated catalog. The full archive must be the reviewed bootable flashpack;
+   generation hashes it but does not inspect/decompress its rootfs.
+
+4. The published signature is ML-DSA65 over the raw image's SHA256 bytes. The
+   catalog itself has no signature format asserted here. Preserve the actual
+   candidate Agent's build public-key file and build provenance. Its shipped empty
+   placeholder is supported: record signature verification as DISABLED and do not
+   claim that a published signature was verified merely because installation
+   succeeded. Do not modify the candidate or provision a key just for this test.
+   If the actual candidate embeds a key, record enforcement as enabled and require
+   its normal verification to succeed; never suppress a rejection or substitute an
+   unsigned/development build. Independently review the exact published artifact's
+   origin and digest in either case. signature_review JSON binds driver_sha256,
+   signature_sha256, agent_sha256, public_key_sha256, the actual boolean
+   agent_signature_verification_enabled and reviewer. Preserve actual build/key
+   evidence and any independently performed signature verification command/result
+   in that reviewed record. Generation checks the binding, empty/nonempty public
+   key policy and signature length only; it does not perform ML-DSA verification
+   or certify the review. The signature-policy result is separate from USB upload
+   and driver activation acceptance. No private key, enrollment credential or token
+   belongs in the inventory/evidence.
+
+5. Generate with:
+     python3 driver-firstboot-rehearsal.py inventory.json NEW_PRIVATE_OUTPUT
+   Compare every inventory/generated/source hash before physical execution. Run
+   the generated plan command and compare its exact board/storage/version and full
+   flashpack URL with the captured catalog. Generation-pinned GCS URLs must match
+   the catalog URL without the generation query and all content hashes. The actual
+   install resolves the published version again; if its catalog/artifact differs,
+   STOP and prepare a new reviewed plan. Do not switch to --nightly/--pr or a local
+   --file shortcut. Verify actual candidate CLI hash and candidate Agent hash
+   @AGENT@. The generated commands select a new private cli-config directory and the
+   file secret store explicitly. Keep those prefixes when running them; preserve
+   that directory until evidence collection is complete, then remove only it.
+   Do not modify the operator's normal default-device or auth state.
+
+Case A: install --driver across a genuine powered disconnect
+
+6. Reserve an already identified board whose pre-flash USB endpoint was recorded.
+   Use the generated install_with_driver command. It explicitly supplies
+   --binary, --pre-enroll=false, --no-wifi and --driver wendyos-hello. A second
+   operator watches the serial console and USB/network timestamps. Keep the USB
+   recovery cable connected for the entire image write and provisioning. Only
+   after the flash writer reports complete, and the CLI reports:
+     Waiting for wendyos-@NAME@ to boot.
+   disconnect the USB DATA cable for @DISCONNECT@ seconds while the board stays
+   separately powered. Never disconnect a writer, remove board power, or interrupt
+   a flashing process to manufacture a failure. If the driver already installed
+   before disconnection, this attempt does not cover the reconnect boundary.
+
+7. Replug the same physical USB path within the existing ten-minute boot-wait
+   window, timed from the waiting message, without restarting the CLI. Record the
+   actual changed USB interface/address, mDNS hostname and recovery-to-OS device
+   transition. Keep the old/new address and kernel observations in the transcript.
+   During the disconnected interval, use the serial console to record the new
+   boot ID, kernel, absence of /sys/module/wendyos_hello and absence of the exact
+   enabled raw path before replug. A module baked into the image or already loaded
+   before this upload cannot prove postflash activation.
+   Require wendyos-@NAME@, the exact board type and @KERNEL@ before any upload.
+   A genuine address change is required for that subcase; if the address remains
+   unchanged, leave address-change acceptance not_run rather than editing interfaces
+   or inventory to pretend it changed. Root's protocol fixture separately exercises
+   wrong hostname/board/old-kernel responses. Do not connect a decoy physical board
+   or falsify firmware identity to repeat those refusals here.
+
+8. Observe driver upload/verification/activation and the terminal CLI result.
+   After boot matching, each driver has its own ten-minute upload bound. Record
+   "Requested drivers installed" only with exit0 AND the independent observations
+   below. A successful flash or reconnect alone is insufficient. If upload stalls,
+   retain the failure, allow its existing bound, and inspect the same board. Do not
+   start concurrent writers or blindly rerun install. Preserve the flash and driver
+   outcomes separately. A missing endpoint or busy module does not prove OS failure.
+
+9. Run generated verify, info and list against the exact new USB endpoint. Through
+   the same serial console, run these read-only observations; missing tools keep
+   acceptance pending rather than installing extra packages:
+     date -u
+     cat /proc/device-tree/serial-number
+     cat /proc/sys/kernel/random/boot_id
+     hostname
+     uname -r
+     timeout 15 systemctl show wendy-agent.service --property=MainPID,ActiveState,SubState
+   Use the observed live MainPID to hash /proc/MAINPID/exe with sha256sum and
+   compare @AGENT@. Do not read Agent configuration/identity keys. Correlate the
+   unit's PID and executable again if it restarted while observing.
+     test -d /sys/module/wendyos_hello
+     cat /sys/module/wendyos_hello/initstate
+     sha256sum '/data/extensions/enabled/@KERNEL@/wendyos-hello.raw'
+     cat /usr/lib/wendyos-driver-state/wendyos-hello/generation
+     cat /usr/lib/wendyos-driver-state/wendyos-hello/replaced-modules
+     timeout 15 journalctl -b -k --no-pager -n 20 --grep='wendyos_hello:'
+     timeout 15 journalctl -b -u wendy-agent.service --no-pager -n 200
+     timeout 15 systemd-sysext status --json=short
+   Require the exact raw digest @RAW@, initstate live, a fresh activation generation,
+   the actual kernel load message AFTER this attempt, and no
+   signature/hash/kernel rejection or rollback in the bounded Agent transcript.
+   Preserve a signature-disabled warning if the candidate uses the documented
+   empty key; it must agree with the recorded policy and must not be hidden.
+   The list JSON must report exact kernelVersion and installed wendyos-hello with
+   loaded:true, unreadable:false, stale:false and modulesLoad:[wendyos_hello].
+   A sysext merge alone, an old receipt or a log from a prior boot is insufficient.
+
+10. Reboot once from the local console with systemctl reboot, after upload and
+    activation have finished. Within ten minutes require a new boot ID, the same
+    physical board/storage identity, exact kernel and Agent hash, same raw digest,
+    healthy CLI RPC and loaded module with THIS boot's kernel log. Re-run the
+    read-only commands and list. Record receipt generation; it may be regenerated
+    during boot, so require correct provenance rather than identical text.
+
+Case B: separate unenrolled USB registry upload without device egress
+
+11. Obtain the separate fresh-erase authorization, then run
+    fresh_registry_baseline, which omits --driver but pins the same image and
+    --binary --pre-enroll=false --no-wifi. Never reuse an already installed hello
+    module as proof of upload. Require list absence and no sys/module/wendyos_hello
+    before this case. Record the serial boot transcript and generated info JSON with the
+    organization key explicitly present and null. An absent organization key means
+    enrollment is unknown and does not qualify as unenrolled. Never read private
+    configuration contents. Keep the board on separately powered USB only,
+    with Ethernet unplugged, no Wi-Fi connection, no cellular/secondary uplink and
+    no host Internet sharing, NAT, bridge or forwarding to it. Host Internet access
+    remains available for the CLI to fetch the catalog and raw image.
+
+12. Verify generated info has only the intended USB link-local/loopback addresses
+    and wifi_status reports disconnected. Over serial, capture:
+      timeout 15 ip -json address
+      timeout 15 ip -json route
+      timeout 15 ip -6 -json route
+    Require no device default route or routable address. Independently review the
+    host network-isolation record; a disconnected Wi-Fi icon alone is insufficient.
+    Do not create/change firewall or routing state with this plan. On this isolated
+    board, run generated available and match the recorded name, version, kernel and module list. This JSON
+    does not expose signatures or digests: compare those separately against the
+    captured published manifest and final raw image. Then run registry_install by NAME. It must emit:
+      Device reports no WiFi or routable network address; downloading driver to upload...
+    Correlate host-side artifact download with the Agent's incoming streamed upload,
+    its verification/apply events and exact installed raw digest. No board egress
+    must exist throughout. The message alone is not proof; a direct URL download
+    or --file install does not cover this registry fallback. Observe at most ten
+    minutes for the CLI download and another ten minutes for streamed installation;
+    on expiry retain evidence and inspect rather than launch a second install.
+    Require exit0 and all observations from step9. Perform step10 again for this
+    independently uploaded driver.
+
+Case C: explicit incomplete-firstboot result
+
+13. This is a separately authorized fresh install_with_driver attempt. Only after
+    confirmed completed write/provisioning, keep USB data disconnected beyond the
+    ten-minute wait, with board power and serial console intact. Capture nonzero
+    CLI exit and the actual diagnostic "OS written, but drivers were not installed".
+    Serial must still show the expected OS booted; no driver success message,
+    receipt or module may be credited. A flashing error is a different failure.
+    Replug only after this CLI has exited; inventory the actual board and record
+    the driver as not installed. Do not relabel this case as a failed OS write or
+    silently run a retry. A later explicit registry install is a new attempt with
+    its own approval/evidence and cannot retroactively turn this result into success.
+
+14. Cleanup only the reserved test module using generated remove_owned_driver in
+    an interactive terminal, after identity/list/source checks and owner approval.
+    No --force or reset-all. Require list absence, no module directory, no owned
+    raw file, and the actual unload log. If removal is refused or another workload
+    holds it, leave evidence and follow the named recovery procedure; do not kill
+    unrelated workloads or delete sysext state by hand. Preserve transcripts and
+    private evidence before deleting the owned host output/config directory.
+    Keep every unsupported board, missing address transition, signature review,
+    activation/receipt observation, timeout result or second boot as not_run or
+    failed. Never derive physical acceptance from generator tests.
