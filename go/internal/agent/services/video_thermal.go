@@ -32,8 +32,12 @@ var thermalUSBIdentity = func(path string) (vendor, product string) {
 func probeThermalCamera(path, name string) *pb.ThermalCamera {
 	adapter := thermal.Identify(name, nil)
 	vendor, product := thermalUSBIdentity(path)
-	if vendor == "2bdf" && product == "0102" && deviceSupportsRawSize(path, v4l2PixFmtYUYV, 256, 392) {
-		return &pb.ThermalCamera{Adapter: thermal.TOPDONTC001HIK, CaptureWidth: 256, CaptureHeight: 392}
+	if vendor == "2bdf" && product == "0102" {
+		for _, size := range [][2]uint32{{256, 392}, {96, 200}} {
+			if deviceSupportsRawSize(path, v4l2PixFmtYUYV, size[0], size[1]) {
+				return &pb.ThermalCamera{Adapter: thermal.TOPDONTC001HIK, CaptureWidth: size[0], CaptureHeight: size[1]}
+			}
+		}
 	}
 	if (adapter == thermal.TOPDONTC001 || vendor == "0bda" && product == "5830") && deviceSupportsRawSize(path, v4l2PixFmtYUYV, 256, 384) {
 		return &pb.ThermalCamera{Adapter: thermal.TOPDONTC001, CaptureWidth: 256, CaptureHeight: 384}
@@ -54,17 +58,14 @@ var thermalCaptureProfile = func(path string) *pb.ThermalCamera {
 }
 
 func thermalPreviewCrop(profile *pb.ThermalCamera, width, height uint32) (top, bottom uint32, ok bool) {
-	if width != 256 {
-		return 0, 0, false
-	}
 	switch profile.GetAdapter() {
 	case thermal.TOPDONTC001:
-		if height == 384 {
+		if width == 256 && height == 384 {
 			return 0, 192, true
 		}
 	case thermal.TOPDONTC001HIK:
-		if height == 392 {
-			return 196, 4, true
+		if (width == 256 && height == 392) || (width == 96 && height == 200) {
+			return height / 2, 4, true
 		}
 	}
 	return 0, 0, false

@@ -2,8 +2,8 @@
 
 package discovery
 
-// usbDisplayNameResolver has nothing to add on Linux and other unix-likes: the
-// kernel interface name is itself the identifier the heuristics key off (enx…,
-// usb0, ncm0) and looksLikeUSBConnection falls back to the sysfs device path
-// for the rest. A nil resolver means "name-only classification".
+// usbDisplayNameResolver has nothing to add on Linux and other unix-likes:
+// Linux classifies by the USB identity in sysfs (see IsWendyUSBGadget), and
+// elsewhere the interface name is all there is. A nil resolver means
+// "classify without a display name".
 func usbDisplayNameResolver() func(string) string { return nil }

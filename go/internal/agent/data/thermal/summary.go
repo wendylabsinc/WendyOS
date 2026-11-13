@@ -19,15 +19,33 @@ type TemperatureSummary struct {
 // conversion MUST NOT be applied to the sensor pixels.
 // Protocol evidence: github.com/Krastanov/ht-203u-linux/THERMOMETRY.md.
 func DecodeTemperatureSummary(data []byte, layout *pb.RawFormat) *TemperatureSummary {
-	if layout.GetThermalPlane().GetAdapter() != TOPDONTC001HIK ||
-		layout.GetFourcc() != "YUYV" || layout.GetWidth() != 256 || layout.GetHeight() != 392 ||
-		layout.GetBytesPerLine() != 512 || len(data) != 200704 ||
-		binary.LittleEndian.Uint32(data[193*512:]) != 0xaabbccdd {
+	if layout.GetThermalPlane().GetAdapter() != TOPDONTC001HIK || layout.GetFourcc() != "YUYV" {
 		return nil
 	}
+	w, h := layout.GetWidth(), layout.GetHeight()
+	if !((w == 256 && h == 392) || (w == 96 && h == 200)) {
+		return nil
+	}
+	stride, sensorHeight := w*2, (h-8)/2
+	if layout.GetBytesPerLine() != stride || len(data) != int(stride*h) {
+		return nil
+	}
+	header := (sensorHeight + 1) * stride
+	if binary.LittleEndian.Uint32(data[header:]) != 0xaabbccdd {
+		return nil
+	}
+	// Verified on 2bdf:0102 / USB bcdDevice 0409: the 96x96 variant carries
+	// the same summary codes and normalized coordinates at row 196.
+	// Successive summaries match the live sensor extrema; the initial
+	// summary may be cached. Consumers must retain the freshness gate.
+	if w == 96 && (binary.LittleEndian.Uint32(data[header+8:]) != w ||
+		binary.LittleEndian.Uint32(data[header+12:]) != sensorHeight) {
+		return nil
+	}
+	trailer := (h - 4) * stride
 	var words [10]uint16
 	for i := range words {
-		words[i] = binary.LittleEndian.Uint16(data[388*512+i*2:])
+		words[i] = binary.LittleEndian.Uint16(data[int(trailer)+i*2:])
 	}
 	if words[0] != 0xffff || words[1] != 0xeeee || words[2] == 0 || words[5] == 0 ||
 		words[2] == 65535 || words[5] == 65535 || words[2] < words[5] ||
@@ -35,7 +53,7 @@ func DecodeTemperatureSummary(data []byte, layout *pb.RawFormat) *TemperatureSum
 		return nil
 	}
 	point := func(code, x, y uint16) Point {
-		return Point{X: (uint32(x)*255 + 500) / 1000, Y: (uint32(y)*191 + 500) / 1000, Raw: code}
+		return Point{X: (uint32(x)*(w-1) + 500) / 1000, Y: (uint32(y)*(sensorHeight-1) + 500) / 1000, Raw: code}
 	}
 	return &TemperatureSummary{Coldest: point(words[5], words[6], words[7]), Hottest: point(words[2], words[3], words[4]),
 		ColdCelsius: float64(words[5])/64 - 50, HotCelsius: float64(words[2])/64 - 50, Identity: words}

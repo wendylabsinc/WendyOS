@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -256,7 +258,11 @@ func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolR
 		return errResultf(errCodeUnsupported, "inside a device container only the local device is reachable (the agent socket overrides %q); connect to %q", address, localDeviceSelector), nil
 	}
 	if err := s.ConnectTo(ctx, address); err != nil {
-		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", address, err.Error()), nil
+		hint := ""
+		if errors.Is(err, certs.ErrExpectedDeviceIdentity) {
+			hint = "; for first-boot Wi-Fi setup of an unenrolled device, pass this selector as device to the Wi-Fi tools instead"
+		}
+		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s%s", address, err.Error(), hint), nil
 	}
 	return okText(fmt.Sprintf("connected to %s", address)), nil
 }

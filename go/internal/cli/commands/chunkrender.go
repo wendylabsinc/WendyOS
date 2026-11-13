@@ -116,7 +116,7 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 		}
 	}()
 
-	finalModel, err := tp.Run()
+	finalModel, err := tui.RunProgram(tp)
 	if err != nil {
 		cancel()
 		<-done

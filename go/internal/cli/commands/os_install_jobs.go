@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/rcm"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/t234"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/wendyconf"
 )
 
 func installationJobStore(root string) (onboarding.JobStore, error) {
@@ -44,7 +46,7 @@ func installationJobBackend() onboarding.Backend {
 			if err != nil {
 				return nil, err
 			}
-			return s.Start(ctx, o, installationJobHooks())
+			return s.Start(ctx, o, installationJobHooksFn())
 		},
 		Status: func(ctx context.Context, id string) (*onboarding.Job, error) {
 			s, err := installationJobStore("")
@@ -58,10 +60,13 @@ func installationJobBackend() onboarding.Backend {
 			if err != nil {
 				return nil, err
 			}
-			return s.Resume(ctx, o, installationJobHooks())
+			return s.Resume(ctx, o, installationJobHooksFn())
 		},
 	}
 }
+
+// installationJobHooksFn lets tests plan without the release manifest.
+var installationJobHooksFn = installationJobHooks
 
 func installationJobHooks() onboarding.JobHooks {
 	return onboarding.JobHooks{Plan: planOSInstall, Probe: probeInstallJobTarget, Ready: installJobPrivileges, Launch: launchInstallJob,
@@ -193,12 +198,20 @@ func newOSInstallJobsCmd() *cobra.Command {
 	}, PersistentPostRunE: func(*cobra.Command, []string) error { return nil }}
 	cmd.PersistentFlags().StringVar(&root, "job-root", "", "Installation job directory (normally ~/.wendy/install-jobs)")
 	var start onboarding.StartOptions
+	var deviceName string
+	var wifiEntries []string
+	var noWiFi bool
 	startCmd := &cobra.Command{Use: "start", Short: "Plan a job and return physical setup instructions without writing", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		prov, err := installJobProvisioning(deviceName, wifiEntries, noWiFi)
+		if err != nil {
+			return err
+		}
+		start.Provisioning = prov
 		s, err := installationJobStore(root)
 		if err != nil {
 			return err
 		}
-		j, err := s.Start(c.Context(), start, installationJobHooks())
+		j, err := s.Start(c.Context(), start, installationJobHooksFn())
 		if err != nil {
 			return err
 		}
@@ -210,6 +223,10 @@ func newOSInstallJobsCmd() *cobra.Command {
 	startCmd.Flags().StringVar(&start.Storage, "storage", "", "sd, nvme or emmc")
 	startCmd.Flags().StringVar(&start.Drive, "drive", "", "Exact host drive path")
 	startCmd.Flags().BoolVar(&start.RootfsOnly, "rootfs-only", false, "Write only the Orin rootfs media")
+	startCmd.Flags().StringVar(&deviceName, "device-name", "", "Device name for first boot; omitted means auto-generated")
+	startCmd.Flags().StringArrayVar(&wifiEntries, "wifi", nil, "Wi-Fi network for first boot. Repeatable. Format: ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2]")
+	startCmd.Flags().BoolVar(&noWiFi, "no-wifi", false, "First boot without Wi-Fi (Ethernet or USB); the same as omitting --wifi")
+	startCmd.MarkFlagsMutuallyExclusive("wifi", "no-wifi")
 	var statusID string
 	statusCmd := &cobra.Command{Use: "status", Short: "Read job progress and required physical steps", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		s, err := installationJobStore(root)
@@ -229,7 +246,7 @@ func newOSInstallJobsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		j, err := s.Resume(c.Context(), resume, installationJobHooks())
+		j, err := s.Resume(c.Context(), resume, installationJobHooksFn())
 		if err != nil {
 			return err
 		}
@@ -247,16 +264,64 @@ func newOSInstallJobsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return s.Run(c.Context(), workerID, executeInstallJob)
+		// A detached worker has nobody to answer a prompt or a retry offer.
+		prevInteractive := isInteractiveTerminalFn
+		isInteractiveTerminalFn = func() bool { return false }
+		defer func() { isInteractiveTerminalFn = prevInteractive }()
+		return s.Run(c.Context(), workerID, func(ctx context.Context, j *onboarding.Job, checkpoint onboarding.Checkpoint) error {
+			prov, err := s.ReadProvisioning(j)
+			if err != nil {
+				return err
+			}
+			return executeInstallJob(ctx, j, newInstallJobFirstBoot(prov), checkpoint)
+		})
 	}}
 	worker.Flags().StringVar(&workerID, "job-id", "", "Job ID")
 	cmd.AddCommand(startCmd, statusCmd, resumeCmd, worker)
 	return cmd
 }
 
+// installJobProvisioning maps the start flags. Errors never quote a --wifi
+// entry, because it may hold a password.
+func installJobProvisioning(deviceName string, wifiEntries []string, noWiFi bool) (*onboarding.Provisioning, error) {
+	p := &onboarding.Provisioning{DeviceName: deviceName, NoWiFi: noWiFi}
+	for i, raw := range wifiEntries {
+		c, err := parseWiFiEntry(raw)
+		if err != nil {
+			return nil, usageErrorf("--wifi entry %d is not valid: use ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2], escaping commas in values as \\,", i+1)
+		}
+		p.WiFi = append(p.WiFi, onboarding.WiFiNetwork(c))
+	}
+	return p, nil
+}
+
+// installJobFirstBoot is a job's first-boot input in the terminal installer's types.
+type installJobFirstBoot struct {
+	name  string
+	creds []wendyconf.WifiCredential
+}
+
+func newInstallJobFirstBoot(p *onboarding.Provisioning) installJobFirstBoot {
+	fb := installJobFirstBoot{name: p.DeviceName}
+	for _, n := range p.WiFi {
+		fb.creds = append(fb.creds, wendyconf.WifiCredential(n))
+	}
+	return fb
+}
+
+func (fb installJobFirstBoot) requested() bool { return fb.name != "" || len(fb.creds) > 0 }
+
+// Install-job seams; tests replace them to avoid downloads and real disks.
+var (
+	installJobInjectOrinConfig = injectRecoveryConfig
+	installJobInjectThorConfig = injectConfigPartition
+	installJobMarkFATVolumes   = markFATVolumes
+	installJobEjectDisk        = ejectDisk
+)
+
 // executeInstallJob calls the same image, RCM, T234 and Thor engines as the
 // terminal installer. It has no input prompts, target picker or implicit retry.
-func executeInstallJob(ctx context.Context, j *onboarding.Job, checkpoint onboarding.Checkpoint) (retErr error) {
+func executeInstallJob(ctx context.Context, j *onboarding.Job, fb installJobFirstBoot, checkpoint onboarding.Checkpoint) (retErr error) {
 	ctx = analytics.WithAttemptID(ctx, j.AnalyticsAttemptID)
 	ctx, finish := startActivationOperation(ctx, "install", "wendy install jobs")
 	defer func() { finish(retErr) }()
@@ -269,6 +334,8 @@ func executeInstallJob(ctx context.Context, j *onboarding.Job, checkpoint onboar
 			step = "download"
 		} else if strings.Contains(phase, "verify") {
 			step = "verify_image"
+		} else if strings.Contains(phase, "config") {
+			step = "provision"
 		}
 		if beginsWrite {
 			step = "flash"
@@ -280,8 +347,11 @@ func executeInstallJob(ctx context.Context, j *onboarding.Job, checkpoint onboar
 	if err := installJobPrivileges(ctx, j); err != nil {
 		return err
 	}
+	if fb.requested() {
+		logProvisioningSummary(os.Stdout, fb.name, fb.creds, nil)
+	}
 	if j.Plan.Method != "usb-recovery" {
-		return executeMediaInstallJob(ctx, j, checkpoint)
+		return executeMediaInstallJob(ctx, j, fb, checkpoint)
 	}
 	cacheBase, err := osCacheDir()
 	if err != nil {
@@ -298,9 +368,9 @@ func executeInstallJob(ctx context.Context, j *onboarding.Job, checkpoint onboar
 		return err
 	}
 	if j.Options.DeviceType == thorDeviceType {
-		return executeThorInstallJob(ctx, j, cache, detail, checkpoint)
+		return executeThorInstallJob(ctx, j, fb, cache, detail, checkpoint)
 	}
-	return executeOrinInstallJob(ctx, j, cache, detail, checkpoint)
+	return executeOrinInstallJob(ctx, j, fb, cache, detail, checkpoint)
 }
 
 func recheckInstallJobTarget(ctx context.Context, j *onboarding.Job) error {
@@ -314,7 +384,7 @@ func recheckInstallJobTarget(ctx context.Context, j *onboarding.Job) error {
 	return nil
 }
 
-func executeMediaInstallJob(ctx context.Context, j *onboarding.Job, checkpoint onboarding.Checkpoint) error {
+func executeMediaInstallJob(ctx context.Context, j *onboarding.Job, fb installJobFirstBoot, checkpoint onboarding.Checkpoint) error {
 	if err := checkpoint("download_and_verify", false); err != nil {
 		return err
 	}
@@ -355,19 +425,48 @@ func executeMediaInstallJob(ctx context.Context, j *onboarding.Job, checkpoint o
 	if err := checkpoint("writing_media", true); err != nil {
 		return err
 	}
-	// The image already contains its agent. Optional first-boot provisioning is
-	// intentionally left to the terminal installer or the network tools.
-	return writeImageToDisk(stream, stream.uncompressedSize, *target, imageFit{}, nil)
+	if err := writeImageToDisk(stream, stream.uncompressedSize, *target, imageFit{}, nil); err != nil {
+		return err
+	}
+	return provisionInstallJobMedia(ctx, *target, fb, checkpoint)
 }
 
-func executeOrinInstallJob(ctx context.Context, j *onboarding.Job, cache string, detail func(string), checkpoint onboarding.Checkpoint) error {
+// provisionInstallJobMedia writes the config partition like the terminal
+// installer, then releases the media. Every failure here follows a complete image.
+func provisionInstallJobMedia(ctx context.Context, target drive, fb installJobFirstBoot, checkpoint onboarding.Checkpoint) error {
+	// Unlike the terminal installer, a job without first-boot input writes only
+	// the published image: no agent seed, config write or eject.
+	if !fb.requested() {
+		return nil
+	}
+	if err := checkpoint("writing_config", false); err != nil {
+		return &onboarding.ProvisioningError{Err: err}
+	}
+	d, attached, provErr := provisionConfigWithRetry(ctx, target, fb.creds, fb.name, nil, true, nil)
+	var ejectErr error
+	// A drive that dropped off the bus may have another disk at its old path.
+	if attached {
+		installJobMarkFATVolumes(d)
+		ejectErr = installJobEjectDisk(d)
+	}
+	provErr, stillMounted := splitStillMounted(provErr)
+	if provErr != nil {
+		return &onboarding.ProvisioningError{Err: errors.Join(provErr, ejectErr)}
+	}
+	if err := errors.Join(stillMounted, ejectErr); err != nil {
+		return &onboarding.ProvisioningError{Err: err, Configured: true}
+	}
+	return nil
+}
+
+func executeOrinInstallJob(ctx context.Context, j *onboarding.Job, fb installJobFirstBoot, cache string, detail func(string), checkpoint onboarding.Checkpoint) error {
 	ref := flashpack.RecoveryRef{Device: j.Options.DeviceType, Storage: j.Plan.Storage, Version: j.Plan.Version}
 	info := &recoveryFlashpackInfo{URL: j.Plan.ArtifactURL, Checksum: j.Plan.ArtifactSHA256, Version: j.Plan.Version, Device: j.Options.DeviceType, Storage: j.Plan.Storage}
 	fp, _, err := resolveT234Flashpack(cache, ref, info, detail)
 	if err != nil {
 		return err
 	}
-	workspace, layout, err := prepareT234Workspace(fp)
+	workspace, layout, err := prepareOrinJobWorkspace(fp, fb, detail)
 	if err != nil {
 		return err
 	}
@@ -411,6 +510,28 @@ func executeOrinInstallJob(ctx context.Context, j *onboarding.Job, cache string,
 		return fmt.Errorf("device did not report a successful final recovery status")
 	}
 	return nil
+}
+
+// prepareOrinJobWorkspace writes first-boot input into the per-run copy of the
+// config image before the flash plan reads the workspace, as the terminal does.
+func prepareOrinJobWorkspace(fp *flashpack.Flashpack, fb installJobFirstBoot, detail func(string)) (workspace, layout string, err error) {
+	workspace, layout, err = prepareT234Workspace(fp)
+	if err != nil {
+		return "", "", err
+	}
+	// Without first-boot input the published config image is flashed as is.
+	if !fb.requested() {
+		return workspace, layout, nil
+	}
+	configRel, err := filepath.Rel(fp.FlashImagesDir(), fp.ConfigImage())
+	if err == nil {
+		err = installJobInjectOrinConfig(filepath.Join(workspace, configRel), fb.creds, fb.name, nil, os.Stdout, detail, nil)
+	}
+	if err != nil {
+		_ = os.RemoveAll(workspace)
+		return "", "", err
+	}
+	return workspace, layout, nil
 }
 
 // Unknown-size gzip/zstd streams are measured before opening any target. The
@@ -488,15 +609,14 @@ type installJobZstdStream struct {
 
 func (s *installJobZstdStream) Close() error { s.Decoder.Close(); return s.file.Close() }
 
-func executeThorInstallJob(ctx context.Context, j *onboarding.Job, cache string, detail func(string), checkpoint onboarding.Checkpoint) error {
+func executeThorInstallJob(ctx context.Context, j *onboarding.Job, fb installJobFirstBoot, cache string, detail func(string), checkpoint onboarding.Checkpoint) error {
 	// Always use the pinned download rather than resolving the release again.
 	plan := thorFlashPlan{version: j.Plan.Version, info: &thorFlashpackInfo{URL: j.Plan.ArtifactURL, Checksum: j.Plan.ArtifactSHA256, Version: j.Plan.Version}}
 	fp, _, err := downloadAndExtractFlashpack(cache, plan, detail)
 	if err != nil {
 		return err
 	}
-	source := filepath.Join(fp.FlashWorkspaceDir(), "flash-images")
-	workspace, _, err := prepareMutableWorkspace(source, filepath.Join(source, "config-partition.fat32.img"))
+	workspace, err := prepareThorJobWorkspace(fp, fb, detail)
 	if err != nil {
 		return err
 	}
@@ -523,4 +643,22 @@ func executeThorInstallJob(ctx context.Context, j *onboarding.Job, cache string,
 		return err
 	}
 	return flashengine.Run(ctx, transport, flashengine.Options{FlashImagesDir: workspace, NvddLocalPath: filepath.Join(fp.BundleDir(), "unified_flash", "tools", "flashtools", "flash", "nvdd"), Out: os.Stdout, Progress: throttledDetail(detail, byteProgress)})
+}
+
+// prepareThorJobWorkspace writes first-boot input into a per-run copy of the
+// config image; the cached flashpack stays untouched.
+func prepareThorJobWorkspace(fp *flashpack.Flashpack, fb installJobFirstBoot, detail func(string)) (string, error) {
+	source := filepath.Join(fp.FlashWorkspaceDir(), "flash-images")
+	workspace, configImage, err := prepareMutableWorkspace(source, filepath.Join(source, "config-partition.fat32.img"))
+	if err != nil {
+		return "", err
+	}
+	if !fb.requested() {
+		return workspace, nil
+	}
+	if err := installJobInjectThorConfig(configImage, fb.creds, fb.name, nil, os.Stdout, detail, nil); err != nil {
+		_ = os.RemoveAll(workspace)
+		return "", err
+	}
+	return workspace, nil
 }

@@ -3,6 +3,7 @@ package backend
 import (
 	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 func (b *Backend) CampaignNotifications(session uint64) ([]commands.DesktopCampaignNotification, error) {
@@ -34,4 +35,10 @@ func (b *Backend) PushRegistration(account string, token []byte, topic string, e
 	ctx, done := b.begin()
 	defer done()
 	return commands.DesktopPushRegistration(ctx, account, token, topic, environment, enabled)
+}
+
+func (b *Backend) Inbox(account string) ([]*cloudpb.Notification, error) {
+	ctx, done := b.begin()
+	defer done()
+	return commands.DesktopInbox(ctx, account)
 }

@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
 	"io"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -82,7 +83,7 @@ func fetchCloudAssetsV2(ctx context.Context, auth *config.AuthConfig, onlineOnly
 }
 
 // cloudDiscoveryDevice preserves each API's identity while sharing the display,
-// clipboard, version-probe and update paths across both generations.
+// clipboard and update paths across both generations.
 type cloudDiscoveryDevice struct {
 	cloudAssetMetadata
 	legacy *cloudpb.Asset
@@ -210,7 +211,7 @@ func pickCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, name
 		m.devices = devices
 		m.hasResults = true
 		m.refreshTable()
-		final, err := tea.NewProgram(m).Run()
+		final, err := tui.RunProgram(tea.NewProgram(m))
 		if err != nil {
 			return cloudDiscoveryDevice{}, err
 		}

@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
@@ -63,7 +64,7 @@ const (
 
 // tlsDebugWriter is where WENDY_TLS_DEBUG resumption logging is written.
 // Overridable in tests to capture output.
-var tlsDebugWriter io.Writer = os.Stderr
+var tlsDebugWriter io.Writer = terminaloutput.Stderr
 
 type AgentConnection struct {
 	Conn *grpc.ClientConn
@@ -120,6 +121,7 @@ type AgentConnection struct {
 	UnitreeService       agentpbv2.WendyUnitreeServiceClient
 	RobotArmService      agentpbv2.WendyRobotArmServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
+	McuService           agentpbv2.WendyArduinoMcuServiceClient
 	DataService          agentpbv2.DataServiceClient
 	// CalibratedFrameService serves RGB-D frames: colour plus depth aligned to
 	// it, with the scale and intrinsics that make both measurable. Separate
@@ -786,6 +788,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		UnitreeService:       agentpbv2.NewWendyUnitreeServiceClient(conn),
 		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
+		McuService:           agentpbv2.NewWendyArduinoMcuServiceClient(conn),
 		DataService:          agentpbv2.NewDataServiceClient(conn),
 
 		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(conn),

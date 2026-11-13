@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/terminaloutput"
 	"github.com/wendylabsinc/wendy/go/internal/shared/useripc"
 )
 
@@ -58,7 +59,7 @@ func EnableEmbeddedHost() {
 		}
 		err = Run(ctx, base64.RawURLEncoding.EncodeToString(data), DefaultIdleTTL, nil)
 		if os.Getenv("WENDY_MESH_DEBUG") == "1" {
-			fmt.Fprintf(os.Stderr, "wendy: embedded mesh broker stopped: %v (context: %v)\n", err, ctx.Err())
+			fmt.Fprintf(terminaloutput.Stderr, "wendy: embedded mesh broker stopped: %v (context: %v)\n", err, ctx.Err())
 		}
 		return err
 	})

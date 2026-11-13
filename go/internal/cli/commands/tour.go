@@ -2198,7 +2198,7 @@ func newTourCmd() *cobra.Command {
 			m := newTourWizardModel()
 			m.root = cmd.Root()
 			m.ctx = ctx
-			final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
+			final, err := tui.RunProgram(tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)))
 			if result, ok := final.(tourWizardModel); ok && result.diagnosticStep != "" {
 				step = result.diagnosticStep
 			}
