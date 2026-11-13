@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -23,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -179,7 +182,8 @@ func newAppRotateCmd() *cobra.Command {
 
 // registryOp is one operator session's view of the registry.
 type registryOp struct {
-	conn        grpc.ClientConnInterface
+	conn        grpc.ClientConnInterface // cloud
+	reg         grpc.ClientConnInterface // the registry: ArtifactRegistryService
 	auth        *config.AuthConfig
 	org, me     string
 	key         hpke.PrivateKey
@@ -217,10 +221,60 @@ func newRegistryOp(ctx context.Context, conn grpc.ClientConnInterface, auth *con
 			return nil, err
 		}
 	}
+	reg, err := dialRegistry(auth)
+	if err != nil {
+		return nil, err
+	}
 	return &registryOp{
-		conn: conn, auth: auth, org: auth.Certificates[0].TenantUUID(), me: auth.Certificates[0].PrincipalURI,
+		conn: conn, reg: reg, auth: auth, org: auth.Certificates[0].TenantUUID(), me: auth.Certificates[0].PrincipalURI,
 		key: key, keyID: keyID, roots: roots, custodian: custodian, custodianID: custodianID,
 	}, nil
+}
+
+// registryEnv overrides the registry's address (host:port).
+const registryEnv = "WENDY_REGISTRY"
+
+// registryAddress is the registry's own address: WENDY_REGISTRY, or
+// registry.<domain>:443 next to the session's api.<domain> (sem: the registry
+// is its own service at registry.<env>).
+func registryAddress(cloudGRPC string) (string, error) {
+	if addr := os.Getenv(registryEnv); addr != "" {
+		return addr, nil
+	}
+	host, _, err := net.SplitHostPort(cloudGRPC)
+	if domain, ok := strings.CutPrefix(host, "api."); err == nil && ok && domain != "" {
+		return net.JoinHostPort("registry."+domain, "443"), nil
+	}
+	return "", fmt.Errorf("no registry address is known for %s; set %s to the registry's host:port", cloudGRPC, registryEnv)
+}
+
+// dialRegistry connects to the registry with the operator's certificate,
+// chain and key in the TLS handshake (operator mTLS), like cloud.
+// ponytail: the connection lives until the CLI exits; close it if a long-lived
+// caller appears.
+var dialRegistry = func(auth *config.AuthConfig) (grpc.ClientConnInterface, error) {
+	addr, err := registryAddress(auth.CloudGRPC)
+	if err != nil {
+		return nil, err
+	}
+	var cert *config.CertificateInfo
+	if len(auth.Certificates) > 0 {
+		cert = &auth.Certificates[0]
+	}
+	creds, err := clouddefaults.CloudTransportCredentials(addr, cert)
+	if err != nil {
+		return nil, err
+	}
+	// The DPoP proof names the registry (htu), but the token comes from the
+	// session itself: a refresh saves the session, never this copy.
+	htu := *auth
+	htu.CloudGRPC = addr
+	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, cloudrequest.DPoPDialOptions(&htu, cliDPoPTokenProvider(auth))...)
+	conn, err := grpc.NewClient(addr, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to the registry: %w", err)
+	}
+	return conn, nil
 }
 
 // sessionCAs are the CA certificates of the operator's own chain, which
@@ -337,7 +391,7 @@ func (op *registryOp) ownWraps(scope byte, scopeID string, key []byte) ([]*cloud
 
 func (op *registryOp) addWraps(ctx context.Context, wraps []*cloudpb.KeyWrap, sealed []*cloudpb.SealedContentKey) error {
 	var resp cloudpb.AddWrapsResponse
-	err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.ArtifactRegistryService_AddWraps_FullMethodName,
+	err := cloudrequest.Invoke(ctx, op.reg, op.auth, cloudpb.ArtifactRegistryService_AddWraps_FullMethodName,
 		&cloudpb.AddWrapsRequest{OrganizationId: op.org, Wraps: wraps, SealedContentKeys: sealed}, &resp)
 	if err != nil {
 		return fmt.Errorf("adding key wraps: %w", err)
@@ -417,7 +471,7 @@ func (op *registryOp) publish(ctx context.Context, releaseID string, img v1.Imag
 	}
 
 	var resp cloudpb.PublishArtifactResponse
-	if err := cloudrequest.Invoke(ctx, op.conn, op.auth, cloudpb.ArtifactRegistryService_PublishArtifact_FullMethodName,
+	if err := cloudrequest.Invoke(ctx, op.reg, op.auth, cloudpb.ArtifactRegistryService_PublishArtifact_FullMethodName,
 		&cloudpb.PublishArtifactRequest{OrganizationId: op.org, AppReleaseId: releaseID, Manifest: manifest}, &resp); err != nil {
 		return nil, fmt.Errorf("publishing the artifact: %w", err)
 	}
@@ -483,7 +537,7 @@ func (op *registryOp) putBlob(ctx context.Context, uploadID string, blob *cloudp
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	stream, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).PutBlob(ctx)
+	stream, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).PutBlob(ctx)
 	if err != nil {
 		return fmt.Errorf("uploading %s: %w", blob.CiphertextDigest, err)
 	}
@@ -521,7 +575,7 @@ func (op *registryOp) putBlob(ctx context.Context, uploadID string, blob *cloudp
 // one thing a served manifest can be checked against here) and, when set,
 // against the digest the operator expects.
 func (op *registryOp) artifact(ctx context.Context, releaseID, want string) (*cloudpb.ArtifactManifest, error) {
-	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).GetArtifact(ctx, &cloudpb.GetArtifactRequest{OrganizationId: op.org, AppReleaseId: releaseID})
+	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).GetArtifact(ctx, &cloudpb.GetArtifactRequest{OrganizationId: op.org, AppReleaseId: releaseID})
 	if err != nil {
 		return nil, fmt.Errorf("reading release %s: %w", releaseID, err)
 	}
@@ -538,7 +592,7 @@ func (op *registryOp) artifact(ctx context.Context, releaseID, want string) (*cl
 
 // contentKey opens this machine's release-scope wrap of the content key.
 func (op *registryOp) contentKey(ctx context.Context, releaseID string, m *cloudpb.ArtifactManifest) ([]byte, error) {
-	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
+	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
 		OrganizationId: op.org, Scope: &cloudpb.WrapScope{Scope: &cloudpb.WrapScope_AppReleaseId{AppReleaseId: releaseID}, KeyId: m.GetContentKeyId()},
 	})
 	if err != nil {
@@ -689,7 +743,7 @@ func (op *registryOp) current(ctx context.Context, deploymentID string) (*keyedD
 	if err != nil {
 		return nil, fmt.Errorf("reading deployment %s: %w", deploymentID, err)
 	}
-	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.conn).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
+	resp, err := cloudpb.NewArtifactRegistryServiceClient(op.reg).GetMyWraps(ctx, &cloudpb.GetMyWrapsRequest{
 		OrganizationId: op.org, Scope: &cloudpb.WrapScope{Scope: &cloudpb.WrapScope_DeploymentId{DeploymentId: deploymentID}},
 	})
 	if err != nil {

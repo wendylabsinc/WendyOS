@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -609,23 +610,34 @@ func registryFixture(t *testing.T, keys ...*cloudpb.RecipientKey) (*registryOp, 
 	session.RegistryKeyID = registrycrypto.KeyID(priv.PublicKey().Bytes()) // bound: no registration call
 
 	fake := newFakeRegistry(t, keys...)
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// Cloud and the registry are two servers: a registry call sent to cloud
+	// (or the reverse) is answered Unimplemented.
+	serve := func(register func(*grpc.Server)) *grpc.ClientConn {
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := grpc.NewServer()
+		register(srv)
+		go func() { _ = srv.Serve(lis) }()
+		t.Cleanup(srv.Stop)
+		conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
 	}
-	srv := grpc.NewServer()
-	cloudpb.RegisterArtifactRegistryServiceServer(srv, fake)
-	cloudpb.RegisterDeploymentServiceServer(srv, fakeDeployments{fake})
-	cloudpb.RegisterKeyDirectoryServiceServer(srv, fake)
-	cloudpb.RegisterAppServiceServer(srv, fake)
-	cloudpb.RegisterAssetServiceServer(srv, fake)
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
+	conn := serve(func(srv *grpc.Server) {
+		cloudpb.RegisterDeploymentServiceServer(srv, fakeDeployments{fake})
+		cloudpb.RegisterKeyDirectoryServiceServer(srv, fake)
+		cloudpb.RegisterAppServiceServer(srv, fake)
+		cloudpb.RegisterAssetServiceServer(srv, fake)
+	})
+	reg := serve(func(srv *grpc.Server) { cloudpb.RegisterArtifactRegistryServiceServer(srv, fake) })
+	prevDial := dialRegistry
+	dialRegistry = func(*config.AuthConfig) (grpc.ClientConnInterface, error) { return reg, nil }
+	t.Cleanup(func() { dialRegistry = prevDial })
 	op, err := newRegistryOp(context.Background(), conn, &session)
 	if err != nil {
 		t.Fatal(err)
@@ -874,5 +886,21 @@ func TestRegistryRefusesWithoutCustodianPin(t *testing.T) {
 	session = tenantOperatorSession(t, defaultDevCloudGRPC)
 	if _, err := newRegistryOp(context.Background(), nil, &session); err == nil || !strings.Contains(err.Error(), "CA chain") {
 		t.Fatalf("no chain: %v", err)
+	}
+}
+
+// The registry is its own service at registry.<domain> next to cloud's
+// api.<domain>, or where WENDY_REGISTRY says; nothing is guessed otherwise.
+func TestRegistryAddress(t *testing.T) {
+	t.Setenv(registryEnv, "")
+	if got, err := registryAddress("api.dev.wendy.sh:443"); err != nil || got != "registry.dev.wendy.sh:443" {
+		t.Fatalf("dev: %q %v", got, err)
+	}
+	if _, err := registryAddress("wendy-cloud-services-114319063177.us-central1.run.app:443"); err == nil || !strings.Contains(err.Error(), registryEnv) {
+		t.Fatalf("no derivable host: %v", err)
+	}
+	t.Setenv(registryEnv, "localhost:9443")
+	if got, _ := registryAddress("api.dev.wendy.sh:443"); got != "localhost:9443" {
+		t.Fatalf("override: %q", got)
 	}
 }
