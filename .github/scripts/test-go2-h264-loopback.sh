@@ -23,7 +23,7 @@ fi
 [[ $# == 0 ]]
 [[ -c /dev/v4l2loopback && $(cat /sys/module/v4l2loopback/version) == 0.15.4 ]]
 [[ ! -e /dev/video128 && ! -L /dev/video128 ]]
-for command in go python3 sudo unshare timeout containerd ctr runc busybox gst-launch-1.0; do command -v "$command" >/dev/null; done
+for command in go python3 sudo unshare timeout containerd ctr runc busybox ldd gst-launch-1.0; do command -v "$command" >/dev/null; done
 for element in videotestsrc x264enc h264parse avdec_h264 videoconvert fdsrc fdsink; do gst-inspect-1.0 "$element" >/dev/null; done
 output=$(mktemp -d "${RUNNER_TEMP:?}/wendy-go2-h264.XXXXXX")
 trap 'rm -f "$output/"*.test; echo "Go2 H264 logs: $output"' EXIT
