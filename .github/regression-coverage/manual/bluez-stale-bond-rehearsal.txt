@@ -1,0 +1,168 @@
+1595 reserved Linux BlueZ/HID stale-bond acceptance
+
+Generation performs no device action. All cases start not_run. This plan covers
+host @HOST@, controller @ADAPTER@, peripheral serial @SERIAL@ at @ADDRESS@,
+using @PROFILE@. Run the other HID transport with its own actual peripheral and
+plan. A fake D-Bus peer, synthetic input directory or connection status alone
+cannot establish physical recovery. Preserve the first failure and every retry.
+
+Reservation and identity
+
+1. Reserve this Linux bench and peripheral with their owner. Retain an independent
+   wired console and wired management path; the tested HID must not be the only
+   keyboard or mouse controlling recovery. Use a console with no application that
+   treats the chosen test buttons as destructive actions. Stop only bench-owned
+   viewers that grab the test input device. Do not stop unrelated input services.
+   Inventory must include real OS release, kernel, BlueZ version, controller model/
+   firmware/USB identity, peripheral serial/model/firmware and its selected host
+   slot. Record unknown firmware explicitly; do not infer it from a product name.
+
+2. Confirm the generated controller_address_on_target command returns @ADAPTER@.
+   Re-read the adapter index after reboot. Verify the Agent's selected adapter,
+   including any WENDY_BT_ADAPTER override, agrees with this controller. If adapter
+   selection is ambiguous, stop and prepare a documented dedicated bench setup.
+   Do not repoint another user's controller. Inspect actual Agent service PID and
+   /proc/PID/exe, hash the running executable, and compare with inventory. Record
+   source revision, installed binary hash, uname -a, /etc/os-release, bluetoothd
+   --version and boot ID. Do not install a candidate as an implicit plan step.
+
+3. Confirm target Address and its original Paired/Trusted/Connected values with
+   the generated busctl commands. Confirm UUIDs contain the transport actually
+   used: 00001812-0000-1000-8000-00805f9b34fb for LE HID, or
+   00001124-0000-1000-8000-00805f9b34fb for classic HID. Save original-state and
+   owner-reviewed recovery records before pairing. A rotating/unresolved address
+   that cannot be tied to the same physical identity is an unavailable setup.
+
+4. Review peripheral-bond-reset.json against the actual vendor instructions.
+   Its steps must clear only this peripheral's reserved host slot/bond while the
+   host retains its bond. The expected confirmation must be physically observable.
+   There is no generic reset button sequence. If this model has no documented
+   peripheral-only method, keep bond-loss and both recovery cases pending. Do not
+   delete /var/lib/bluetooth, call RemoveDevice/forget or reset the host adapter to
+   manufacture a stale-host state. Those operations remove the precondition.
+
+Baseline with real input
+
+5. Start a fresh case directory, UTC timeline and full Agent journal capture.
+   Confirm btmon, busctl, timeout and evtest are installed and their --help matches
+   the commands. Confirm the reserved account already has the needed observation
+   access; sudo -n must fail rather than wait for credentials. Run baseline_pair on the management host. This bounded command
+   requests pairing and trust for only @ADDRESS@; owner authorization is required
+   for executing this generated procedure. Require Paired=true, Trusted=true,
+   Connected=true, the expected HID UUID and a matching real kernel input uniq.
+   Copy bluez-input-observer.py to the reserved board, verify its source hash and
+   run input_registry_on_target there. It reads only actual /sys/class/input;
+   it does not create a fake input device or read another peripheral's events.
+
+6. Pick an event node reported beneath the matching input device. Verify the
+   node's sysfs ancestry and uniq before and after every capture, because event
+   numbers can change when HID reconnects. Set OBSERVED_EVENT_NODE to that exact
+   /dev/input/eventN. On the reserved board, from the new case directory:
+     sudo -n timeout --signal=INT --kill-after=3s 20s evtest "$OBSERVED_EVENT_NODE" > input-events.txt 2>&1
+   Use capture mode, with no --grab and no injection tool. During the interval,
+   press/release only the reserved peripheral's safe controls in this fresh order:
+     @CHALLENGE@
+   Run nonce: @NONCE@. Save a timestamped observer note linking the physical
+   actions to the device serial and capture. Require actual EV_KEY press/release
+   transitions matching the order, not merely the capability header or static
+   key state. A timeout 124 ending the configured observation window is expected;
+   it is never sufficient acceptance without the fresh events. Other early errors
+   or a capture killed after the grace period leave input acceptance incomplete.
+
+Create and prove the mismatch
+
+7. Run disconnect_target and require Connected=false and disappearance of the
+   matching input device. Wait at most ten seconds. If a stale kernel input node
+   remains, preserve evidence and stop; it could falsely satisfy input readiness.
+   Require host Paired=true and Trusted=true. Record the exact target properties
+   and, where authorized, metadata and SHA256 of that target's BlueZ bond record.
+   Never print/copy its key material or the complete Bluetooth state directory.
+
+8. Execute only the exact vendor recipe on the peripheral's reserved slot, within
+   @RESET_SECONDS@ seconds. Record the physical confirmation, serial/slot and UTC
+   time. Put this same peripheral into its documented pairing/advertising mode.
+   Recheck host Paired=true and Trusted=true WITHOUT forgetting/re-pairing first.
+   Confirm no matching input node and no successful automatic reconnect occurred.
+   The host still having a record plus a verified peripheral-only reset establishes
+   the mismatch. A guessed reset, changed peripheral address/slot or a routine
+   disconnect is not stale-bond evidence. Restore the healthy baseline and repeat
+   the setup if auto-reconnect consumed it before the measured command.
+
+Measured repair
+
+9. Use three terminals: start the generated bounded controller trace on the target,
+   start input_registry_on_target in a fresh directory, then run
+   repair_preserving_live_trust on the management host. Save the complete command
+   exit/output and correlated Agent journal. The command explicitly sets trust=false
+   to prove that a previously live Trusted=true survives RemoveDevice and re-pairing.
+   It still requests pair=true. Do not issue a second connect while it runs.
+
+10. Classify the actual trigger separately; do not force both branches from one run:
+    - Key-error recovery requires an observed key/authentication failure and the
+      production 'Connect failed with a stale-bond error' message, followed by
+      removal, rediscovery, fresh pairing and successful connection. RF loss or
+      a generic timeout is not evidence of this branch.
+    - Hollow-HID recovery requires initial BlueZ Connected=true with no matching
+      kernel input device, then production's unchanged eight-second input wait
+      and 'HID device connected but produced no input device' message. Require
+      the subsequent stale removal/fresh pair and real input arrival. Use the
+      input registry timeline and HCI/Agent timestamps; do not create a fake node
+      or shorten the production timeout. If this device instead reports an
+      authentication error, record that branch and leave hollow-HID not_run.
+    For each observed branch, require the bounded command to exit 0, the production
+    'Re-paired Bluetooth device after dropping stale bond' event, Paired=true,
+    Trusted=true and Connected=true for the same identity, plus the fresh input
+    challenge from step 6 after repair. A successful RPC without real input fails.
+    Record actual elapsed time; the 60-second CLI bound is an upper failure bound,
+    not a performance acceptance target. Keep a nonreproducible branch pending.
+
+No implicit bond removal and reconnect
+
+11. From a healthy baseline, recreate the peripheral-only mismatch exactly as in
+    steps 7–8. Capture target properties, HCI, input registry and Agent journal,
+    then run no_pair_control. This explicitly sets pair=false/trust=false. Require
+    no Agent-initiated RemoveDevice or fresh Pair. The call may fail or report a
+    direct connection, because this mode deliberately does not authorize bond
+    removal; it must not be counted as repaired HID unless actual events appear.
+    If the peripheral itself initiates fresh pairing, retain that trace and mark
+    the no-repair case inconclusive. Restore using the explicit pair=true command
+    and verify fresh input again before continuing. Never leave a known broken
+    bond as a successful test cleanup.
+
+12. Once repaired, disconnect only this target, power-cycle only the reserved
+    peripheral using its normal operation, and explicitly connect it again.
+    Require the same physical identity/profile and a new real input challenge
+    within 60 seconds. Existing device paths or old event logs cannot satisfy this.
+    Repeat each observed stale trigger from a newly established healthy baseline;
+    write each attempt into a new evidence directory without overwriting failures.
+
+Bounds, recovery and acceptance
+
+13. Observation commands own only their foreground child processes. Let timeout
+    finish and confirm no test btmon/evtest/observer remains. Never use broad pkill.
+    Controller traces contain sensitive Bluetooth traffic; restrict access and
+    publish only redacted evidence. Preserve the full original traces privately.
+    Export the exact measured Agent journal interval using the actual service unit:
+      sudo -n journalctl -u "$OBSERVED_AGENT_UNIT" --since "$CASE_START_UTC" --until "$CASE_END_UTC" --no-pager
+    On a timed-out RPC, preserve evidence and inspect the same target through the
+    independent console before any next operation. Do not restart system BlueZ or
+    wipe bonds as an automatic retry. Use only the owner-reviewed recovery record.
+
+14. Re-establish the original paired/trusted/connection state from recovery.txt.
+    If the bench originally had no bond, remove only the test target through the
+    owner-approved cleanup recipe; do not clear other host slots or devices.
+    If it had a bond, fresh re-pairing may replace its key, so verify actual input
+    and owner acceptance rather than claiming that an old key was restored.
+    Recheck an unrelated reserved control peripheral where available and confirm
+    no other bond/controller was changed. Account for any necessary repair.
+
+15. Fill evidence.json per case with exact source/binary/kernel/BlueZ/profile
+    identities, first-failure logs, mismatch proof, elapsed times, HCI/Input/Agent
+    observations and cleanup result. The other HID transport stays not_run until
+    a separate exact-target plan runs. An independent reviewer must accept the
+    physical identity and input evidence. Generation, portable tests and synthetic
+    D-Bus success cannot mark these hardware cases passed.
+
+Tool references:
+https://github.com/bluez/bluez/blob/master/doc/btmon.rst
+https://manpages.debian.org/bookworm/evtest/evtest.1.en.html
