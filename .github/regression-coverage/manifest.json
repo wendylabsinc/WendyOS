@@ -3817,9 +3817,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2673",
       "title": "Correct mesh discovery and NVIDIA PAIR documentation",
       "package": "16",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Documentation corrects mesh discovery and PAIR usage; no command-transcript or example validation was found for the corrected instructions.",
-      "required_follow_up": "Require hosted documented CLI argument checks and the actual pinned PAIR invitation/member-state process transcript, including restart and both incorrect-documentation controls. No GPU, mesh discovery, attach transport or Unix pairctl-hop execution is claimed by the PAIR fixture.",
+      "required_follow_up": "Retain required documented CLI argument checks and the pinned PAIR invitation/member-state transcript with restart and both incorrect-documentation controls.",
       "evidence": [
         {
           "tests": [
@@ -3834,8 +3834,19 @@
             ".github/workflows/fumadocs.yml"
           ],
           "result": "Pinned upstream cluster-manager with the example production patch completes a real PIN invitation between two loopback processes, observes paired invitation versus member entries, and retains identity/membership after restart. Both ambiguous and incorrect documentation controls fail against the actual transcript. Local execution passed; required hosted execution pending."
+        },
+        {
+          "head": "1b2f847c423a556cabc1f8123bb9c3833cb9d2e6",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43331058242/job/131575749692",
+          "result": "Hosted race suite passed the CLI commands package, including both non-skipping documented-argument contract tests. Root inspected the workflow invocation and test discovery; source is unchanged in the current batch. The parser validates actual guide argv and typed flags without executing device operations."
+        },
+        {
+          "head": "1b2f847c423a556cabc1f8123bb9c3833cb9d2e6",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43331057808/job/131575600087",
+          "result": "Hosted actual PAIR process transcript passed at pinned upstream 13b68115fa2c9c1d94f1ead1358f8d5a527cfecf with production example patch SHA256 3442e96fc673bf6c573f1e59e9a07f2f608d4ce4d5e9c5aa5d28ae45fd9667cb. cluster:invite-status returned paired, both member entries returned member, and restart retained identity/membership. Ambiguous-original-explanation and substituted-membership-state controls both failed as required. Root inspected exact logs; no GPU, physical discovery or pairctl Unix-hop claim."
         }
-      ]
+      ],
+      "resolution": "Required hosted command-contract checks and actual pinned PAIR invitation/restart transcript passed, including incorrect-documentation controls."
     },
     {
       "key": "2561",
