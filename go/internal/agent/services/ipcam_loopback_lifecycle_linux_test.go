@@ -118,11 +118,11 @@ func TestIPCameraKernelPumpRetainsConsumersAndStopsAfterFinalRelease(t *testing.
 		formatDeadline := time.Now().Add(4 * time.Second)
 		for {
 			format, err := os.ReadFile("/sys/class/video4linux/video200/format")
-			if err == nil && strings.Contains(string(format), ":64x48@") {
+			if err == nil && strings.HasSuffix(strings.TrimSpace(string(format)), ":64x48@25") {
 				break
 			}
 			if time.Now().After(formatDeadline) {
-				t.Fatalf("kernel pump did not negotiate 64x48 capture format: %q %v", format, err)
+				t.Fatalf("kernel pump did not negotiate 64x48 capture format at 25fps: %q %v", format, err)
 			}
 			wait(20 * time.Millisecond)
 		}
