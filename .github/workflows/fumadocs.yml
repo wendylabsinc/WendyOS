@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "README.md"
+      - "DEVELOPMENT.md"
+      - "go/internal/agent/network/documented_backend_unix_test.go"
       - ".github/scripts/test-readme-install.py"
       - ".github/scripts/readme_install_test.py"
       - ".github/scripts/run-owned-media-test.py"
@@ -21,6 +23,8 @@ on:
     branches: [main]
     paths:
       - "README.md"
+      - "DEVELOPMENT.md"
+      - "go/internal/agent/network/documented_backend_unix_test.go"
       - ".github/scripts/test-readme-install.py"
       - ".github/scripts/readme_install_test.py"
       - ".github/scripts/run-owned-media-test.py"
@@ -112,6 +116,11 @@ jobs:
           path: ${{ runner.temp }}/docs-readme-install-evidence
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Verify the documented Go Agent backend selection
+        working-directory: .
+        timeout-minutes: 3
+        run: go test -race ./go/internal/agent/network -run '^TestDocumentedGoAgentIgnoresLegacyNetworkBackend$' -count=1 -timeout=60s -v
 
       - name: Install dependencies
         run: npm ci
