@@ -10,7 +10,9 @@ is the authoritative behavioral reference, backed by executable assertions;
 record Wendy-specific decisions and exceptions there. The additions below guide
 new work and intentional redesigns; existing commands may not yet comply.
 
-### Preserve user work through predictable file generation
+### Guidelines
+
+#### Preserve user work through predictable file generation
 
 Create missing files, leave identical files untouched, preserve unrelated files,
 and resolve differing files explicitly. Interactive conflicts offer overwrite,
@@ -19,7 +21,7 @@ while creating missing files. Reject `--force` together with `--skip`. Preflight
 unresolved conflicts before writing; this does not promise rollback of later
 I/O failures.
 
-### Keep presentation optional and commands usable
+#### Keep presentation optional and commands usable
 
 A TUI is an optional convenience: all capabilities must remain available without
 Bubble Tea. Full-screen TUI design requires separate guidance. Print displayed
