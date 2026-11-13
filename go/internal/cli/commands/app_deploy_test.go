@@ -128,6 +128,11 @@ func TestDeployMissingAnswerNamesTheFlag(t *testing.T) {
 			t.Fatalf("%s: %v", flag, err)
 		}
 	}
+	a := allFlags(releaseID)
+	a.tags, a.devices = nil, []string{""} // dock-cam-07 has no display name
+	if err := runDeploy(context.Background(), op, a, io.Discard, false); err == nil || !strings.Contains(err.Error(), `No device ""`) {
+		t.Fatalf("an empty device name: %v", err)
+	}
 	if len(fake.deploys) != 0 {
 		t.Fatal("a deploy with a missing answer created a deployment")
 	}
