@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -105,7 +106,7 @@ type deniedCampaignCloud struct{ calls atomic.Int32 }
 
 func (s *deniedCampaignCloud) CreateNotificationV2(context.Context, *cloudpb.CreateNotificationV2Request) (*cloudpb.CreateNotificationV2Response, error) {
 	s.calls.Add(1)
-	return nil, status.Error(codes.PermissionDenied, "device notification delivery is refused")
+	return nil, cloudResponseError{status.Error(codes.PermissionDenied, "device notification delivery is refused")}
 }
 
 func TestCampaignCloudAuthorizationFailureIsTerminal(t *testing.T) {
@@ -144,5 +145,43 @@ func TestCampaignCloudAuthorizationFailureIsTerminal(t *testing.T) {
 	}
 	if cloud.calls.Load() != 1 {
 		t.Fatalf("authorization failure retried %d times", cloud.calls.Load())
+	}
+}
+
+// Errors the agent raises before reaching Cloud tell the operator what to fix,
+// so campaign status must keep them; only Cloud's own response text is redacted.
+func TestCampaignUnenrolledDeviceReportsActionableError(t *testing.T) {
+	manager, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaign, err := data.ParseCampaign(inferenceTestYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaign.Notify.Webhook = ""
+	cloud := NewCloudNotificationSender(zap.NewNop(), &ProvisioningService{})
+	job := &campaignInferenceJob{owner: &campaignInferenceManager{service: NewDataService(manager), sender: &CampaignCloudSender{Cloud: cloud}}, campaign: campaign}
+	queue := make(chan DetectionNotification, 1)
+	queue <- detectionNotification(campaign, "camera", []inference.Detection{{Label: "person", Score: .9}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); job.notifications(ctx, queue) }()
+	deadline := time.Now().Add(time.Second)
+	var reported string
+	for time.Now().Before(deadline) {
+		job.mu.Lock()
+		reported = job.status.NotificationError
+		job.mu.Unlock()
+		if reported != "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if !strings.Contains(reported, "FailedPrecondition") || !strings.Contains(reported, "device must be enrolled before sending notifications") {
+		t.Fatalf("un-enrolled campaign lost its actionable error: %q", reported)
 	}
 }

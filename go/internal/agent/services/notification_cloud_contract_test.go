@@ -307,12 +307,17 @@ func TestCampaignNotificationsRetryThroughVerifiedCloudMTLS(t *testing.T) {
 }
 
 func TestCampaignCloudFailureRedactsStatusAndWarnings(t *testing.T) {
-	for _, code := range []codes.Code{codes.PermissionDenied, codes.Unavailable} {
-		t.Run(code.String(), func(t *testing.T) {
+	// Each enrollment kind reaches Cloud through its own RPC call site.
+	for _, fixture := range []struct {
+		acme bool
+		code codes.Code
+	}{{true, codes.PermissionDenied}, {true, codes.Unavailable}, {false, codes.PermissionDenied}} {
+		acme, code := fixture.acme, fixture.code
+		t.Run(fmt.Sprintf("acme=%t/%s", acme, code), func(t *testing.T) {
 			const privateError = "private audience fixture@example.invalid token=fixture-secret"
 			const failedID = "00000000-0000-4000-8000-000000000003"
 			const recoveredID = "00000000-0000-4000-8000-000000000004"
-			sender, cloud, logs := newNotificationContractCloud(t, true, func(id string, _ int) error {
+			sender, cloud, logs := newNotificationContractCloud(t, acme, func(id string, _ int) error {
 				if id == failedID {
 					return status.Error(code, privateError)
 				}
