@@ -6,8 +6,9 @@ from pathlib import Path
 import tempfile
 import subprocess
 import unittest
+from unittest import mock
 
-from E2EDeviceCache import prepare
+from E2EDeviceCache import main, prepare
 
 
 class DeviceCacheTests(unittest.TestCase):
@@ -25,6 +26,9 @@ assert os.environ["WENDY_CONFIG_DIR"] == str(config)
 assert sys.argv[1:] == ["--json", "--device", "orin.local", "device", "info"]
 if (config / "config.json").read_text() == "reject":
     sys.exit(7)
+if (config / "config.json").read_text() == "hang":
+    import time
+    time.sleep(10)
 files = sorted(p.name for p in config.iterdir())
 seed = json.loads((config / "devices.json").read_text()) if "devices.json" in files else None
 entry = {"id": "orin", "hostname": "orin.local", "ip": "192.0.2.1", "port": 50052,
@@ -104,6 +108,19 @@ print(json.dumps({"version": "test", "preflightHome": str(home), "files": files,
         self.auth.write_text("reject")
         with self.assertRaises(subprocess.CalledProcessError):
             self.prepare()
+        self.assertFalse(self.fixture.exists())
+        self.assertFalse(self.output.exists())
+        self.assertFalse(Path(self.cli.with_suffix(".home").read_text()).exists())
+
+    def test_timed_out_preflight_fails_loudly_and_cleans_auth_home(self):
+        self.auth.write_text("hang")
+        stderr = io.StringIO()
+        arguments = ["E2EDeviceCache.py", "--cli", str(self.cli), "--auth-config", str(self.auth),
+                     "--target", "orin.local", "--fixture", str(self.fixture), "--output", str(self.output)]
+        with mock.patch("E2EDeviceCache.PREFLIGHT_TIMEOUT_SECONDS", 1), \
+                mock.patch("sys.argv", arguments), contextlib.redirect_stderr(stderr):
+            self.assertEqual(main(), 1)
+        self.assertIn("timed out", stderr.getvalue())
         self.assertFalse(self.fixture.exists())
         self.assertFalse(self.output.exists())
         self.assertFalse(Path(self.cli.with_suffix(".home").read_text()).exists())

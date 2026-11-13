@@ -141,6 +141,8 @@ lookup cost. Later runs seed that preflight HOME from the prepared fixture and
 still check reachability and identity with the real CLI. Each run writes a
 separate refreshed snapshot; tests copy it into their own HOME. No TLS session
 cache, pin store or additional credentials are copied.
+The preflight command has a separate 30-second deadline; `--test-timeout` applies
+to the subsequent Swift test process.
 
 Only scenario calls with `run(useDeviceCache: true)` consume that snapshot;
 currently the explicit-device and non-interactive device-info specs opt in.

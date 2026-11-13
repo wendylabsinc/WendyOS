@@ -12,6 +12,8 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 
+PREFLIGHT_TIMEOUT_SECONDS = 30
+
 
 def normalized_host(value):
     return value.lower().rstrip(".").removesuffix(".local")
@@ -65,7 +67,7 @@ def prepare(cli, auth_config, target, fixture, output):
         result = subprocess.run(
             [cli, "--json", "--device", target, "device", "info"],
             env={**os.environ, "HOME": home, "WENDY_CONFIG_DIR": str(config_dir), "WENDY_ANALYTICS": "false"},
-            check=True, stdout=subprocess.PIPE, text=True,
+            check=True, stdout=subprocess.PIPE, text=True, timeout=PREFLIGHT_TIMEOUT_SECONDS,
         )
         json.loads(result.stdout)  # A successful preflight must return JSON.
         cache = target_cache(json.loads((config_dir / "devices.json").read_text()), target)
@@ -99,7 +101,7 @@ def main():
     args = parser.parse_args()
     try:
         prepare(args.cli, args.auth_config, args.target, args.fixture, args.output)
-    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"ERROR: device cache fixture preflight failed: {error}", file=sys.stderr)
         return 1
     return 0
