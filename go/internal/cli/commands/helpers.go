@@ -1500,7 +1500,8 @@ func connectToAgentInner(ctx context.Context, opts ...resolveOption) (*grpcclien
 // addr for the ladder and its retries, "" when the USB-direct fallback
 // substituted a connection that never touched addr. pinKey is the key the
 // caller derived once for addr and judges the connection under: the ladder
-// and every retry dial under it too.
+// and every retry dial under it too, and a substituted connection is handed
+// back carrying it.
 func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr, pinKey string, isDefault bool) (_ *grpcclient.AgentConnection, dialled string, finished bool, _ error) {
 	startedAt := time.Now()
 	dialled = addr
@@ -1539,7 +1540,10 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 		} else if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
 			// The stored address is unreachable but the same device (verified
 			// by hostname) is on USB — use it directly. It is not the address
-			// that was asked for, so it is never treated as the typed one.
+			// that was asked for, so it is never treated as the typed one. It
+			// is still the device that was asked for, and the caller judges
+			// it under pinKey (see keepAsRequestedDevice).
+			keepAsRequestedDevice(usbConn, pinKey)
 			conn, dialled = usbConn, ""
 		} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 			// Default device is unreachable — offer interactive recovery.

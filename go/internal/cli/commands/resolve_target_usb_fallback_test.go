@@ -506,6 +506,81 @@ func TestResolveTargetUSBConnectionIsAFirstContactOnlyForAnUnsavedName(t *testin
 	}
 }
 
+// connectToAgent's own USB fallback hands back the requested device's
+// connection too: kept under the requested name's key, so a reconnect is held
+// to the identity saved there, and a first contact only when that name has no
+// saved identity.
+func TestConnectToAgentKeepsAUSBConnectionAsTheRequestedDevice(t *testing.T) {
+	const device, addr = "wendy-thor.local", "wendy-thor.local:50051"
+	saved := map[string]config.DevicePin{"wendy-thor": pinA}
+	connect := func(t *testing.T, d *usbOnlyDevice) *grpcclient.AgentConnection {
+		t.Helper()
+		jsonOutput = true // notices are then plain lines in d.notices
+		deviceFlag = device
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		conn, err := connectToAgent(ctx, NonInteractive())
+		if err != nil {
+			t.Fatalf("connectToAgent = %v, want the board on USB", err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		if conn != d.conn {
+			t.Fatalf("connectToAgent returned %+v, want the USB connection", conn)
+		}
+		if conn.DevicePinKey != device {
+			t.Errorf("the USB connection is kept as %q, want the requested %q", conn.DevicePinKey, device)
+		}
+		return conn
+	}
+
+	t.Run("saved device", func(t *testing.T) {
+		d := stubUSBOnlyDevice(t, &config.Config{DevicePins: saved},
+			pinnedHostNoAuthenticatedEndpointError(device, []string{addr}, nil, false), "wendy-thor", assetObs("42"))
+		conn := connect(t, d)
+		if conn.NoSavedIdentity {
+			t.Error("a saved device is marked as having no saved identity")
+		}
+		if got := d.firstContactNotices(device, true); got != 0 {
+			t.Errorf("first-contact notices = %d, want none for a saved device; printed:\n%s", got, d.notices.String())
+		}
+		if pins := savedPins(t); !reflect.DeepEqual(pins, saved) {
+			t.Errorf("pins = %+v, want the saved identity unchanged", pins)
+		}
+
+		// A reconnect after an agent or OS update is held to the saved identity.
+		d.targets = nil
+		again, err := dialOSUpdateAgent(context.Background(), conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != conn {
+			again.Close()
+		}
+		if len(d.targets) != 1 {
+			t.Fatalf("reconnect dials = %+v, want one", d.targets)
+		}
+		got := d.targets[0]
+		if got.Addr != usbGadgetMTLSAddr || got.PinKey != device || got.Expected == nil || got.Expected.EntityID != "42" {
+			t.Fatalf("reconnect dialled %s under %q expecting %+v, want %s under %q expecting asset 42",
+				got.Addr, got.PinKey, got.Expected, usbGadgetMTLSAddr, device)
+		}
+	})
+
+	t.Run("device with no saved identity", func(t *testing.T) {
+		d := stubUSBOnlyDevice(t, &config.Config{}, errors.New("device offline in test"), "wendy-thor", assetObs("42"))
+		conn := connect(t, d)
+		if !conn.NoSavedIdentity {
+			t.Error("a first contact is not marked as having no saved identity")
+		}
+		if got := d.firstContactNotices(device, true); got != 1 {
+			t.Errorf("first-contact notices = %d, want one; printed:\n%s", got, d.notices.String())
+		}
+		if pins := savedPins(t); len(pins) != 1 || pins["wendy-thor"].AssetID != "42" {
+			t.Errorf("pins = %+v, want only wendy-thor naming asset 42", pins)
+		}
+	})
+}
+
 // A saved identity only ever removes the first-contact mark from an
 // authenticated connection. A plaintext board answering for a saved name is
 // refused by the pin check; this is what holds if it ever got past that (the
