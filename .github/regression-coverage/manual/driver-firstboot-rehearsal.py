@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,24 @@ line, artifact = COMMON.line, COMMON.artifact
 BUILDER_REVISION = "f72a1b354c80523dc2b092e52e38e44fe56c8d5a"
 BUILDER_PATH = "drivers/wendyos-hello/wendyos_hello.c"
 GCS = "https://storage.googleapis.com/wendyos-images-public/"
+# Commands that address the booted device. They exist only for an endpoint
+# observed after first boot (see observe), never in the pre-boot plan.
+POST_BOOT = ("verify", "info", "wifi_status", "available", "list", "registry_install", "remove_owned_driver")
+
+
+def usb_endpoint(value):
+    """Return the endpoint and its bare address for comparison."""
+    address = line(value)
+    # USB fallback must be a real link-local endpoint, not cloud/NAT/loopback.
+    host, port = address.rsplit(":", 1)
+    ip = ipaddress.ip_address(host.strip("[]"))
+    if not ip.is_link_local or port != "50051" or (ip.version == 6 and not host.startswith("[")):
+        raise ValueError("require explicit link-local USB endpoint on port50051")
+    return address, str(ip).split("%", 1)[0]
+
+
+def cli_prefix(out, cli):
+    return ["env", "WENDY_CONFIG_DIR="+str(out/"cli-config"), "WENDY_SECRET_STORE=file", "WENDY_ANALYTICS=false", "WENDY_NO_UPDATE_CHECK=1", cli]
 
 
 def public_url(value):
@@ -51,18 +70,10 @@ def generate(inventory, output):
         line(board[key])
     if not re.fullmatch(r"[a-z][a-z0-9-]{2,54}", board["device_name"]) or board["device_name"].endswith("-"):
         raise ValueError("require a unique valid provisioned device name")
-    addresses = []
-    for key in ("usb_address_before", "usb_address_after"):
-        address = line(board[key])
-        # USB fallback must be a real link-local endpoint, not cloud/NAT/loopback.
-        import ipaddress
-        host, port = address.rsplit(":", 1)
-        ip = ipaddress.ip_address(host.strip("[]"))
-        addresses.append(str(ip).split("%", 1)[0])
-        if not ip.is_link_local or port != "50051" or (ip.version == 6 and not host.startswith("[")):
-            raise ValueError("require explicit link-local USB endpoint on port50051")
-    if addresses[0] == addresses[1]:
-        raise ValueError("record distinct observed pre/post first-boot endpoints")
+    usb_endpoint(board["usb_address_before"])
+    if "usb_address_after" in board:
+        # First boot has not happened yet, so this could only be a guess.
+        raise ValueError("the post-boot endpoint is observed after first boot; pass it with --observed-address")
     for key in ("cli_source_commit", "agent_source_commit"):
         if not re.fullmatch(r"[a-f0-9]{40}", data[key]): raise ValueError("pin full candidate source commits")
     if type(data["disconnect_seconds"]) is not int or not 15 <= data["disconnect_seconds"] <= 120:
@@ -113,21 +124,16 @@ def generate(inventory, output):
     out = Path(output).resolve()
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     cli = records["cli_binary"]["path"]
-    config = out/"cli-config"
-    config.mkdir(mode=0o700)
-    prefix = ["env", "WENDY_CONFIG_DIR="+str(config), "WENDY_SECRET_STORE=file", "WENDY_ANALYTICS=false", "WENDY_NO_UPDATE_CHECK=1", cli]
+    (out/"cli-config").mkdir(mode=0o700)
+    prefix = cli_prefix(out, cli)
     selection = ["--device-type",board["device"],"--storage",board["storage"],"--version",version]
     install = [*prefix,"install",*selection,"--device-name",board["device_name"],"--binary",records["agent_binary"]["path"],"--pre-enroll=false","--no-wifi"]
-    target = ["--device",board["usb_address_after"]]
-    commands = {"plan":[*prefix,"install","plan",*selection,"--carrier","developer-kit"], "install_with_driver":install+["--driver","wendyos-hello"], "fresh_registry_baseline":install,
-                "verify":[*prefix,"install","verify","--address",board["usb_address_after"],"--expected-device-type",board["device"],"--expected-os-version",version,"--timeout","30s"],
-                "info":[*prefix,"--json","device","info",*target], "wifi_status":[*prefix,"--json","device","wifi","status",*target],
-                "available":[*prefix,"--json","device","drivers","list","--available",*target], "list":[*prefix,"--json","device","drivers","list",*target],
-                "registry_install":[*prefix,"device","drivers","install","wendyos-hello",*target], "remove_owned_driver":[*prefix,"device","drivers","remove","wendyos-hello",*target]}
+    commands = {"plan":[*prefix,"install","plan",*selection,"--carrier","developer-kit"], "install_with_driver":install+["--driver","wendyos-hello"], "fresh_registry_baseline":install}
     (out/"commands.json").write_text(json.dumps(commands,indent=2)+"\n")
     guide = Path(__file__).with_suffix(".txt").read_text()
     for key,value in {"@SERIAL@":board["serial"],"@NAME@":board["device_name"],"@KERNEL@":kernel,"@DISCONNECT@":str(data["disconnect_seconds"]),"@RAW@":raw["sha256"],"@AGENT@":records["agent_binary"]["sha256"]}.items(): guide=guide.replace(key,value)
     guide += "\nExact commands, never executed by generation:\n"+"\n".join(key+": "+shlex.join(value) for key,value in commands.items())+"\n"
+    guide += "\nCommands addressing the booted device ("+", ".join(POST_BOOT)+") are not planned. After each first boot, pass the endpoint actually observed:\n"+shlex.join(["python3",str(Path(__file__).resolve()),"--observed-address","OBSERVED_LINK_LOCAL:50051",str(Path(inventory).resolve()),str(out)])+"\n"
     (out/"procedure.txt").write_text(guide)
     sources = [Path(__file__),Path(__file__).with_suffix(".txt"),HELPER]+[ROOT/p for p in ("go/internal/cli/commands/os_install_drivers.go","go/internal/cli/commands/drivers_upload.go","go/internal/cli/commands/drivers_install.go","go/internal/cli/commands/manifest.go","go/internal/cli/commands/device_organization.go","go/internal/cli/commands/os_cmd.go","go/internal/agent/services/driver_service.go","go/internal/shared/sigverify/sigverify.go")]
     evidence = {"audit_entries":["2628"],"hardware_execution":"not_run","inventory_record":artifact(str(Path(inventory).resolve())),"inventory":data,"records":records,"release":release,"driver":driver,"kernel":kernel,
@@ -140,9 +146,35 @@ def generate(inventory, output):
     return evidence
 
 
+def observe(inventory, output, address):
+    """Return the device-addressing commands for an endpoint observed after first boot."""
+    out = Path(output).resolve(strict=True)
+    evidence = json.loads((out/"evidence.json").read_text())
+    cli = evidence["records"]["cli_binary"]
+    if artifact(str(Path(inventory).resolve())) != evidence["inventory_record"] or any(artifact(record["path"]) != record for record in [cli, *evidence["generated"]]):
+        raise ValueError("inventory, CLI or plan changed since generation")
+    board = evidence["inventory"]["board"]
+    endpoint, bare = usb_endpoint(address)
+    prefix = cli_prefix(out, cli["path"])
+    target = ["--device",endpoint]
+    commands = {"verify":[*prefix,"install","verify","--address",endpoint,"--expected-device-type",board["device"],"--expected-os-version",evidence["release"]["version"],"--timeout","30s"],
+                "info":[*prefix,"--json","device","info",*target], "wifi_status":[*prefix,"--json","device","wifi","status",*target],
+                "available":[*prefix,"--json","device","drivers","list","--available",*target], "list":[*prefix,"--json","device","drivers","list",*target],
+                "registry_install":[*prefix,"device","drivers","install","wendyos-hello",*target], "remove_owned_driver":[*prefix,"device","drivers","remove","wendyos-hello",*target]}
+    # An unchanged endpoint still needs these commands for the other cases, but
+    # is never credited as the powered-disconnect address change.
+    return {"usb_address_before":board["usb_address_before"], "usb_address_observed":endpoint, "address_changed":bare != usb_endpoint(board["usb_address_before"])[1], "commands":commands}
+
+
 if __name__ == "__main__":
     parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--observed-address",help="link-local USB endpoint observed after first boot; prints the commands addressing the booted device for an existing plan")
     parser.add_argument("inventory",type=Path)
     parser.add_argument("output",type=Path)
     args=parser.parse_args()
-    generate(args.inventory,args.output)
+    if args.observed_address:
+        observed=observe(args.inventory,args.output,args.observed_address)
+        print(json.dumps({key:value for key,value in observed.items() if key!="commands"}))
+        print("\n".join(key+": "+shlex.join(value) for key,value in observed["commands"].items()))
+    else:
+        generate(args.inventory,args.output)
