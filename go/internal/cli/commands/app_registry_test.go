@@ -667,7 +667,7 @@ func TestDeployRefusesStatementsNotAskedFor(t *testing.T) {
 		{Kind: cloudpb.PendingDeviceStatement_KIND_ASSIGN, Device: deviceURI(testOperatorTenant, vectorDevice), Revision: 1, ReplacesDeploymentId: uuid.NewString(), ReplacesRevision: 4},
 	}
 	err := op.deploy(context.Background(), "sh.wendy.example", releaseID, m.GetManifestDigest(), "line-3", []string{vectorDevice})
-	if err == nil || !strings.Contains(err.Error(), "not asked for") {
+	if err == nil || !strings.Contains(err.Error(), "Cloud asked to give it the deployment, which was not asked for") || !strings.Contains(err.Error(), "Cloud asked to move it from deployment") {
 		t.Fatalf("an unasked-for statement: %v", err)
 	}
 	if len(fake.assigned) != 1 || fake.assigned[0].GetDevice() != deviceURI(testOperatorTenant, vectorDevice) {
