@@ -3250,10 +3250,20 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/1998",
       "title": "dragonwing: seed the config partition and factory-reset /data on an EDL flash",
       "package": "10",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Tests inspect the generated config filesystem, seed contents and flash descriptor ordering, including protection of data partitions. Real EDL erase/first-boot behavior is not verified in ordinary CI.",
-      "required_follow_up": "Run a disposable Dragonwing flash/boot check and verify both the seed and factory-reset data state.",
-      "evidence": []
+      "required_follow_up": "Follow the exact IQ9075/IQ8275 UFS procedure with durable preflash nonce, actual Firehose config/data acknowledgments, fresh plain-ext4 UUID, absent nonce, seeded name/network, candidate Agent and second-boot persistence. All physical cases remain not_run; encrypted/custom layouts and secure erasure are excluded.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/dragonwing-reset-rehearsal.py",
+            ".github/regression-coverage/manual/dragonwing-reset-rehearsal.txt",
+            ".github/regression-coverage/manual/dragonwing-reset-marker.py",
+            ".github/scripts/dragonwing_reset_rehearsal_test.py"
+          ],
+          "result": "Independently reviewed exact-target procedure binds supported board/SoC, physical USB/UFS identity, immutable catalog/flashpack/programmer, candidate CLI/Agent and pinned Builder initialization sources. Explicit owner consent/recovery and preflash persisted nonce establish a before-state; actual postflash ext4 recreation and second-boot observations establish acceptance. Four offline admission/ownership tests pass. No physical flash or hardware acceptance has run."
+        }
+      ]
     },
     {
       "key": "1682",
