@@ -4677,7 +4677,7 @@
       "package": "16",
       "status": "partial",
       "audit_finding": "These are corrections to docs claims about Mender, Swift and the agent. No automated assertion verifies the corrected claims.",
-      "required_follow_up": "Verify Wendy command snippets in CI, then bind remaining Mender, Swift and Agent version/platform claims to actual generated capabilities or built artifacts.",
+      "required_follow_up": "Require current-head hosted documentation gates, then bind remaining Swift toolchain/cross-compilation, language/template and Agent platform claims to actual build outputs. Published RPi5/VM x86 rootfs configuration is qualified at the pinned Builder release only; other machine/default combinations and real startup/OTA behavior remain outside this documentation increment.",
       "evidence": [
         {
           "tests": [
@@ -4691,6 +4691,14 @@
             "go/internal/agent/network/documented_backend_unix_test.go"
           ],
           "result": "Local race execution proves the corrected Go Agent backend-selection claim: with legacy WENDY_NETWORK_MANAGER=connman, the actual constructor selects an owned nmcli executable and two actual child-process status calls return changing connected/escaped-SSID results with exact argv receipts; ConnMan invocation is trapped. A semantic sensitivity overlay that honors the old selector fails DOCUMENTED_NMCLI_BACKEND with ordinary exit1. This is a supplied process-boundary fixture, not a NetworkManager daemon or radio test and not a claim that this Go implementation historically honored the selector. The existing Fumadocs job requires the focused test, including on DEVELOPMENT.md edits; the ordinary Go race suite also discovers it. Mender/OTA defaults, Swift platform/version and language/template prose remain unverified by this increment."
+        },
+        {
+          "tests": [
+            ".github/scripts/check-built-doc-capabilities.py",
+            ".github/scripts/built_doc_capabilities_test.py",
+            ".github/scripts/fixtures/docs-capabilities/pins.json"
+          ],
+          "result": "Actual published Builder nightly20261112T214826 rootfs SPDX3 artifacts for raspberrypi5 and vm-x86-64 passed SHA256/size checks and image-rootfs membership traversal. Installed updater connector, data service and VM persistent-journal/mount file hashes match exact Builder a8084d8 sources. Parsed documentation INI configuration now equals those installed bytes; the original MaxRetentionSec=1month documentation fails the named DOC_PACKAGED_JOURNAL boundary. Five admission controls reject empty/wrong/ambiguous membership, recipe-only file decoys, missing digests and tampered artifacts. This binds packaged configuration for these exact reference images, not current unbuilt source defaults, other machines, real boot ordering, OTA or reboot persistence. Existing Fumadocs job requires the bounded public-artifact check without a new runner; current-head hosted execution pending."
         }
       ]
     },

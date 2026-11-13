@@ -1,0 +1,44 @@
+{
+  "builder_revision": "a8084d8cd9b5a52a4afad586bb2aa564cffb8ecb",
+  "release": "nightly-20261112T214826",
+  "sources": {
+    "journal": {
+      "path": "recipes-core/systemd-conf/files/journald-persistent.conf",
+      "sha256": "4f92dce3ee9d489f9d0cc25f6aa5f53cc478e353eb70b96c347ae288b5b3aa13"
+    },
+    "mount": {
+      "path": "recipes-core/systemd-conf/files/var-log.mount",
+      "sha256": "44e5000f642f72e5d3e85a9e7bcd37294856b46aa3da543bc5536d551cad7a53"
+    },
+    "data": {
+      "path": "recipes-support/data-device/files/wendyos-data.service",
+      "sha256": "e22476f238ce18e6557654f1e0928809b25d1ae28024d4fbc98f0bf9f8de2569"
+    },
+    "rpi-config": {
+      "path": "meta-rpi-extensions/recipes-core/wendyos-update-config/files/config.json",
+      "sha256": "42bce3f51b22cccc9aa6d91fd9ea9368e79be50abd33ebb140cec73a2cec0e27"
+    },
+    "vm-config": {
+      "path": "meta-vm-extensions/recipes-core/wendyos-update-config/files/config.json",
+      "sha256": "9e0a80360087e3134180975f302e365d2a1969b3aa6459ef2e41a254f021977f"
+    }
+  },
+  "images": {
+    "raspberrypi5": {
+      "asset": "wendyos-image-raspberrypi5-wendyos.rootfs-20261112214927.spdx.json",
+      "sha256": "943716caa540f8dd0964cb2cafcb576a0ee79438071ce881dc7ed2e7ea4810b7",
+      "size": 33067969,
+      "connector": "ubootenv",
+      "persistent_journal": false,
+      "config_source": "rpi-config"
+    },
+    "vm-x86-64": {
+      "asset": "wendyos-image-vm-x86-64-wendyos.rootfs-20261112220415.spdx.json",
+      "sha256": "93c9659ef245e1cc39b8679aee213c62e034a549597a531a6ff0e8a9458b38b2",
+      "size": 22386391,
+      "connector": "grubenv",
+      "persistent_journal": true,
+      "config_source": "vm-config"
+    }
+  }
+}

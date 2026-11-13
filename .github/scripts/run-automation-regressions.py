@@ -16,6 +16,7 @@ SUITES = (
     "review_sources_test.py",
     "docs_review_test.py",
     "readme_install_test.py",
+    "built_doc_capabilities_test.py",
     "security_review_test.py",
     "swift_e2e_gate_test.py",
     "ci_execution_test.py",
