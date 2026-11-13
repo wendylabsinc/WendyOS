@@ -45,9 +45,19 @@ struct `'wendy device logs'` {
         try await HTTPAppFixture.scenario().run { cli, _ in
             try await HTTPAppFixture.withComposeApp(cli: cli) { app in
                 let before = try await app.response(cli)
+                _ = try await app.requireReplay(cli, containing: before)
                 try await HTTPAppFixture.withComposeApp(cli: cli) { other in
                     let otherBefore = try await other.response(cli)
-                    let entries = try await app.logs(cli)
+                    _ = try await other.requireReplay(cli, containing: otherBefore)
+                    // Each subsequent write occurs after the preceding output
+                    // is observed in stored replay. These three distinct
+                    // ingestion boundaries exceed the target's two-batch tail;
+                    // a global-tail-before-filter implementation loses it.
+                    for _ in 0..<2 {
+                        let noise = try await other.response(cli, retryStartup: false)
+                        _ = try await other.requireReplay(cli, containing: noise)
+                    }
+                    let entries = try await app.logs(cli, tail: 2)
                     try #require(!entries.isEmpty, "Replay must contain actual app output")
                     #expect(
                         entries.contains {
@@ -64,7 +74,7 @@ struct `'wendy device logs'` {
                     #expect(entries.allSatisfy { !$0.body.contains(other.app) })
                     #expect(entries.allSatisfy { !$0.timestamp.isEmpty && !$0.severity.isEmpty })
 
-                    let errors = try await app.logs(cli, level: "error")
+                    let errors = try await app.logs(cli, tail: 2, level: "error")
                     try #require(!errors.isEmpty)
                     #expect(errors.contains { $0.body.contains(app.marker("stderr", before)) })
                     #expect(errors.allSatisfy { !$0.body.contains("e2e stdout") })
