@@ -50,6 +50,11 @@ class BluezPhysicalTests(unittest.TestCase):
             self.assertIn('--pair=true',commands['repair_preserving_live_trust'])
             self.assertIn('--trust=false',commands['repair_preserving_live_trust'])
             self.assertIn('--pair=false',commands['no_pair_control'])
+            watches=commands['target_methods_on_target']
+            self.assertIn('--monitor',watches)
+            self.assertTrue(any("member='RemoveDevice'" in arg and "path='/org/bluez/hci7'" in arg for arg in watches))
+            self.assertTrue(any("member='Pair'" in arg and 'dev_02_00_00_00_00_02' in arg for arg in watches))
+            self.assertTrue(any("member='Get'" in arg for arg in watches))
             self.assertTrue(all('forget' not in argv and 'remove' not in argv for argv in commands.values()))
             self.assertIn(data['peripheral']['address'],commands['disconnect_target'])
             self.assertEqual(len(set(evidence['challenge'][:2])),2)
