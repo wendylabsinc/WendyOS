@@ -54,6 +54,7 @@ SUITES = (
     "topdon_physical_rehearsal_test.py",
     "bluez_stale_bond_rehearsal_test.py",
     "ble_transport_rehearsal_test.py",
+    "ble_mesh_rehearsal_test.py",
     "owned_media_report_test.py",
     "usb_profile_namespace_test.py",
     "usb_profile_dependencies_test.py",

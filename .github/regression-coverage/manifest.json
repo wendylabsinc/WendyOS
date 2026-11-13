@@ -1415,10 +1415,30 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2669",
       "title": "Fix Mac mesh carrier discovery and operator attachment",
       "package": "04",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "The carrier and operator tests cover discovery and cached issuers. A former operator_discovery_test.go has been removed, and native macOS radio/client execution is not established by the Linux job.",
-      "required_follow_up": "Keep portable carrier tests, run native discovery tests and exercise operator attachment after restart.",
-      "evidence": []
+      "required_follow_up": "Execute the qualified exact-radio procedure for the remaining physical behavior; record native discovery/restart or real controller profile/power observations as applicable. All physical cases remain not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.py",
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.txt",
+            ".github/scripts/ble_mesh_rehearsal_test.py",
+            ".github/scripts/fixtures/ble-mesh-coverage.md"
+          ],
+          "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068104",
+          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
+          "result": "Required race job passed bleprovider, btradio, operatormesh and sessionbroker. The relevant non-opt-in issuer/recipe and admission-lock/profile tests are active on Linux. Root independently verified no source/test changes in btradio, operatormesh or sessionbroker between that head and this batch. This proves software boundaries only; native radio outcomes remain physical."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068157",
+          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
+          "result": "Required network gate passed explicit-disconnect intent across native process restarts and cold broker/spare-carrier recovery with actual traffic. Discovery is loopback, so the new reserved Mac/radio procedure is still required for physical discovery."
+        }
+      ]
     },
     {
       "key": "2582",
@@ -1497,10 +1517,27 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2576",
       "title": "[WN3] Connect WendyOS to native Lite mesh carriers",
       "package": "04",
-      "status": "open",
+      "status": "coverage_added_pending_ci",
       "audit_finding": "Advertisement, identity and carrier-selection tests exist. Listener ownership and native TLS handover across radios require runtime coverage beyond the codec fixtures.",
-      "required_follow_up": "Test simultaneous incoming/outgoing carriers, listener failure and teardown while switching preferred paths.",
-      "evidence": []
+      "required_follow_up": "Require both actual native TLS listener-drain and Lite LAN-attachment tests in the existing network job. Ordinary race CI skips these namespace-only cases. Qualified physical handover/listener acceptance has an executable procedure and remains not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.py",
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.txt",
+            ".github/scripts/ble_mesh_rehearsal_test.py",
+            ".github/scripts/fixtures/ble-mesh-coverage.md"
+          ],
+          "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
+        },
+        {
+          "tests": [
+            "go/internal/agent/localmesh/native_listener_success_linux_test.go",
+            ".github/scripts/test-packet-backends.sh"
+          ],
+          "result": "Found namespace-only native listener/dial tests were not selected by the existing required operator gate. Added explicit required selection, nonzero PASS markers and skip rejection using the already-built localmesh binary in private namespaces. Hosted runtime remains pending. Existing crossed-provider TLS software tests passed in the ordinary race job; those do not establish native listener/kernel behavior."
+        }
+      ]
     },
     {
       "key": "2575",
@@ -1627,6 +1664,15 @@
             ".github/scripts/test-sharing-slow-lease.sh"
           ],
           "result": "Prepared real TLS lease over one TCP connection held across16seconds and successive actual Controller.Step calls; pending steps must retain the same connection before roaming. Existing real namespaces then require dual-stack HTTP/DNS, grant/revocation and donor withdrawal cleanup. Historical pending-withdrawal mutation must fail at retained lease assertion. Node/probe inputs are controlled; actual resolved integration is separate. Normal/control Linux compilation, ShellCheck and independent review pass. Privileged runtime remains pending; no physical radio was used."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.py",
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.txt",
+            ".github/scripts/ble_mesh_rehearsal_test.py",
+            ".github/scripts/fixtures/ble-mesh-coverage.md"
+          ],
+          "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
         }
       ]
     },
@@ -1645,6 +1691,15 @@
             ".github/scripts/test-ble-interval-transport.py"
           ],
           "result": "Prepared actual provider dial, PKI/TLS, stream hello and two exact echoes for accepted/refused negotiation, plus zero TLS output and joined IO for unknown/timeout/disconnect/cancel outcomes. Overlays replace only controller syscall outcomes and private policy path. Normal and historical fallback-removal Linux binaries compile; source review is clear. Actual Linux race runtime remains pending; cross-compilation establishes no radio or firmware behavior."
+        },
+        {
+          "tests": [
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.py",
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.txt",
+            ".github/scripts/ble_mesh_rehearsal_test.py",
+            ".github/scripts/fixtures/ble-mesh-coverage.md"
+          ],
+          "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
         }
       ]
     },
@@ -1653,10 +1708,25 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2603",
       "title": "[WN2] Configure Bluetooth mesh profiles and device-wide transmit power",
       "package": "04",
-      "status": "open",
+      "status": "human_script_ready",
       "audit_finding": "Controller tests cover PHY/power/profile operations and concurrency, but real BlueZ tuning races are not exercised on hardware in normal CI.",
-      "required_follow_up": "Run concurrent profile-change/link-tuning tests with controlled controller responses and one BlueZ hardware scenario.",
-      "evidence": []
+      "required_follow_up": "Execute the qualified exact-radio procedure for the remaining physical behavior; record native discovery/restart or real controller profile/power observations as applicable. All physical cases remain not_run.",
+      "evidence": [
+        {
+          "tests": [
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.py",
+            ".github/regression-coverage/manual/ble-mesh-rehearsal.txt",
+            ".github/scripts/ble_mesh_rehearsal_test.py",
+            ".github/scripts/fixtures/ble-mesh-coverage.md"
+          ],
+          "result": "Prepared reviewed exact-host/radio/firmware/source/device/tenant/AP provenance and six physical acceptance cases, including native C5 Wi-Fi/BLE handover, original controller refusal, qualified slow BLE lease, and overlapping profile/readback. Three offline admission/generation tests pass. No radio, package, firmware or device operation ran. Every physical result is not_run; missing qualified stimulus, readback or safe original-failure control remains inconclusive."
+        },
+        {
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43360636095/job/131673068104",
+          "head": "78bbeed0a6ddcc6d4f481b771a33ccc34c807040",
+          "result": "Required race job passed bleprovider, btradio, operatormesh and sessionbroker. The relevant non-opt-in issuer/recipe and admission-lock/profile tests are active on Linux. Root independently verified no source/test changes in btradio, operatormesh or sessionbroker between that head and this batch. This proves software boundaries only; native radio outcomes remain physical."
+        }
+      ]
     },
     {
       "key": "1903",
