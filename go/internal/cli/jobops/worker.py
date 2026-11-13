@@ -193,6 +193,7 @@ try:
             finally:
                 os.close(liveness_read)
                 os.close(report_write)
+            guard_reported = False
             try:
                 os.set_blocking(report_read, False)
                 report_bytes = bytearray()
@@ -245,6 +246,7 @@ try:
                         raise RuntimeError(result["error"])
                     code = result["returncode"]
                     descendants_remaining = result["descendants_remaining"]
+                    guard_reported = True
                 elif code == 0:
                     raise RuntimeError(name + " guard exited without a step result")
             finally:
@@ -258,6 +260,17 @@ try:
                     child.wait()
                 except ChildProcessError:
                     pass
+                # A guard lost without a result (OOM kill, external SIGKILL) can
+                # no longer bound its workload, so the runner ends the group.
+                # ponytail: nothing pins this group ID once the guard is gone;
+                # reuse needs the whole group to exit and its ID to go to a new
+                # group leader within one 50 ms poll. Make the runner a child
+                # subreaper if that window ever matters.
+                if not guard_reported and state["child_pid"]:
+                    try:
+                        os.killpg(state["child_pid"], signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
         state["stages"].append(
             {
                 "label": name,

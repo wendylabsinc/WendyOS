@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -222,4 +223,36 @@ pathlib.Path(os.environ['WENDY_STEP_DIR'],'checkpoint').write_text('saved')
 	if data, _ := os.ReadFile(filepath.Join(root, "train", "checkpoint")); string(data) != "saved" {
 		t.Fatal("workload was signalled again before its checkpoint finished")
 	}
+}
+
+func TestSubmitGuardLossDoesNotLeaveWorkloadRunning(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip(err)
+	}
+	source := "import os,time\nopen(os.environ['WENDY_STEP_DIR']+'/guard','w').write(str(os.getppid()))" + heartbeat
+	spec := jobops.Spec{Name: "guard-loss", WorkingDirectory: t.TempDir(), Steps: []jobops.Step{{Name: "train", Argv: []string{python, "-c", source}, TimeoutSeconds: 20}}}
+	receipt, err := jobops.Submit(context.Background(), connection(t, &host{}), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := receipt["job_path"].(string)
+	guard := 0
+	for deadline := time.Now().Add(3 * time.Second); guard == 0 && time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(root, "train", "beat")); err == nil {
+			data, _ := os.ReadFile(filepath.Join(root, "train", "guard"))
+			guard, _ = strconv.Atoi(string(data))
+		}
+	}
+	if guard == 0 {
+		t.Fatal("workload did not report its parent")
+	}
+	// The guard alone is lost, as from an OOM kill; the runner survives.
+	if process, err := os.FindProcess(guard); err != nil || process.Kill() != nil {
+		t.Fatal("could not kill the step guard")
+	}
+	if state := waitForJob(t, root); state["state"] != "failed" {
+		t.Fatalf("guard loss not recorded as failure: %+v", state)
+	}
+	requireHeartbeatStopped(t, filepath.Join(root, "train", "beat"))
 }
