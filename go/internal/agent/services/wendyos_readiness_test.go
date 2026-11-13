@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // Matches CheckReadiness for tegra234 in wendyos-update commit
@@ -180,6 +181,39 @@ func TestWendyOSLegacyRepairsRemainRequired(t *testing.T) {
 			if !tc.wantErr {
 				f.wantVariable(t, rootfsRedundancy, tc.levelAttrs, 1)
 				f.wantVariable(t, rootfsRetryMax, tc.retryAttrs, 3)
+			}
+		})
+	}
+}
+
+// A wording change to the updater's check name silently turns delegation back
+// into a refusal; the verdict log is what makes either outcome visible.
+func TestWendyOSReadinessVerdictIsLogged(t *testing.T) {
+	for _, tc := range []struct {
+		name, response, message, reason string
+		wantErr                         bool
+	}{
+		{"delegate", readyRootfsJSON, "wendyos-update check confirmed readiness; delegating firmware-managed rootfs redundancy to the updater", "", false},
+		{"refuse renamed check", `{"ok":true,"checks":[{"name":"rootfs slot redundancy","ok":true}]}`, "wendyos-update check did not confirm readiness; refusing the OS update", `did not report "rootfs A/B redundancy"`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubWendyOSPreflightBinary(t, "if [ \"$1\" = check ]; then printf '%s' '"+tc.response+"'; fi\n")
+			f := newJetsonPreparationFixture(t)
+			f.seed(t, rootfsRedundancy, 6, 0)
+			f.seed(t, rootfsRetryMax, 6, 3)
+			core, logs := observer.New(zap.InfoLevel)
+			w := newWendyOSUpdater(zap.New(core))
+			w.prepareRootfs = func(ctx context.Context) error { _, err := f.p.prepare(ctx); return err }
+			err := w.install(context.Background(), "https://example.invalid/update.wendy", func(string, int32) {})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("install: %v", err)
+			}
+			entries := logs.FilterMessage(tc.message).All()
+			if len(entries) != 1 {
+				t.Fatalf("verdict log %q: got %d entries in %v", tc.message, len(entries), logs.All())
+			}
+			if reason, _ := entries[0].ContextMap()["reason"].(string); !strings.Contains(reason, tc.reason) || (tc.reason == "") != (reason == "") {
+				t.Fatalf("verdict reason = %q, want %q", reason, tc.reason)
 			}
 		})
 	}
