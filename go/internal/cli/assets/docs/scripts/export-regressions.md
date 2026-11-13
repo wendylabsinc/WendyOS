@@ -126,7 +126,10 @@ HTTP redirects before following any destination. It checks the preview homepage,
 and robots.txt against the exact artifact. It checks canonical URLs, accessible
 redirect fallbacks, target anchors, noindex/nofollow and absent preview analytics.
 It then checks the same compatibility map on public `/latest`, which may be a
-different revision and is not compared to the preview artifact. Wildcard robots
+different revision and is not compared to the preview artifact. `/latest` only
+changes on a stable release, so it cannot satisfy a redirect this revision adds
+or moves: its findings are written to the report and raised as a workflow
+warning, and only preview failures or an aborted probe fail the step. Wildcard robots
 rules must exclude the tested preview path; comments or other user-agent groups
 do not satisfy that check. Production analytics loading is outside this probe.
 
