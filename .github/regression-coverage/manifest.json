@@ -4368,10 +4368,16 @@
             ".github/scripts/macos_vm_lifecycle_test.py",
             ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
           ],
-          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent identity/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent hostname/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
         },
         {
           "result": "Original fixes0a3c57ff89c6c8e187a76351d918478aff2c06d1 and26e76bc5715b4ec430c63abc84bb0f4e28bd4ea7 distinguish app QMP forwarding/reconnection from picker rendering. New fixture retains production discovery and forwarding APIs and an actual persisted guest app; no background/QMP promise is made for Windows, where the product requires foreground mode."
+        },
+        {
+          "tests": [
+            "go/internal/cli/commands/vm_lifecycle_darwin_test.go"
+          ],
+          "result": "Corrected fixture expectation to the actual shipped GetAgentVersion contract: Go Agent supplies hostname, not PublicKey. Same nonempty hostname and same owned regular disk inode must survive restart, alongside new guest boot ID, owned QMP/process/port and actual persisted app HTTP output. No cryptographic identity claim; native runtime execution remains pending."
         }
       ]
     },
@@ -4402,10 +4408,16 @@
             ".github/scripts/macos_vm_lifecycle_test.py",
             ".github/regression-coverage/manual/macos-vm-hvf-rehearsal.txt"
           ],
-          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent identity/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
+          "result": "Actual production VM launcher/discover-start callback, QMP pause and observed boot-wait cancellation, same-QEMU recovery, real chunk-uploaded ARM64 OCI HTTP app, automatic QMP forwarding, graceful stop and same-disk restart with persistent Agent hostname/new guest boot ID. Historical missing-forwarding source control must fail actual app reachability after real startup. Six portable admission/QMP/flock tests pass; native normal/control compile passes. Registered in the existing Intel macOS CLI row, reusing the Make CLI and commands binary, without another runner. Full TCG normal/control journey remains pending CI. Exact reserved bare-metal ARM64/HVF procedure is executable but every physical case is not_run; no UI, Cloud or other host claim."
         },
         {
           "result": "Original simulator correction c9f63eb09530072cfef12836d2980d0cac051a45 preserved authentication refusal while retrying cold-boot reachability and respecting caller cancellation. New fixture cancels only after observing actual waitForSimulatorAgent while QEMU is paused, then resumes that same VM and completes real Agent/app requests. It does not count cancellation before operation entry or mocked readiness as recovery."
+        },
+        {
+          "tests": [
+            "go/internal/cli/commands/vm_lifecycle_darwin_test.go"
+          ],
+          "result": "Corrected fixture expectation to the actual shipped GetAgentVersion contract: Go Agent supplies hostname, not PublicKey. Same nonempty hostname and same owned regular disk inode must survive restart, alongside new guest boot ID, owned QMP/process/port and actual persisted app HTTP output. No cryptographic identity claim; native runtime execution remains pending."
         }
       ]
     },
@@ -4764,7 +4776,7 @@
       "package": "16",
       "status": "partial",
       "audit_finding": "These are corrections to docs claims about Mender, Swift and the agent. No automated assertion verifies the corrected claims.",
-      "required_follow_up": "Require current-head hosted documentation gates, then bind remaining Swift toolchain/cross-compilation, language/template and Agent platform claims to actual build outputs. Published RPi5/VM x86 rootfs configuration is qualified at the pinned Builder release only; other machine/default combinations and real startup/OTA behavior remain outside this documentation increment.",
+      "required_follow_up": "Bind remaining Swift cross-compilation, language/template and Agent platform claims to actual build outputs. Pinned published RPi5/VM x86 rootfs configuration and hosted documentation gates pass; other machine/default combinations and runtime OTA/startup are separate scope.",
       "evidence": [
         {
           "tests": [
@@ -4786,6 +4798,12 @@
             ".github/scripts/fixtures/docs-capabilities/pins.json"
           ],
           "result": "Actual published Builder nightly20261112T214826 rootfs SPDX3 artifacts for raspberrypi5 and vm-x86-64 passed SHA256/size checks and image-rootfs membership traversal. Installed updater connector, data service and VM persistent-journal/mount file hashes match exact Builder a8084d8 sources. Parsed documentation INI configuration now equals those installed bytes; the original MaxRetentionSec=1month documentation fails the named DOC_PACKAGED_JOURNAL boundary. Five admission controls reject empty/wrong/ambiguous membership, recipe-only file decoys, missing digests and tampered artifacts. This binds packaged configuration for these exact reference images, not current unbuilt source defaults, other machines, real boot ordering, OTA or reboot persistence. Existing Fumadocs job requires the bounded public-artifact check without a new runner; current-head hosted execution pending."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378092028/job/131729216774",
+          "artifact": 14016050305,
+          "result": "Hosted published-rootfs/configuration comparison passes for both pinned RPi5 and VM x86 images. The original logging documentation fails DOC_PACKAGED_JOURNAL; exact installed file membership and source hashes are retained in docs-built-capabilities artifact. Full docs export and route crawl also pass. No real boot, OTA or physical logging acceptance is claimed."
         }
       ]
     },
@@ -4848,7 +4866,7 @@
       "package": "16",
       "status": "partial",
       "audit_finding": "The PR mixes README corrections and documentation-file cleanup. No automated documentation correctness check was found for these changes.",
-      "required_follow_up": "Require current-head hosted standalone installer execution; retain public package-manager/winget installation and other setup/deployment snippets beyond the existing Wendy parser as residuals.",
+      "required_follow_up": "Require current-head hosted template generation/HTTP execution, then cover remaining public package-manager/winget installation and actual device deployment snippets.",
       "evidence": [
         {
           "tests": [
@@ -4871,6 +4889,12 @@
             ".github/scripts/fixtures/readme-template/package-lock.json"
           ],
           "result": "Local actual README init argv executed through production Cobra, HTTPS-request translation to owned loopback metadata/archive serving, extraction/rendering and project writes from pinned templates44d5d1ba804c332c1b6787b9812bbcdd4e005aee. The actual generated TypeScript compiled with a locked npm graph and the owned Node process returned the documented hello-world JSON. A wrong-response compiled-handler control fails the exact README_HTTP_BODY assertion. PID/nonce listening receipts and joined owned process groups exclude an unrelated listener. The existing Fumadocs build job reuses its pinned templates checkout and Node/Go installation; hosted current-head execution remains pending. This proves local generation/build/HTTP output, not wendy run, an OCI image or remote device deployment."
+        },
+        {
+          "head": "2debcbb5aad06e78d332dee33a167cc632614931",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43378092028/job/131729216774",
+          "artifact": 14015621070,
+          "result": "Hosted README Unix install pipeline passed with the freshly built candidate CLI6b4022e805de4da4f96444904131ed9baa088ea64af0450395320ffc5d9a685b. Actual installed bytes match; version invocation and installed-binary MCP setup pass. Missing-install and missing-MCP controls are rejected. Source README matches integrated bytes. Public delivery/package managers and actual deployment remain outside this increment."
         }
       ]
     },
