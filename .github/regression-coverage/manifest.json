@@ -3334,9 +3334,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2483",
       "title": "fix(cli): honor VERSION in native make builds",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The Makefile now respects VERSION, but no build-and-version regression was found.",
-      "required_follow_up": "Build with a sentinel VERSION and assert the resulting CLI reports that exact value.",
+      "required_follow_up": "Retain native Make build/version and linker-failure checks on Linux, macOS and Windows.",
       "evidence": [
         {
           "test": ".github/scripts/test-native-make-version.py",
@@ -3346,6 +3346,21 @@
         {
           "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43231090224/job/131226573972",
           "result": "Native Windows CI exposed Make/sh expansion of PowerShell LASTEXITCODE, producing an invalid if expression after the build. The native recipe now invokes a .ps1 file so PowerShell receives its own variables intact. Added a real linker-failure case to require nonzero Make exit on all three hosts. Final Windows execution pending."
+        },
+        {
+          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481613",
+          "result": "Linux amd64 actual native Make builds reported both exact sentinels2099.01.02-regression-a and2099.01.03-regression-b and propagated the deliberate real linker failure. Entire job passed. Makefile, PowerShell helper and fixture are byte-identical to the current coverage branch."
+        },
+        {
+          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481736",
+          "result": "Windows amd64 actual native Make builds reported both exact sentinels2099.01.02-regression-a and2099.01.03-regression-b and propagated the deliberate real linker failure. Entire job passed. Makefile, PowerShell helper and fixture are byte-identical to the current coverage branch."
+        },
+        {
+          "head": "f5b2a3085ad0bcf953f9350a403f8fd5e3eddb88",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356139718/job/131659042618",
+          "result": "macOS arm64 actual native Make builds reported both exact sentinels2099.01.02-regression-a and2099.01.03-regression-b and propagated the deliberate real linker failure. Entire job passed. Makefile, PowerShell helper and fixture are byte-identical to the current coverage branch."
         }
       ]
     },
@@ -3354,17 +3369,22 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2424",
       "title": "Rename the runner janitor to Janitor and keep its Slack job names whole",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The janitor Slack name correction is inline workflow shell with no message-format fixture.",
-      "required_follow_up": "Extract and test the job-name parsing, including names containing spaces.",
+      "required_follow_up": "Retain the required offline automation gate and its failure cases.",
       "evidence": [
         {
           "test": ".github/scripts/janitor_report_test.py",
           "runner": "local macOS; required offline automation job added",
           "result": "Five tests parse the actual YAML names and execute only the actual local alarm/report writers. Complete channel names and spaces survive; JSON escaping, success/failure/cancellation/offline reports, and runner recording before a failed disk probe are checked. Removing the YAML quoting reproduces the original truncated job-name failure. No cleanup or Slack action is executed."
+        },
+        {
+          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481733",
+          "result": "All five Janitor YAML/payload cases passed in the hosted offline job, including complete names with spaces/hash characters, escaping, failures/cancellation/offline reporting and identity before a failed disk probe. No messages were sent. Relevant tested files are byte-identical to the current coverage branch."
         }
       ],
-      "resolution": "Historical diff confirms YAML comment truncation, not a separate job-name parser. Required fixtures exercise the YAML and local payload generation directly. CI reconciliation remains pending."
+      "resolution": "Historical diff confirms YAML comment truncation, not a separate job-name parser. Required fixtures exercise the YAML and local payload generation directly. Hosted CI reconciliation is complete."
     },
     {
       "key": "1724",
@@ -3432,17 +3452,22 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2353",
       "title": "Keep disk space free on the self-hosted macOS CI runner",
       "package": "11",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "Disk cleanup has an operational guard and maintenance scripts, but no selected fixture proves that only stale CI builders are removed.",
-      "required_follow_up": "Test cleanup with active, stale, foreign and malformed builder records and low-disk conditions.",
+      "required_follow_up": "Retain the required offline automation gate and its failure cases.",
       "evidence": [
         {
           "test": ".github/scripts/runner_cleanup_test.py",
           "runner": "local macOS; required offline automation job",
           "result": "Six fixtures execute the actual stale-builder selector with a fake Docker CLI and the actual disk gate with isolated df results. Current-run attempts, foreign names, the user-owned hexadecimal builder name, malformed names and node rows are preserved; stale owned names are removed once. Dry run, missing/invalid run ID, listing failure, removal failure, exact disk threshold, insufficient space and malformed disk inputs are covered. Original script failed active/malformed-selection checks; tightened selection passes. All 308 offline regressions pass. No real Docker builder or cache was accessed."
+        },
+        {
+          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481733",
+          "result": "All six stale-builder/disk-gate cases passed in hosted CI. The production selector retained active, foreign and malformed names and removed only stale owned entries under controlled Docker responses; low-disk and invalid readings stopped work. No real builders were deleted by these fixtures. Relevant tested files are byte-identical to the current coverage branch."
         }
       ],
-      "resolution": "The sweep retains its documented single-runner-per-Docker-daemon requirement and now preserves current-run builders explicitly. Outside an identifiable GitHub run it skips sweeping. Required CI remains pending."
+      "resolution": "The sweep retains its documented single-runner-per-Docker-daemon requirement and now preserves current-run builders explicitly. Outside an identifiable GitHub run it skips sweeping. Hosted required fixtures passed."
     },
     {
       "key": "2352",
@@ -4706,9 +4731,9 @@
       "url": "https://github.com/wendylabsinc/wendyos/pull/2803",
       "title": "Tag releases at the commit that was built",
       "package": "priority",
-      "status": "coverage_added_pending_ci",
+      "status": "verified",
       "audit_finding": "The release tag now uses the built commit, but no automated moving-main/tag-target regression was found.",
-      "required_follow_up": "The shell-tag fixture is present. Add published artifact/provenance SHA agreement; document and test what happens when tag creation fails or an existing tag points elsewhere.",
+      "required_follow_up": "Retain the required offline automation gate and its failure cases.",
       "evidence": [
         {
           "pr": "https://github.com/wendylabsinc/WendyOS/pull/2838",
@@ -4732,9 +4757,14 @@
           "source_commit": "e6ace7c62272c6537be22f10b70aec259bd24c27",
           "sha256": "a1bce59078f0fc1901bfc14cd5cff7832c1258c0879cc96a7eedc593e0f54154",
           "result": "Actual gh cryptographic verification of the published artifact accepted its exact tag/source commit and signer workflow, and rejected an all-zero source digest. Read-only check; no release or tag was changed."
+        },
+        {
+          "head": "a38653db0bf6a83cdd12f388d0531c18b320f917",
+          "url": "https://github.com/wendylabsinc/WendyOS/actions/runs/43356084695/job/131658481733",
+          "result": "All seven actual Git/tag/publication-gate scenarios and five provenance workflow cases passed in hosted CI. Moving main, wrong lightweight/annotated tags, concurrent creators, API failures and wrong/missing artifact metadata are covered. Earlier recorded real gh cryptographic artifact verification supplies the distinct attestation boundary; no release was published by this test. Relevant tested files are byte-identical to the current coverage branch."
         }
       ],
-      "resolution": "The release now verifies signed asset bytes and exact source SHA before accepting or creating its immutable tag. An incorrect existing tag or an unresolved API/attestation failure stops publication; target_commitish also pins release creation. Required PR CI remains pending; no release was published to test the change."
+      "resolution": "The release now verifies signed asset bytes and exact source SHA before accepting or creating its immutable tag. An incorrect existing tag or an unresolved API/attestation failure stops publication; target_commitish also pins release creation. Required hosted fixtures passed; no release was published to test the change."
     },
     {
       "key": "2781",
