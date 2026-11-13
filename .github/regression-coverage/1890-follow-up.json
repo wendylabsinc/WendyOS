@@ -1,8 +1,8 @@
 {
   "audit_key": "1890",
   "original_merge": "284058dfdfb7abdc586884d33a5556f6c1cf35ed",
-  "reviewed_root": "44ef6f4f6",
-  "method": "Original commit/source decomposition, exact hosted runtime artifacts and per-behavior evidence. Kernel sample identity passed at8b59c8dce; remaining certificate/startup boundaries stay open.",
+  "reviewed_root": "50ce4945a",
+  "method": "Original commit/source decomposition, exact hosted runtime artifacts and per-behavior evidence. Kernel sample identity passed at8b59c8dce; TLS policy and sensor tenant matrices passed at50ce4945a. Actual unknown-own-scope startup remains pending.",
   "items": [
     {
       "original_commit": "b42fdde4c",
@@ -44,14 +44,15 @@
     {
       "original_commit": "3dda11ee3",
       "behavior": "Direct ML-DSA chain policy and unknown EKU rejection",
-      "status": "coverage_added_pending_ci",
+      "status": "verified_hosted_transport",
       "tests": "go/internal/agent/mtls/peer_chain_transport_test.go; .github/scripts/test-mldsa-policy-transport.py",
-      "scope": "Eight actual TCP/TLS13 client/server cases use ECDSA endpoint possession under real ML-DSA issuer signatures. Valid chains exchange nonce bytes; leaf/issuer critical extensions and unknown EKU reject before application delivery with an observed production verifier error. All eight pass under race locally; adapted historical missing-issuer-policy control admits bytes and fails both directions. Required in existing race job; hosted execution pending. Missing-own-scope startup remains separate.",
+      "scope": "Eight actual TCP/TLS13 client/server cases use ECDSA endpoint possession under real ML-DSA issuer signatures. Valid chains exchange nonce bytes; leaf/issuer critical extensions and unknown EKU reject before application delivery with an observed production verifier error. All eight pass under race locally; adapted historical missing-issuer-policy control admits bytes and fails both directions. Required in existing race job; Missing-own-scope startup remains separate. Hosted full race job131714898688 at50ce4945a now passes actual normal cases and intended historical controls.",
       "related_entries": [
         "2596"
       ],
       "evidence_urls": [
-        "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875"
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43228418127/job/131217546875",
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
       ]
     },
     {
@@ -120,16 +121,17 @@
     {
       "original_commit": "c66651732",
       "behavior": "Sensor source tenant derives from local certificate and pinned peer identity",
-      "status": "coverage_added_pending_ci",
+      "status": "verified_hosted_transport",
       "tests": "go/internal/agent/mcusource/mtls_identity_transport_test.go; .github/scripts/test-sensor-asset-identity.py",
-      "scope": "Twelve actual TLS/gRPC cases now distinguish legacy and SPIFFE certificate tenant from stale numeric pairing OrgID; wrong tenant/asset fail before RPC dispatch. Local race matrix and adapted pairing-org control pass. Registered in existing race job under2048; hosted execution pending.",
+      "scope": "Twelve actual TLS/gRPC cases now distinguish legacy and SPIFFE certificate tenant from stale numeric pairing OrgID; wrong tenant/asset fail before RPC dispatch. Local race matrix and adapted pairing-org control pass. Registered in existing race job under2048; hosted execution passed. Hosted full race job131714898688 at50ce4945a now passes actual normal cases and intended historical controls.",
       "related_entries": [
         "2350",
         "1858"
       ],
       "evidence_urls": [
         "https://github.com/wendylabsinc/WendyOS/actions/runs/43315180056/job/131521484536",
-        "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305"
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43320329041/job/131539227305",
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43373610335/job/131714898688"
       ]
     },
     {
@@ -153,15 +155,16 @@
     {
       "original_commit": "1890 inference",
       "behavior": "Managed YAML campaign inference lifecycle",
-      "status": "local_runtime_hosted_pending",
+      "status": "verified_hosted_runtime",
       "tests": "go/internal/agent/services/data_campaign_runtime_test.go; .github/scripts/test-camera-campaign-runtime.py",
-      "scope": "64eb53257 local real RPC/managed PyAV+DETR worker, red/blue generated pixels, durable service restart, recorder/removal and two controls. Published model, physical camera and GPU acceptance not implied.",
+      "scope": "Hosted actual CampaignDeploy/DataService/VideoService RPC, managed PyAV/DETR worker, generated pixels, durable service restart, recorder/removal and both historical controls passed at8b59c8dce. Artifact14011737370. Published model, physical camera and GPU acceptance remain separate.",
       "related_entries": [
         "2258"
       ],
       "evidence_urls": [
         "https://github.com/wendylabsinc/WendyOS/actions/runs/43289291273/job/131430931049",
-        "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498452"
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43294052121/job/131447498452",
+        "https://github.com/wendylabsinc/WendyOS/actions/runs/43368990597/job/131700219364"
       ]
     }
   ]
