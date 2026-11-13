@@ -738,6 +738,19 @@ jobs:
             ${{ runner.temp }}/sharing-slow-lease/*.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Require RTPS packets to stay on joined interfaces
+        timeout-minutes: 5
+        run: bash .github/scripts/test-rtps-multicast-isolation.sh "$RUNNER_TEMP/rtps-multicast-isolation"
+      - name: Retain RTPS interface packet evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rtps-multicast-isolation
+          path: |
+            ${{ runner.temp }}/rtps-multicast-isolation/*.log
+            ${{ runner.temp }}/rtps-multicast-isolation/source.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Require wired-only automatic ROS discovery
         run: bash .github/scripts/test-ros-discovery-policy.sh "$RUNNER_TEMP/ros-discovery-policy"
       - name: Require TLS UDP admission and recovery under a stalled stream
