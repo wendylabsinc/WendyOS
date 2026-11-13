@@ -1,7 +1,13 @@
 """Portable admission/cleanup tests only. Real kernel proof requires the VM gate."""
 import importlib.util
+import configparser
 import io
 import json
+import os
+import pty
+import select
+import subprocess
+import tty
 from pathlib import Path
 import tarfile
 import tempfile
@@ -49,14 +55,90 @@ class DriverVMTests(unittest.TestCase):
 
     def test_requires_real_lifecycle_and_specific_control_boundary(self):
         nonce="a"*32
-        normal=f"--- PASS: TestDriverLifecycleVM\nDRIVER_VM_LIFECYCLE_VERIFIED {nonce}\nDRIVER_VM_EXIT nonce={nonce} control=normal phase=first status=0\n"
+        normal=f"DRIVER_VM_EVIDENCE_CHANNEL_READY\n--- PASS: TestDriverLifecycleVM\nDRIVER_VM_LIFECYCLE_VERIFIED {nonce}\nDRIVER_VM_EXIT nonce={nonce} control=normal phase=first status=0\n"
         VM.accept_log(normal,nonce,"normal","first",0)
-        for bad in (normal.replace("LIFECYCLE_VERIFIED","missing"),normal+"--- SKIP: prereq\n",normal.replace(nonce,"b"*32)):
+        for bad in (normal.replace("DRIVER_VM_EVIDENCE_CHANNEL_READY", "missing"), normal.replace("LIFECYCLE_VERIFIED","missing"),normal+"--- SKIP: prereq\n",normal.replace(nonce,"b"*32)):
             with self.assertRaises(ValueError):VM.accept_log(bad,nonce,"normal","first",0)
-        control=f"--- FAIL: TestDriverLifecycleVM\nlive driver version mismatch: wendy_fixture_target\nDRIVER_VM_EXIT nonce={nonce} control=omit-unload phase=first status=1\n"
+        control=f"DRIVER_VM_EVIDENCE_CHANNEL_READY\n--- FAIL: TestDriverLifecycleVM\nlive driver version mismatch: wendy_fixture_target\nDRIVER_VM_EXIT nonce={nonce} control=omit-unload phase=first status=1\n"
         VM.accept_log(control,nonce,"omit-unload","first",0)
         with self.assertRaises(ValueError):VM.accept_log(control.replace("live driver version mismatch: wendy_fixture_target","compile failed"),nonce,"omit-unload","first",0)
         with self.assertRaises(ValueError):VM.accept_log(control,nonce,"omit-unload","first",124)
+
+    def test_generated_guest_masks_both_console_providers(self):
+        class StopBeforeDocker(Exception):
+            pass
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = VM.Runner(root, root, "a" * 32)
+            def command(argv, **options):
+                if argv[:2] == ["git", "rev-parse"]:
+                    return "controlled-source\n"
+                if argv[0] == "env":
+                    Path(argv[argv.index("-o") + 1]).write_bytes(b"not-an-executable")
+                    return ""
+                if argv[:2] == ["docker", "build"]:
+                    context = Path(argv[-1])
+                    unit = configparser.ConfigParser(interpolation=None)
+                    unit.read(context / "driver-fixture.service")
+                    self.assertEqual(unit["Service"]["StandardInput"], "null")
+                    self.assertEqual(unit["Service"]["ExecStart"], "/bin/bash /fixture/run-guest.sh")
+                    self.assertEqual(unit["Service"]["TimeoutStartSec"], "480")
+                    recipe = (context / "Dockerfile").read_text()
+                    self.assertIn("systemctl mask serial-getty@ttyS0.service console-getty.service &&", recipe)
+                    self.assertIn("virtio_console", (context / "build-guest.sh").read_text())
+                    self.assertTrue((context / "evidence.sh").is_file())
+                    raise StopBeforeDocker
+                self.fail("unexpected external operation: " + repr(argv))
+            with mock.patch.object(VM, "SOURCES", {}), mock.patch.object(runner, "command", side_effect=command):
+                with self.assertRaises(StopBeforeDocker):
+                    runner.prepare()
+
+    def test_evidence_uses_live_character_channel_and_refuses_regular_file(self):
+        helper = VM.FIXTURE / "evidence.sh"
+        master, slave = pty.openpty()
+        tty.setraw(slave)
+        try:
+            result = subprocess.run(["bash", "-c",
+                'source "$1"; driver_vm_open_evidence "$2" 1 || exit; printf "owned-independent-evidence\\n" >&3',
+                "test", str(helper), os.ttyname(slave)], capture_output=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(select.select([master], [], [], 2)[0], "independent evidence channel produced no bytes")
+            self.assertEqual(os.read(master, 128), b"owned-independent-evidence\n")
+            self.assertEqual(result.stdout, b"")
+        finally:
+            os.close(master)
+            os.close(slave)
+        with tempfile.TemporaryDirectory() as temporary:
+            regular = Path(temporary) / "not-a-port"
+            regular.write_text("preserved")
+            result = subprocess.run(["bash", "-c",
+                'source "$1"; driver_vm_open_evidence "$2" 0',
+                "test", str(helper), str(regular)], capture_output=True, timeout=3)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"DRIVER_VM_EVIDENCE_UNAVAILABLE", result.stderr)
+            self.assertEqual(regular.read_text(), "preserved")
+
+    def test_boot_separates_console_from_nonce_checked_evidence(self):
+        nonce = "a" * 32
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = VM.Runner(root, root, nonce)
+            def qemu(command, timeout, **options):
+                self.assertIn("virtserialport,chardev=driver-evidence,name=wendy.driver.evidence", command)
+                channel = command[command.index("-chardev") + 1]
+                self.assertEqual(channel, "file,id=driver-evidence,path=" + str(root / "normal-first.log"))
+                options["stdout"].write("independent boot console\n")
+                (root / "normal-first.log").write_text(
+                    f"DRIVER_VM_EVIDENCE_CHANNEL_READY\n--- PASS: TestDriverLifecycleVM\n"
+                    f"DRIVER_VM_LIFECYCLE_VERIFIED {nonce}\n"
+                    f"DRIVER_VM_EXIT nonce={nonce} control=normal phase=first status=0\n")
+                return 0
+            with mock.patch.object(VM.GUARDIAN, "run", side_effect=qemu):
+                runner.boot(root / "normal.qcow2", "normal", "first")
+            self.assertTrue(runner.results["normal/first"]["passed"])
+            self.assertEqual((root / "normal-first-console.log").read_text(), "independent boot console\n")
+            with self.assertRaisesRegex(ValueError, "already exist"):
+                runner.boot(root / "normal.qcow2", "normal", "first")
 
     def test_shared_deadline_bounds_a_real_command_and_prevents_next_launch(self):
         with tempfile.TemporaryDirectory() as tmp:
