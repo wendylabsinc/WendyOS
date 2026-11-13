@@ -127,6 +127,29 @@ sandbox. Prefer a dedicated E2E fixture config instead of your live
 credential-related values directly in shell history. If the variable is not set,
 the runner uses the current CLI user's `~/.wendy/config.json` where possible.
 
+For repeated explicit-device inner loops with the Bash runner, add
+`--device-cache-fixture /absolute/path/to/e2e-target-cache.json` (or
+`WENDY_E2E_CLI_DEVICE_CACHE_FIXTURE`) alongside `--device-address`. The first
+run prepares a target-only `devices.json` fixture after a successful mTLS
+`device info` preflight in a temporary HOME. Preparation pays the normal cold
+lookup cost. Later runs seed that preflight HOME from the prepared fixture and
+still check reachability and identity with the real CLI. Each run writes a
+separate refreshed snapshot; tests copy it into their own HOME. No TLS session
+cache, pin store or additional credentials are copied.
+
+Only scenario calls with `run(useDeviceCache: true)` consume that snapshot;
+currently the explicit-device and non-interactive device-info specs opt in.
+Discovery and other scenarios remain cold by default. This requires `per-test`
+isolation and an unmanaged explicit target. The prepared fixture is immutable
+and bound to the exact target argument. Use a named LAN target that the CLI
+persists in its discovery cache; IP literals do not produce these entries.
+Missing fixtures are prepared; malformed
+or mismatched fixtures fail setup. The CLI retains its normal stale-address
+fallback. Remove a stale fixture to prepare a fresh one rather than repeatedly
+paying for fallback. Use a dedicated path, never your personal
+`~/.wendy/devices.json`. Do not commit fixture files. The PowerShell runner does
+not prepare these fixtures.
+
 ## Artifacts
 
 The E2E workflow uses two artifact layouts: attempt directories from individual

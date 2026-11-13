@@ -17,6 +17,7 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
 
     func run<Result>(
         authenticated: Bool = true,
+        useDeviceCache: Bool = false,
         filePath: String = #filePath,
         function: String = #function,
         line: Int = #line,
@@ -24,6 +25,7 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
     ) async throws -> Result {
         let (cli, agent) = try await self.setUp(
             authenticated: authenticated,
+            useDeviceCache: useDeviceCache,
             filePath: filePath,
             function: function,
             line: line
@@ -72,6 +74,7 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
 
     private func setUp(
         authenticated: Bool,
+        useDeviceCache: Bool,
         filePath: String,
         function: String,
         line: Int
@@ -148,6 +151,23 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
             cliSession = cli
             if authenticated {
                 try await Self.installCLIAuthFixture(into: cli)
+            }
+            if useDeviceCache, let source = WendyE2EEnvironment.cliDeviceCachePath {
+                guard authenticated, isolation == .perTest else {
+                    throw NSError(
+                        domain: "CLIAndAgentScenario",
+                        code: 1,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "Device cache fixtures require authenticated per-test isolation."
+                        ]
+                    )
+                }
+                try await cli.sh(
+                    posix: "cp \(Self.shellQuote(source)) \"$HOME/.wendy/devices.json\"",
+                    power:
+                        "Copy-Item -LiteralPath \(Self.powerShellQuote(source)) -Destination (Join-Path $env:HOME '.wendy/devices.json') -ErrorAction Stop"
+                )
             }
             let agent = try await WendyE2ESession.begin(
                 for: agentMachine,
@@ -342,6 +362,7 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
         ]
         if let homeDirectory = sandbox.homeDirectory {
             environment["HOME"] = homeDirectory
+            environment["WENDY_CONFIG_DIR"] = Self.path(homeDirectory, ".wendy")
             if machineOS == .windows {
                 environment["USERPROFILE"] = homeDirectory
                 environment["APPDATA"] = Self.path(homeDirectory, "AppData", "Roaming")
